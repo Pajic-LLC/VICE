@@ -85,7 +85,7 @@ int main() {
     static_assert(texture_format_bytes_per_pixel(color_texture.format) == 8U);
 
     constexpr TextureDesc depth_texture{
-        .dimension = TextureDimension::d2;
+        .dimension = TextureDimension::d2,
         .width = 1920,
         .height = 1080,
         .depth = 1,
