@@ -18,9 +18,9 @@ DXIL
   |
   v
 Metal Shader Converter
-  |
-  v
-metallib
+  |              |
+  v              v
+metallib     reflection JSON
   |
   v
 Metal
@@ -48,9 +48,12 @@ A successful cook writes:
 - `shader.dxil`
 - `shader.dxc.txt`
 - `shader.metallib` when Metal is requested
+- `shader.metal.json` when Metal is requested
 - `shader.vice.json`
 
-`shader.dxc.txt` is the compiler assembly listing used to extract resource reflection. It is kept beside the cooked binary so cache hits can recover the same reflection without recompiling.
+`shader.dxc.txt` is the compiler assembly listing used to extract logical HLSL resource reflection. It is kept beside the cooked binary so cache hits can recover the same reflection without recompiling.
+
+`shader.metal.json` is emitted by Metal Shader Converter with `--output-reflection-file`. VICE treats it as backend-native metadata. It is not replaced by guessed argument-buffer offsets.
 
 The manifest records the shader identity, compiler profile, cache key, tool versions, backend artifact names, and reflected resource bindings.
 
@@ -79,7 +82,7 @@ The register classes are:
 
 A reflected binding also records its resource count and whether the range is unbounded.
 
-This keeps D3D12 descriptor layout and Metal argument-buffer layout out of the shader asset format. Backend-specific layout generation consumes the same logical binding data later.
+This keeps Direct3D 12 descriptor handles and Metal argument-buffer offsets out of game-facing code.
 
 ## Reflection extraction
 
@@ -96,11 +99,15 @@ The parser records:
 - DXC format
 - DXC dimension
 
-Reflection failure fails the cook. A shader must not produce a binary with missing or ambiguous resource metadata.
+Reflection failure fails the cook. A shader must not produce a binary with missing or ambiguous logical resource metadata.
 
-CI compiles a resource-using shader with the Windows SDK DXC and checks the generated manifest. This protects the parser against compiler output changes.
+When Metal is requested, Metal Shader Converter also writes `shader.metal.json`. The manifest records that artifact in a versioned `metal_binding` section. The converter file is the source of backend resource locations for Metal runtime binding.
 
-The current reflection object is version 1 inside shader manifest version 2.
+VICE does not calculate Metal argument-buffer offsets from HLSL register numbers. When the runtime moves to explicit root-signature translation, converter or runtime resource-location queries remain authoritative.
+
+CI compiles a resource-using shader with the Windows SDK DXC and checks the generated manifest. This protects the DXC parser against compiler output changes. Metal converter output is only required on machines that actually perform a Metal cook.
+
+The logical reflection object remains version 1. The shader manifest is version 3.
 
 ## Cache key
 
@@ -117,7 +124,9 @@ The cache key is SHA-256 over the inputs that affect generated shader code:
 
 If the manifest contains the same key and all requested artifacts exist, the cooker reuses the result unless `--force` is passed.
 
-The shader asset cache seed is versioned. Reflection schema changes invalidate older cached output.
+For Metal targets, a valid cache entry requires both `shader.metallib` and `shader.metal.json`.
+
+The shader asset cache seed is versioned. Manifest or binding metadata changes invalidate older cached output.
 
 ## Compiler policy
 
