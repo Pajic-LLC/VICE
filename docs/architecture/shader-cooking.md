@@ -46,24 +46,61 @@ The tool accepts explicit `--dxc` and `--metal-shader-converter` paths. The same
 A successful cook writes:
 
 - `shader.dxil`
+- `shader.dxc.txt`
 - `shader.metallib` when Metal is requested
 - `shader.vice.json`
 
-The JSON file is the first VICE shader manifest. It records the shader identity, compiler profile, cache key, tool versions, and backend artifact names.
+`shader.dxc.txt` is the compiler assembly listing used to extract resource reflection. It is kept beside the cooked binary so cache hits can recover the same reflection without recompiling.
+
+The manifest records the shader identity, compiler profile, cache key, tool versions, backend artifact names, and reflected resource bindings.
 
 ## Runtime loading
 
 The RHI accepts cooked shaders through `ShaderBinaryDesc`.
 
-The descriptor contains the shader stage, backend binary format, byte span, entry point, and debug name. It does not contain a file path.
+The descriptor contains the shader stage, backend binary format, byte span, logical resource bindings, entry point, and debug name. It does not contain a file path.
 
-Higher-level asset code reads the cooked artifact and passes its bytes into the RHI. The input span only needs to remain valid during module creation.
+Higher-level asset code reads the cooked artifact and passes its bytes and binding metadata into the RHI. The input spans only need to remain valid during module creation.
 
-Direct3D 12 accepts `ShaderBinaryFormat::dxil`. The backend owns a copy of the DXIL bytes and uses them directly when creating pipeline state.
+Direct3D 12 accepts `ShaderBinaryFormat::dxil`. Metal accepts `ShaderBinaryFormat::metallib`.
 
-Metal accepts `ShaderBinaryFormat::metallib`. The backend creates an `MTLLibrary` from the supplied data and resolves the requested entry point.
+Runtime source compilation remains available as a development fallback while the asset layer is being connected.
 
-Both paths produce the same `ShaderModule` interface used by graphics pipelines. Runtime source compilation remains available as a development fallback while the asset layer is being connected.
+## Logical binding identity
+
+VICE uses the HLSL register class, binding index, and register space as the backend-neutral resource identity.
+
+The register classes are:
+
+- `constant_buffer` for `b` registers
+- `shader_resource` for `t` registers
+- `unordered_access` for `u` registers
+- `sampler` for `s` registers
+
+A reflected binding also records its resource count and whether the range is unbounded.
+
+This keeps D3D12 descriptor layout and Metal argument-buffer layout out of the shader asset format. Backend-specific layout generation consumes the same logical binding data later.
+
+## Reflection extraction
+
+DXC emits a `Resource Bindings` table in its assembly listing. The cooker parses that compiler output after a successful compile.
+
+The parser records:
+
+- resource name
+- register class
+- binding index
+- register space
+- count or unbounded range
+- DXC resource type
+- DXC format
+- DXC dimension
+
+Reflection failure fails the cook. A shader must not produce a binary with missing or ambiguous resource metadata.
+
+CI compiles a resource-using shader with the Windows SDK DXC and checks the generated manifest. This protects the parser against compiler output changes.
+
+The current reflection object is version 1 inside shader manifest version 2.
 
 ## Cache key
 
@@ -80,16 +117,12 @@ The cache key is SHA-256 over the inputs that affect generated shader code:
 
 If the manifest contains the same key and all requested artifacts exist, the cooker reuses the result unless `--force` is passed.
 
+The shader asset cache seed is versioned. Reflection schema changes invalidate older cached output.
+
 ## Compiler policy
 
-The default shader model is 6.0. This gives the first VICE pipeline a conservative baseline while keeping the profile explicit in every manifest.
+The default shader model is 6.0. This keeps the first VICE pipeline on a conservative baseline while the required profile remains explicit in every manifest.
 
-Release build infrastructure should pin exact compiler packages. The cooker itself does not download compilers. Local development can point to installed tools.
+Release build infrastructure should pin exact compiler packages. The cooker does not download compilers. Local development can point to installed tools.
 
-DXC errors and Metal Shader Converter errors are captured and returned by the cooker. Shader build failures must remain actionable and should not be replaced by generic asset-pipeline errors.
-
-## Reflection
-
-The manifest already reserves a versioned reflection object. It currently contains an empty resource list because the first triangle has no bound resources and the RHI binding contract does not exist yet.
-
-The binding API and actual compiler reflection should be designed together. The manifest version gives that work a stable place to land without changing how shader binaries are named or cached.
+DXC errors and Metal Shader Converter errors are captured and returned by the cooker. Shader build failures should keep the original compiler context.
