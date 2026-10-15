@@ -61,6 +61,58 @@ int main() {
     assert(!serialized.blob.empty());
     assert(serialized.descriptor_table_count == 4U);
     assert(serialized.descriptor_range_count == 4U);
+    assert(serialized.tables.size() == 4U);
+    assert(serialized.bindings.size() == 4U);
+
+    const ShaderBindingKey cbv_key{
+        .register_class = ShaderRegisterClass::constant_buffer,
+        .binding = 2,
+        .space = 1,
+        .array_element = 0,
+    };
+    const auto* cbv_location = find_d3d12_binding_location(serialized, cbv_key);
+    assert(cbv_location != nullptr);
+    assert(cbv_location->count == 1U);
+    assert(!cbv_location->unbounded);
+    assert(cbv_location->table_offset == 0U);
+
+    const ShaderBindingKey texture_element{
+        .register_class = ShaderRegisterClass::shader_resource,
+        .binding = 4,
+        .space = 2,
+        .array_element = 5,
+    };
+    const auto* texture_location = find_d3d12_binding_location(serialized, texture_element);
+    assert(texture_location != nullptr);
+    assert(texture_location->count == 6U);
+    assert(texture_location->table_offset == 0U);
+
+    const ShaderBindingKey texture_out_of_range{
+        .register_class = ShaderRegisterClass::shader_resource,
+        .binding = 4,
+        .space = 2,
+        .array_element = 6,
+    };
+    assert(find_d3d12_binding_location(serialized, texture_out_of_range) == nullptr);
+
+    const ShaderBindingKey bindless_element{
+        .register_class = ShaderRegisterClass::shader_resource,
+        .binding = 32,
+        .space = 5,
+        .array_element = 4096,
+    };
+    const auto* bindless_location = find_d3d12_binding_location(serialized, bindless_element);
+    assert(bindless_location != nullptr);
+    assert(bindless_location->unbounded);
+    assert(bindless_location->table_offset == 0U);
+
+    const ShaderBindingKey wrong_class{
+        .register_class = ShaderRegisterClass::unordered_access,
+        .binding = 32,
+        .space = 5,
+        .array_element = 0,
+    };
+    assert(find_d3d12_binding_location(serialized, wrong_class) == nullptr);
 
     ComPtr<ID3D12RootSignatureDeserializer> deserializer;
     const HRESULT result = D3D12CreateRootSignatureDeserializer(
@@ -115,12 +167,27 @@ int main() {
     assert(saw_fragment_sampler);
     assert(saw_fragment_unbounded);
 
+    for (const auto& table : serialized.tables) {
+        if (table.root_parameter_index == cbv_location->root_parameter_index) {
+            assert(table.heap_class == D3D12DescriptorHeapClass::resources);
+            assert(table.bounded_descriptor_count == 1U);
+            assert(!table.unbounded);
+        }
+        if (table.root_parameter_index == bindless_location->root_parameter_index) {
+            assert(table.heap_class == D3D12DescriptorHeapClass::resources);
+            assert(table.bounded_descriptor_count == 0U);
+            assert(table.unbounded);
+        }
+    }
+
     PipelineLayout invalid_layout;
     invalid_layout.valid = false;
     invalid_layout.diagnostics = "expected failure";
     const D3D12RootSignatureResult invalid = serialize_d3d12_root_signature(invalid_layout);
     assert(!invalid.success);
     assert(invalid.blob.empty());
+    assert(invalid.tables.empty());
+    assert(invalid.bindings.empty());
     assert(invalid.diagnostics == "expected failure");
 
     return 0;
