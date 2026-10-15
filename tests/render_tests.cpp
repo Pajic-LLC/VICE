@@ -7,6 +7,9 @@ int main() {
 
     assert(backend_name(Backend::metal) == "Metal");
     assert(backend_name(Backend::direct3d12) == "Direct3D 12");
+    assert(shader_stage_name(ShaderStage::vertex) == "vertex");
+    assert(shader_stage_name(ShaderStage::fragment) == "fragment");
+    assert(shader_stage_name(ShaderStage::compute) == "compute");
 
     const DeviceCapabilities capabilities{};
     assert(!capabilities.unified_memory);
@@ -137,6 +140,31 @@ int main() {
         .debug_name = {},
     };
     static_assert(!is_valid(invalid_anisotropic_filter));
+
+    constexpr ShaderModuleDesc valid_shader{
+        .stage = ShaderStage::vertex,
+        .language = ShaderSourceLanguage::hlsl,
+        .source = "void main() {}",
+        .entry_point = "main",
+        .debug_name = {},
+    };
+    static_assert(is_valid(valid_shader));
+
+    constexpr ShaderModuleDesc invalid_shader{
+        .stage = ShaderStage::fragment,
+        .language = ShaderSourceLanguage::metal,
+        .source = {},
+        .entry_point = "main",
+        .debug_name = {},
+    };
+    static_assert(!is_valid(invalid_shader));
+
+    constexpr GraphicsPipelineDesc invalid_pipeline{};
+    static_assert(!is_valid(invalid_pipeline));
+
+    constexpr RenderPassDesc render_pass{};
+    static_assert(render_pass.clear_color_attachment);
+    static_assert(render_pass.clear_color.alpha == 1.0F);
 
     static_assert(texture_format_bytes_per_pixel(TextureFormat::rgba8_unorm) == 4U);
     static_assert(texture_format_bytes_per_pixel(TextureFormat::undefined) == 0U);
