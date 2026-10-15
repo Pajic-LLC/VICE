@@ -14,6 +14,7 @@
 #include <memory>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace vice::render {
@@ -225,19 +226,43 @@ public:
         id<MTLRenderPipelineState> state,
         const PrimitiveTopology topology,
         const CullMode cull,
-        const FrontFace front
-    ) : state_{state}, topology_{topology}, cull_{cull}, front_{front} {}
+        const FrontFace front,
+        PipelineLayout layout
+    ) : state_{state}, topology_{topology}, cull_{cull}, front_{front}, layout_{std::move(layout)} {}
 
     [[nodiscard]] PrimitiveTopology topology() const noexcept override { return topology_; }
     [[nodiscard]] id<MTLRenderPipelineState> native() const noexcept { return state_; }
     [[nodiscard]] CullMode cull() const noexcept { return cull_; }
     [[nodiscard]] FrontFace front() const noexcept { return front_; }
+    [[nodiscard]] bool has_resources() const noexcept { return !layout_.resources.empty(); }
+
+    [[nodiscard]] bool has_binding(
+        const ShaderBindingKey& key,
+        const ShaderRegisterClass expected_class
+    ) const noexcept {
+        if (key.register_class != expected_class) {
+            return false;
+        }
+        const auto found = std::find_if(
+            layout_.resources.begin(),
+            layout_.resources.end(),
+            [&](const PipelineResourceBinding& resource) {
+                if (resource.register_class != key.register_class ||
+                    resource.binding != key.binding || resource.space != key.space) {
+                    return false;
+                }
+                return resource.unbounded || key.array_element < resource.count;
+            }
+        );
+        return found != layout_.resources.end();
+    }
 
 private:
     id<MTLRenderPipelineState> state_ = nil;
     PrimitiveTopology topology_ = PrimitiveTopology::triangle_list;
     CullMode cull_ = CullMode::back;
     FrontFace front_ = FrontFace::counter_clockwise;
+    PipelineLayout layout_;
 };
 
 class MetalSwapchain final : public Swapchain {
@@ -418,6 +443,7 @@ public:
         );
         render_encoder_ = [command_buffer_ renderCommandEncoderWithDescriptor:pass];
         active_swapchain_ = metal_swapchain;
+        active_pipeline_ = nullptr;
         pipeline_bound_ = false;
         return render_encoder_ != nil;
     }
@@ -433,7 +459,84 @@ public:
         [render_encoder_ setRenderPipelineState:metal_pipeline->native()];
         [render_encoder_ setCullMode:cull_mode(metal_pipeline->cull())];
         [render_encoder_ setFrontFacingWinding:front_winding(metal_pipeline->front())];
+        active_pipeline_ = metal_pipeline;
         pipeline_bound_ = true;
+        return true;
+    }
+
+    bool set_graphics_constant_buffer(
+        const ShaderBindingKey& binding,
+        Buffer& buffer,
+        const std::uint64_t offset,
+        const std::uint64_t size
+    ) override {
+        if (!binding_allowed(binding, ShaderRegisterClass::constant_buffer) ||
+            dynamic_cast<MetalBuffer*>(&buffer) == nullptr ||
+            !has_usage(buffer.usage(), BufferUsage::uniform) || offset > buffer.size() ||
+            (size != 0U && size > buffer.size() - offset)) {
+            return false;
+        }
+        has_validated_binding_ = true;
+        return true;
+    }
+
+    bool set_graphics_buffer(
+        const ShaderBindingKey& binding,
+        Buffer& buffer,
+        const BufferViewDesc& view
+    ) override {
+        if (!binding_allowed(binding, ShaderRegisterClass::shader_resource) ||
+            dynamic_cast<MetalBuffer*>(&buffer) == nullptr ||
+            !has_usage(buffer.usage(), BufferUsage::storage) || !valid_buffer_view(buffer, view)) {
+            return false;
+        }
+        has_validated_binding_ = true;
+        return true;
+    }
+
+    bool set_graphics_storage_buffer(
+        const ShaderBindingKey& binding,
+        Buffer& buffer,
+        const BufferViewDesc& view
+    ) override {
+        if (!binding_allowed(binding, ShaderRegisterClass::unordered_access) ||
+            dynamic_cast<MetalBuffer*>(&buffer) == nullptr ||
+            !has_usage(buffer.usage(), BufferUsage::storage) || !valid_buffer_view(buffer, view)) {
+            return false;
+        }
+        has_validated_binding_ = true;
+        return true;
+    }
+
+    bool set_graphics_texture(const ShaderBindingKey& binding, Texture& texture) override {
+        if (!binding_allowed(binding, ShaderRegisterClass::shader_resource) ||
+            dynamic_cast<MetalTexture*>(&texture) == nullptr ||
+            !has_usage(texture.usage(), TextureUsage::sampled)) {
+            return false;
+        }
+        has_validated_binding_ = true;
+        return true;
+    }
+
+    bool set_graphics_storage_texture(
+        const ShaderBindingKey& binding,
+        Texture& texture
+    ) override {
+        if (!binding_allowed(binding, ShaderRegisterClass::unordered_access) ||
+            dynamic_cast<MetalTexture*>(&texture) == nullptr ||
+            !has_usage(texture.usage(), TextureUsage::storage)) {
+            return false;
+        }
+        has_validated_binding_ = true;
+        return true;
+    }
+
+    bool set_graphics_sampler(const ShaderBindingKey& binding, Sampler& sampler) override {
+        if (!binding_allowed(binding, ShaderRegisterClass::sampler) ||
+            dynamic_cast<MetalSampler*>(&sampler) == nullptr) {
+            return false;
+        }
+        has_validated_binding_ = true;
         return true;
     }
 
@@ -443,7 +546,15 @@ public:
         const std::uint32_t first_vertex,
         const std::uint32_t first_instance
     ) override {
-        if (render_encoder_ == nil || !pipeline_bound_ || vertex_count == 0 || instance_count == 0) {
+        if (render_encoder_ == nil || !pipeline_bound_ || active_pipeline_ == nullptr ||
+            vertex_count == 0 || instance_count == 0) {
+            return false;
+        }
+        if (active_pipeline_->has_resources()) {
+            core::log(
+                core::LogLevel::error,
+                "Metal resource binding requires Metal Shader Converter argument-buffer location metadata."
+            );
             return false;
         }
         [render_encoder_ drawPrimitives:MTLPrimitiveTypeTriangle
@@ -460,6 +571,8 @@ public:
         }
         [render_encoder_ endEncoding];
         render_encoder_ = nil;
+        active_pipeline_ = nullptr;
+        has_validated_binding_ = false;
         pipeline_bound_ = false;
         return true;
     }
@@ -478,10 +591,37 @@ public:
     [[nodiscard]] id<MTLCommandBuffer> native() const noexcept { return command_buffer_; }
 
 private:
+    [[nodiscard]] bool binding_allowed(
+        const ShaderBindingKey& binding,
+        const ShaderRegisterClass expected_class
+    ) const noexcept {
+        return render_encoder_ != nil && pipeline_bound_ && active_pipeline_ != nullptr &&
+            active_pipeline_->has_binding(binding, expected_class);
+    }
+
+    [[nodiscard]] static bool valid_buffer_view(
+        const Buffer& buffer,
+        const BufferViewDesc& view
+    ) noexcept {
+        if (!is_valid(view) || view.offset > buffer.size()) {
+            return false;
+        }
+        const std::uint64_t size = view.size == 0U ? buffer.size() - view.offset : view.size;
+        if (size == 0U || size > buffer.size() - view.offset) {
+            return false;
+        }
+        if (view.structure_stride == 0U) {
+            return view.offset % 4U == 0U && size % 4U == 0U;
+        }
+        return view.offset % view.structure_stride == 0U && size % view.structure_stride == 0U;
+    }
+
     id<MTLCommandBuffer> command_buffer_ = nil;
     id<MTLRenderCommandEncoder> render_encoder_ = nil;
     id<CAMetalDrawable> drawable_ = nil;
+    MetalGraphicsPipeline* active_pipeline_ = nullptr;
     MetalSwapchain* active_swapchain_ = nullptr;
+    bool has_validated_binding_ = false;
     bool pipeline_bound_ = false;
     bool present_scheduled_ = false;
 };
@@ -683,7 +823,7 @@ public:
             return nullptr;
         }
 
-        const PipelineLayout layout = compile_graphics_pipeline_layout(
+        PipelineLayout layout = compile_graphics_pipeline_layout(
             vertex->resources(),
             fragment->resources()
         );
@@ -712,7 +852,8 @@ public:
             state,
             desc.topology,
             desc.cull_mode,
-            desc.front_face
+            desc.front_face,
+            std::move(layout)
         );
     }
 
