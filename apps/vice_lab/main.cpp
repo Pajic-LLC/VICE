@@ -5,6 +5,7 @@
 #include <vice/core/version.hpp>
 #include <vice/platform/event.hpp>
 #include <vice/platform/services.hpp>
+#include <vice/render/rhi.hpp>
 #include <vice/world/world.hpp>
 
 #include <chrono>
@@ -61,12 +62,29 @@ int main() {
             std::to_string(metrics.drawable_height) + " drawable"
     );
 
+    auto render_device = vice::render::Device::create();
+    if (!render_device) {
+        log(LogLevel::error, "VICE Lab could not create a render device.");
+        return 1;
+    }
+    log(
+        LogLevel::info,
+        std::string{"Renderer: "} + std::string{vice::render::backend_name(render_device->backend())}
+    );
+
+    auto swapchain = render_device->create_swapchain(*window);
+    if (!swapchain) {
+        log(LogLevel::error, "VICE Lab could not create a swapchain.");
+        return 1;
+    }
+
     vice::world::World world;
     const auto entity = world.create_entity();
     if (const auto persistent_id = world.persistent_id(entity)) {
         log(LogLevel::info, std::string{"World entity: "} + persistent_id->to_string());
     }
 
+    constexpr vice::render::Color clear_color{0.018F, 0.022F, 0.030F, 1.0F};
     FrameClock clock;
     bool running = true;
     while (running) {
@@ -80,6 +98,8 @@ int main() {
                         std::is_same_v<Payload, vice::platform::WindowCloseRequested>
                     ) {
                         running = false;
+                    } else if constexpr (std::is_same_v<Payload, vice::platform::WindowMetricsChanged>) {
+                        swapchain->resize(payload.metrics);
                     } else if constexpr (std::is_same_v<Payload, vice::platform::KeyEvent>) {
                         if (payload.pressed && payload.key == vice::platform::Key::escape) {
                             running = false;
@@ -90,10 +110,16 @@ int main() {
             );
         }
 
+        if (running) {
+            swapchain->clear_and_present(clear_color);
+        }
+
         clock.tick();
         std::this_thread::sleep_for(std::chrono::milliseconds{1});
     }
 
+    swapchain.reset();
+    render_device.reset();
     window.reset();
     log(LogLevel::info, "VICE Lab closed.");
     return 0;
