@@ -1,0 +1,39 @@
+# Build output
+/build/
+/build-*/
+/out/
+
+# CMake
+CMakeUserPresets.json
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+CTestTestfile.cmake
+
+# IDE and editor files
+.vscode/
+.idea/
+*.xcworkspace
+*.xcodeproj
+.vs/
+
+# macOS
+.DS_Store
+
+# Windows
+Thumbs.db
+*.suo
+*.user
+*.VC.db
+*.VC.VC.opendb
+
+# Compiler output
+*.o
+*.obj
+*.a
+*.lib
+*.dll
+*.dylib
+*.so
+*.exe
+*.pdb
