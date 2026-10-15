@@ -2,6 +2,7 @@
 
 #include <vice/platform/types.hpp>
 #include <vice/platform/window.hpp>
+#include <vice/render/mesh_input.hpp>
 
 #include <cstddef>
 #include <cstdint>
@@ -408,13 +409,15 @@ struct GraphicsPipelineDesc {
     PrimitiveTopology topology = PrimitiveTopology::triangle_list;
     CullMode cull_mode = CullMode::back;
     FrontFace front_face = FrontFace::counter_clockwise;
+    std::span<const VertexBufferLayoutDesc> vertex_buffers;
     std::string_view debug_name;
 };
 
 [[nodiscard]] constexpr bool is_valid(const GraphicsPipelineDesc& desc) noexcept {
     return desc.vertex_shader != nullptr && desc.fragment_shader != nullptr &&
         desc.color_format != TextureFormat::undefined &&
-        desc.color_format != TextureFormat::depth32_float;
+        desc.color_format != TextureFormat::depth32_float &&
+        is_valid(desc.vertex_buffers);
 }
 
 struct RenderPassDesc {
@@ -493,6 +496,26 @@ public:
 
     virtual bool begin_render_pass(Swapchain& swapchain, const RenderPassDesc& desc) = 0;
     virtual bool set_graphics_pipeline(GraphicsPipeline& pipeline) = 0;
+    virtual bool set_vertex_buffer(
+        std::uint32_t slot,
+        Buffer& buffer,
+        std::uint64_t offset = 0
+    ) {
+        (void)slot;
+        (void)buffer;
+        (void)offset;
+        return false;
+    }
+    virtual bool set_index_buffer(
+        Buffer& buffer,
+        IndexFormat format,
+        std::uint64_t offset = 0
+    ) {
+        (void)buffer;
+        (void)format;
+        (void)offset;
+        return false;
+    }
     virtual bool set_graphics_constant_buffer(
         const ShaderBindingKey& binding,
         Buffer& buffer,
@@ -521,6 +544,20 @@ public:
         std::uint32_t first_vertex = 0,
         std::uint32_t first_instance = 0
     ) = 0;
+    virtual bool draw_indexed(
+        std::uint32_t index_count,
+        std::uint32_t instance_count = 1,
+        std::uint32_t first_index = 0,
+        std::int32_t vertex_offset = 0,
+        std::uint32_t first_instance = 0
+    ) {
+        (void)index_count;
+        (void)instance_count;
+        (void)first_index;
+        (void)vertex_offset;
+        (void)first_instance;
+        return false;
+    }
     virtual bool end_render_pass() = 0;
     virtual bool present(Swapchain& swapchain) = 0;
 };
