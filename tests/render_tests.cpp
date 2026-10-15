@@ -12,6 +12,10 @@ int main() {
     assert(shader_stage_name(ShaderStage::vertex) == "vertex");
     assert(shader_stage_name(ShaderStage::fragment) == "fragment");
     assert(shader_stage_name(ShaderStage::compute) == "compute");
+    assert(shader_register_class_name(ShaderRegisterClass::constant_buffer) == "constant_buffer");
+    assert(shader_register_class_name(ShaderRegisterClass::shader_resource) == "shader_resource");
+    assert(shader_register_class_name(ShaderRegisterClass::unordered_access) == "unordered_access");
+    assert(shader_register_class_name(ShaderRegisterClass::sampler) == "sampler");
 
     const DeviceCapabilities capabilities{};
     assert(!capabilities.unified_memory);
@@ -143,6 +147,33 @@ int main() {
     };
     static_assert(!is_valid(invalid_anisotropic_filter));
 
+    constexpr ShaderResourceBindingDesc constant_binding{
+        .register_class = ShaderRegisterClass::constant_buffer,
+        .binding = 0,
+        .space = 1,
+        .count = 1,
+        .unbounded = false,
+    };
+    static_assert(is_valid(constant_binding));
+
+    constexpr ShaderResourceBindingDesc unbounded_binding{
+        .register_class = ShaderRegisterClass::shader_resource,
+        .binding = 4,
+        .space = 2,
+        .count = 0,
+        .unbounded = true,
+    };
+    static_assert(is_valid(unbounded_binding));
+
+    constexpr ShaderResourceBindingDesc invalid_binding{
+        .register_class = ShaderRegisterClass::unordered_access,
+        .binding = 2,
+        .space = 0,
+        .count = 0,
+        .unbounded = false,
+    };
+    static_assert(!is_valid(invalid_binding));
+
     constexpr ShaderModuleDesc valid_shader{
         .stage = ShaderStage::vertex,
         .language = ShaderSourceLanguage::hlsl,
@@ -162,19 +193,38 @@ int main() {
     static_assert(!is_valid(invalid_shader));
 
     static constexpr std::array<std::byte, 4> binary_bytes{};
+    static constexpr std::array<ShaderResourceBindingDesc, 2> binary_bindings{
+        constant_binding,
+        unbounded_binding,
+    };
     constexpr ShaderBinaryDesc valid_binary{
         .stage = ShaderStage::vertex,
         .format = ShaderBinaryFormat::dxil,
         .binary = std::span<const std::byte>{binary_bytes},
+        .resources = std::span<const ShaderResourceBindingDesc>{binary_bindings},
         .entry_point = "main",
         .debug_name = {},
     };
     static_assert(is_valid(valid_binary));
 
+    static constexpr std::array<ShaderResourceBindingDesc, 1> invalid_binary_bindings{
+        invalid_binding,
+    };
+    constexpr ShaderBinaryDesc invalid_binding_binary{
+        .stage = ShaderStage::fragment,
+        .format = ShaderBinaryFormat::dxil,
+        .binary = std::span<const std::byte>{binary_bytes},
+        .resources = std::span<const ShaderResourceBindingDesc>{invalid_binary_bindings},
+        .entry_point = "main",
+        .debug_name = {},
+    };
+    static_assert(!is_valid(invalid_binding_binary));
+
     constexpr ShaderBinaryDesc invalid_binary{
         .stage = ShaderStage::fragment,
         .format = ShaderBinaryFormat::metallib,
         .binary = {},
+        .resources = {},
         .entry_point = "main",
         .debug_name = {},
     };
