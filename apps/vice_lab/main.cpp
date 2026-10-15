@@ -16,9 +16,75 @@
 #include <cstddef>
 #include <span>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <type_traits>
 #include <variant>
+
+namespace {
+
+constexpr std::string_view metal_triangle_source = R"(
+#include <metal_stdlib>
+using namespace metal;
+
+struct VertexOut {
+    float4 position [[position]];
+    float3 color;
+};
+
+vertex VertexOut vice_triangle_vs(uint vertex_id [[vertex_id]]) {
+    const float2 positions[3] = {
+        float2(0.0, 0.72),
+        float2(-0.68, -0.58),
+        float2(0.68, -0.58)
+    };
+    const float3 colors[3] = {
+        float3(0.20, 0.84, 1.00),
+        float3(1.00, 0.26, 0.62),
+        float3(0.98, 0.82, 0.18)
+    };
+
+    VertexOut out;
+    out.position = float4(positions[vertex_id], 0.0, 1.0);
+    out.color = colors[vertex_id];
+    return out;
+}
+
+fragment float4 vice_triangle_fs(VertexOut in [[stage_in]]) {
+    return float4(in.color, 1.0);
+}
+)";
+
+constexpr std::string_view hlsl_triangle_source = R"(
+struct VertexOut {
+    float4 position : SV_Position;
+    float3 color : COLOR0;
+};
+
+VertexOut vice_triangle_vs(uint vertex_id : SV_VertexID) {
+    static const float2 positions[3] = {
+        float2(0.0, 0.72),
+        float2(-0.68, -0.58),
+        float2(0.68, -0.58)
+    };
+    static const float3 colors[3] = {
+        float3(0.20, 0.84, 1.00),
+        float3(1.00, 0.26, 0.62),
+        float3(0.98, 0.82, 0.18)
+    };
+
+    VertexOut output;
+    output.position = float4(positions[vertex_id], 0.0, 1.0);
+    output.color = colors[vertex_id];
+    return output;
+}
+
+float4 vice_triangle_fs(VertexOut input) : SV_Target0 {
+    return float4(input.color, 1.0);
+}
+)";
+
+} // namespace
 
 int main() {
     using namespace vice::core;
@@ -144,8 +210,8 @@ int main() {
 
     auto upload_buffer = render_device->create_buffer(upload_desc);
     auto readback_buffer = render_device->create_buffer(readback_desc);
-    auto command_list = render_device->create_command_list();
-    if (!upload_buffer || !readback_buffer || !command_list) {
+    auto transfer_commands = render_device->create_command_list();
+    if (!upload_buffer || !readback_buffer || !transfer_commands) {
         log(LogLevel::error, "VICE Lab could not create RHI probe resources.");
         return 1;
     }
@@ -153,7 +219,7 @@ int main() {
         log(LogLevel::error, "VICE Lab could not write the RHI upload buffer.");
         return 1;
     }
-    if (!command_list->copy_buffer(
+    if (!transfer_commands->copy_buffer(
             *upload_buffer,
             0,
             *readback_buffer,
@@ -164,7 +230,7 @@ int main() {
         return 1;
     }
 
-    const auto probe_submission = render_device->submit(std::move(command_list));
+    const auto probe_submission = render_device->submit(std::move(transfer_commands));
     if (probe_submission == vice::render::invalid_submission ||
         !render_device->wait_for_submission(probe_submission)) {
         log(LogLevel::error, "VICE Lab RHI probe submission failed.");
@@ -184,6 +250,42 @@ int main() {
         log(LogLevel::error, "VICE Lab could not create a swapchain.");
         return 1;
     }
+
+    const bool metal_backend = render_device->backend() == vice::render::Backend::metal;
+    vice::render::ShaderModuleDesc vertex_desc;
+    vertex_desc.stage = vice::render::ShaderStage::vertex;
+    vertex_desc.language = metal_backend
+        ? vice::render::ShaderSourceLanguage::metal
+        : vice::render::ShaderSourceLanguage::hlsl;
+    vertex_desc.source = metal_backend ? metal_triangle_source : hlsl_triangle_source;
+    vertex_desc.entry_point = "vice_triangle_vs";
+    vertex_desc.debug_name = "VICE Lab triangle vertex";
+
+    vice::render::ShaderModuleDesc fragment_desc = vertex_desc;
+    fragment_desc.stage = vice::render::ShaderStage::fragment;
+    fragment_desc.entry_point = "vice_triangle_fs";
+    fragment_desc.debug_name = "VICE Lab triangle fragment";
+
+    auto vertex_shader = render_device->create_shader_module(vertex_desc);
+    auto fragment_shader = render_device->create_shader_module(fragment_desc);
+    if (!vertex_shader || !fragment_shader) {
+        log(LogLevel::error, "VICE Lab could not create triangle shader modules.");
+        return 1;
+    }
+
+    vice::render::GraphicsPipelineDesc pipeline_desc;
+    pipeline_desc.vertex_shader = vertex_shader.get();
+    pipeline_desc.fragment_shader = fragment_shader.get();
+    pipeline_desc.color_format = swapchain->color_format();
+    pipeline_desc.cull_mode = vice::render::CullMode::none;
+    pipeline_desc.debug_name = "VICE Lab first triangle";
+
+    auto triangle_pipeline = render_device->create_graphics_pipeline(pipeline_desc);
+    if (!triangle_pipeline) {
+        log(LogLevel::error, "VICE Lab could not create the first graphics pipeline.");
+        return 1;
+    }
+    log(LogLevel::info, "VICE Lab graphics pipeline ready.");
 
     vice::world::World world;
     const auto entity = world.create_entity();
@@ -220,7 +322,27 @@ int main() {
         (void)jobs.pump_main(64);
 
         if (running) {
-            (void)swapchain->clear_and_present(clear_color);
+            auto frame_commands = render_device->create_command_list();
+            vice::render::RenderPassDesc pass_desc;
+            pass_desc.clear_color = clear_color;
+
+            const bool recorded = frame_commands &&
+                frame_commands->begin_render_pass(*swapchain, pass_desc) &&
+                frame_commands->set_graphics_pipeline(*triangle_pipeline) &&
+                frame_commands->draw(3) &&
+                frame_commands->end_render_pass() &&
+                frame_commands->present(*swapchain);
+
+            if (!recorded) {
+                log(LogLevel::error, "VICE Lab failed to record the triangle frame.");
+                running = false;
+            } else {
+                const auto frame_submission = render_device->submit(std::move(frame_commands));
+                if (frame_submission == vice::render::invalid_submission) {
+                    log(LogLevel::error, "VICE Lab triangle submission failed.");
+                    running = false;
+                }
+            }
         }
 
         clock.tick();
@@ -228,6 +350,9 @@ int main() {
     }
 
     (void)render_device->wait_idle();
+    triangle_pipeline.reset();
+    fragment_shader.reset();
+    vertex_shader.reset();
     swapchain.reset();
     readback_buffer.reset();
     upload_buffer.reset();

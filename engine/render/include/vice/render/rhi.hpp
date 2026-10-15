@@ -249,6 +249,76 @@ struct SamplerDesc {
     return 0;
 }
 
+enum class ShaderStage : std::uint8_t {
+    vertex,
+    fragment,
+    compute,
+};
+
+enum class ShaderSourceLanguage : std::uint8_t {
+    metal,
+    hlsl,
+};
+
+[[nodiscard]] constexpr std::string_view shader_stage_name(const ShaderStage stage) noexcept {
+    switch (stage) {
+    case ShaderStage::vertex: return "vertex";
+    case ShaderStage::fragment: return "fragment";
+    case ShaderStage::compute: return "compute";
+    }
+    return "unknown";
+}
+
+struct ShaderModuleDesc {
+    ShaderStage stage = ShaderStage::vertex;
+    ShaderSourceLanguage language = ShaderSourceLanguage::hlsl;
+    std::string_view source;
+    std::string_view entry_point = "main";
+    std::string_view debug_name;
+};
+
+[[nodiscard]] constexpr bool is_valid(const ShaderModuleDesc& desc) noexcept {
+    return !desc.source.empty() && !desc.entry_point.empty();
+}
+
+enum class PrimitiveTopology : std::uint8_t {
+    triangle_list,
+};
+
+enum class CullMode : std::uint8_t {
+    none,
+    front,
+    back,
+};
+
+enum class FrontFace : std::uint8_t {
+    counter_clockwise,
+    clockwise,
+};
+
+class ShaderModule;
+
+struct GraphicsPipelineDesc {
+    ShaderModule* vertex_shader = nullptr;
+    ShaderModule* fragment_shader = nullptr;
+    TextureFormat color_format = TextureFormat::bgra8_unorm;
+    PrimitiveTopology topology = PrimitiveTopology::triangle_list;
+    CullMode cull_mode = CullMode::back;
+    FrontFace front_face = FrontFace::counter_clockwise;
+    std::string_view debug_name;
+};
+
+[[nodiscard]] constexpr bool is_valid(const GraphicsPipelineDesc& desc) noexcept {
+    return desc.vertex_shader != nullptr && desc.fragment_shader != nullptr &&
+        desc.color_format != TextureFormat::undefined &&
+        desc.color_format != TextureFormat::depth32_float;
+}
+
+struct RenderPassDesc {
+    Color clear_color{0.0F, 0.0F, 0.0F, 1.0F};
+    bool clear_color_attachment = true;
+};
+
 struct DeviceCapabilities {
     bool unified_memory = false;
     bool ray_tracing = false;
@@ -289,6 +359,20 @@ public:
     virtual ~Sampler() = default;
 };
 
+class ShaderModule {
+public:
+    virtual ~ShaderModule() = default;
+    [[nodiscard]] virtual ShaderStage stage() const noexcept = 0;
+};
+
+class GraphicsPipeline {
+public:
+    virtual ~GraphicsPipeline() = default;
+    [[nodiscard]] virtual PrimitiveTopology topology() const noexcept = 0;
+};
+
+class Swapchain;
+
 class CommandList {
 public:
     virtual ~CommandList() = default;
@@ -300,6 +384,17 @@ public:
         std::uint64_t destination_offset,
         std::uint64_t size
     ) = 0;
+
+    virtual bool begin_render_pass(Swapchain& swapchain, const RenderPassDesc& desc) = 0;
+    virtual bool set_graphics_pipeline(GraphicsPipeline& pipeline) = 0;
+    virtual bool draw(
+        std::uint32_t vertex_count,
+        std::uint32_t instance_count = 1,
+        std::uint32_t first_vertex = 0,
+        std::uint32_t first_instance = 0
+    ) = 0;
+    virtual bool end_render_pass() = 0;
+    virtual bool present(Swapchain& swapchain) = 0;
 };
 
 using SubmissionId = std::uint64_t;
@@ -310,6 +405,7 @@ public:
     virtual ~Swapchain() = default;
 
     [[nodiscard]] virtual platform::WindowId window_id() const noexcept = 0;
+    [[nodiscard]] virtual TextureFormat color_format() const noexcept = 0;
     virtual bool resize(platform::WindowMetrics metrics) = 0;
     virtual bool clear_and_present(Color color) = 0;
 };
@@ -326,6 +422,12 @@ public:
     [[nodiscard]] virtual std::unique_ptr<Buffer> create_buffer(const BufferDesc& desc) = 0;
     [[nodiscard]] virtual std::unique_ptr<Texture> create_texture(const TextureDesc& desc) = 0;
     [[nodiscard]] virtual std::unique_ptr<Sampler> create_sampler(const SamplerDesc& desc) = 0;
+    [[nodiscard]] virtual std::unique_ptr<ShaderModule> create_shader_module(
+        const ShaderModuleDesc& desc
+    ) = 0;
+    [[nodiscard]] virtual std::unique_ptr<GraphicsPipeline> create_graphics_pipeline(
+        const GraphicsPipelineDesc& desc
+    ) = 0;
     [[nodiscard]] virtual std::unique_ptr<CommandList> create_command_list() = 0;
 
     virtual SubmissionId submit(std::unique_ptr<CommandList> command_list) = 0;
