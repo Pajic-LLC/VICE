@@ -1,7 +1,11 @@
 add_library(
   vice_core
   STATIC
+    src/assert.cpp
+    src/build.cpp
+    src/log.cpp
     src/platform.cpp
+    src/time.cpp
     src/version.cpp
 )
 
