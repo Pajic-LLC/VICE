@@ -1,3 +1,4 @@
+#include <vice/tools/metal_reflection.hpp>
 #include <vice/tools/shader_cooker.hpp>
 
 #include <array>
@@ -456,13 +457,14 @@ struct BindingLocation {
     const std::filesystem::path& assembly_path,
     const std::optional<std::filesystem::path>& metallib_path,
     const std::optional<std::filesystem::path>& metal_reflection_path,
+    const std::optional<MetalBindingReflection>& metal_binding,
     const ShaderReflection& reflection
 ) {
     std::ostringstream manifest;
     manifest
         << "{\n"
         << "  \"format\": \"vice.shader\",\n"
-        << "  \"version\": 3,\n"
+        << "  \"version\": 4,\n"
         << "  \"cache_key\": \"" << json_escape(cache_key) << "\",\n"
         << "  \"source\": \"" << json_escape(request.input.filename().string()) << "\",\n"
         << "  \"entry_point\": \"" << json_escape(request.entry_point) << "\",\n"
@@ -492,15 +494,36 @@ struct BindingLocation {
     manifest
         << "  },\n"
         << "  \"metal_binding\": {\n"
-        << "    \"version\": 1,\n"
-        << "    \"model\": \"converter_reflection\",\n"
-        << "    \"resource_locations\": ";
-    if (metal_reflection_path.has_value()) {
-        manifest << "\"" << json_escape(metal_reflection_path->filename().string()) << "\"\n";
+        << "    \"version\": 2,\n"
+        << "    \"model\": ";
+    if (metal_binding.has_value()) {
+        manifest << "\"automatic_linear\",\n";
     } else {
-        manifest << "null\n";
+        manifest << "null,\n";
     }
     manifest
+        << "    \"descriptor_entry_size\": 24,\n"
+        << "    \"locations\": [";
+    if (metal_binding.has_value() && !metal_binding->locations.empty()) {
+        manifest << "\n";
+        for (std::size_t index = 0; index < metal_binding->locations.size(); ++index) {
+            const auto& location = metal_binding->locations[index];
+            manifest
+                << "      {\n"
+                << "        \"class\": \"" << shader_register_class_name(location.register_class) << "\",\n"
+                << "        \"binding\": " << location.binding << ",\n"
+                << "        \"space\": " << location.space << ",\n"
+                << "        \"argument_buffer_offset\": " << location.argument_buffer_offset << ",\n"
+                << "        \"size\": " << location.size << "\n"
+                << "      }";
+            if (index + 1U != metal_binding->locations.size()) {
+                manifest << ',';
+            }
+            manifest << "\n";
+        }
+    }
+    manifest
+        << "    ]\n"
         << "  },\n"
         << "  \"reflection\": {\n"
         << "    \"version\": 1,\n"
@@ -698,7 +721,7 @@ std::string make_cache_key(
 ) {
     std::string material;
     material.reserve(source.size() + 512);
-    hash_append(material, "VICE_SHADER_ASSET_V3");
+    hash_append(material, "VICE_SHADER_ASSET_V4");
     hash_append(material, source);
     hash_append(material, request.entry_point);
     hash_append(material, shader_stage_name(request.stage));
@@ -830,6 +853,17 @@ CookResult cook(const CookRequest& request) {
         manifest_matches(result.manifest_path, result.cache_key)) {
         result.reflection = parse_dxc_resource_bindings(read_file(result.assembly_path));
         if (result.reflection.valid) {
+            if (result.metal_reflection_path.has_value()) {
+                const MetalBindingReflection metal = parse_metal_shader_converter_reflection(
+                    read_file(*result.metal_reflection_path),
+                    result.reflection
+                );
+                if (!metal.valid) {
+                    result.diagnostics =
+                        "Cached Metal reflection normalization failed. " + metal.diagnostics;
+                    return result;
+                }
+            }
             result.success = true;
             result.cache_hit = true;
             result.diagnostics = "Shader is up to date.";
@@ -866,6 +900,7 @@ CookResult cook(const CookRequest& request) {
         return result;
     }
 
+    std::optional<MetalBindingReflection> metal_binding;
     if (result.metallib_path.has_value() && result.metal_reflection_path.has_value()) {
         const auto converter_log = request.output_directory / "metal-shaderconverter.log";
         const std::string converter_command =
@@ -881,6 +916,16 @@ CookResult cook(const CookRequest& request) {
                 "Metal Shader Converter failed.\n" + converter_result.output;
             return result;
         }
+        metal_binding = parse_metal_shader_converter_reflection(
+            read_file(*result.metal_reflection_path),
+            result.reflection
+        );
+        if (!metal_binding->valid) {
+            result.diagnostics =
+                "Metal Shader Converter reflection normalization failed. " +
+                metal_binding->diagnostics;
+            return result;
+        }
     }
 
     const std::string manifest = build_manifest(
@@ -892,6 +937,7 @@ CookResult cook(const CookRequest& request) {
         result.assembly_path,
         result.metallib_path,
         result.metal_reflection_path,
+        metal_binding,
         result.reflection
     );
     if (!write_file(result.manifest_path, manifest)) {
