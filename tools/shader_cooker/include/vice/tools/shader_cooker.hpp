@@ -70,6 +70,7 @@ struct CookResult {
     std::filesystem::path dxil_path;
     std::filesystem::path assembly_path;
     std::optional<std::filesystem::path> metallib_path;
+    std::optional<std::filesystem::path> metal_reflection_path;
     std::filesystem::path manifest_path;
     ShaderReflection reflection;
     std::string diagnostics;
