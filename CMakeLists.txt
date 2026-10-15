@@ -11,6 +11,14 @@ option(VICE_BUILD_TESTS "Build VICE tests" ON)
 option(VICE_BUILD_LAB "Build the VICE Lab executable" ON)
 option(VICE_BUILD_TOOLS "Build VICE developer tools" ON)
 
+set(VICE_DXC_EXECUTABLE "" CACHE FILEPATH "Path to the DXC executable used for shader cooking")
+set(
+  VICE_METAL_SHADER_CONVERTER_EXECUTABLE
+  ""
+  CACHE FILEPATH
+  "Path to the Metal Shader Converter executable used for shader cooking"
+)
+
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)

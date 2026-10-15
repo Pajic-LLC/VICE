@@ -33,6 +33,33 @@ metallib     reflection JSON
 
 The cooker executable is `vice_shader_cooker`.
 
+## Build integration
+
+Shader cooking is part of the normal build when the current platform has the required local toolchain.
+
+VICE discovers DXC in this order:
+
+1. `VICE_DXC_EXECUTABLE` CMake cache path
+2. `VICE_DXC` environment variable
+3. `dxc` on `PATH`
+4. the newest x64 DXC found in the Windows SDK on Windows
+
+VICE discovers Metal Shader Converter in this order:
+
+1. `VICE_METAL_SHADER_CONVERTER_EXECUTABLE` CMake cache path
+2. `VICE_METAL_SHADER_CONVERTER` environment variable
+3. `metal-shaderconverter` on `PATH`
+
+On Windows, VICE Lab enables cooked shaders when DXC is available. The normal Lab build cooks vertex and fragment DXIL into the build `cooked` directory before the executable is linked.
+
+On macOS, VICE Lab enables cooked shaders only when both DXC and Metal Shader Converter are available. The normal Lab build then produces DXIL, metallib, converter reflection, and the VICE manifest before the executable is linked.
+
+If the platform toolchain is incomplete, VICE Lab still builds and uses the explicit source shader development fallback. A missing optional shader toolchain is not a configure failure.
+
+If the toolchain is available and cooking fails, the build fails. VICE does not hide a broken cooked shader behind the source fallback.
+
+Generated shader artifacts stay in the build directory. They are not committed to Git.
+
 ## Example
 
 ```text
@@ -68,11 +95,13 @@ The RHI accepts cooked shaders through `ShaderBinaryDesc`.
 
 The descriptor contains the shader stage, backend binary format, byte span, logical resource bindings, entry point, debug name, and optional normalized Metal resource locations. It does not contain a file path.
 
-Higher-level asset code reads the cooked artifact and passes its bytes and binding metadata into the RHI. The input spans only need to remain valid during module creation.
+Higher-level asset code reads `shader.vice.json`, validates the manifest, loads the artifact for the active backend, reconstructs the typed binding records, and passes them into the RHI.
+
+The runtime loader never parses raw `shader.metal.json`. That converter output is a cooker input only.
 
 Direct3D 12 accepts `ShaderBinaryFormat::dxil`. Metal accepts `ShaderBinaryFormat::metallib`.
 
-Runtime source compilation remains available as a development fallback while the asset layer is being connected.
+VICE Lab prefers cooked shader manifests when they exist. Source compilation is only used when the cooked manifest is absent. An existing but invalid cooked manifest is a hard error.
 
 ## Logical binding identity
 
@@ -145,7 +174,9 @@ Schema changes also change the shader asset cache seed so older manifests cannot
 
 ## CI
 
-CI compiles a resource-using shader with the Windows SDK DXC and checks the generated manifest. This protects the DXC parser and the platform-neutral manifest schema against compiler and code changes.
+Windows CI proves build-integrated shader cooking by checking that the normal build emits both VICE Lab shader manifests and DXIL files.
+
+CI also compiles a separate resource-using reflection fixture with the Windows SDK DXC and checks its generated manifest. This protects the DXC parser and the platform-neutral manifest schema against compiler and code changes.
 
 The shader cooker unit tests use representative Metal Shader Converter reflection JSON to verify normalization, including arrays, sampler locations, missing sampler locations, and the automatic-layout rejection of unbounded resources.
 
