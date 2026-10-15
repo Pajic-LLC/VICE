@@ -161,7 +161,7 @@ int main() {
     };
     static_assert(!is_valid(invalid_shader));
 
-    constexpr std::array<std::byte, 4> binary_bytes{};
+    static constexpr std::array<std::byte, 4> binary_bytes{};
     constexpr ShaderBinaryDesc valid_binary{
         .stage = ShaderStage::vertex,
         .format = ShaderBinaryFormat::dxil,
