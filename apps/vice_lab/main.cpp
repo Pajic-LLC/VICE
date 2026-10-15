@@ -4,6 +4,7 @@
 #include <vice/core/time.hpp>
 #include <vice/core/version.hpp>
 #include <vice/jobs/jobs.hpp>
+#include <vice/math/math.hpp>
 #include <vice/platform/event.hpp>
 #include <vice/platform/services.hpp>
 #include <vice/render/rhi.hpp>
@@ -28,26 +29,38 @@
 namespace {
 
 struct LabVertex {
-    float position[2];
+    float position[3];
     float color[3];
 };
 
-static_assert(sizeof(LabVertex) == 20U);
+static_assert(sizeof(LabVertex) == 24U);
 
-static constexpr std::array<LabVertex, 3> triangle_vertices{{
-    {{0.0F, 0.72F}, {0.20F, 0.84F, 1.00F}},
-    {{-0.68F, -0.58F}, {1.00F, 0.26F, 0.62F}},
-    {{0.68F, -0.58F}, {0.98F, 0.82F, 0.18F}},
+static constexpr std::array<LabVertex, 8> cube_vertices{{
+    {{-0.7F, -0.7F, -0.7F}, {0.16F, 0.68F, 1.00F}},
+    {{ 0.7F, -0.7F, -0.7F}, {0.96F, 0.26F, 0.54F}},
+    {{ 0.7F,  0.7F, -0.7F}, {0.98F, 0.80F, 0.18F}},
+    {{-0.7F,  0.7F, -0.7F}, {0.34F, 0.92F, 0.48F}},
+    {{-0.7F, -0.7F,  0.7F}, {0.66F, 0.34F, 1.00F}},
+    {{ 0.7F, -0.7F,  0.7F}, {1.00F, 0.48F, 0.20F}},
+    {{ 0.7F,  0.7F,  0.7F}, {0.24F, 0.88F, 0.92F}},
+    {{-0.7F,  0.7F,  0.7F}, {0.96F, 0.42F, 0.82F}},
 }};
 
-static constexpr std::array<std::uint16_t, 3> triangle_indices{0U, 1U, 2U};
+static constexpr std::array<std::uint16_t, 36> cube_indices{
+    4, 5, 6, 4, 6, 7,
+    1, 0, 3, 1, 3, 2,
+    0, 4, 7, 0, 7, 3,
+    5, 1, 2, 5, 2, 6,
+    3, 7, 6, 3, 6, 2,
+    0, 1, 5, 0, 5, 4,
+};
 
-static constexpr std::array triangle_attributes{
+static constexpr std::array cube_attributes{
     vice::render::VertexAttributeDesc{
         .semantic = "POSITION",
         .semantic_index = 0,
         .shader_location = 0,
-        .format = vice::render::VertexFormat::float32x2,
+        .format = vice::render::VertexFormat::float32x3,
         .offset = 0,
     },
     vice::render::VertexAttributeDesc{
@@ -55,25 +68,25 @@ static constexpr std::array triangle_attributes{
         .semantic_index = 0,
         .shader_location = 1,
         .format = vice::render::VertexFormat::float32x3,
-        .offset = 8,
+        .offset = 12,
     },
 };
 
-static constexpr std::array triangle_vertex_layouts{
+static constexpr std::array cube_vertex_layouts{
     vice::render::VertexBufferLayoutDesc{
         .stride = sizeof(LabVertex),
         .step_mode = vice::render::VertexStepMode::per_vertex,
         .step_rate = 1,
-        .attributes = triangle_attributes,
+        .attributes = cube_attributes,
     },
 };
 
-constexpr std::string_view metal_triangle_source = R"(
+constexpr std::string_view metal_cube_source = R"(
 #include <metal_stdlib>
 using namespace metal;
 
 struct VertexIn {
-    float2 position [[attribute(11)]];
+    float3 position [[attribute(11)]];
     float3 color [[attribute(12)]];
 };
 
@@ -82,21 +95,43 @@ struct VertexOut {
     float3 color;
 };
 
-vertex VertexOut vice_triangle_vs(VertexIn input [[stage_in]]) {
+vertex VertexOut vice_cube_vs(VertexIn input [[stage_in]]) {
+    constexpr float cy = 0.8525245;
+    constexpr float sy = 0.5226872;
+    constexpr float cx = 0.9393727;
+    constexpr float sx = -0.3428978;
+
+    float3 yawed = float3(
+        cy * input.position.x + sy * input.position.z,
+        input.position.y,
+        -sy * input.position.x + cy * input.position.z
+    );
+    float3 rotated = float3(
+        yawed.x,
+        cx * yawed.y - sx * yawed.z,
+        sx * yawed.y + cx * yawed.z
+    );
+    float z_view = rotated.z - 3.2;
+
     VertexOut out;
-    out.position = float4(input.position, 0.0, 1.0);
+    out.position = float4(
+        0.9742786 * rotated.x,
+        1.7320508 * rotated.y,
+        -1.001001 * z_view - 0.1001001,
+        -z_view
+    );
     out.color = input.color;
     return out;
 }
 
-fragment float4 vice_triangle_fs(VertexOut in [[stage_in]]) {
+fragment float4 vice_cube_fs(VertexOut in [[stage_in]]) {
     return float4(in.color, 1.0);
 }
 )";
 
-constexpr std::string_view hlsl_triangle_source = R"(
+constexpr std::string_view hlsl_cube_source = R"(
 struct VertexIn {
-    float2 position : POSITION0;
+    float3 position : POSITION0;
     float3 color : COLOR0;
 };
 
@@ -105,14 +140,36 @@ struct VertexOut {
     float3 color : COLOR0;
 };
 
-VertexOut vice_triangle_vs(VertexIn input) {
+VertexOut vice_cube_vs(VertexIn input) {
+    const float cy = 0.8525245;
+    const float sy = 0.5226872;
+    const float cx = 0.9393727;
+    const float sx = -0.3428978;
+
+    float3 yawed = float3(
+        cy * input.position.x + sy * input.position.z,
+        input.position.y,
+        -sy * input.position.x + cy * input.position.z
+    );
+    float3 rotated = float3(
+        yawed.x,
+        cx * yawed.y - sx * yawed.z,
+        sx * yawed.y + cx * yawed.z
+    );
+    float z_view = rotated.z - 3.2;
+
     VertexOut output;
-    output.position = float4(input.position, 0.0, 1.0);
+    output.position = float4(
+        0.9742786 * rotated.x,
+        1.7320508 * rotated.y,
+        -1.001001 * z_view - 0.1001001,
+        -z_view
+    );
     output.color = input.color;
     return output;
 }
 
-float4 vice_triangle_fs(VertexOut input) : SV_Target0 {
+float4 vice_cube_fs(VertexOut input) : SV_Target0 {
     return float4(input.color, 1.0);
 }
 )";
@@ -155,6 +212,24 @@ float4 vice_triangle_fs(VertexOut input) : SV_Target0 {
             cooked_directory.filename().string()
     );
     return device.create_shader_module(development_fallback);
+}
+
+[[nodiscard]] std::unique_ptr<vice::render::Texture> create_depth_target(
+    vice::render::Device& device,
+    const vice::platform::WindowMetrics metrics
+) {
+    vice::render::TextureDesc depth_desc;
+    depth_desc.dimension = vice::render::TextureDimension::d2;
+    depth_desc.width = std::max<std::uint32_t>(1U, metrics.drawable_width);
+    depth_desc.height = std::max<std::uint32_t>(1U, metrics.drawable_height);
+    depth_desc.depth = 1;
+    depth_desc.mip_levels = 1;
+    depth_desc.array_layers = 1;
+    depth_desc.sample_count = 1;
+    depth_desc.format = vice::render::TextureFormat::depth32_float;
+    depth_desc.usage = vice::render::TextureUsage::depth_attachment;
+    depth_desc.debug_name = "VICE Lab depth";
+    return device.create_texture(depth_desc);
 }
 
 } // namespace
@@ -324,24 +399,37 @@ int main() {
         return 1;
     }
 
+    auto depth_target = create_depth_target(*render_device, window->metrics());
+    if (!depth_target) {
+        log(LogLevel::error, "VICE Lab could not create the depth target.");
+        return 1;
+    }
+
     vice::render::BufferDesc vertex_buffer_desc;
-    vertex_buffer_desc.size = sizeof(triangle_vertices);
+    vertex_buffer_desc.size = sizeof(cube_vertices);
     vertex_buffer_desc.usage = vice::render::BufferUsage::vertex;
     vertex_buffer_desc.memory = vice::render::MemoryLocation::cpu_to_gpu;
-    vertex_buffer_desc.debug_name = "VICE Lab triangle vertices";
+    vertex_buffer_desc.debug_name = "VICE Lab cube vertices";
 
     vice::render::BufferDesc index_buffer_desc;
-    index_buffer_desc.size = sizeof(triangle_indices);
+    index_buffer_desc.size = sizeof(cube_indices);
     index_buffer_desc.usage = vice::render::BufferUsage::index;
     index_buffer_desc.memory = vice::render::MemoryLocation::cpu_to_gpu;
-    index_buffer_desc.debug_name = "VICE Lab triangle indices";
+    index_buffer_desc.debug_name = "VICE Lab cube indices";
+
+    vice::render::BufferDesc frame_buffer_desc;
+    frame_buffer_desc.size = sizeof(vice::math::Mat4);
+    frame_buffer_desc.usage = vice::render::BufferUsage::uniform;
+    frame_buffer_desc.memory = vice::render::MemoryLocation::cpu_to_gpu;
+    frame_buffer_desc.debug_name = "VICE Lab frame constants";
 
     auto vertex_buffer = render_device->create_buffer(vertex_buffer_desc);
     auto index_buffer = render_device->create_buffer(index_buffer_desc);
-    if (!vertex_buffer || !index_buffer ||
-        !vertex_buffer->write(0, std::as_bytes(std::span{triangle_vertices})) ||
-        !index_buffer->write(0, std::as_bytes(std::span{triangle_indices}))) {
-        log(LogLevel::error, "VICE Lab could not upload triangle mesh buffers.");
+    auto frame_buffer = render_device->create_buffer(frame_buffer_desc);
+    if (!vertex_buffer || !index_buffer || !frame_buffer ||
+        !vertex_buffer->write(0, std::as_bytes(std::span{cube_vertices})) ||
+        !index_buffer->write(0, std::as_bytes(std::span{cube_indices}))) {
+        log(LogLevel::error, "VICE Lab could not upload cube resources.");
         return 1;
     }
 
@@ -351,28 +439,28 @@ int main() {
     vertex_desc.language = metal_backend
         ? vice::render::ShaderSourceLanguage::metal
         : vice::render::ShaderSourceLanguage::hlsl;
-    vertex_desc.source = metal_backend ? metal_triangle_source : hlsl_triangle_source;
-    vertex_desc.entry_point = "vice_triangle_vs";
-    vertex_desc.debug_name = "VICE Lab triangle vertex";
+    vertex_desc.source = metal_backend ? metal_cube_source : hlsl_cube_source;
+    vertex_desc.entry_point = "vice_cube_vs";
+    vertex_desc.debug_name = "VICE Lab cube vertex";
 
     vice::render::ShaderModuleDesc fragment_desc = vertex_desc;
     fragment_desc.stage = vice::render::ShaderStage::fragment;
-    fragment_desc.entry_point = "vice_triangle_fs";
-    fragment_desc.debug_name = "VICE Lab triangle fragment";
+    fragment_desc.entry_point = "vice_cube_fs";
+    fragment_desc.debug_name = "VICE Lab cube fragment";
 
     const std::filesystem::path cooked_shader_root{VICE_LAB_COOKED_SHADER_ROOT};
     auto vertex_shader = load_lab_shader(
         *render_device,
-        cooked_shader_root / "vice_lab_triangle_vs",
+        cooked_shader_root / "vice_lab_cube_vs",
         vertex_desc
     );
     auto fragment_shader = load_lab_shader(
         *render_device,
-        cooked_shader_root / "vice_lab_triangle_fs",
+        cooked_shader_root / "vice_lab_cube_fs",
         fragment_desc
     );
     if (!vertex_shader || !fragment_shader) {
-        log(LogLevel::error, "VICE Lab could not create triangle shader modules.");
+        log(LogLevel::error, "VICE Lab could not create cube shader modules.");
         return 1;
     }
 
@@ -381,15 +469,27 @@ int main() {
     pipeline_desc.fragment_shader = fragment_shader.get();
     pipeline_desc.color_format = swapchain->color_format();
     pipeline_desc.cull_mode = vice::render::CullMode::none;
-    pipeline_desc.vertex_buffers = triangle_vertex_layouts;
-    pipeline_desc.debug_name = "VICE Lab indexed triangle";
+    pipeline_desc.depth.format = vice::render::TextureFormat::depth32_float;
+    pipeline_desc.depth.test_enabled = true;
+    pipeline_desc.depth.write_enabled = true;
+    pipeline_desc.depth.compare = vice::render::CompareOp::less;
+    pipeline_desc.vertex_buffers = cube_vertex_layouts;
+    pipeline_desc.debug_name = "VICE Lab depth-tested cube";
 
-    auto triangle_pipeline = render_device->create_graphics_pipeline(pipeline_desc);
-    if (!triangle_pipeline) {
-        log(LogLevel::error, "VICE Lab could not create the indexed triangle pipeline.");
+    auto cube_pipeline = render_device->create_graphics_pipeline(pipeline_desc);
+    if (!cube_pipeline) {
+        log(LogLevel::error, "VICE Lab could not create the cube pipeline.");
         return 1;
     }
-    log(LogLevel::info, "VICE Lab indexed mesh pipeline ready.");
+    log(LogLevel::info, "VICE Lab 3D cube pipeline ready.");
+
+    const bool cooked_transform_binding = !vertex_shader->resources().empty();
+    constexpr vice::render::ShaderBindingKey frame_binding{
+        .register_class = vice::render::ShaderRegisterClass::constant_buffer,
+        .binding = 0,
+        .space = 0,
+        .array_element = 0,
+    };
 
     vice::world::World world;
     const auto entity = world.create_entity();
@@ -398,6 +498,7 @@ int main() {
     }
 
     constexpr vice::render::Color clear_color{0.018F, 0.022F, 0.030F, 1.0F};
+    const auto scene_start = std::chrono::steady_clock::now();
     FrameClock clock;
     bool running = true;
     while (running) {
@@ -412,7 +513,20 @@ int main() {
                     ) {
                         running = false;
                     } else if constexpr (std::is_same_v<Payload, vice::platform::WindowMetricsChanged>) {
-                        (void)swapchain->resize(payload.metrics);
+                        if (payload.metrics.drawable_width > 0U && payload.metrics.drawable_height > 0U) {
+                            if (!render_device->wait_idle() || !swapchain->resize(payload.metrics)) {
+                                log(LogLevel::error, "VICE Lab could not resize the render targets.");
+                                running = false;
+                                return;
+                            }
+                            auto replacement_depth = create_depth_target(*render_device, payload.metrics);
+                            if (!replacement_depth) {
+                                log(LogLevel::error, "VICE Lab could not resize the depth target.");
+                                running = false;
+                                return;
+                            }
+                            depth_target = std::move(replacement_depth);
+                        }
                     } else if constexpr (std::is_same_v<Payload, vice::platform::KeyEvent>) {
                         if (payload.pressed && payload.key == vice::platform::Key::escape) {
                             running = false;
@@ -426,29 +540,71 @@ int main() {
         (void)jobs.pump_main(64);
 
         if (running) {
+            const auto elapsed = std::chrono::duration<float>(
+                std::chrono::steady_clock::now() - scene_start
+            ).count();
+            const float aspect = static_cast<float>(depth_target->width()) /
+                static_cast<float>(std::max<std::uint32_t>(1U, depth_target->height()));
+            const auto model = vice::math::multiply(
+                vice::math::rotation_y(elapsed * 0.72F),
+                vice::math::rotation_x(elapsed * 0.41F)
+            );
+            const auto view = vice::math::look_at_rh(
+                vice::math::Vec3{0.0F, 0.0F, 3.2F},
+                vice::math::Vec3{0.0F, 0.0F, 0.0F},
+                vice::math::Vec3{0.0F, 1.0F, 0.0F}
+            );
+            const auto projection = vice::math::perspective_rh_zo(
+                1.0471975512F,
+                aspect,
+                0.1F,
+                100.0F
+            );
+            const auto mvp = vice::math::multiply(
+                projection,
+                vice::math::multiply(view, model)
+            );
+            if (!frame_buffer->write(0, std::as_bytes(std::span{mvp.values}))) {
+                log(LogLevel::error, "VICE Lab could not update frame constants.");
+                running = false;
+                continue;
+            }
+
             auto frame_commands = render_device->create_command_list();
             vice::render::RenderPassDesc pass_desc;
             pass_desc.clear_color = clear_color;
+            pass_desc.depth_attachment = depth_target.get();
+            pass_desc.clear_depth = 1.0F;
+            pass_desc.clear_depth_attachment = true;
 
-            const bool recorded = frame_commands &&
+            bool recorded = frame_commands &&
                 frame_commands->begin_render_pass(*swapchain, pass_desc) &&
-                frame_commands->set_graphics_pipeline(*triangle_pipeline) &&
+                frame_commands->set_graphics_pipeline(*cube_pipeline) &&
                 frame_commands->set_vertex_buffer(0, *vertex_buffer) &&
                 frame_commands->set_index_buffer(
                     *index_buffer,
                     vice::render::IndexFormat::uint16
-                ) &&
-                frame_commands->draw_indexed(static_cast<std::uint32_t>(triangle_indices.size())) &&
+                );
+            if (recorded && cooked_transform_binding) {
+                recorded = frame_commands->set_graphics_constant_buffer(
+                    frame_binding,
+                    *frame_buffer,
+                    0,
+                    sizeof(vice::math::Mat4)
+                );
+            }
+            recorded = recorded &&
+                frame_commands->draw_indexed(static_cast<std::uint32_t>(cube_indices.size())) &&
                 frame_commands->end_render_pass() &&
                 frame_commands->present(*swapchain);
 
             if (!recorded) {
-                log(LogLevel::error, "VICE Lab failed to record the indexed triangle frame.");
+                log(LogLevel::error, "VICE Lab failed to record the depth-tested cube frame.");
                 running = false;
             } else {
                 const auto frame_submission = render_device->submit(std::move(frame_commands));
                 if (frame_submission == vice::render::invalid_submission) {
-                    log(LogLevel::error, "VICE Lab indexed triangle submission failed.");
+                    log(LogLevel::error, "VICE Lab cube submission failed.");
                     running = false;
                 }
             }
@@ -459,11 +615,13 @@ int main() {
     }
 
     (void)render_device->wait_idle();
-    triangle_pipeline.reset();
+    cube_pipeline.reset();
     fragment_shader.reset();
     vertex_shader.reset();
+    frame_buffer.reset();
     index_buffer.reset();
     vertex_buffer.reset();
+    depth_target.reset();
     swapchain.reset();
     readback_buffer.reset();
     upload_buffer.reset();
