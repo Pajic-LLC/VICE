@@ -9,9 +9,11 @@
 #include <vice/render/rhi.hpp>
 #include <vice/world/world.hpp>
 
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <chrono>
+#include <cstddef>
 #include <span>
 #include <string>
 #include <thread>
@@ -101,10 +103,81 @@ int main() {
         log(LogLevel::error, "VICE Lab could not create a render device.");
         return 1;
     }
+
+    const auto render_capabilities = render_device->capabilities();
     log(
         LogLevel::info,
         std::string{"Renderer: "} + std::string{vice::render::backend_name(render_device->backend())}
     );
+    log(
+        LogLevel::debug,
+        std::string{"RHI unified memory: "} + (render_capabilities.unified_memory ? "yes" : "no")
+    );
+
+    std::array<std::byte, 64> probe_source{};
+    vice::jobs::TaskDesc build_probe;
+    build_probe.name = "vice_lab.build_rhi_probe";
+    build_probe.function = [&] {
+        for (std::size_t index = 0; index < probe_source.size(); ++index) {
+            probe_source[index] = std::byte{
+                static_cast<unsigned char>((index * 17U + 11U) & 0xFFU)
+            };
+        }
+    };
+    const auto probe_job = jobs.schedule(std::move(build_probe));
+    if (jobs.wait(probe_job) != vice::jobs::Status::succeeded) {
+        log(LogLevel::error, "VICE Lab could not prepare the RHI resource probe.");
+        return 1;
+    }
+
+    vice::render::BufferDesc upload_desc;
+    upload_desc.size = probe_source.size();
+    upload_desc.usage = vice::render::BufferUsage::copy_source;
+    upload_desc.memory = vice::render::MemoryLocation::cpu_to_gpu;
+    upload_desc.debug_name = "VICE Lab upload probe";
+
+    vice::render::BufferDesc readback_desc;
+    readback_desc.size = probe_source.size();
+    readback_desc.usage = vice::render::BufferUsage::copy_destination;
+    readback_desc.memory = vice::render::MemoryLocation::gpu_to_cpu;
+    readback_desc.debug_name = "VICE Lab readback probe";
+
+    auto upload_buffer = render_device->create_buffer(upload_desc);
+    auto readback_buffer = render_device->create_buffer(readback_desc);
+    auto command_list = render_device->create_command_list();
+    if (!upload_buffer || !readback_buffer || !command_list) {
+        log(LogLevel::error, "VICE Lab could not create RHI probe resources.");
+        return 1;
+    }
+    if (!upload_buffer->write(0, std::span<const std::byte>{probe_source})) {
+        log(LogLevel::error, "VICE Lab could not write the RHI upload buffer.");
+        return 1;
+    }
+    if (!command_list->copy_buffer(
+            *upload_buffer,
+            0,
+            *readback_buffer,
+            0,
+            probe_source.size()
+        )) {
+        log(LogLevel::error, "VICE Lab could not record the RHI buffer copy.");
+        return 1;
+    }
+
+    const auto probe_submission = render_device->submit(std::move(command_list));
+    if (probe_submission == vice::render::invalid_submission ||
+        !render_device->wait_for_submission(probe_submission)) {
+        log(LogLevel::error, "VICE Lab RHI probe submission failed.");
+        return 1;
+    }
+
+    std::array<std::byte, 64> probe_result{};
+    if (!readback_buffer->read(0, std::span<std::byte>{probe_result}) ||
+        !std::equal(probe_source.begin(), probe_source.end(), probe_result.begin())) {
+        log(LogLevel::error, "VICE Lab RHI buffer transfer verification failed.");
+        return 1;
+    }
+    log(LogLevel::debug, "VICE Lab RHI buffer transfer verified.");
 
     auto swapchain = render_device->create_swapchain(*window);
     if (!swapchain) {
@@ -154,7 +227,10 @@ int main() {
         std::this_thread::sleep_for(std::chrono::milliseconds{1});
     }
 
+    (void)render_device->wait_idle();
     swapchain.reset();
+    readback_buffer.reset();
+    upload_buffer.reset();
     render_device.reset();
     window.reset();
     jobs.shutdown();
