@@ -71,3 +71,45 @@ jobs:
           if ($LASTEXITCODE -ne 0) {
             exit $LASTEXITCODE
           }
+
+          & $cooker `
+            --input "assets/shaders/vice_reflection_fixture.hlsl" `
+            --output "build/cooked/vice_reflection_fixture" `
+            --entry "vice_reflection_cs" `
+            --stage compute `
+            --target d3d12 `
+            --dxc $dxc.FullName
+          if ($LASTEXITCODE -ne 0) {
+            exit $LASTEXITCODE
+          }
+
+          $manifestPath = "build/cooked/vice_reflection_fixture/shader.vice.json"
+          $manifest = Get-Content $manifestPath -Raw | ConvertFrom-Json
+          if ($manifest.version -ne 2) {
+            throw "Unexpected shader manifest version: $($manifest.version)"
+          }
+          if ($manifest.reflection.version -ne 1) {
+            throw "Unexpected shader reflection version: $($manifest.reflection.version)"
+          }
+          if ($manifest.reflection.resources.Count -ne 4) {
+            throw "Expected four reflected resources, got $($manifest.reflection.resources.Count)."
+          }
+
+          function Assert-Resource($name, $class, $binding, $space) {
+            $resource = $manifest.reflection.resources | Where-Object { $_.name -eq $name }
+            if (-not $resource) {
+              throw "Missing reflected resource $name."
+            }
+            if ($resource.class -ne $class -or
+                $resource.binding -ne $binding -or
+                $resource.space -ne $space -or
+                $resource.count -ne 1 -or
+                $resource.unbounded) {
+              throw "Unexpected reflection for $name."
+            }
+          }
+
+          Assert-Resource "FrameData" "constant_buffer" 2 1
+          Assert-Resource "LinearSampler" "sampler" 3 1
+          Assert-Resource "InputTexture" "shader_resource" 4 2
+          Assert-Resource "OutputBuffer" "unordered_access" 7 3
