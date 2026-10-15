@@ -4,6 +4,12 @@ target_compile_features(vice_core_tests PRIVATE cxx_std_23)
 vice_enable_warnings(vice_core_tests)
 add_test(NAME vice_core_tests COMMAND vice_core_tests)
 
+add_executable(vice_math_tests math_tests.cpp)
+target_link_libraries(vice_math_tests PRIVATE VICE::Math)
+target_compile_features(vice_math_tests PRIVATE cxx_std_23)
+vice_enable_warnings(vice_math_tests)
+add_test(NAME vice_math_tests COMMAND vice_math_tests)
+
 add_executable(vice_jobs_tests jobs_tests.cpp)
 target_link_libraries(vice_jobs_tests PRIVATE VICE::Jobs)
 target_compile_features(vice_jobs_tests PRIVATE cxx_std_23)
