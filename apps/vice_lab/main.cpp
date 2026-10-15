@@ -15,6 +15,7 @@
 #include <atomic>
 #include <chrono>
 #include <cstddef>
+#include <cstdint>
 #include <filesystem>
 #include <memory>
 #include <span>
@@ -26,30 +27,65 @@
 
 namespace {
 
+struct LabVertex {
+    float position[2];
+    float color[3];
+};
+
+static_assert(sizeof(LabVertex) == 20U);
+
+static constexpr std::array<LabVertex, 3> triangle_vertices{{
+    {{0.0F, 0.72F}, {0.20F, 0.84F, 1.00F}},
+    {{-0.68F, -0.58F}, {1.00F, 0.26F, 0.62F}},
+    {{0.68F, -0.58F}, {0.98F, 0.82F, 0.18F}},
+}};
+
+static constexpr std::array<std::uint16_t, 3> triangle_indices{0U, 1U, 2U};
+
+static constexpr std::array triangle_attributes{
+    vice::render::VertexAttributeDesc{
+        .semantic = "POSITION",
+        .semantic_index = 0,
+        .shader_location = 0,
+        .format = vice::render::VertexFormat::float32x2,
+        .offset = 0,
+    },
+    vice::render::VertexAttributeDesc{
+        .semantic = "COLOR",
+        .semantic_index = 0,
+        .shader_location = 1,
+        .format = vice::render::VertexFormat::float32x3,
+        .offset = 8,
+    },
+};
+
+static constexpr std::array triangle_vertex_layouts{
+    vice::render::VertexBufferLayoutDesc{
+        .stride = sizeof(LabVertex),
+        .step_mode = vice::render::VertexStepMode::per_vertex,
+        .step_rate = 1,
+        .attributes = triangle_attributes,
+    },
+};
+
 constexpr std::string_view metal_triangle_source = R"(
 #include <metal_stdlib>
 using namespace metal;
+
+struct VertexIn {
+    float2 position [[attribute(11)]];
+    float3 color [[attribute(12)]];
+};
 
 struct VertexOut {
     float4 position [[position]];
     float3 color;
 };
 
-vertex VertexOut vice_triangle_vs(uint vertex_id [[vertex_id]]) {
-    const float2 positions[3] = {
-        float2(0.0, 0.72),
-        float2(-0.68, -0.58),
-        float2(0.68, -0.58)
-    };
-    const float3 colors[3] = {
-        float3(0.20, 0.84, 1.00),
-        float3(1.00, 0.26, 0.62),
-        float3(0.98, 0.82, 0.18)
-    };
-
+vertex VertexOut vice_triangle_vs(VertexIn input [[stage_in]]) {
     VertexOut out;
-    out.position = float4(positions[vertex_id], 0.0, 1.0);
-    out.color = colors[vertex_id];
+    out.position = float4(input.position, 0.0, 1.0);
+    out.color = input.color;
     return out;
 }
 
@@ -59,26 +95,20 @@ fragment float4 vice_triangle_fs(VertexOut in [[stage_in]]) {
 )";
 
 constexpr std::string_view hlsl_triangle_source = R"(
+struct VertexIn {
+    float2 position : POSITION0;
+    float3 color : COLOR0;
+};
+
 struct VertexOut {
     float4 position : SV_Position;
     float3 color : COLOR0;
 };
 
-VertexOut vice_triangle_vs(uint vertex_id : SV_VertexID) {
-    static const float2 positions[3] = {
-        float2(0.0, 0.72),
-        float2(-0.68, -0.58),
-        float2(0.68, -0.58)
-    };
-    static const float3 colors[3] = {
-        float3(0.20, 0.84, 1.00),
-        float3(1.00, 0.26, 0.62),
-        float3(0.98, 0.82, 0.18)
-    };
-
+VertexOut vice_triangle_vs(VertexIn input) {
     VertexOut output;
-    output.position = float4(positions[vertex_id], 0.0, 1.0);
-    output.color = colors[vertex_id];
+    output.position = float4(input.position, 0.0, 1.0);
+    output.color = input.color;
     return output;
 }
 
@@ -294,6 +324,27 @@ int main() {
         return 1;
     }
 
+    vice::render::BufferDesc vertex_buffer_desc;
+    vertex_buffer_desc.size = sizeof(triangle_vertices);
+    vertex_buffer_desc.usage = vice::render::BufferUsage::vertex;
+    vertex_buffer_desc.memory = vice::render::MemoryLocation::cpu_to_gpu;
+    vertex_buffer_desc.debug_name = "VICE Lab triangle vertices";
+
+    vice::render::BufferDesc index_buffer_desc;
+    index_buffer_desc.size = sizeof(triangle_indices);
+    index_buffer_desc.usage = vice::render::BufferUsage::index;
+    index_buffer_desc.memory = vice::render::MemoryLocation::cpu_to_gpu;
+    index_buffer_desc.debug_name = "VICE Lab triangle indices";
+
+    auto vertex_buffer = render_device->create_buffer(vertex_buffer_desc);
+    auto index_buffer = render_device->create_buffer(index_buffer_desc);
+    if (!vertex_buffer || !index_buffer ||
+        !vertex_buffer->write(0, std::as_bytes(std::span{triangle_vertices})) ||
+        !index_buffer->write(0, std::as_bytes(std::span{triangle_indices}))) {
+        log(LogLevel::error, "VICE Lab could not upload triangle mesh buffers.");
+        return 1;
+    }
+
     const bool metal_backend = render_device->backend() == vice::render::Backend::metal;
     vice::render::ShaderModuleDesc vertex_desc;
     vertex_desc.stage = vice::render::ShaderStage::vertex;
@@ -330,14 +381,15 @@ int main() {
     pipeline_desc.fragment_shader = fragment_shader.get();
     pipeline_desc.color_format = swapchain->color_format();
     pipeline_desc.cull_mode = vice::render::CullMode::none;
-    pipeline_desc.debug_name = "VICE Lab first triangle";
+    pipeline_desc.vertex_buffers = triangle_vertex_layouts;
+    pipeline_desc.debug_name = "VICE Lab indexed triangle";
 
     auto triangle_pipeline = render_device->create_graphics_pipeline(pipeline_desc);
     if (!triangle_pipeline) {
-        log(LogLevel::error, "VICE Lab could not create the first graphics pipeline.");
+        log(LogLevel::error, "VICE Lab could not create the indexed triangle pipeline.");
         return 1;
     }
-    log(LogLevel::info, "VICE Lab graphics pipeline ready.");
+    log(LogLevel::info, "VICE Lab indexed mesh pipeline ready.");
 
     vice::world::World world;
     const auto entity = world.create_entity();
@@ -381,17 +433,22 @@ int main() {
             const bool recorded = frame_commands &&
                 frame_commands->begin_render_pass(*swapchain, pass_desc) &&
                 frame_commands->set_graphics_pipeline(*triangle_pipeline) &&
-                frame_commands->draw(3) &&
+                frame_commands->set_vertex_buffer(0, *vertex_buffer) &&
+                frame_commands->set_index_buffer(
+                    *index_buffer,
+                    vice::render::IndexFormat::uint16
+                ) &&
+                frame_commands->draw_indexed(static_cast<std::uint32_t>(triangle_indices.size())) &&
                 frame_commands->end_render_pass() &&
                 frame_commands->present(*swapchain);
 
             if (!recorded) {
-                log(LogLevel::error, "VICE Lab failed to record the triangle frame.");
+                log(LogLevel::error, "VICE Lab failed to record the indexed triangle frame.");
                 running = false;
             } else {
                 const auto frame_submission = render_device->submit(std::move(frame_commands));
                 if (frame_submission == vice::render::invalid_submission) {
-                    log(LogLevel::error, "VICE Lab triangle submission failed.");
+                    log(LogLevel::error, "VICE Lab indexed triangle submission failed.");
                     running = false;
                 }
             }
@@ -405,6 +462,8 @@ int main() {
     triangle_pipeline.reset();
     fragment_shader.reset();
     vertex_shader.reset();
+    index_buffer.reset();
+    vertex_buffer.reset();
     swapchain.reset();
     readback_buffer.reset();
     upload_buffer.reset();
