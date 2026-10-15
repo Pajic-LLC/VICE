@@ -1,25 +1,27 @@
+#include <vice/tools/metal_reflection.hpp>
 #include <vice/tools/shader_cooker.hpp>
 
-#include <cassert>
 #include <filesystem>
 #include <fstream>
 #include <string>
 
+#define CHECK(condition) do { if (!(condition)) return __LINE__; } while (false)
+
 int main() {
     using namespace vice::tools::shader_cooker;
 
-    assert(shader_stage_name(ShaderStage::vertex) == "vertex");
-    assert(shader_stage_name(ShaderStage::fragment) == "fragment");
-    assert(shader_stage_name(ShaderStage::compute) == "compute");
+    CHECK(shader_stage_name(ShaderStage::vertex) == "vertex");
+    CHECK(shader_stage_name(ShaderStage::fragment) == "fragment");
+    CHECK(shader_stage_name(ShaderStage::compute) == "compute");
 
-    assert(shader_register_class_name(ShaderRegisterClass::constant_buffer) == "constant_buffer");
-    assert(shader_register_class_name(ShaderRegisterClass::shader_resource) == "shader_resource");
-    assert(shader_register_class_name(ShaderRegisterClass::unordered_access) == "unordered_access");
-    assert(shader_register_class_name(ShaderRegisterClass::sampler) == "sampler");
+    CHECK(shader_register_class_name(ShaderRegisterClass::constant_buffer) == "constant_buffer");
+    CHECK(shader_register_class_name(ShaderRegisterClass::shader_resource) == "shader_resource");
+    CHECK(shader_register_class_name(ShaderRegisterClass::unordered_access) == "unordered_access");
+    CHECK(shader_register_class_name(ShaderRegisterClass::sampler) == "sampler");
 
-    assert(shader_profile(ShaderStage::vertex, "6.0") == "vs_6_0");
-    assert(shader_profile(ShaderStage::fragment, "6.6") == "ps_6_6");
-    assert(shader_profile(ShaderStage::compute, "6.9") == "cs_6_9");
+    CHECK(shader_profile(ShaderStage::vertex, "6.0") == "vs_6_0");
+    CHECK(shader_profile(ShaderStage::fragment, "6.6") == "ps_6_6");
+    CHECK(shader_profile(ShaderStage::compute, "6.9") == "cs_6_9");
 
     constexpr const char* assembly = R"DXC(
 ;
@@ -36,38 +38,38 @@ int main() {
 )DXC";
 
     const ShaderReflection reflection = parse_dxc_resource_bindings(assembly);
-    assert(reflection.valid);
-    assert(reflection.diagnostics.empty());
-    assert(reflection.resources.size() == 4U);
+    CHECK(reflection.valid);
+    CHECK(reflection.diagnostics.empty());
+    CHECK(reflection.resources.size() == 4U);
 
     const auto& constant_buffer = reflection.resources[0];
-    assert(constant_buffer.name == "FrameData");
-    assert(constant_buffer.register_class == ShaderRegisterClass::constant_buffer);
-    assert(constant_buffer.binding == 2U);
-    assert(constant_buffer.space == 1U);
-    assert(constant_buffer.count == 1U);
-    assert(!constant_buffer.unbounded);
+    CHECK(constant_buffer.name == "FrameData");
+    CHECK(constant_buffer.register_class == ShaderRegisterClass::constant_buffer);
+    CHECK(constant_buffer.binding == 2U);
+    CHECK(constant_buffer.space == 1U);
+    CHECK(constant_buffer.count == 1U);
+    CHECK(!constant_buffer.unbounded);
 
     const auto& sampler = reflection.resources[1];
-    assert(sampler.register_class == ShaderRegisterClass::sampler);
-    assert(sampler.binding == 3U);
-    assert(sampler.space == 1U);
+    CHECK(sampler.register_class == ShaderRegisterClass::sampler);
+    CHECK(sampler.binding == 3U);
+    CHECK(sampler.space == 1U);
 
     const auto& texture = reflection.resources[2];
-    assert(texture.register_class == ShaderRegisterClass::shader_resource);
-    assert(texture.binding == 4U);
-    assert(texture.space == 2U);
-    assert(texture.count == 6U);
-    assert(texture.type == "texture");
-    assert(texture.format == "f32");
-    assert(texture.dimension == "2d");
+    CHECK(texture.register_class == ShaderRegisterClass::shader_resource);
+    CHECK(texture.binding == 4U);
+    CHECK(texture.space == 2U);
+    CHECK(texture.count == 6U);
+    CHECK(texture.type == "texture");
+    CHECK(texture.format == "f32");
+    CHECK(texture.dimension == "2d");
 
     const auto& unordered_access = reflection.resources[3];
-    assert(unordered_access.register_class == ShaderRegisterClass::unordered_access);
-    assert(unordered_access.binding == 7U);
-    assert(unordered_access.space == 3U);
-    assert(unordered_access.count == 0U);
-    assert(unordered_access.unbounded);
+    CHECK(unordered_access.register_class == ShaderRegisterClass::unordered_access);
+    CHECK(unordered_access.binding == 7U);
+    CHECK(unordered_access.space == 3U);
+    CHECK(unordered_access.count == 0U);
+    CHECK(unordered_access.unbounded);
 
     const ShaderReflection empty_reflection = parse_dxc_resource_bindings(R"DXC(
 ; Resource Bindings:
@@ -76,12 +78,97 @@ int main() {
 ; ------------------------------ ---------- ------- ----------- ------- -------------- ------
 ;
 )DXC");
-    assert(empty_reflection.valid);
-    assert(empty_reflection.resources.empty());
+    CHECK(empty_reflection.valid);
+    CHECK(empty_reflection.resources.empty());
 
     const ShaderReflection malformed_reflection = parse_dxc_resource_bindings("; no bindings here\n");
-    assert(!malformed_reflection.valid);
-    assert(!malformed_reflection.diagnostics.empty());
+    CHECK(!malformed_reflection.valid);
+    CHECK(!malformed_reflection.diagnostics.empty());
+
+    ShaderReflection bounded_reflection;
+    bounded_reflection.valid = true;
+    bounded_reflection.resources = {
+        ShaderResourceReflection{
+            .name = "FrameData",
+            .register_class = ShaderRegisterClass::constant_buffer,
+            .binding = 2,
+            .space = 1,
+            .count = 1,
+            .unbounded = false,
+            .type = "cbuffer",
+            .format = "NA",
+            .dimension = "NA",
+        },
+        ShaderResourceReflection{
+            .name = "LinearSampler",
+            .register_class = ShaderRegisterClass::sampler,
+            .binding = 3,
+            .space = 1,
+            .count = 1,
+            .unbounded = false,
+            .type = "sampler",
+            .format = "NA",
+            .dimension = "NA",
+        },
+        ShaderResourceReflection{
+            .name = "InputTexture",
+            .register_class = ShaderRegisterClass::shader_resource,
+            .binding = 4,
+            .space = 2,
+            .count = 2,
+            .unbounded = false,
+            .type = "texture",
+            .format = "f32",
+            .dimension = "2d",
+        },
+    };
+
+    constexpr std::string_view metal_json = R"JSON({
+        "EntryPoint": "main",
+        "ShaderType": "Fragment",
+        "TopLevelArgumentBuffer": [
+            {"EltOffset": 0, "Size": 24, "Slot": 2, "Space": 1, "Type": "CBV"},
+            {"EltOffset": 24, "Size": 24, "Slot": 3, "Space": 1, "Type": "SMP"},
+            {"EltOffset": 48, "Size": 48, "Slot": 4, "Space": 2, "Type": "SRV"}
+        ]
+    })JSON";
+
+    const MetalBindingReflection metal = parse_metal_shader_converter_reflection(
+        metal_json,
+        bounded_reflection
+    );
+    CHECK(metal.valid);
+    CHECK(metal.diagnostics.empty());
+    CHECK(metal.locations.size() == 3U);
+    CHECK(metal.locations[0].register_class == ShaderRegisterClass::constant_buffer);
+    CHECK(metal.locations[0].argument_buffer_offset == 0U);
+    CHECK(metal.locations[1].register_class == ShaderRegisterClass::sampler);
+    CHECK(metal.locations[1].argument_buffer_offset == 24U);
+    CHECK(metal.locations[2].register_class == ShaderRegisterClass::shader_resource);
+    CHECK(metal.locations[2].binding == 4U);
+    CHECK(metal.locations[2].space == 2U);
+    CHECK(metal.locations[2].argument_buffer_offset == 48U);
+    CHECK(metal.locations[2].size == 48U);
+
+    constexpr std::string_view missing_sampler_json = R"JSON({
+        "TopLevelArgumentBuffer": [
+            {"EltOffset": 0, "Size": 24, "Slot": 2, "Space": 1, "Type": "CBV"},
+            {"EltOffset": 24, "Size": 48, "Slot": 4, "Space": 2, "Type": "SRV"}
+        ]
+    })JSON";
+    const MetalBindingReflection missing_sampler = parse_metal_shader_converter_reflection(
+        missing_sampler_json,
+        bounded_reflection
+    );
+    CHECK(!missing_sampler.valid);
+    CHECK(missing_sampler.diagnostics.find("sampler") != std::string::npos);
+
+    const MetalBindingReflection unbounded_metal = parse_metal_shader_converter_reflection(
+        metal_json,
+        reflection
+    );
+    CHECK(!unbounded_metal.valid);
+    CHECK(unbounded_metal.diagnostics.find("unbounded") != std::string::npos);
 
     CookRequest request;
     request.entry_point = "main_vs";
@@ -95,17 +182,17 @@ int main() {
 
     const auto first = make_cache_key(source, request, "dxc 1", "msc 1");
     const auto second = make_cache_key(source, request, "dxc 1", "msc 1");
-    assert(first == second);
-    assert(first.size() == 64U);
+    CHECK(first == second);
+    CHECK(first.size() == 64U);
 
     request.entry_point = "other_vs";
     const auto changed_entry = make_cache_key(source, request, "dxc 1", "msc 1");
-    assert(first != changed_entry);
+    CHECK(first != changed_entry);
 
     request.entry_point = "main_vs";
     request.debug = true;
     const auto debug_key = make_cache_key(source, request, "dxc 1", "msc 1");
-    assert(first != debug_key);
+    CHECK(first != debug_key);
 
     const auto temporary =
         std::filesystem::temp_directory_path() / "vice_shader_cooker_discovery_test";
@@ -119,8 +206,10 @@ int main() {
         std::ofstream stream(fake_tool);
         stream << "fake";
     }
-    assert(discover_executable(fake_tool, "VICE_TEST_UNUSED", "vice-fake-tool") == fake_tool);
+    CHECK(discover_executable(fake_tool, "VICE_TEST_UNUSED", "vice-fake-tool") == fake_tool);
     std::filesystem::remove_all(temporary);
 
     return 0;
 }
+
+#undef CHECK

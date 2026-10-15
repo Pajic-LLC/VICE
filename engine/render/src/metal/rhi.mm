@@ -10,7 +10,9 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <cstdint>
 #include <cstring>
+#include <limits>
 #include <memory>
 #include <string>
 #include <string_view>
@@ -19,6 +21,17 @@
 
 namespace vice::render {
 namespace {
+
+constexpr NSUInteger metal_shader_converter_argument_buffer_bind_point = 2U;
+constexpr std::uint64_t metal_descriptor_entry_size = 3U * sizeof(std::uint64_t);
+
+struct alignas(std::uint64_t) MetalDescriptorTableEntry {
+    std::uint64_t gpu_address = 0;
+    std::uint64_t texture_view_id = 0;
+    std::uint64_t metadata = 0;
+};
+
+static_assert(sizeof(MetalDescriptorTableEntry) == metal_descriptor_entry_size);
 
 [[nodiscard]] NSString* make_label(const std::string_view text) {
     if (text.empty()) {
@@ -121,6 +134,85 @@ void log_error(const char* prefix, NSError* error) {
     return face == FrontFace::counter_clockwise ? MTLWindingCounterClockwise : MTLWindingClockwise;
 }
 
+[[nodiscard]] bool same_binding(
+    const ShaderBindingKey& left,
+    const ShaderBindingKey& right
+) noexcept {
+    return left.register_class == right.register_class &&
+        left.binding == right.binding && left.space == right.space &&
+        left.array_element == right.array_element;
+}
+
+[[nodiscard]] bool same_location_namespace(
+    const MetalShaderResourceLocationDesc& location,
+    const ShaderResourceBindingDesc& resource
+) noexcept {
+    return location.register_class == resource.register_class &&
+        location.binding == resource.binding && location.space == resource.space;
+}
+
+[[nodiscard]] bool validate_metal_shader_layout(
+    const std::span<const ShaderResourceBindingDesc> resources,
+    const std::span<const MetalShaderResourceLocationDesc> locations,
+    std::string& diagnostics
+) {
+    if (resources.empty()) {
+        if (!locations.empty()) {
+            diagnostics = "Metal shader locations exist without reflected logical resources.";
+            return false;
+        }
+        return true;
+    }
+    for (const auto& resource : resources) {
+        if (resource.unbounded) {
+            diagnostics =
+                "Metal automatic resource layout does not support unbounded ranges. "
+                "Use the explicit root-signature conversion path.";
+            return false;
+        }
+        const auto found = std::find_if(
+            locations.begin(),
+            locations.end(),
+            [&](const MetalShaderResourceLocationDesc& location) {
+                return same_location_namespace(location, resource);
+            }
+        );
+        if (found == locations.end()) {
+            diagnostics = "Metal shader is missing a converter-reflected resource location.";
+            return false;
+        }
+        const std::uint64_t required =
+            static_cast<std::uint64_t>(resource.count) * metal_descriptor_entry_size;
+        if (found->size < required) {
+            diagnostics = "Metal resource location is too small for the reflected resource array.";
+            return false;
+        }
+    }
+    for (std::size_t index = 0; index < locations.size(); ++index) {
+        const auto& location = locations[index];
+        const auto logical = std::find_if(
+            resources.begin(),
+            resources.end(),
+            [&](const ShaderResourceBindingDesc& resource) {
+                return same_location_namespace(location, resource);
+            }
+        );
+        if (logical == resources.end()) {
+            diagnostics = "Metal converter location does not match a logical shader resource.";
+            return false;
+        }
+        for (std::size_t other = index + 1U; other < locations.size(); ++other) {
+            if (locations[other].register_class == location.register_class &&
+                locations[other].binding == location.binding &&
+                locations[other].space == location.space) {
+                diagnostics = "Metal shader contains duplicate converter resource locations.";
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
 class MetalBuffer final : public Buffer {
 public:
     MetalBuffer(const BufferDesc& desc, id<MTLBuffer> buffer)
@@ -184,6 +276,7 @@ public:
     [[nodiscard]] std::uint32_t width() const noexcept override { return desc_.width; }
     [[nodiscard]] std::uint32_t height() const noexcept override { return desc_.height; }
     [[nodiscard]] std::uint32_t depth() const noexcept override { return desc_.depth; }
+    [[nodiscard]] id<MTLTexture> native() const noexcept { return texture_; }
 
 private:
     TextureDesc desc_{};
@@ -193,6 +286,7 @@ private:
 class MetalSampler final : public Sampler {
 public:
     explicit MetalSampler(id<MTLSamplerState> sampler) : sampler_{sampler} {}
+    [[nodiscard]] id<MTLSamplerState> native() const noexcept { return sampler_; }
 
 private:
     id<MTLSamplerState> sampler_ = nil;
@@ -204,12 +298,17 @@ public:
         const ShaderStage stage,
         id<MTLLibrary> library,
         id<MTLFunction> function,
-        std::vector<ShaderResourceBindingDesc> resources = {}
-    ) : stage_{stage}, library_{library}, function_{function}, resources_{std::move(resources)} {}
+        std::vector<ShaderResourceBindingDesc> resources = {},
+        std::vector<MetalShaderResourceLocationDesc> locations = {}
+    ) : stage_{stage}, library_{library}, function_{function},
+        resources_{std::move(resources)}, locations_{std::move(locations)} {}
 
     [[nodiscard]] ShaderStage stage() const noexcept override { return stage_; }
     [[nodiscard]] std::span<const ShaderResourceBindingDesc> resources() const noexcept override {
         return resources_;
+    }
+    [[nodiscard]] std::span<const MetalShaderResourceLocationDesc> locations() const noexcept {
+        return locations_;
     }
     [[nodiscard]] id<MTLFunction> function() const noexcept { return function_; }
 
@@ -218,6 +317,7 @@ private:
     id<MTLLibrary> library_ = nil;
     id<MTLFunction> function_ = nil;
     std::vector<ShaderResourceBindingDesc> resources_;
+    std::vector<MetalShaderResourceLocationDesc> locations_;
 };
 
 class MetalGraphicsPipeline final : public GraphicsPipeline {
@@ -227,14 +327,18 @@ public:
         const PrimitiveTopology topology,
         const CullMode cull,
         const FrontFace front,
-        PipelineLayout layout
-    ) : state_{state}, topology_{topology}, cull_{cull}, front_{front}, layout_{std::move(layout)} {}
+        PipelineLayout layout,
+        std::vector<MetalShaderResourceLocationDesc> vertex_locations,
+        std::vector<MetalShaderResourceLocationDesc> fragment_locations
+    ) : state_{state}, topology_{topology}, cull_{cull}, front_{front},
+        layout_{std::move(layout)}, vertex_locations_{std::move(vertex_locations)},
+        fragment_locations_{std::move(fragment_locations)} {}
 
     [[nodiscard]] PrimitiveTopology topology() const noexcept override { return topology_; }
     [[nodiscard]] id<MTLRenderPipelineState> native() const noexcept { return state_; }
     [[nodiscard]] CullMode cull() const noexcept { return cull_; }
     [[nodiscard]] FrontFace front() const noexcept { return front_; }
-    [[nodiscard]] bool has_resources() const noexcept { return !layout_.resources.empty(); }
+    [[nodiscard]] const PipelineLayout& layout() const noexcept { return layout_; }
 
     [[nodiscard]] bool has_binding(
         const ShaderBindingKey& key,
@@ -251,10 +355,18 @@ public:
                     resource.binding != key.binding || resource.space != key.space) {
                     return false;
                 }
-                return resource.unbounded || key.array_element < resource.count;
+                return !resource.unbounded && key.array_element < resource.count;
             }
         );
         return found != layout_.resources.end();
+    }
+
+    [[nodiscard]] std::span<const MetalShaderResourceLocationDesc> locations(
+        const ShaderStage stage
+    ) const noexcept {
+        return stage == ShaderStage::vertex
+            ? std::span<const MetalShaderResourceLocationDesc>{vertex_locations_}
+            : std::span<const MetalShaderResourceLocationDesc>{fragment_locations_};
     }
 
 private:
@@ -263,6 +375,8 @@ private:
     CullMode cull_ = CullMode::back;
     FrontFace front_ = FrontFace::counter_clockwise;
     PipelineLayout layout_;
+    std::vector<MetalShaderResourceLocationDesc> vertex_locations_;
+    std::vector<MetalShaderResourceLocationDesc> fragment_locations_;
 };
 
 class MetalSwapchain final : public Swapchain {
@@ -369,10 +483,31 @@ private:
     bool valid_ = false;
 };
 
+enum class MetalBoundKind : std::uint8_t {
+    constant_buffer,
+    read_buffer,
+    write_buffer,
+    texture,
+    storage_texture,
+    sampler,
+};
+
+struct MetalBoundResource {
+    ShaderBindingKey key{};
+    MetalBoundKind kind = MetalBoundKind::read_buffer;
+    MetalBuffer* buffer = nullptr;
+    MetalTexture* texture = nullptr;
+    MetalSampler* sampler = nullptr;
+    std::uint64_t offset = 0;
+    std::uint64_t size = 0;
+};
+
 class MetalCommandList final : public CommandList {
 public:
-    explicit MetalCommandList(id<MTLCommandBuffer> command_buffer)
-        : command_buffer_{command_buffer} {}
+    MetalCommandList(id<MTLDevice> device, id<MTLCommandBuffer> command_buffer)
+        : device_{device}, command_buffer_{command_buffer},
+          retained_argument_buffers_{[[NSMutableArray alloc] init]},
+          retained_samplers_{[[NSMutableArray alloc] init]} {}
 
     ~MetalCommandList() override {
         if (render_encoder_ != nil) {
@@ -444,6 +579,7 @@ public:
         render_encoder_ = [command_buffer_ renderCommandEncoderWithDescriptor:pass];
         active_swapchain_ = metal_swapchain;
         active_pipeline_ = nullptr;
+        bound_resources_.clear();
         pipeline_bound_ = false;
         return render_encoder_ != nil;
     }
@@ -460,6 +596,7 @@ public:
         [render_encoder_ setCullMode:cull_mode(metal_pipeline->cull())];
         [render_encoder_ setFrontFacingWinding:front_winding(metal_pipeline->front())];
         active_pipeline_ = metal_pipeline;
+        bound_resources_.clear();
         pipeline_bound_ = true;
         return true;
     }
@@ -470,13 +607,23 @@ public:
         const std::uint64_t offset,
         const std::uint64_t size
     ) override {
+        auto* metal_buffer = dynamic_cast<MetalBuffer*>(&buffer);
         if (!binding_allowed(binding, ShaderRegisterClass::constant_buffer) ||
-            dynamic_cast<MetalBuffer*>(&buffer) == nullptr ||
-            !has_usage(buffer.usage(), BufferUsage::uniform) || offset > buffer.size() ||
-            (size != 0U && size > buffer.size() - offset)) {
+            metal_buffer == nullptr || !has_usage(buffer.usage(), BufferUsage::uniform) ||
+            offset > buffer.size() || (size != 0U && size > buffer.size() - offset)) {
             return false;
         }
-        has_validated_binding_ = true;
+        const std::uint64_t resolved_size = size == 0U ? buffer.size() - offset : size;
+        if (resolved_size == 0U) {
+            return false;
+        }
+        upsert_bound(MetalBoundResource{
+            .key = binding,
+            .kind = MetalBoundKind::constant_buffer,
+            .buffer = metal_buffer,
+            .offset = offset,
+            .size = resolved_size,
+        });
         return true;
     }
 
@@ -485,12 +632,21 @@ public:
         Buffer& buffer,
         const BufferViewDesc& view
     ) override {
+        auto* metal_buffer = dynamic_cast<MetalBuffer*>(&buffer);
+        std::uint64_t offset = 0;
+        std::uint64_t size = 0;
         if (!binding_allowed(binding, ShaderRegisterClass::shader_resource) ||
-            dynamic_cast<MetalBuffer*>(&buffer) == nullptr ||
-            !has_usage(buffer.usage(), BufferUsage::storage) || !valid_buffer_view(buffer, view)) {
+            metal_buffer == nullptr || !has_usage(buffer.usage(), BufferUsage::storage) ||
+            !resolve_buffer_view(buffer, view, offset, size)) {
             return false;
         }
-        has_validated_binding_ = true;
+        upsert_bound(MetalBoundResource{
+            .key = binding,
+            .kind = MetalBoundKind::read_buffer,
+            .buffer = metal_buffer,
+            .offset = offset,
+            .size = size,
+        });
         return true;
     }
 
@@ -499,22 +655,35 @@ public:
         Buffer& buffer,
         const BufferViewDesc& view
     ) override {
+        auto* metal_buffer = dynamic_cast<MetalBuffer*>(&buffer);
+        std::uint64_t offset = 0;
+        std::uint64_t size = 0;
         if (!binding_allowed(binding, ShaderRegisterClass::unordered_access) ||
-            dynamic_cast<MetalBuffer*>(&buffer) == nullptr ||
-            !has_usage(buffer.usage(), BufferUsage::storage) || !valid_buffer_view(buffer, view)) {
+            metal_buffer == nullptr || !has_usage(buffer.usage(), BufferUsage::storage) ||
+            !resolve_buffer_view(buffer, view, offset, size)) {
             return false;
         }
-        has_validated_binding_ = true;
+        upsert_bound(MetalBoundResource{
+            .key = binding,
+            .kind = MetalBoundKind::write_buffer,
+            .buffer = metal_buffer,
+            .offset = offset,
+            .size = size,
+        });
         return true;
     }
 
     bool set_graphics_texture(const ShaderBindingKey& binding, Texture& texture) override {
+        auto* metal_texture = dynamic_cast<MetalTexture*>(&texture);
         if (!binding_allowed(binding, ShaderRegisterClass::shader_resource) ||
-            dynamic_cast<MetalTexture*>(&texture) == nullptr ||
-            !has_usage(texture.usage(), TextureUsage::sampled)) {
+            metal_texture == nullptr || !has_usage(texture.usage(), TextureUsage::sampled)) {
             return false;
         }
-        has_validated_binding_ = true;
+        upsert_bound(MetalBoundResource{
+            .key = binding,
+            .kind = MetalBoundKind::texture,
+            .texture = metal_texture,
+        });
         return true;
     }
 
@@ -522,21 +691,29 @@ public:
         const ShaderBindingKey& binding,
         Texture& texture
     ) override {
+        auto* metal_texture = dynamic_cast<MetalTexture*>(&texture);
         if (!binding_allowed(binding, ShaderRegisterClass::unordered_access) ||
-            dynamic_cast<MetalTexture*>(&texture) == nullptr ||
-            !has_usage(texture.usage(), TextureUsage::storage)) {
+            metal_texture == nullptr || !has_usage(texture.usage(), TextureUsage::storage)) {
             return false;
         }
-        has_validated_binding_ = true;
+        upsert_bound(MetalBoundResource{
+            .key = binding,
+            .kind = MetalBoundKind::storage_texture,
+            .texture = metal_texture,
+        });
         return true;
     }
 
     bool set_graphics_sampler(const ShaderBindingKey& binding, Sampler& sampler) override {
-        if (!binding_allowed(binding, ShaderRegisterClass::sampler) ||
-            dynamic_cast<MetalSampler*>(&sampler) == nullptr) {
+        auto* metal_sampler = dynamic_cast<MetalSampler*>(&sampler);
+        if (!binding_allowed(binding, ShaderRegisterClass::sampler) || metal_sampler == nullptr) {
             return false;
         }
-        has_validated_binding_ = true;
+        upsert_bound(MetalBoundResource{
+            .key = binding,
+            .kind = MetalBoundKind::sampler,
+            .sampler = metal_sampler,
+        });
         return true;
     }
 
@@ -550,11 +727,12 @@ public:
             vertex_count == 0 || instance_count == 0) {
             return false;
         }
-        if (active_pipeline_->has_resources()) {
-            core::log(
-                core::LogLevel::error,
-                "Metal resource binding requires Metal Shader Converter argument-buffer location metadata."
-            );
+        if (!all_required_resources_bound()) {
+            core::log(core::LogLevel::error, "Metal draw is missing a reflected shader resource.");
+            return false;
+        }
+        if (!encode_stage_argument_buffer(ShaderStage::vertex) ||
+            !encode_stage_argument_buffer(ShaderStage::fragment)) {
             return false;
         }
         [render_encoder_ drawPrimitives:MTLPrimitiveTypeTriangle
@@ -572,7 +750,7 @@ public:
         [render_encoder_ endEncoding];
         render_encoder_ = nil;
         active_pipeline_ = nullptr;
-        has_validated_binding_ = false;
+        bound_resources_.clear();
         pipeline_bound_ = false;
         return true;
     }
@@ -599,29 +777,236 @@ private:
             active_pipeline_->has_binding(binding, expected_class);
     }
 
-    [[nodiscard]] static bool valid_buffer_view(
+    [[nodiscard]] static bool resolve_buffer_view(
         const Buffer& buffer,
-        const BufferViewDesc& view
+        const BufferViewDesc& view,
+        std::uint64_t& offset,
+        std::uint64_t& size
     ) noexcept {
         if (!is_valid(view) || view.offset > buffer.size()) {
             return false;
         }
-        const std::uint64_t size = view.size == 0U ? buffer.size() - view.offset : view.size;
+        offset = view.offset;
+        size = view.size == 0U ? buffer.size() - view.offset : view.size;
         if (size == 0U || size > buffer.size() - view.offset) {
             return false;
         }
         if (view.structure_stride == 0U) {
-            return view.offset % 4U == 0U && size % 4U == 0U;
+            return offset % 4U == 0U && size % 4U == 0U;
         }
-        return view.offset % view.structure_stride == 0U && size % view.structure_stride == 0U;
+        return offset % view.structure_stride == 0U && size % view.structure_stride == 0U;
     }
 
+    void upsert_bound(MetalBoundResource resource) {
+        const auto found = std::find_if(
+            bound_resources_.begin(),
+            bound_resources_.end(),
+            [&](const MetalBoundResource& existing) {
+                return same_binding(existing.key, resource.key);
+            }
+        );
+        if (found == bound_resources_.end()) {
+            bound_resources_.push_back(std::move(resource));
+        } else {
+            *found = std::move(resource);
+        }
+    }
+
+    [[nodiscard]] const MetalBoundResource* bound_resource(
+        const ShaderBindingKey& key
+    ) const noexcept {
+        const auto found = std::find_if(
+            bound_resources_.begin(),
+            bound_resources_.end(),
+            [&](const MetalBoundResource& resource) {
+                return same_binding(resource.key, key);
+            }
+        );
+        return found == bound_resources_.end() ? nullptr : &*found;
+    }
+
+    [[nodiscard]] const PipelineResourceBinding* logical_binding(
+        const MetalShaderResourceLocationDesc& location
+    ) const noexcept {
+        if (active_pipeline_ == nullptr) {
+            return nullptr;
+        }
+        const auto& resources = active_pipeline_->layout().resources;
+        const auto found = std::find_if(
+            resources.begin(),
+            resources.end(),
+            [&](const PipelineResourceBinding& resource) {
+                return resource.register_class == location.register_class &&
+                    resource.binding == location.binding && resource.space == location.space;
+            }
+        );
+        return found == resources.end() ? nullptr : &*found;
+    }
+
+    [[nodiscard]] bool all_required_resources_bound() const noexcept {
+        if (active_pipeline_ == nullptr) {
+            return false;
+        }
+        for (const auto& resource : active_pipeline_->layout().resources) {
+            if (resource.unbounded) {
+                return false;
+            }
+            for (std::uint32_t element = 0; element < resource.count; ++element) {
+                const ShaderBindingKey key{
+                    .register_class = resource.register_class,
+                    .binding = resource.binding,
+                    .space = resource.space,
+                    .array_element = element,
+                };
+                if (bound_resource(key) == nullptr) {
+                    return false;
+                }
+            }
+        }
+        return true;
+    }
+
+    [[nodiscard]] bool encode_stage_argument_buffer(const ShaderStage stage) {
+        if (active_pipeline_ == nullptr || device_ == nil || render_encoder_ == nil) {
+            return false;
+        }
+        const auto locations = active_pipeline_->locations(stage);
+        if (locations.empty()) {
+            return true;
+        }
+
+        std::uint64_t argument_buffer_size = 0;
+        for (const auto& location : locations) {
+            const std::uint64_t end =
+                static_cast<std::uint64_t>(location.argument_buffer_offset) + location.size;
+            argument_buffer_size = std::max(argument_buffer_size, end);
+        }
+        if (argument_buffer_size == 0U ||
+            argument_buffer_size > static_cast<std::uint64_t>(std::numeric_limits<NSUInteger>::max())) {
+            return false;
+        }
+
+        id<MTLBuffer> argument_buffer = [device_
+            newBufferWithLength:static_cast<NSUInteger>(argument_buffer_size)
+            options:MTLResourceStorageModeShared];
+        if (argument_buffer == nil || argument_buffer.contents == nullptr) {
+            core::log(core::LogLevel::error, "Metal could not allocate the converted shader argument buffer.");
+            return false;
+        }
+        std::memset(argument_buffer.contents, 0, static_cast<std::size_t>(argument_buffer_size));
+        auto* bytes = static_cast<std::byte*>(argument_buffer.contents);
+
+        const MTLRenderStages render_stage = stage == ShaderStage::vertex
+            ? MTLRenderStageVertex
+            : MTLRenderStageFragment;
+
+        for (const auto& location : locations) {
+            const PipelineResourceBinding* logical = logical_binding(location);
+            if (logical == nullptr || logical->unbounded) {
+                return false;
+            }
+            const std::uint64_t required =
+                static_cast<std::uint64_t>(logical->count) * metal_descriptor_entry_size;
+            if (required > location.size) {
+                return false;
+            }
+            for (std::uint32_t element = 0; element < logical->count; ++element) {
+                const ShaderBindingKey key{
+                    .register_class = logical->register_class,
+                    .binding = logical->binding,
+                    .space = logical->space,
+                    .array_element = element,
+                };
+                const MetalBoundResource* bound = bound_resource(key);
+                if (bound == nullptr) {
+                    return false;
+                }
+                const std::uint64_t descriptor_offset =
+                    static_cast<std::uint64_t>(location.argument_buffer_offset) +
+                    static_cast<std::uint64_t>(element) * metal_descriptor_entry_size;
+                if (descriptor_offset + metal_descriptor_entry_size > argument_buffer_size) {
+                    return false;
+                }
+                auto* entry = reinterpret_cast<MetalDescriptorTableEntry*>(
+                    bytes + static_cast<std::size_t>(descriptor_offset)
+                );
+                if (!encode_descriptor(*entry, *bound, render_stage)) {
+                    return false;
+                }
+            }
+        }
+
+        if (stage == ShaderStage::vertex) {
+            [render_encoder_ setVertexBuffer:argument_buffer
+                                      offset:0
+                                     atIndex:metal_shader_converter_argument_buffer_bind_point];
+        } else {
+            [render_encoder_ setFragmentBuffer:argument_buffer
+                                        offset:0
+                                       atIndex:metal_shader_converter_argument_buffer_bind_point];
+        }
+        [retained_argument_buffers_ addObject:argument_buffer];
+        return true;
+    }
+
+    [[nodiscard]] bool encode_descriptor(
+        MetalDescriptorTableEntry& entry,
+        const MetalBoundResource& bound,
+        const MTLRenderStages stage
+    ) {
+        entry = {};
+        switch (bound.kind) {
+        case MetalBoundKind::constant_buffer:
+        case MetalBoundKind::read_buffer:
+        case MetalBoundKind::write_buffer: {
+            if (bound.buffer == nullptr || bound.buffer->native() == nil ||
+                bound.size == 0U || bound.size > std::numeric_limits<std::uint32_t>::max()) {
+                return false;
+            }
+            const std::uint64_t gpu_address = bound.buffer->native().gpuAddress;
+            if (bound.offset > std::numeric_limits<std::uint64_t>::max() - gpu_address) {
+                return false;
+            }
+            entry.gpu_address = gpu_address + bound.offset;
+            entry.metadata = static_cast<std::uint32_t>(bound.size);
+            const MTLResourceUsage usage = bound.kind == MetalBoundKind::write_buffer
+                ? static_cast<MTLResourceUsage>(MTLResourceUsageRead | MTLResourceUsageWrite)
+                : MTLResourceUsageRead;
+            [render_encoder_ useResource:bound.buffer->native() usage:usage stages:stage];
+            return true;
+        }
+        case MetalBoundKind::texture:
+        case MetalBoundKind::storage_texture: {
+            if (bound.texture == nullptr || bound.texture->native() == nil) {
+                return false;
+            }
+            entry.texture_view_id = bound.texture->native().gpuResourceID._impl;
+            const MTLResourceUsage usage = bound.kind == MetalBoundKind::storage_texture
+                ? static_cast<MTLResourceUsage>(MTLResourceUsageRead | MTLResourceUsageWrite)
+                : MTLResourceUsageRead;
+            [render_encoder_ useResource:bound.texture->native() usage:usage stages:stage];
+            return true;
+        }
+        case MetalBoundKind::sampler:
+            if (bound.sampler == nullptr || bound.sampler->native() == nil) {
+                return false;
+            }
+            entry.gpu_address = bound.sampler->native().gpuResourceID._impl;
+            [retained_samplers_ addObject:bound.sampler->native()];
+            return true;
+        }
+        return false;
+    }
+
+    id<MTLDevice> device_ = nil;
     id<MTLCommandBuffer> command_buffer_ = nil;
     id<MTLRenderCommandEncoder> render_encoder_ = nil;
     id<CAMetalDrawable> drawable_ = nil;
     MetalGraphicsPipeline* active_pipeline_ = nullptr;
     MetalSwapchain* active_swapchain_ = nullptr;
-    bool has_validated_binding_ = false;
+    std::vector<MetalBoundResource> bound_resources_;
+    NSMutableArray<id<MTLBuffer>>* retained_argument_buffers_ = nil;
+    NSMutableArray<id<MTLSamplerState>>* retained_samplers_ = nil;
     bool pipeline_bound_ = false;
     bool present_scheduled_ = false;
 };
@@ -721,6 +1106,7 @@ public:
         native_desc.tAddressMode = address_mode(desc.address_v);
         native_desc.rAddressMode = address_mode(desc.address_w);
         native_desc.maxAnisotropy = desc.max_anisotropy;
+        native_desc.supportArgumentBuffers = YES;
         if (NSString* label = make_label(desc.debug_name)) {
             native_desc.label = label;
         }
@@ -769,6 +1155,18 @@ public:
             core::log(core::LogLevel::error, "Metal requires a valid metallib shader binary.");
             return nullptr;
         }
+        std::string layout_diagnostics;
+        if (!validate_metal_shader_layout(
+                desc.resources,
+                desc.metal_resource_locations,
+                layout_diagnostics
+            )) {
+            core::log(
+                core::LogLevel::error,
+                "Metal rejected cooked resource locations. " + layout_diagnostics
+            );
+            return nullptr;
+        }
 
         NSString* entry = make_label(desc.entry_point);
         if (entry == nil) {
@@ -805,7 +1203,11 @@ public:
             desc.stage,
             library,
             function,
-            std::vector<ShaderResourceBindingDesc>{desc.resources.begin(), desc.resources.end()}
+            std::vector<ShaderResourceBindingDesc>{desc.resources.begin(), desc.resources.end()},
+            std::vector<MetalShaderResourceLocationDesc>{
+                desc.metal_resource_locations.begin(),
+                desc.metal_resource_locations.end()
+            }
         );
     }
 
@@ -834,6 +1236,17 @@ public:
             );
             return nullptr;
         }
+        if (std::any_of(
+                layout.resources.begin(),
+                layout.resources.end(),
+                [](const PipelineResourceBinding& resource) { return resource.unbounded; }
+            )) {
+            core::log(
+                core::LogLevel::error,
+                "Metal automatic resource layout cannot create a pipeline with unbounded bindings."
+            );
+            return nullptr;
+        }
 
         MTLRenderPipelineDescriptor* native_desc = [[MTLRenderPipelineDescriptor alloc] init];
         native_desc.vertexFunction = vertex->function();
@@ -853,7 +1266,15 @@ public:
             desc.topology,
             desc.cull_mode,
             desc.front_face,
-            std::move(layout)
+            std::move(layout),
+            std::vector<MetalShaderResourceLocationDesc>{
+                vertex->locations().begin(),
+                vertex->locations().end()
+            },
+            std::vector<MetalShaderResourceLocationDesc>{
+                fragment->locations().begin(),
+                fragment->locations().end()
+            }
         );
     }
 
@@ -863,7 +1284,7 @@ public:
             core::log(core::LogLevel::error, "Metal could not create a VICE command buffer.");
             return nullptr;
         }
-        return std::make_unique<MetalCommandList>(command_buffer);
+        return std::make_unique<MetalCommandList>(device_, command_buffer);
     }
 
     SubmissionId submit(std::unique_ptr<CommandList> command_list) override {

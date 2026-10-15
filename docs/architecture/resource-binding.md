@@ -51,7 +51,7 @@ A binding call must match a resource declared by the active graphics pipeline. R
 
 `BufferViewDesc` describes a buffer byte range. A zero structure stride means a raw buffer view. A nonzero stride means a structured buffer view. A zero view size means the remaining logical buffer bytes.
 
-A draw fails if a reflected Direct3D 12 binding has not been supplied. Missing bindings are not silently replaced with null descriptors.
+A draw fails if a required reflected binding has not been supplied. Missing bindings are not silently replaced with null descriptors.
 
 ## Direct3D 12
 
@@ -81,14 +81,31 @@ Windows tests deserialize generated root-signature blobs and inspect the native 
 
 ## Metal
 
-Shaders produced by Metal Shader Converter use argument buffers for converted resource binding.
+Shaders produced by Metal Shader Converter use a top-level argument buffer for converted resource binding.
 
-VICE does not assume that an HLSL register index is a Metal argument-buffer offset. Metal Shader Converter writes `shader.metal.json` during a Metal cook, and that converter output is the backend-native source of resource locations.
+VICE does not assume that an HLSL register index is a Metal argument-buffer offset. Metal Shader Converter writes `shader.metal.json` during a Metal cook. The shader cooker normalizes `TopLevelArgumentBuffer` entries against DXC logical reflection and stores class, binding, register space, byte offset, and byte size in the VICE shader manifest.
 
-Metal graphics pipeline creation performs the same logical layout validation as Direct3D 12. The command list validates the new logical binding calls as well.
+If converter reflection does not provide an authoritative location for every logical resource, cooking fails. VICE does not infer a byte offset from the converter's `Resources.slot` field.
 
-Native Metal resource encoding is intentionally blocked for reflected-resource pipelines until the converter-derived argument-buffer locations are connected. A resource-using draw fails with an explicit error instead of running with fabricated or missing offsets.
+Cooked Metal shader modules copy the normalized locations into `ShaderBinaryDesc`. Vertex and fragment locations remain separate because independently converted stages may use different top-level offsets for the same logical HLSL resource.
 
-The next Metal runtime step is to load the converter resource locations, encode the top-level argument buffer, and make indirectly accessed resources resident before draw or dispatch.
+Before each resource-using draw, the command list:
 
-Long term, VICE should translate its D3D12-style root layout explicitly through Metal Shader Converter and query the converter or runtime for resource locations. The logical HLSL identity remains stable while native offsets stay backend-owned.
+1. verifies every bounded reflected resource is bound
+2. allocates a shared top-level argument-buffer snapshot for each used graphics stage
+3. writes Metal Shader Converter's documented 24-byte descriptor entries
+4. binds each top-level argument buffer at converter bind point 2
+5. declares every indirectly accessed buffer and texture with `useResource`, the correct read or read-write usage, and the correct render stage
+6. retains argument buffers and sampler states until command submission completes
+
+Buffer descriptors store GPU virtual address plus byte offset and the logical byte length. Texture descriptors store the texture GPU resource ID. Sampler descriptors store the sampler GPU resource ID. Samplers are created with argument-buffer support enabled.
+
+Automatic converter layout is bounded-only in VICE. An unbounded resource causes Metal shader creation or pipeline creation to fail with a clear diagnostic. Bindless Metal resources will use the explicit VICE root-signature conversion path instead of assigning an arbitrary maximum array size.
+
+The current command submission path waits synchronously, so per-draw shared argument-buffer allocations have unambiguous lifetime. A later frames-in-flight allocator can replace these temporary allocations without changing the public resource-binding API.
+
+## Long-term Metal layout
+
+The automatic layout path gives VICE a correct bounded resource path while preserving the same logical API as Direct3D 12.
+
+For bindless resources and larger production workloads, VICE will translate its D3D12-style root layout explicitly through Metal Shader Converter and query converter or runtime resource locations. The logical HLSL identity remains stable while native offsets remain backend-owned.

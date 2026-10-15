@@ -85,7 +85,7 @@ jobs:
 
           $manifestPath = "build/cooked/vice_reflection_fixture/shader.vice.json"
           $manifest = Get-Content $manifestPath -Raw | ConvertFrom-Json
-          if ($manifest.version -ne 3) {
+          if ($manifest.version -ne 4) {
             throw "Unexpected shader manifest version: $($manifest.version)"
           }
           if ($manifest.reflection.version -ne 1) {
@@ -94,9 +94,10 @@ jobs:
           if ($manifest.artifacts.metal_reflection -ne $null) {
             throw "A Direct3D 12-only cook must not declare a Metal reflection artifact."
           }
-          if ($manifest.metal_binding.version -ne 1 -or
-              $manifest.metal_binding.model -ne "converter_reflection" -or
-              $manifest.metal_binding.resource_locations -ne $null) {
+          if ($manifest.metal_binding.version -ne 2 -or
+              $manifest.metal_binding.model -ne $null -or
+              $manifest.metal_binding.descriptor_entry_size -ne 24 -or
+              $manifest.metal_binding.locations.Count -ne 0) {
             throw "Unexpected Metal binding metadata for a Direct3D 12-only cook."
           }
           if ($manifest.reflection.resources.Count -ne 4) {
