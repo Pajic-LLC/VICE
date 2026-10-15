@@ -500,12 +500,22 @@ public:
         std::uint32_t slot,
         Buffer& buffer,
         std::uint64_t offset = 0
-    ) = 0;
+    ) {
+        (void)slot;
+        (void)buffer;
+        (void)offset;
+        return false;
+    }
     virtual bool set_index_buffer(
         Buffer& buffer,
         IndexFormat format,
         std::uint64_t offset = 0
-    ) = 0;
+    ) {
+        (void)buffer;
+        (void)format;
+        (void)offset;
+        return false;
+    }
     virtual bool set_graphics_constant_buffer(
         const ShaderBindingKey& binding,
         Buffer& buffer,
@@ -540,7 +550,14 @@ public:
         std::uint32_t first_index = 0,
         std::int32_t vertex_offset = 0,
         std::uint32_t first_instance = 0
-    ) = 0;
+    ) {
+        (void)index_count;
+        (void)instance_count;
+        (void)first_index;
+        (void)vertex_offset;
+        (void)first_instance;
+        return false;
+    }
     virtual bool end_render_pass() = 0;
     virtual bool present(Swapchain& swapchain) = 0;
 };
