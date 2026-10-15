@@ -28,6 +28,7 @@ list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 include(ViceCompiler)
 
 add_subdirectory(engine/core)
+add_subdirectory(engine/math)
 add_subdirectory(engine/jobs)
 add_subdirectory(engine/platform)
 add_subdirectory(engine/world)
