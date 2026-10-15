@@ -28,6 +28,12 @@ target_compile_features(vice_render_tests PRIVATE cxx_std_23)
 vice_enable_warnings(vice_render_tests)
 add_test(NAME vice_render_tests COMMAND vice_render_tests)
 
+add_executable(vice_depth_state_tests depth_state_tests.cpp)
+target_link_libraries(vice_depth_state_tests PRIVATE VICE::Render)
+target_compile_features(vice_depth_state_tests PRIVATE cxx_std_23)
+vice_enable_warnings(vice_depth_state_tests)
+add_test(NAME vice_depth_state_tests COMMAND vice_depth_state_tests)
+
 add_executable(vice_mesh_input_tests mesh_input_tests.cpp)
 target_link_libraries(vice_mesh_input_tests PRIVATE VICE::Render)
 target_compile_features(vice_mesh_input_tests PRIVATE cxx_std_23)
