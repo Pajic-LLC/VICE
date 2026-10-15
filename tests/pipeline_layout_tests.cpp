@@ -85,9 +85,10 @@ int main() {
         .count = 2,
         .unbounded = false,
     };
+    constexpr std::array vertex_frame{frame_data};
     constexpr std::array conflicting_fragment{conflicting_frame_data};
     const PipelineLayout shape_conflict = compile_graphics_pipeline_layout(
-        std::span{vertex_resources}.first<1>(),
+        vertex_frame,
         conflicting_fragment
     );
     assert(!shape_conflict.valid);
