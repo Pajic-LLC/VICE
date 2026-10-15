@@ -28,10 +28,46 @@ jobs:
         uses: actions/checkout@v6
 
       - name: Configure
-        run: cmake -S . -B build -DVICE_BUILD_TESTS=ON -DVICE_BUILD_LAB=ON
+        run: cmake -S . -B build -DVICE_BUILD_TESTS=ON -DVICE_BUILD_LAB=ON -DVICE_BUILD_TOOLS=ON
 
       - name: Build
         run: cmake --build build --config Release --parallel
 
       - name: Test
         run: ctest --test-dir build -C Release --output-on-failure
+
+      - name: Shader cooker DXIL smoke test
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $sdkRoot = "${env:ProgramFiles(x86)}\Windows Kits\10\bin"
+          $dxc = Get-ChildItem $sdkRoot -Filter dxc.exe -File -Recurse |
+            Where-Object { $_.FullName -match '\\x64\\dxc\.exe$' } |
+            Sort-Object FullName -Descending |
+            Select-Object -First 1
+          if (-not $dxc) {
+            throw "DXC was not found in the Windows SDK."
+          }
+
+          $cooker = Resolve-Path "build/tools/shader_cooker/Release/vice_shader_cooker.exe"
+          & $cooker `
+            --input "assets/shaders/vice_lab_triangle.hlsl" `
+            --output "build/cooked/vice_lab_triangle_vs" `
+            --entry "vice_triangle_vs" `
+            --stage vertex `
+            --target d3d12 `
+            --dxc $dxc.FullName
+          if ($LASTEXITCODE -ne 0) {
+            exit $LASTEXITCODE
+          }
+
+          & $cooker `
+            --input "assets/shaders/vice_lab_triangle.hlsl" `
+            --output "build/cooked/vice_lab_triangle_fs" `
+            --entry "vice_triangle_fs" `
+            --stage fragment `
+            --target d3d12 `
+            --dxc $dxc.FullName
+          if ($LASTEXITCODE -ne 0) {
+            exit $LASTEXITCODE
+          }
