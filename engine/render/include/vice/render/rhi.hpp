@@ -420,7 +420,9 @@ class ShaderModule {
 public:
     virtual ~ShaderModule() = default;
     [[nodiscard]] virtual ShaderStage stage() const noexcept = 0;
-    [[nodiscard]] virtual std::span<const ShaderResourceBindingDesc> resources() const noexcept = 0;
+    [[nodiscard]] virtual std::span<const ShaderResourceBindingDesc> resources() const noexcept {
+        return {};
+    }
 };
 
 class GraphicsPipeline {
