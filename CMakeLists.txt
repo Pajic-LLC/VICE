@@ -9,6 +9,7 @@ project(
 
 option(VICE_BUILD_TESTS "Build VICE tests" ON)
 option(VICE_BUILD_LAB "Build the VICE Lab executable" ON)
+option(VICE_BUILD_TOOLS "Build VICE developer tools" ON)
 
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -23,6 +24,10 @@ add_subdirectory(engine/jobs)
 add_subdirectory(engine/platform)
 add_subdirectory(engine/world)
 add_subdirectory(engine/render)
+
+if(VICE_BUILD_TOOLS)
+  add_subdirectory(tools/shader_cooker)
+endif()
 
 if(VICE_BUILD_LAB)
   add_subdirectory(apps/vice_lab)
