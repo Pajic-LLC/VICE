@@ -7,10 +7,15 @@
 #include <wrl/client.h>
 #include <windows.h>
 
+#ifdef DeviceCapabilities
+#undef DeviceCapabilities
+#endif
+
 #include <algorithm>
 #include <array>
 #include <cstdint>
 #include <memory>
+#include <utility>
 
 namespace vice::render {
 namespace {
@@ -304,10 +309,12 @@ public:
         queue_desc.Priority = D3D12_COMMAND_QUEUE_PRIORITY_NORMAL;
         queue_desc.Flags = D3D12_COMMAND_QUEUE_FLAG_NONE;
 
-        succeeded(
+        if (!succeeded(
             device_->CreateCommandQueue(&queue_desc, IID_PPV_ARGS(&command_queue_)),
             "VICE could not create a Direct3D 12 command queue."
-        );
+        )) {
+            return;
+        }
     }
 
     [[nodiscard]] bool valid() const noexcept {
