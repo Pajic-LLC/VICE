@@ -305,6 +305,20 @@ struct ShaderResourceBindingDesc {
     return desc.unbounded ? desc.count == 0U : desc.count > 0U;
 }
 
+struct MetalShaderResourceLocationDesc {
+    ShaderRegisterClass register_class = ShaderRegisterClass::shader_resource;
+    std::uint32_t binding = 0;
+    std::uint32_t space = 0;
+    std::uint32_t argument_buffer_offset = 0;
+    std::uint32_t size = 0;
+};
+
+[[nodiscard]] constexpr bool is_valid(const MetalShaderResourceLocationDesc& desc) noexcept {
+    constexpr std::uint32_t descriptor_size = 3U * sizeof(std::uint64_t);
+    return desc.argument_buffer_offset % alignof(std::uint64_t) == 0U &&
+        desc.size >= descriptor_size && desc.size % descriptor_size == 0U;
+}
+
 struct ShaderBindingKey {
     ShaderRegisterClass register_class = ShaderRegisterClass::shader_resource;
     std::uint32_t binding = 0;
@@ -346,6 +360,7 @@ struct ShaderBinaryDesc {
     std::span<const ShaderResourceBindingDesc> resources;
     std::string_view entry_point = "main";
     std::string_view debug_name;
+    std::span<const MetalShaderResourceLocationDesc> metal_resource_locations;
 };
 
 [[nodiscard]] constexpr bool is_valid(const ShaderModuleDesc& desc) noexcept {
@@ -358,6 +373,11 @@ struct ShaderBinaryDesc {
     }
     for (const auto& resource : desc.resources) {
         if (!is_valid(resource)) {
+            return false;
+        }
+    }
+    for (const auto& location : desc.metal_resource_locations) {
+        if (!is_valid(location)) {
             return false;
         }
     }
