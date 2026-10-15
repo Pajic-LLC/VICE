@@ -400,7 +400,33 @@ enum class FrontFace : std::uint8_t {
     clockwise,
 };
 
+enum class CompareOp : std::uint8_t {
+    never,
+    less,
+    less_equal,
+    greater,
+    greater_equal,
+    equal,
+    not_equal,
+    always,
+};
+
+struct DepthStateDesc {
+    TextureFormat format = TextureFormat::undefined;
+    bool test_enabled = false;
+    bool write_enabled = false;
+    CompareOp compare = CompareOp::less;
+};
+
+[[nodiscard]] constexpr bool is_valid(const DepthStateDesc& desc) noexcept {
+    if (desc.format == TextureFormat::undefined) {
+        return !desc.test_enabled && !desc.write_enabled;
+    }
+    return desc.format == TextureFormat::depth32_float;
+}
+
 class ShaderModule;
+class Texture;
 
 struct GraphicsPipelineDesc {
     ShaderModule* vertex_shader = nullptr;
@@ -409,6 +435,7 @@ struct GraphicsPipelineDesc {
     PrimitiveTopology topology = PrimitiveTopology::triangle_list;
     CullMode cull_mode = CullMode::back;
     FrontFace front_face = FrontFace::counter_clockwise;
+    DepthStateDesc depth{};
     std::span<const VertexBufferLayoutDesc> vertex_buffers;
     std::string_view debug_name;
 };
@@ -417,12 +444,15 @@ struct GraphicsPipelineDesc {
     return desc.vertex_shader != nullptr && desc.fragment_shader != nullptr &&
         desc.color_format != TextureFormat::undefined &&
         desc.color_format != TextureFormat::depth32_float &&
-        is_valid(desc.vertex_buffers);
+        is_valid(desc.depth) && is_valid(desc.vertex_buffers);
 }
 
 struct RenderPassDesc {
     Color clear_color{0.0F, 0.0F, 0.0F, 1.0F};
+    Texture* depth_attachment = nullptr;
+    float clear_depth = 1.0F;
     bool clear_color_attachment = true;
+    bool clear_depth_attachment = true;
 };
 
 struct DeviceCapabilities {
