@@ -40,6 +40,29 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
+          foreach ($stage in @("vice_lab_triangle_vs", "vice_lab_triangle_fs")) {
+            $manifestPath = "build/cooked/$stage/shader.vice.json"
+            $dxilPath = "build/cooked/$stage/shader.dxil"
+            if (-not (Test-Path $manifestPath)) {
+              throw "The normal build did not cook $stage."
+            }
+            if (-not (Test-Path $dxilPath)) {
+              throw "The normal build did not emit DXIL for $stage."
+            }
+
+            $labManifest = Get-Content $manifestPath -Raw | ConvertFrom-Json
+            if ($labManifest.version -ne 4) {
+              throw "Unexpected VICE Lab shader manifest version: $($labManifest.version)"
+            }
+            if ($labManifest.artifacts.dxil -ne "shader.dxil") {
+              throw "Unexpected VICE Lab DXIL artifact name."
+            }
+            if ($labManifest.artifacts.metallib -ne $null -or
+                $labManifest.artifacts.metal_reflection -ne $null) {
+              throw "A Windows VICE Lab cook must not declare Metal artifacts."
+            }
+          }
+
           $sdkRoot = "${env:ProgramFiles(x86)}\Windows Kits\10\bin"
           $dxc = Get-ChildItem $sdkRoot -Filter dxc.exe -File -Recurse |
             Where-Object { $_.FullName -match '\\x64\\dxc\.exe$' } |
@@ -50,28 +73,6 @@ jobs:
           }
 
           $cooker = Resolve-Path "build/tools/shader_cooker/Release/vice_shader_cooker.exe"
-          & $cooker `
-            --input "assets/shaders/vice_lab_triangle.hlsl" `
-            --output "build/cooked/vice_lab_triangle_vs" `
-            --entry "vice_triangle_vs" `
-            --stage vertex `
-            --target d3d12 `
-            --dxc $dxc.FullName
-          if ($LASTEXITCODE -ne 0) {
-            exit $LASTEXITCODE
-          }
-
-          & $cooker `
-            --input "assets/shaders/vice_lab_triangle.hlsl" `
-            --output "build/cooked/vice_lab_triangle_fs" `
-            --entry "vice_triangle_fs" `
-            --stage fragment `
-            --target d3d12 `
-            --dxc $dxc.FullName
-          if ($LASTEXITCODE -ne 0) {
-            exit $LASTEXITCODE
-          }
-
           & $cooker `
             --input "assets/shaders/vice_reflection_fixture.hlsl" `
             --output "build/cooked/vice_reflection_fixture" `
