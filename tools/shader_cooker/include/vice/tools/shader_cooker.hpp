@@ -68,6 +68,7 @@ struct CookResult {
     bool cache_hit = false;
     std::string cache_key;
     std::filesystem::path dxil_path;
+    std::filesystem::path assembly_path;
     std::optional<std::filesystem::path> metallib_path;
     std::filesystem::path manifest_path;
     ShaderReflection reflection;
