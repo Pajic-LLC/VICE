@@ -3,6 +3,7 @@
 #include <array>
 #include <bit>
 #include <cctype>
+#include <charconv>
 #include <cstdint>
 #include <cstdlib>
 #include <fstream>
@@ -11,6 +12,7 @@
 #include <optional>
 #include <sstream>
 #include <system_error>
+#include <vector>
 
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
@@ -375,19 +377,91 @@ void hash_append(std::string& value, std::string_view field) {
     return target == CookTarget::metal || target == CookTarget::all;
 }
 
+[[nodiscard]] bool parse_uint32(const std::string_view text, std::uint32_t& value) noexcept {
+    if (text.empty()) {
+        return false;
+    }
+    const char* begin = text.data();
+    const char* end = text.data() + text.size();
+    const auto [parsed_end, error] = std::from_chars(begin, end, value);
+    return error == std::errc{} && parsed_end == end;
+}
+
+struct BindingLocation {
+    ShaderRegisterClass register_class = ShaderRegisterClass::shader_resource;
+    std::uint32_t binding = 0;
+    std::uint32_t space = 0;
+};
+
+[[nodiscard]] std::optional<BindingLocation> parse_binding_location(
+    const std::string_view token
+) noexcept {
+    const std::size_t comma = token.find(',');
+    const std::string_view register_token = token.substr(0, comma);
+    const std::string_view space_token = comma == std::string_view::npos
+        ? std::string_view{}
+        : token.substr(comma + 1U);
+
+    ShaderRegisterClass register_class = ShaderRegisterClass::shader_resource;
+    std::size_t prefix_length = 0;
+    if (register_token.starts_with("cb")) {
+        register_class = ShaderRegisterClass::constant_buffer;
+        prefix_length = 2;
+    } else if (register_token.starts_with('t')) {
+        register_class = ShaderRegisterClass::shader_resource;
+        prefix_length = 1;
+    } else if (register_token.starts_with('u')) {
+        register_class = ShaderRegisterClass::unordered_access;
+        prefix_length = 1;
+    } else if (register_token.starts_with('s')) {
+        register_class = ShaderRegisterClass::sampler;
+        prefix_length = 1;
+    } else {
+        return std::nullopt;
+    }
+
+    std::uint32_t binding = 0;
+    if (!parse_uint32(register_token.substr(prefix_length), binding)) {
+        return std::nullopt;
+    }
+
+    std::uint32_t space = 0;
+    if (!space_token.empty()) {
+        constexpr std::string_view prefix = "space";
+        if (!space_token.starts_with(prefix) ||
+            !parse_uint32(space_token.substr(prefix.size()), space)) {
+            return std::nullopt;
+        }
+    }
+
+    return BindingLocation{register_class, binding, space};
+}
+
+[[nodiscard]] std::vector<std::string> split_whitespace(const std::string& value) {
+    std::istringstream stream{value};
+    std::vector<std::string> fields;
+    std::string field;
+    while (stream >> field) {
+        fields.push_back(std::move(field));
+    }
+    return fields;
+}
+
 [[nodiscard]] std::string build_manifest(
     const CookRequest& request,
     std::string_view cache_key,
     std::string_view dxc_version,
     std::string_view metal_converter_version,
     const std::filesystem::path& dxil_path,
-    const std::optional<std::filesystem::path>& metallib_path
+    const std::filesystem::path& assembly_path,
+    const std::optional<std::filesystem::path>& metallib_path,
+    const ShaderReflection& reflection
 ) {
     std::ostringstream manifest;
     manifest
         << "{\n"
         << "  \"format\": \"vice.shader\",\n"
-        << "  \"version\": 1,\n"
+        << "  \"version\": 2,\n"
         << "  \"cache_key\": \"" << json_escape(cache_key) << "\",\n"
         << "  \"source\": \"" << json_escape(request.input.filename().string()) << "\",\n"
         << "  \"entry_point\": \"" << json_escape(request.entry_point) << "\",\n"
@@ -401,6 +475,7 @@ void hash_append(std::string& value, std::string_view field) {
         << "  },\n"
         << "  \"artifacts\": {\n"
         << "    \"dxil\": \"" << json_escape(dxil_path.filename().string()) << "\",\n"
+        << "    \"dxc_assembly\": \"" << json_escape(assembly_path.filename().string()) << "\",\n"
         << "    \"metallib\": ";
     if (metallib_path.has_value()) {
         manifest << "\"" << json_escape(metallib_path->filename().string()) << "\"\n";
@@ -411,7 +486,32 @@ void hash_append(std::string& value, std::string_view field) {
         << "  },\n"
         << "  \"reflection\": {\n"
         << "    \"version\": 1,\n"
-        << "    \"resources\": []\n"
+        << "    \"resources\": [";
+
+    if (!reflection.resources.empty()) {
+        manifest << "\n";
+    }
+    for (std::size_t index = 0; index < reflection.resources.size(); ++index) {
+        const auto& resource = reflection.resources[index];
+        manifest
+            << "      {\n"
+            << "        \"name\": \"" << json_escape(resource.name) << "\",\n"
+            << "        \"class\": \"" << shader_register_class_name(resource.register_class) << "\",\n"
+            << "        \"binding\": " << resource.binding << ",\n"
+            << "        \"space\": " << resource.space << ",\n"
+            << "        \"count\": " << resource.count << ",\n"
+            << "        \"unbounded\": " << (resource.unbounded ? "true" : "false") << ",\n"
+            << "        \"type\": \"" << json_escape(resource.type) << "\",\n"
+            << "        \"format\": \"" << json_escape(resource.format) << "\",\n"
+            << "        \"dimension\": \"" << json_escape(resource.dimension) << "\"\n"
+            << "      }";
+        if (index + 1U != reflection.resources.size()) {
+            manifest << ',';
+        }
+        manifest << "\n";
+    }
+    manifest
+        << "    ]\n"
         << "  }\n"
         << "}\n";
     return manifest.str();
@@ -458,6 +558,16 @@ std::string_view cook_target_name(const CookTarget target) noexcept {
     return "unknown";
 }
 
+std::string_view shader_register_class_name(const ShaderRegisterClass register_class) noexcept {
+    switch (register_class) {
+    case ShaderRegisterClass::constant_buffer: return "constant_buffer";
+    case ShaderRegisterClass::shader_resource: return "shader_resource";
+    case ShaderRegisterClass::unordered_access: return "unordered_access";
+    case ShaderRegisterClass::sampler: return "sampler";
+    }
+    return "unknown";
+}
+
 std::string shader_profile(const ShaderStage stage, const std::string_view shader_model) {
     std::string prefix;
     switch (stage) {
@@ -475,6 +585,93 @@ std::string shader_profile(const ShaderStage stage, const std::string_view shade
     return prefix + model;
 }
 
+ShaderReflection parse_dxc_resource_bindings(const std::string_view assembly) {
+    ShaderReflection reflection;
+    constexpr std::string_view marker = "; Resource Bindings:";
+    const std::size_t marker_position = assembly.find(marker);
+    if (marker_position == std::string_view::npos) {
+        reflection.diagnostics = "DXC assembly does not contain a Resource Bindings section.";
+        return reflection;
+    }
+
+    std::istringstream stream{std::string{assembly.substr(marker_position)}};
+    std::string line;
+    bool saw_header = false;
+    bool reading_rows = false;
+
+    while (std::getline(stream, line)) {
+        std::string content = trim(std::move(line));
+        if (!content.starts_with(';')) {
+            if (reading_rows) {
+                reflection.valid = true;
+                return reflection;
+            }
+            continue;
+        }
+
+        content = trim(content.substr(1));
+        if (!reading_rows) {
+            if (content.starts_with("Name") &&
+                content.find("HLSL Bind") != std::string::npos &&
+                content.find("Count") != std::string::npos) {
+                saw_header = true;
+                continue;
+            }
+            if (saw_header && content.starts_with("---")) {
+                reading_rows = true;
+            }
+            continue;
+        }
+
+        if (content.empty()) {
+            reflection.valid = true;
+            return reflection;
+        }
+
+        const auto fields = split_whitespace(content);
+        if (fields.size() < 7U) {
+            reflection.diagnostics = "DXC emitted a malformed resource binding row: " + content;
+            return reflection;
+        }
+
+        const std::string& binding_token = fields[fields.size() - 2U];
+        const std::string& count_token = fields.back();
+        const auto location = parse_binding_location(binding_token);
+        if (!location.has_value()) {
+            reflection.diagnostics = "DXC emitted an unsupported HLSL binding: " + binding_token;
+            return reflection;
+        }
+
+        ShaderResourceReflection resource;
+        resource.name = fields[0];
+        resource.type = fields[1];
+        resource.format = fields[2];
+        resource.dimension = fields[3];
+        resource.register_class = location->register_class;
+        resource.binding = location->binding;
+        resource.space = location->space;
+
+        if (count_token == "unbounded") {
+            resource.count = 0;
+            resource.unbounded = true;
+        } else if (!parse_uint32(count_token, resource.count) || resource.count == 0U) {
+            reflection.diagnostics = "DXC emitted an invalid resource count: " + count_token;
+            return reflection;
+        }
+
+        reflection.resources.push_back(std::move(resource));
+        line.clear();
+    }
+
+    if (!reading_rows) {
+        reflection.diagnostics = "DXC Resource Bindings section is missing its table header.";
+        return reflection;
+    }
+
+    reflection.valid = true;
+    return reflection;
+}
+
 std::string make_cache_key(
     const std::string_view source,
     const CookRequest& request,
@@ -483,7 +680,7 @@ std::string make_cache_key(
 ) {
     std::string material;
     material.reserve(source.size() + 512);
-    hash_append(material, "VICE_SHADER_ASSET_V1");
+    hash_append(material, "VICE_SHADER_ASSET_V2");
     hash_append(material, source);
     hash_append(material, request.entry_point);
     hash_append(material, shader_stage_name(request.stage));
@@ -597,6 +794,7 @@ CookResult cook(const CookRequest& request) {
 
     result.cache_key = make_cache_key(source, request, dxc_version, converter_version);
     result.dxil_path = request.output_directory / "shader.dxil";
+    result.assembly_path = request.output_directory / "shader.dxc.txt";
     if (needs_metal(request.target)) {
         result.metallib_path = request.output_directory / "shader.metallib";
     }
@@ -604,14 +802,18 @@ CookResult cook(const CookRequest& request) {
 
     const bool artifacts_exist =
         std::filesystem::exists(result.dxil_path, error) &&
+        std::filesystem::exists(result.assembly_path, error) &&
         (!result.metallib_path.has_value() ||
             std::filesystem::exists(*result.metallib_path, error));
     if (!request.force && artifacts_exist &&
         manifest_matches(result.manifest_path, result.cache_key)) {
-        result.success = true;
-        result.cache_hit = true;
-        result.diagnostics = "Shader is up to date.";
-        return result;
+        result.reflection = parse_dxc_resource_bindings(read_file(result.assembly_path));
+        if (result.reflection.valid) {
+            result.success = true;
+            result.cache_hit = true;
+            result.diagnostics = "Shader is up to date.";
+            return result;
+        }
     }
 
     const auto compiler_log = request.output_directory / "dxc.log";
@@ -627,11 +829,19 @@ CookResult cook(const CookRequest& request) {
         dxc_command += "-O3 -Qstrip_debug ";
     }
     dxc_command +=
+        "-Fc " + shell_quote_path(result.assembly_path) + " " +
         "-Fo " + shell_quote_path(result.dxil_path) + " " + shell_quote_path(request.input);
 
     const ProcessResult dxc_result = run_capture(dxc_command, compiler_log);
-    if (dxc_result.exit_code != 0 || !std::filesystem::exists(result.dxil_path, error)) {
+    if (dxc_result.exit_code != 0 || !std::filesystem::exists(result.dxil_path, error) ||
+        !std::filesystem::exists(result.assembly_path, error)) {
         result.diagnostics = "DXC failed.\n" + dxc_result.output;
+        return result;
+    }
+
+    result.reflection = parse_dxc_resource_bindings(read_file(result.assembly_path));
+    if (!result.reflection.valid) {
+        result.diagnostics = "DXC reflection extraction failed.\n" + result.reflection.diagnostics;
         return result;
     }
 
@@ -656,7 +866,9 @@ CookResult cook(const CookRequest& request) {
         dxc_version,
         converter_version,
         result.dxil_path,
-        result.metallib_path
+        result.assembly_path,
+        result.metallib_path,
+        result.reflection
     );
     if (!write_file(result.manifest_path, manifest)) {
         result.diagnostics = "Could not write shader manifest.";

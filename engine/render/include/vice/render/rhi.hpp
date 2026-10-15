@@ -265,6 +265,13 @@ enum class ShaderBinaryFormat : std::uint8_t {
     metallib,
 };
 
+enum class ShaderRegisterClass : std::uint8_t {
+    constant_buffer,
+    shader_resource,
+    unordered_access,
+    sampler,
+};
+
 [[nodiscard]] constexpr std::string_view shader_stage_name(const ShaderStage stage) noexcept {
     switch (stage) {
     case ShaderStage::vertex: return "vertex";
@@ -272,6 +279,30 @@ enum class ShaderBinaryFormat : std::uint8_t {
     case ShaderStage::compute: return "compute";
     }
     return "unknown";
+}
+
+[[nodiscard]] constexpr std::string_view shader_register_class_name(
+    const ShaderRegisterClass register_class
+) noexcept {
+    switch (register_class) {
+    case ShaderRegisterClass::constant_buffer: return "constant_buffer";
+    case ShaderRegisterClass::shader_resource: return "shader_resource";
+    case ShaderRegisterClass::unordered_access: return "unordered_access";
+    case ShaderRegisterClass::sampler: return "sampler";
+    }
+    return "unknown";
+}
+
+struct ShaderResourceBindingDesc {
+    ShaderRegisterClass register_class = ShaderRegisterClass::shader_resource;
+    std::uint32_t binding = 0;
+    std::uint32_t space = 0;
+    std::uint32_t count = 1;
+    bool unbounded = false;
+};
+
+[[nodiscard]] constexpr bool is_valid(const ShaderResourceBindingDesc& desc) noexcept {
+    return desc.unbounded ? desc.count == 0U : desc.count > 0U;
 }
 
 struct ShaderModuleDesc {
@@ -286,6 +317,7 @@ struct ShaderBinaryDesc {
     ShaderStage stage = ShaderStage::vertex;
     ShaderBinaryFormat format = ShaderBinaryFormat::dxil;
     std::span<const std::byte> binary;
+    std::span<const ShaderResourceBindingDesc> resources;
     std::string_view entry_point = "main";
     std::string_view debug_name;
 };
@@ -295,7 +327,15 @@ struct ShaderBinaryDesc {
 }
 
 [[nodiscard]] constexpr bool is_valid(const ShaderBinaryDesc& desc) noexcept {
-    return !desc.binary.empty() && !desc.entry_point.empty();
+    if (desc.binary.empty() || desc.entry_point.empty()) {
+        return false;
+    }
+    for (const auto& resource : desc.resources) {
+        if (!is_valid(resource)) {
+            return false;
+        }
+    }
+    return true;
 }
 
 enum class PrimitiveTopology : std::uint8_t {
@@ -380,6 +420,9 @@ class ShaderModule {
 public:
     virtual ~ShaderModule() = default;
     [[nodiscard]] virtual ShaderStage stage() const noexcept = 0;
+    [[nodiscard]] virtual std::span<const ShaderResourceBindingDesc> resources() const noexcept {
+        return {};
+    }
 };
 
 class GraphicsPipeline {

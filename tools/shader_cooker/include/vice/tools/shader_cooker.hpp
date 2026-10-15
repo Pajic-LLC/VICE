@@ -1,9 +1,11 @@
 #pragma once
 
+#include <cstdint>
 #include <filesystem>
 #include <optional>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace vice::tools::shader_cooker {
 
@@ -17,6 +19,31 @@ enum class CookTarget {
     direct3d12,
     metal,
     all,
+};
+
+enum class ShaderRegisterClass {
+    constant_buffer,
+    shader_resource,
+    unordered_access,
+    sampler,
+};
+
+struct ShaderResourceReflection {
+    std::string name;
+    ShaderRegisterClass register_class = ShaderRegisterClass::shader_resource;
+    std::uint32_t binding = 0;
+    std::uint32_t space = 0;
+    std::uint32_t count = 1;
+    bool unbounded = false;
+    std::string type;
+    std::string format;
+    std::string dimension;
+};
+
+struct ShaderReflection {
+    bool valid = false;
+    std::vector<ShaderResourceReflection> resources;
+    std::string diagnostics;
 };
 
 struct Toolchain {
@@ -41,14 +68,18 @@ struct CookResult {
     bool cache_hit = false;
     std::string cache_key;
     std::filesystem::path dxil_path;
+    std::filesystem::path assembly_path;
     std::optional<std::filesystem::path> metallib_path;
     std::filesystem::path manifest_path;
+    ShaderReflection reflection;
     std::string diagnostics;
 };
 
 [[nodiscard]] std::string_view shader_stage_name(ShaderStage stage) noexcept;
 [[nodiscard]] std::string_view cook_target_name(CookTarget target) noexcept;
+[[nodiscard]] std::string_view shader_register_class_name(ShaderRegisterClass register_class) noexcept;
 [[nodiscard]] std::string shader_profile(ShaderStage stage, std::string_view shader_model);
+[[nodiscard]] ShaderReflection parse_dxc_resource_bindings(std::string_view assembly);
 [[nodiscard]] std::string make_cache_key(
     std::string_view source,
     const CookRequest& request,
