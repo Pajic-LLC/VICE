@@ -3,6 +3,7 @@
 #include <vice/core/platform.hpp>
 #include <vice/core/time.hpp>
 #include <vice/core/version.hpp>
+#include <vice/world/world.hpp>
 
 #include <string>
 
@@ -23,6 +24,12 @@ int main() {
         LogLevel::info,
         std::string{"Build: "} + std::string{build_configuration_name(current_build_configuration())}
     );
+
+    vice::world::World world;
+    const auto entity = world.create_entity();
+    if (const auto persistent_id = world.persistent_id(entity)) {
+        log(LogLevel::info, std::string{"World entity: "} + persistent_id->to_string());
+    }
 
     FrameClock clock;
     clock.tick();

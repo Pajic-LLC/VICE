@@ -19,6 +19,7 @@ list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 include(ViceCompiler)
 
 add_subdirectory(engine/core)
+add_subdirectory(engine/world)
 
 if(VICE_BUILD_LAB)
   add_subdirectory(apps/vice_lab)
