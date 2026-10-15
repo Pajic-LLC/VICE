@@ -17,15 +17,25 @@ function(vice_find_dxc out_var)
     return()
   endif()
 
-  if(WIN32 AND DEFINED ENV{ProgramFiles(x86)})
-    file(GLOB _vice_sdk_dxc_candidates
-      "$ENV{ProgramFiles(x86)}/Windows Kits/10/bin/*/x64/dxc.exe"
+  if(WIN32)
+    cmake_host_system_information(
+      RESULT _vice_kits_root
+      QUERY WINDOWS_REGISTRY "HKLM/SOFTWARE/Microsoft/Windows Kits/Installed Roots"
+      VALUE KitsRoot10
+      VIEW BOTH
+      ERROR_VARIABLE _vice_kits_error
     )
-    if(_vice_sdk_dxc_candidates)
-      list(SORT _vice_sdk_dxc_candidates COMPARE NATURAL ORDER DESCENDING)
-      list(GET _vice_sdk_dxc_candidates 0 _vice_sdk_dxc)
-      set(${out_var} "${_vice_sdk_dxc}" PARENT_SCOPE)
-      return()
+    if(_vice_kits_root AND NOT _vice_kits_error)
+      file(TO_CMAKE_PATH "${_vice_kits_root}" _vice_kits_root_cmake)
+      file(GLOB _vice_sdk_dxc_candidates
+        "${_vice_kits_root_cmake}/bin/*/x64/dxc.exe"
+      )
+      if(_vice_sdk_dxc_candidates)
+        list(SORT _vice_sdk_dxc_candidates COMPARE NATURAL ORDER DESCENDING)
+        list(GET _vice_sdk_dxc_candidates 0 _vice_sdk_dxc)
+        set(${out_var} "${_vice_sdk_dxc}" PARENT_SCOPE)
+        return()
+      endif()
     endif()
   endif()
 
