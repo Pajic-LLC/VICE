@@ -370,8 +370,8 @@ public:
         if (!valid_ || swapchain_ == nullptr) {
             return false;
         }
-        const UINT frame_index = swapchain_->GetCurrentBackBufferIndex();
-        if (frame_index >= back_buffer_count) {
+        const UINT index = frame_index();
+        if (index >= back_buffer_count) {
             return false;
         }
         if (!succeeded(allocator_->Reset(), "Direct3D 12 could not reset the command allocator.")) {
@@ -383,11 +383,21 @@ public:
         )) {
             return false;
         }
-        transition_back_buffer(command_list_.Get(), frame_index, D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_RENDER_TARGET);
+        transition_resource(
+            command_list_.Get(),
+            back_buffers_[index].Get(),
+            D3D12_RESOURCE_STATE_PRESENT,
+            D3D12_RESOURCE_STATE_RENDER_TARGET
+        );
         const auto rtv = current_rtv();
         const FLOAT clear_color[4] = {color.red, color.green, color.blue, color.alpha};
         command_list_->ClearRenderTargetView(rtv, clear_color, 0, nullptr);
-        transition_back_buffer(command_list_.Get(), frame_index, D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_PRESENT);
+        transition_resource(
+            command_list_.Get(),
+            back_buffers_[index].Get(),
+            D3D12_RESOURCE_STATE_RENDER_TARGET,
+            D3D12_RESOURCE_STATE_PRESENT
+        );
         if (!succeeded(command_list_->Close(), "Direct3D 12 could not close the command list.")) {
             return false;
         }
@@ -429,12 +439,11 @@ public:
     }
 
 private:
-    static void transition_back_buffer(
+    static void transition_resource(
         ID3D12GraphicsCommandList* command_list,
-        const UINT,
+        ID3D12Resource* resource,
         const D3D12_RESOURCE_STATES before,
-        const D3D12_RESOURCE_STATES after,
-        ID3D12Resource* resource = nullptr
+        const D3D12_RESOURCE_STATES after
     ) {
         if (command_list == nullptr || resource == nullptr || before == after) {
             return;
@@ -446,18 +455,6 @@ private:
         barrier.Transition.StateBefore = before;
         barrier.Transition.StateAfter = after;
         command_list->ResourceBarrier(1, &barrier);
-    }
-
-    void transition_back_buffer(
-        ID3D12GraphicsCommandList* command_list,
-        const UINT index,
-        const D3D12_RESOURCE_STATES before,
-        const D3D12_RESOURCE_STATES after
-    ) {
-        if (index >= back_buffer_count) {
-            return;
-        }
-        transition_back_buffer(command_list, index, before, after, back_buffers_[index].Get());
     }
 
     bool initialize(const platform::WindowMetrics metrics) {
@@ -963,10 +960,13 @@ public:
         ComPtr<ID3DBlob> bytecode;
         ComPtr<ID3DBlob> errors;
         const std::string entry{desc.entry_point};
+        const std::string source_name = desc.debug_name.empty()
+            ? std::string{"VICE shader"}
+            : std::string{desc.debug_name};
         const HRESULT result = D3DCompile(
             desc.source.data(),
             desc.source.size(),
-            desc.debug_name.empty() ? "VICE shader" : std::string{desc.debug_name}.c_str(),
+            source_name.c_str(),
             nullptr,
             nullptr,
             entry.c_str(),
@@ -1032,13 +1032,25 @@ public:
             return nullptr;
         }
 
+        D3D12_RENDER_TARGET_BLEND_DESC blend{};
+        blend.BlendEnable = FALSE;
+        blend.LogicOpEnable = FALSE;
+        blend.SrcBlend = D3D12_BLEND_ONE;
+        blend.DestBlend = D3D12_BLEND_ZERO;
+        blend.BlendOp = D3D12_BLEND_OP_ADD;
+        blend.SrcBlendAlpha = D3D12_BLEND_ONE;
+        blend.DestBlendAlpha = D3D12_BLEND_ZERO;
+        blend.BlendOpAlpha = D3D12_BLEND_OP_ADD;
+        blend.LogicOp = D3D12_LOGIC_OP_NOOP;
+        blend.RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
+
         D3D12_GRAPHICS_PIPELINE_STATE_DESC pipeline_desc{};
         pipeline_desc.pRootSignature = root_signature.Get();
         pipeline_desc.VS = vertex->native_bytecode();
         pipeline_desc.PS = fragment->native_bytecode();
         pipeline_desc.BlendState.AlphaToCoverageEnable = FALSE;
         pipeline_desc.BlendState.IndependentBlendEnable = FALSE;
-        pipeline_desc.BlendState.RenderTarget[0].RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
+        pipeline_desc.BlendState.RenderTarget[0] = blend;
         pipeline_desc.SampleMask = UINT_MAX;
         pipeline_desc.RasterizerState.FillMode = D3D12_FILL_MODE_SOLID;
         pipeline_desc.RasterizerState.CullMode = cull_mode(desc.cull_mode);
