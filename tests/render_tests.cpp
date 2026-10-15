@@ -1,6 +1,8 @@
 #include <vice/render/rhi.hpp>
 
+#include <array>
 #include <cassert>
+#include <cstddef>
 
 int main() {
     using namespace vice::render;
@@ -158,6 +160,25 @@ int main() {
         .debug_name = {},
     };
     static_assert(!is_valid(invalid_shader));
+
+    constexpr std::array<std::byte, 4> binary_bytes{};
+    constexpr ShaderBinaryDesc valid_binary{
+        .stage = ShaderStage::vertex,
+        .format = ShaderBinaryFormat::dxil,
+        .binary = std::span<const std::byte>{binary_bytes},
+        .entry_point = "main",
+        .debug_name = {},
+    };
+    static_assert(is_valid(valid_binary));
+
+    constexpr ShaderBinaryDesc invalid_binary{
+        .stage = ShaderStage::fragment,
+        .format = ShaderBinaryFormat::metallib,
+        .binary = {},
+        .entry_point = "main",
+        .debug_name = {},
+    };
+    static_assert(!is_valid(invalid_binary));
 
     constexpr GraphicsPipelineDesc invalid_pipeline{};
     static_assert(!is_valid(invalid_pipeline));
