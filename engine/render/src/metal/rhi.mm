@@ -631,11 +631,11 @@ public:
         dispatch_data_t data = dispatch_data_create(
             desc.binary.data(),
             desc.binary.size(),
-            dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0),
-            DISPATCH_DATA_DESTRUCTOR_NONE
+            nullptr,
+            DISPATCH_DATA_DESTRUCTOR_DEFAULT
         );
         if (data == nullptr) {
-            core::log(core::LogLevel::error, "Metal could not wrap the cooked shader binary.");
+            core::log(core::LogLevel::error, "Metal could not copy the cooked shader binary.");
             return nullptr;
         }
 
