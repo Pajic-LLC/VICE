@@ -85,7 +85,7 @@ int main() {
     static_assert(texture_format_bytes_per_pixel(color_texture.format) == 8U);
 
     constexpr TextureDesc depth_texture{
-        .dimension = TextureDimension::d2,
+        .dimension = TextureDimension::d2;
         .width = 1920,
         .height = 1080,
         .depth = 1,
@@ -174,6 +174,42 @@ int main() {
     };
     static_assert(!is_valid(invalid_binding));
 
+    constexpr MetalShaderResourceLocationDesc metal_location{
+        .register_class = ShaderRegisterClass::constant_buffer,
+        .binding = 0,
+        .space = 1,
+        .argument_buffer_offset = 24,
+        .size = 24,
+    };
+    static_assert(is_valid(metal_location));
+
+    constexpr MetalShaderResourceLocationDesc metal_array_location{
+        .register_class = ShaderRegisterClass::shader_resource,
+        .binding = 4,
+        .space = 2,
+        .argument_buffer_offset = 48,
+        .size = 72,
+    };
+    static_assert(is_valid(metal_array_location));
+
+    constexpr MetalShaderResourceLocationDesc invalid_metal_size{
+        .register_class = ShaderRegisterClass::shader_resource,
+        .binding = 4,
+        .space = 2,
+        .argument_buffer_offset = 48,
+        .size = 16,
+    };
+    static_assert(!is_valid(invalid_metal_size));
+
+    constexpr MetalShaderResourceLocationDesc invalid_metal_alignment{
+        .register_class = ShaderRegisterClass::sampler,
+        .binding = 1,
+        .space = 0,
+        .argument_buffer_offset = 4,
+        .size = 24,
+    };
+    static_assert(!is_valid(invalid_metal_alignment));
+
     constexpr ShaderBindingKey texture_element{
         .register_class = ShaderRegisterClass::shader_resource,
         .binding = 4,
@@ -248,6 +284,41 @@ int main() {
         .debug_name = {},
     };
     static_assert(is_valid(valid_binary));
+
+    static constexpr std::array<ShaderResourceBindingDesc, 1> metal_binary_bindings{
+        constant_binding,
+    };
+    static constexpr std::array<MetalShaderResourceLocationDesc, 1> metal_binary_locations{
+        metal_location,
+    };
+    constexpr ShaderBinaryDesc valid_metal_binary{
+        .stage = ShaderStage::vertex,
+        .format = ShaderBinaryFormat::metallib,
+        .binary = std::span<const std::byte>{binary_bytes},
+        .resources = std::span<const ShaderResourceBindingDesc>{metal_binary_bindings},
+        .entry_point = "main",
+        .debug_name = {},
+        .metal_resource_locations = std::span<const MetalShaderResourceLocationDesc>{
+            metal_binary_locations
+        },
+    };
+    static_assert(is_valid(valid_metal_binary));
+
+    static constexpr std::array<MetalShaderResourceLocationDesc, 1> invalid_metal_locations{
+        invalid_metal_size,
+    };
+    constexpr ShaderBinaryDesc invalid_metal_binary{
+        .stage = ShaderStage::vertex,
+        .format = ShaderBinaryFormat::metallib,
+        .binary = std::span<const std::byte>{binary_bytes},
+        .resources = std::span<const ShaderResourceBindingDesc>{metal_binary_bindings},
+        .entry_point = "main",
+        .debug_name = {},
+        .metal_resource_locations = std::span<const MetalShaderResourceLocationDesc>{
+            invalid_metal_locations
+        },
+    };
+    static_assert(!is_valid(invalid_metal_binary));
 
     static constexpr std::array<ShaderResourceBindingDesc, 1> invalid_binary_bindings{
         invalid_binding,
