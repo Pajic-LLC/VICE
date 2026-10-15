@@ -7,6 +7,7 @@
 #include <vice/platform/event.hpp>
 #include <vice/platform/services.hpp>
 #include <vice/render/rhi.hpp>
+#include <vice/render/shader_asset.hpp>
 #include <vice/world/world.hpp>
 
 #include <algorithm>
@@ -14,6 +15,8 @@
 #include <atomic>
 #include <chrono>
 #include <cstddef>
+#include <filesystem>
+#include <memory>
 #include <span>
 #include <string>
 #include <string_view>
@@ -83,6 +86,46 @@ float4 vice_triangle_fs(VertexOut input) : SV_Target0 {
     return float4(input.color, 1.0);
 }
 )";
+
+[[nodiscard]] std::unique_ptr<vice::render::ShaderModule> load_lab_shader(
+    vice::render::Device& device,
+    const std::filesystem::path& cooked_directory,
+    const vice::render::ShaderModuleDesc& development_fallback
+) {
+    const std::filesystem::path manifest = cooked_directory / "shader.vice.json";
+    std::error_code error;
+    const bool manifest_exists = std::filesystem::exists(manifest, error);
+    if (error) {
+        vice::core::log(
+            vice::core::LogLevel::error,
+            "VICE Lab could not inspect cooked shader manifest: " + error.message()
+        );
+        return nullptr;
+    }
+
+    if (manifest_exists) {
+        auto loaded = vice::render::load_cooked_shader(device, manifest);
+        if (!loaded) {
+            vice::core::log(
+                vice::core::LogLevel::error,
+                "VICE Lab cooked shader load failed: " + loaded.diagnostics
+            );
+            return nullptr;
+        }
+        vice::core::log(
+            vice::core::LogLevel::debug,
+            "VICE Lab loaded cooked shader: " + cooked_directory.filename().string()
+        );
+        return std::move(loaded.module);
+    }
+
+    vice::core::log(
+        vice::core::LogLevel::debug,
+        "VICE Lab cooked shader is absent; using development source fallback: " +
+            cooked_directory.filename().string()
+    );
+    return device.create_shader_module(development_fallback);
+}
 
 } // namespace
 
@@ -266,8 +309,17 @@ int main() {
     fragment_desc.entry_point = "vice_triangle_fs";
     fragment_desc.debug_name = "VICE Lab triangle fragment";
 
-    auto vertex_shader = render_device->create_shader_module(vertex_desc);
-    auto fragment_shader = render_device->create_shader_module(fragment_desc);
+    const std::filesystem::path cooked_shader_root{VICE_LAB_COOKED_SHADER_ROOT};
+    auto vertex_shader = load_lab_shader(
+        *render_device,
+        cooked_shader_root / "vice_lab_triangle_vs",
+        vertex_desc
+    );
+    auto fragment_shader = load_lab_shader(
+        *render_device,
+        cooked_shader_root / "vice_lab_triangle_fs",
+        fragment_desc
+    );
     if (!vertex_shader || !fragment_shader) {
         log(LogLevel::error, "VICE Lab could not create triangle shader modules.");
         return 1;

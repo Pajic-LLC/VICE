@@ -22,6 +22,12 @@ target_compile_features(vice_render_tests PRIVATE cxx_std_23)
 vice_enable_warnings(vice_render_tests)
 add_test(NAME vice_render_tests COMMAND vice_render_tests)
 
+add_executable(vice_shader_asset_tests shader_asset_tests.cpp)
+target_link_libraries(vice_shader_asset_tests PRIVATE VICE::Render)
+target_compile_features(vice_shader_asset_tests PRIVATE cxx_std_23)
+vice_enable_warnings(vice_shader_asset_tests)
+add_test(NAME vice_shader_asset_tests COMMAND vice_shader_asset_tests)
+
 add_executable(vice_pipeline_layout_tests pipeline_layout_tests.cpp)
 target_link_libraries(vice_pipeline_layout_tests PRIVATE VICE::Render)
 target_compile_features(vice_pipeline_layout_tests PRIVATE cxx_std_23)
