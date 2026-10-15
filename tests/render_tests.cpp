@@ -174,6 +174,48 @@ int main() {
     };
     static_assert(!is_valid(invalid_binding));
 
+    constexpr ShaderBindingKey texture_element{
+        .register_class = ShaderRegisterClass::shader_resource,
+        .binding = 4,
+        .space = 2,
+        .array_element = 5,
+    };
+    constexpr ShaderBindingKey same_texture_namespace{
+        .register_class = ShaderRegisterClass::shader_resource,
+        .binding = 4,
+        .space = 2,
+        .array_element = 1,
+    };
+    constexpr ShaderBindingKey different_texture_space{
+        .register_class = ShaderRegisterClass::shader_resource,
+        .binding = 4,
+        .space = 3,
+        .array_element = 5,
+    };
+    static_assert(same_binding_namespace(texture_element, same_texture_namespace));
+    static_assert(!same_binding_namespace(texture_element, different_texture_space));
+
+    constexpr BufferViewDesc raw_view{
+        .offset = 16,
+        .size = 64,
+        .structure_stride = 0,
+    };
+    static_assert(is_valid(raw_view));
+
+    constexpr BufferViewDesc structured_view{
+        .offset = 32,
+        .size = 128,
+        .structure_stride = 16,
+    };
+    static_assert(is_valid(structured_view));
+
+    constexpr BufferViewDesc invalid_structured_view{
+        .offset = 0,
+        .size = 130,
+        .structure_stride = 16,
+    };
+    static_assert(!is_valid(invalid_structured_view));
+
     constexpr ShaderModuleDesc valid_shader{
         .stage = ShaderStage::vertex,
         .language = ShaderSourceLanguage::hlsl,

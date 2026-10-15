@@ -455,13 +455,14 @@ struct BindingLocation {
     const std::filesystem::path& dxil_path,
     const std::filesystem::path& assembly_path,
     const std::optional<std::filesystem::path>& metallib_path,
+    const std::optional<std::filesystem::path>& metal_reflection_path,
     const ShaderReflection& reflection
 ) {
     std::ostringstream manifest;
     manifest
         << "{\n"
         << "  \"format\": \"vice.shader\",\n"
-        << "  \"version\": 2,\n"
+        << "  \"version\": 3,\n"
         << "  \"cache_key\": \"" << json_escape(cache_key) << "\",\n"
         << "  \"source\": \"" << json_escape(request.input.filename().string()) << "\",\n"
         << "  \"entry_point\": \"" << json_escape(request.entry_point) << "\",\n"
@@ -478,7 +479,24 @@ struct BindingLocation {
         << "    \"dxc_assembly\": \"" << json_escape(assembly_path.filename().string()) << "\",\n"
         << "    \"metallib\": ";
     if (metallib_path.has_value()) {
-        manifest << "\"" << json_escape(metallib_path->filename().string()) << "\"\n";
+        manifest << "\"" << json_escape(metallib_path->filename().string()) << "\",\n";
+    } else {
+        manifest << "null,\n";
+    }
+    manifest << "    \"metal_reflection\": ";
+    if (metal_reflection_path.has_value()) {
+        manifest << "\"" << json_escape(metal_reflection_path->filename().string()) << "\"\n";
+    } else {
+        manifest << "null\n";
+    }
+    manifest
+        << "  },\n"
+        << "  \"metal_binding\": {\n"
+        << "    \"version\": 1,\n"
+        << "    \"model\": \"converter_reflection\",\n"
+        << "    \"resource_locations\": ";
+    if (metal_reflection_path.has_value()) {
+        manifest << "\"" << json_escape(metal_reflection_path->filename().string()) << "\"\n";
     } else {
         manifest << "null\n";
     }
@@ -680,7 +698,7 @@ std::string make_cache_key(
 ) {
     std::string material;
     material.reserve(source.size() + 512);
-    hash_append(material, "VICE_SHADER_ASSET_V2");
+    hash_append(material, "VICE_SHADER_ASSET_V3");
     hash_append(material, source);
     hash_append(material, request.entry_point);
     hash_append(material, shader_stage_name(request.stage));
@@ -797,6 +815,7 @@ CookResult cook(const CookRequest& request) {
     result.assembly_path = request.output_directory / "shader.dxc.txt";
     if (needs_metal(request.target)) {
         result.metallib_path = request.output_directory / "shader.metallib";
+        result.metal_reflection_path = request.output_directory / "shader.metal.json";
     }
     result.manifest_path = request.output_directory / "shader.vice.json";
 
@@ -804,7 +823,9 @@ CookResult cook(const CookRequest& request) {
         std::filesystem::exists(result.dxil_path, error) &&
         std::filesystem::exists(result.assembly_path, error) &&
         (!result.metallib_path.has_value() ||
-            std::filesystem::exists(*result.metallib_path, error));
+            std::filesystem::exists(*result.metallib_path, error)) &&
+        (!result.metal_reflection_path.has_value() ||
+            std::filesystem::exists(*result.metal_reflection_path, error));
     if (!request.force && artifacts_exist &&
         manifest_matches(result.manifest_path, result.cache_key)) {
         result.reflection = parse_dxc_resource_bindings(read_file(result.assembly_path));
@@ -845,15 +866,17 @@ CookResult cook(const CookRequest& request) {
         return result;
     }
 
-    if (result.metallib_path.has_value()) {
+    if (result.metallib_path.has_value() && result.metal_reflection_path.has_value()) {
         const auto converter_log = request.output_directory / "metal-shaderconverter.log";
         const std::string converter_command =
             shell_quote_path(toolchain.metal_shader_converter) + " " +
             shell_quote_path(result.dxil_path) + " -o " +
-            shell_quote_path(*result.metallib_path);
+            shell_quote_path(*result.metallib_path) + " --output-reflection-file " +
+            shell_quote_path(*result.metal_reflection_path);
         const ProcessResult converter_result = run_capture(converter_command, converter_log);
         if (converter_result.exit_code != 0 ||
-            !std::filesystem::exists(*result.metallib_path, error)) {
+            !std::filesystem::exists(*result.metallib_path, error) ||
+            !std::filesystem::exists(*result.metal_reflection_path, error)) {
             result.diagnostics =
                 "Metal Shader Converter failed.\n" + converter_result.output;
             return result;
@@ -868,6 +891,7 @@ CookResult cook(const CookRequest& request) {
         result.dxil_path,
         result.assembly_path,
         result.metallib_path,
+        result.metal_reflection_path,
         result.reflection
     );
     if (!write_file(result.manifest_path, manifest)) {

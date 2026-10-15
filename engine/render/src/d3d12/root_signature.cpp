@@ -20,6 +20,7 @@ struct DescriptorTableGroup {
     bool sampler = false;
     ShaderStageMask stages = ShaderStageMask::none;
     bool unbounded = false;
+    std::vector<PipelineResourceBinding> resources;
     std::vector<D3D12_DESCRIPTOR_RANGE> ranges;
 };
 
@@ -101,6 +102,7 @@ D3D12RootSignatureResult serialize_d3d12_root_signature(const PipelineLayout& la
             group.sampler = sampler;
             group.stages = resource.stages;
             group.unbounded = true;
+            group.resources.push_back(resource);
             group.ranges.push_back(make_range(resource));
             groups.push_back(std::move(group));
             continue;
@@ -114,12 +116,17 @@ D3D12RootSignatureResult serialize_d3d12_root_signature(const PipelineLayout& la
             groups.push_back(std::move(new_group));
             group = &groups.back();
         }
+        group->resources.push_back(resource);
         group->ranges.push_back(make_range(resource));
     }
 
     std::vector<D3D12_ROOT_PARAMETER> parameters;
     parameters.reserve(groups.size());
-    for (const auto& group : groups) {
+    result.tables.reserve(groups.size());
+    result.bindings.reserve(layout.resources.size());
+
+    for (std::size_t group_index = 0; group_index < groups.size(); ++group_index) {
+        const auto& group = groups[group_index];
         D3D12_ROOT_PARAMETER parameter{};
         parameter.ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
         parameter.ShaderVisibility = shader_visibility(group.stages);
@@ -128,6 +135,32 @@ D3D12RootSignatureResult serialize_d3d12_root_signature(const PipelineLayout& la
         parameter.DescriptorTable.pDescriptorRanges = group.ranges.data();
         parameters.push_back(parameter);
         result.descriptor_range_count += group.ranges.size();
+
+        D3D12DescriptorTableLayout table;
+        table.root_parameter_index = static_cast<std::uint32_t>(group_index);
+        table.heap_class = group.sampler
+            ? D3D12DescriptorHeapClass::samplers
+            : D3D12DescriptorHeapClass::resources;
+        table.stages = group.stages;
+        table.unbounded = group.unbounded;
+
+        std::uint32_t table_offset = 0;
+        for (const auto& resource : group.resources) {
+            result.bindings.push_back(D3D12BindingLocation{
+                .register_class = resource.register_class,
+                .binding = resource.binding,
+                .space = resource.space,
+                .count = resource.count,
+                .unbounded = resource.unbounded,
+                .root_parameter_index = table.root_parameter_index,
+                .table_offset = table_offset,
+            });
+            if (!resource.unbounded) {
+                table_offset += resource.count;
+            }
+        }
+        table.bounded_descriptor_count = table_offset;
+        result.tables.push_back(table);
     }
 
     D3D12_ROOT_SIGNATURE_DESC root{};
@@ -153,6 +186,8 @@ D3D12RootSignatureResult serialize_d3d12_root_signature(const PipelineLayout& la
         if (result.diagnostics.empty()) {
             result.diagnostics = "Direct3D 12 could not serialize the VICE root signature.";
         }
+        result.tables.clear();
+        result.bindings.clear();
         return result;
     }
 
@@ -161,6 +196,24 @@ D3D12RootSignatureResult serialize_d3d12_root_signature(const PipelineLayout& la
     result.descriptor_table_count = groups.size();
     result.success = true;
     return result;
+}
+
+const D3D12BindingLocation* find_d3d12_binding_location(
+    const D3D12RootSignatureResult& root,
+    const ShaderBindingKey& binding
+) noexcept {
+    const auto found = std::find_if(
+        root.bindings.begin(),
+        root.bindings.end(),
+        [&](const D3D12BindingLocation& location) {
+            if (location.register_class != binding.register_class ||
+                location.binding != binding.binding || location.space != binding.space) {
+                return false;
+            }
+            return location.unbounded || binding.array_element < location.count;
+        }
+    );
+    return found == root.bindings.end() ? nullptr : &*found;
 }
 
 } // namespace vice::render

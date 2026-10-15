@@ -31,6 +31,8 @@ namespace {
 
 using Microsoft::WRL::ComPtr;
 constexpr UINT back_buffer_count = 2;
+constexpr std::uint64_t constant_buffer_alignment = 256U;
+constexpr std::uint64_t maximum_constant_buffer_size = 64U * 1024U;
 
 [[nodiscard]] bool succeeded(const HRESULT result, const char* message) {
     if (SUCCEEDED(result)) {
@@ -70,6 +72,18 @@ constexpr UINT back_buffer_count = 2;
     return result;
 }
 
+[[nodiscard]] bool aligned_size(
+    const std::uint64_t value,
+    const std::uint64_t alignment,
+    std::uint64_t& result
+) noexcept {
+    if (alignment == 0U || value > std::numeric_limits<std::uint64_t>::max() - (alignment - 1U)) {
+        return false;
+    }
+    result = (value + alignment - 1U) / alignment * alignment;
+    return true;
+}
+
 [[nodiscard]] D3D12_HEAP_TYPE heap_type(const MemoryLocation memory) noexcept {
     switch (memory) {
     case MemoryLocation::gpu_only: return D3D12_HEAP_TYPE_DEFAULT;
@@ -104,6 +118,19 @@ constexpr UINT back_buffer_count = 2;
     case TextureFormat::undefined: return DXGI_FORMAT_UNKNOWN;
     }
     return DXGI_FORMAT_UNKNOWN;
+}
+
+[[nodiscard]] DXGI_FORMAT texture_resource_format(const TextureDesc& desc) noexcept {
+    if (desc.format == TextureFormat::depth32_float && has_usage(desc.usage, TextureUsage::sampled)) {
+        return DXGI_FORMAT_R32_TYPELESS;
+    }
+    return pixel_format(desc.format);
+}
+
+[[nodiscard]] DXGI_FORMAT shader_view_format(const TextureFormat format) noexcept {
+    return format == TextureFormat::depth32_float
+        ? DXGI_FORMAT_R32_FLOAT
+        : pixel_format(format);
 }
 
 [[nodiscard]] D3D12_RESOURCE_DIMENSION resource_dimension(
@@ -175,13 +202,21 @@ constexpr UINT back_buffer_count = 2;
     return "";
 }
 
+[[nodiscard]] bool same_binding_key(
+    const ShaderBindingKey& left,
+    const ShaderBindingKey& right
+) noexcept {
+    return same_binding_namespace(left, right) && left.array_element == right.array_element;
+}
+
 class D3D12Buffer final : public Buffer {
 public:
     D3D12Buffer(
         const BufferDesc& desc,
         ComPtr<ID3D12Resource> resource,
+        const std::uint64_t allocation_size,
         const D3D12_RESOURCE_STATES state
-    ) : size_{desc.size}, usage_{desc.usage}, memory_{desc.memory},
+    ) : size_{desc.size}, allocation_size_{allocation_size}, usage_{desc.usage}, memory_{desc.memory},
         resource_{std::move(resource)}, state_{state} {}
 
     [[nodiscard]] std::uint64_t size() const noexcept override { return size_; }
@@ -235,11 +270,13 @@ public:
     }
 
     [[nodiscard]] ID3D12Resource* native() const noexcept { return resource_.Get(); }
+    [[nodiscard]] std::uint64_t allocation_size() const noexcept { return allocation_size_; }
     [[nodiscard]] D3D12_RESOURCE_STATES state() const noexcept { return state_; }
     void set_state(const D3D12_RESOURCE_STATES state) noexcept { state_ = state; }
 
 private:
     std::uint64_t size_ = 0;
+    std::uint64_t allocation_size_ = 0;
     BufferUsage usage_ = BufferUsage::none;
     MemoryLocation memory_ = MemoryLocation::gpu_only;
     ComPtr<ID3D12Resource> resource_;
@@ -248,8 +285,11 @@ private:
 
 class D3D12Texture final : public Texture {
 public:
-    D3D12Texture(const TextureDesc& desc, ComPtr<ID3D12Resource> resource)
-        : desc_{desc}, resource_{std::move(resource)} {
+    D3D12Texture(
+        const TextureDesc& desc,
+        ComPtr<ID3D12Resource> resource,
+        const D3D12_RESOURCE_STATES state
+    ) : desc_{desc}, resource_{std::move(resource)}, state_{state} {
         desc_.debug_name = {};
     }
 
@@ -259,15 +299,21 @@ public:
     [[nodiscard]] std::uint32_t width() const noexcept override { return desc_.width; }
     [[nodiscard]] std::uint32_t height() const noexcept override { return desc_.height; }
     [[nodiscard]] std::uint32_t depth() const noexcept override { return desc_.depth; }
+    [[nodiscard]] const TextureDesc& desc() const noexcept { return desc_; }
+    [[nodiscard]] ID3D12Resource* native() const noexcept { return resource_.Get(); }
+    [[nodiscard]] D3D12_RESOURCE_STATES state() const noexcept { return state_; }
+    void set_state(const D3D12_RESOURCE_STATES state) noexcept { state_ = state; }
 
 private:
     TextureDesc desc_{};
     ComPtr<ID3D12Resource> resource_;
+    D3D12_RESOURCE_STATES state_ = D3D12_RESOURCE_STATE_COMMON;
 };
 
 class D3D12Sampler final : public Sampler {
 public:
     explicit D3D12Sampler(const D3D12_SAMPLER_DESC& desc) : desc_{desc} {}
+    [[nodiscard]] const D3D12_SAMPLER_DESC& native_desc() const noexcept { return desc_; }
 private:
     D3D12_SAMPLER_DESC desc_{};
 };
@@ -302,17 +348,26 @@ public:
     D3D12GraphicsPipeline(
         ComPtr<ID3D12RootSignature> root_signature,
         ComPtr<ID3D12PipelineState> state,
-        const PrimitiveTopology topology
-    ) : root_signature_{std::move(root_signature)}, state_{std::move(state)}, topology_{topology} {}
+        const PrimitiveTopology topology,
+        D3D12RootSignatureResult root_layout
+    ) : root_signature_{std::move(root_signature)}, state_{std::move(state)}, topology_{topology},
+        root_layout_{std::move(root_layout)} {}
 
     [[nodiscard]] PrimitiveTopology topology() const noexcept override { return topology_; }
     [[nodiscard]] ID3D12RootSignature* root_signature() const noexcept { return root_signature_.Get(); }
     [[nodiscard]] ID3D12PipelineState* state() const noexcept { return state_.Get(); }
+    [[nodiscard]] const D3D12RootSignatureResult& root_layout() const noexcept { return root_layout_; }
+    [[nodiscard]] const D3D12BindingLocation* binding_location(
+        const ShaderBindingKey& binding
+    ) const noexcept {
+        return find_d3d12_binding_location(root_layout_, binding);
+    }
 
 private:
     ComPtr<ID3D12RootSignature> root_signature_;
     ComPtr<ID3D12PipelineState> state_;
     PrimitiveTopology topology_ = PrimitiveTopology::triangle_list;
+    D3D12RootSignatureResult root_layout_;
 };
 
 class D3D12Swapchain final : public Swapchain {
@@ -589,6 +644,33 @@ private:
     bool valid_ = false;
 };
 
+enum class PendingGraphicsBindingKind : std::uint8_t {
+    constant_buffer,
+    shader_buffer,
+    storage_buffer,
+    texture,
+    storage_texture,
+    sampler,
+};
+
+struct PendingGraphicsBinding {
+    ShaderBindingKey key{};
+    PendingGraphicsBindingKind kind = PendingGraphicsBindingKind::texture;
+    D3D12Buffer* buffer = nullptr;
+    D3D12Texture* texture = nullptr;
+    D3D12Sampler* sampler = nullptr;
+    BufferViewDesc view{};
+    std::uint64_t constant_offset = 0;
+    std::uint64_t constant_size = 0;
+};
+
+struct DescriptorTableAllocation {
+    std::uint32_t root_parameter_index = 0;
+    D3D12DescriptorHeapClass heap_class = D3D12DescriptorHeapClass::resources;
+    std::uint32_t heap_offset = 0;
+    std::uint32_t descriptor_count = 0;
+};
+
 class D3D12CommandList final : public CommandList {
 public:
     explicit D3D12CommandList(ComPtr<ID3D12Device> device) : device_{std::move(device)} {
@@ -607,6 +689,12 @@ public:
         )) {
             return;
         }
+        resource_descriptor_size_ = device_->GetDescriptorHandleIncrementSize(
+            D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV
+        );
+        sampler_descriptor_size_ = device_->GetDescriptorHandleIncrementSize(
+            D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER
+        );
         valid_ = true;
     }
 
@@ -684,7 +772,7 @@ public:
         command_list_->RSSetScissorRects(1, &scissor);
         active_swapchain_ = d3d_swapchain;
         render_pass_active_ = true;
-        pipeline_bound_ = false;
+        reset_graphics_bindings();
         return true;
     }
 
@@ -700,7 +788,118 @@ public:
         command_list_->SetGraphicsRootSignature(d3d_pipeline->root_signature());
         command_list_->SetPipelineState(d3d_pipeline->state());
         command_list_->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+        active_pipeline_ = d3d_pipeline;
+        pending_bindings_.clear();
+        active_resource_heap_.Reset();
+        active_sampler_heap_.Reset();
+        bindings_dirty_ = true;
         pipeline_bound_ = true;
+        return true;
+    }
+
+    bool set_graphics_constant_buffer(
+        const ShaderBindingKey& binding,
+        Buffer& buffer,
+        const std::uint64_t offset,
+        const std::uint64_t size
+    ) override {
+        auto* native_buffer = dynamic_cast<D3D12Buffer*>(&buffer);
+        if (!binding_allowed(binding, ShaderRegisterClass::constant_buffer) ||
+            native_buffer == nullptr || !has_usage(buffer.usage(), BufferUsage::uniform) ||
+            offset > buffer.size() || (size != 0U && size > buffer.size() - offset)) {
+            return false;
+        }
+        PendingGraphicsBinding pending;
+        pending.key = binding;
+        pending.kind = PendingGraphicsBindingKind::constant_buffer;
+        pending.buffer = native_buffer;
+        pending.constant_offset = offset;
+        pending.constant_size = size;
+        upsert_binding(std::move(pending));
+        return true;
+    }
+
+    bool set_graphics_buffer(
+        const ShaderBindingKey& binding,
+        Buffer& buffer,
+        const BufferViewDesc& view
+    ) override {
+        auto* native_buffer = dynamic_cast<D3D12Buffer*>(&buffer);
+        if (!binding_allowed(binding, ShaderRegisterClass::shader_resource) ||
+            native_buffer == nullptr || !has_usage(buffer.usage(), BufferUsage::storage) ||
+            !valid_buffer_view(buffer, view)) {
+            return false;
+        }
+        PendingGraphicsBinding pending;
+        pending.key = binding;
+        pending.kind = PendingGraphicsBindingKind::shader_buffer;
+        pending.buffer = native_buffer;
+        pending.view = view;
+        upsert_binding(std::move(pending));
+        return true;
+    }
+
+    bool set_graphics_storage_buffer(
+        const ShaderBindingKey& binding,
+        Buffer& buffer,
+        const BufferViewDesc& view
+    ) override {
+        auto* native_buffer = dynamic_cast<D3D12Buffer*>(&buffer);
+        if (!binding_allowed(binding, ShaderRegisterClass::unordered_access) ||
+            native_buffer == nullptr || !has_usage(buffer.usage(), BufferUsage::storage) ||
+            !valid_buffer_view(buffer, view)) {
+            return false;
+        }
+        PendingGraphicsBinding pending;
+        pending.key = binding;
+        pending.kind = PendingGraphicsBindingKind::storage_buffer;
+        pending.buffer = native_buffer;
+        pending.view = view;
+        upsert_binding(std::move(pending));
+        return true;
+    }
+
+    bool set_graphics_texture(const ShaderBindingKey& binding, Texture& texture) override {
+        auto* native_texture = dynamic_cast<D3D12Texture*>(&texture);
+        if (!binding_allowed(binding, ShaderRegisterClass::shader_resource) ||
+            native_texture == nullptr || !has_usage(texture.usage(), TextureUsage::sampled)) {
+            return false;
+        }
+        PendingGraphicsBinding pending;
+        pending.key = binding;
+        pending.kind = PendingGraphicsBindingKind::texture;
+        pending.texture = native_texture;
+        upsert_binding(std::move(pending));
+        return true;
+    }
+
+    bool set_graphics_storage_texture(
+        const ShaderBindingKey& binding,
+        Texture& texture
+    ) override {
+        auto* native_texture = dynamic_cast<D3D12Texture*>(&texture);
+        if (!binding_allowed(binding, ShaderRegisterClass::unordered_access) ||
+            native_texture == nullptr || !has_usage(texture.usage(), TextureUsage::storage)) {
+            return false;
+        }
+        PendingGraphicsBinding pending;
+        pending.key = binding;
+        pending.kind = PendingGraphicsBindingKind::storage_texture;
+        pending.texture = native_texture;
+        upsert_binding(std::move(pending));
+        return true;
+    }
+
+    bool set_graphics_sampler(const ShaderBindingKey& binding, Sampler& sampler) override {
+        auto* native_sampler = dynamic_cast<D3D12Sampler*>(&sampler);
+        if (!binding_allowed(binding, ShaderRegisterClass::sampler) || native_sampler == nullptr) {
+            return false;
+        }
+        PendingGraphicsBinding pending;
+        pending.key = binding;
+        pending.kind = PendingGraphicsBindingKind::sampler;
+        pending.sampler = native_sampler;
+        upsert_binding(std::move(pending));
         return true;
     }
 
@@ -710,7 +909,11 @@ public:
         const std::uint32_t first_vertex,
         const std::uint32_t first_instance
     ) override {
-        if (!render_pass_active_ || !pipeline_bound_ || vertex_count == 0 || instance_count == 0) {
+        if (!render_pass_active_ || !pipeline_bound_ || active_pipeline_ == nullptr ||
+            vertex_count == 0 || instance_count == 0) {
+            return false;
+        }
+        if (!materialize_graphics_bindings()) {
             return false;
         }
         command_list_->DrawInstanced(vertex_count, instance_count, first_vertex, first_instance);
@@ -722,7 +925,7 @@ public:
             return false;
         }
         render_pass_active_ = false;
-        pipeline_bound_ = false;
+        reset_graphics_bindings();
         return true;
     }
 
@@ -756,6 +959,531 @@ public:
     }
 
 private:
+    [[nodiscard]] bool binding_allowed(
+        const ShaderBindingKey& binding,
+        const ShaderRegisterClass expected_class
+    ) const noexcept {
+        return render_pass_active_ && pipeline_bound_ && active_pipeline_ != nullptr &&
+            binding.register_class == expected_class &&
+            active_pipeline_->binding_location(binding) != nullptr;
+    }
+
+    [[nodiscard]] static bool valid_buffer_view(
+        const Buffer& buffer,
+        const BufferViewDesc& view
+    ) noexcept {
+        if (!is_valid(view) || view.offset > buffer.size()) {
+            return false;
+        }
+        const std::uint64_t size = view.size == 0U ? buffer.size() - view.offset : view.size;
+        if (size == 0U || size > buffer.size() - view.offset) {
+            return false;
+        }
+        if (view.structure_stride == 0U) {
+            return view.offset % 4U == 0U && size % 4U == 0U;
+        }
+        return view.offset % view.structure_stride == 0U && size % view.structure_stride == 0U;
+    }
+
+    void upsert_binding(PendingGraphicsBinding pending) {
+        const auto found = std::find_if(
+            pending_bindings_.begin(),
+            pending_bindings_.end(),
+            [&](const PendingGraphicsBinding& current) {
+                return same_binding_key(current.key, pending.key);
+            }
+        );
+        if (found == pending_bindings_.end()) {
+            pending_bindings_.push_back(std::move(pending));
+        } else {
+            *found = std::move(pending);
+        }
+        bindings_dirty_ = true;
+    }
+
+    [[nodiscard]] const PendingGraphicsBinding* pending_binding(
+        const D3D12BindingLocation& location,
+        const std::uint32_t array_element
+    ) const noexcept {
+        const auto found = std::find_if(
+            pending_bindings_.begin(),
+            pending_bindings_.end(),
+            [&](const PendingGraphicsBinding& pending) {
+                return pending.key.register_class == location.register_class &&
+                    pending.key.binding == location.binding &&
+                    pending.key.space == location.space &&
+                    pending.key.array_element == array_element;
+            }
+        );
+        return found == pending_bindings_.end() ? nullptr : &*found;
+    }
+
+    [[nodiscard]] bool binding_set_is_complete(
+        const D3D12BindingLocation& location,
+        std::uint32_t& required_count
+    ) const noexcept {
+        std::uint64_t match_count = 0;
+        std::uint32_t maximum_element = 0;
+        bool found_any = false;
+        for (const auto& pending : pending_bindings_) {
+            if (pending.key.register_class != location.register_class ||
+                pending.key.binding != location.binding || pending.key.space != location.space) {
+                continue;
+            }
+            ++match_count;
+            maximum_element = std::max(maximum_element, pending.key.array_element);
+            found_any = true;
+        }
+
+        if (location.unbounded) {
+            if (!found_any || maximum_element == std::numeric_limits<std::uint32_t>::max()) {
+                return false;
+            }
+            const std::uint64_t count = static_cast<std::uint64_t>(maximum_element) + 1U;
+            if (match_count != count || count > std::numeric_limits<std::uint32_t>::max()) {
+                return false;
+            }
+            required_count = static_cast<std::uint32_t>(count);
+            return true;
+        }
+
+        if (match_count != location.count) {
+            return false;
+        }
+        required_count = location.count;
+        return true;
+    }
+
+    [[nodiscard]] bool table_descriptor_count(
+        const D3D12DescriptorTableLayout& table,
+        std::uint32_t& count
+    ) const noexcept {
+        if (!table.unbounded) {
+            count = table.bounded_descriptor_count;
+            return count > 0U;
+        }
+        if (active_pipeline_ == nullptr) {
+            return false;
+        }
+        for (const auto& location : active_pipeline_->root_layout().bindings) {
+            if (location.root_parameter_index != table.root_parameter_index || !location.unbounded) {
+                continue;
+            }
+            return binding_set_is_complete(location, count);
+        }
+        return false;
+    }
+
+    [[nodiscard]] bool create_shader_visible_heap(
+        const D3D12_DESCRIPTOR_HEAP_TYPE type,
+        const std::uint32_t descriptor_count,
+        ComPtr<ID3D12DescriptorHeap>& heap
+    ) {
+        if (descriptor_count == 0U) {
+            heap.Reset();
+            return true;
+        }
+        D3D12_DESCRIPTOR_HEAP_DESC desc{};
+        desc.Type = type;
+        desc.NumDescriptors = descriptor_count;
+        desc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
+        desc.NodeMask = 0;
+        if (!succeeded(
+            device_->CreateDescriptorHeap(&desc, IID_PPV_ARGS(&heap)),
+            "Direct3D 12 could not create a VICE shader-visible descriptor heap."
+        )) {
+            return false;
+        }
+        retained_heaps_.push_back(heap);
+        return true;
+    }
+
+    [[nodiscard]] const DescriptorTableAllocation* table_allocation(
+        const std::vector<DescriptorTableAllocation>& allocations,
+        const std::uint32_t root_parameter_index
+    ) const noexcept {
+        const auto found = std::find_if(
+            allocations.begin(),
+            allocations.end(),
+            [&](const DescriptorTableAllocation& allocation) {
+                return allocation.root_parameter_index == root_parameter_index;
+            }
+        );
+        return found == allocations.end() ? nullptr : &*found;
+    }
+
+    [[nodiscard]] bool create_constant_buffer_view(
+        const PendingGraphicsBinding& pending,
+        const D3D12_CPU_DESCRIPTOR_HANDLE handle
+    ) {
+        if (pending.buffer == nullptr || pending.constant_offset % constant_buffer_alignment != 0U) {
+            return false;
+        }
+        const std::uint64_t logical_size = pending.constant_size == 0U
+            ? pending.buffer->size() - pending.constant_offset
+            : pending.constant_size;
+        std::uint64_t view_size = 0;
+        if (logical_size == 0U || logical_size > maximum_constant_buffer_size ||
+            !aligned_size(logical_size, constant_buffer_alignment, view_size) ||
+            view_size > maximum_constant_buffer_size ||
+            pending.constant_offset + view_size > pending.buffer->allocation_size()) {
+            return false;
+        }
+        D3D12_CONSTANT_BUFFER_VIEW_DESC desc{};
+        desc.BufferLocation = pending.buffer->native()->GetGPUVirtualAddress() + pending.constant_offset;
+        desc.SizeInBytes = static_cast<UINT>(view_size);
+        device_->CreateConstantBufferView(&desc, handle);
+        transition(*pending.buffer, D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER);
+        return true;
+    }
+
+    [[nodiscard]] bool create_buffer_srv(
+        const PendingGraphicsBinding& pending,
+        const D3D12_CPU_DESCRIPTOR_HANDLE handle
+    ) {
+        if (pending.buffer == nullptr) {
+            return false;
+        }
+        const std::uint64_t size = pending.view.size == 0U
+            ? pending.buffer->size() - pending.view.offset
+            : pending.view.size;
+        const std::uint64_t stride = pending.view.structure_stride == 0U
+            ? 4U
+            : pending.view.structure_stride;
+        const std::uint64_t first_element = pending.view.offset / stride;
+        const std::uint64_t element_count = size / stride;
+        if (first_element > std::numeric_limits<UINT>::max() ||
+            element_count == 0U || element_count > std::numeric_limits<UINT>::max()) {
+            return false;
+        }
+        D3D12_SHADER_RESOURCE_VIEW_DESC desc{};
+        desc.Format = pending.view.structure_stride == 0U ? DXGI_FORMAT_R32_TYPELESS : DXGI_FORMAT_UNKNOWN;
+        desc.ViewDimension = D3D12_SRV_DIMENSION_BUFFER;
+        desc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+        desc.Buffer.FirstElement = first_element;
+        desc.Buffer.NumElements = static_cast<UINT>(element_count);
+        desc.Buffer.StructureByteStride = pending.view.structure_stride;
+        desc.Buffer.Flags = pending.view.structure_stride == 0U
+            ? D3D12_BUFFER_SRV_FLAG_RAW
+            : D3D12_BUFFER_SRV_FLAG_NONE;
+        device_->CreateShaderResourceView(pending.buffer->native(), &desc, handle);
+        transition(
+            *pending.buffer,
+            static_cast<D3D12_RESOURCE_STATES>(
+                D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE |
+                D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE
+            )
+        );
+        return true;
+    }
+
+    [[nodiscard]] bool create_buffer_uav(
+        const PendingGraphicsBinding& pending,
+        const D3D12_CPU_DESCRIPTOR_HANDLE handle
+    ) {
+        if (pending.buffer == nullptr) {
+            return false;
+        }
+        const std::uint64_t size = pending.view.size == 0U
+            ? pending.buffer->size() - pending.view.offset
+            : pending.view.size;
+        const std::uint64_t stride = pending.view.structure_stride == 0U
+            ? 4U
+            : pending.view.structure_stride;
+        const std::uint64_t first_element = pending.view.offset / stride;
+        const std::uint64_t element_count = size / stride;
+        if (first_element > std::numeric_limits<UINT>::max() ||
+            element_count == 0U || element_count > std::numeric_limits<UINT>::max()) {
+            return false;
+        }
+        D3D12_UNORDERED_ACCESS_VIEW_DESC desc{};
+        desc.Format = pending.view.structure_stride == 0U ? DXGI_FORMAT_R32_TYPELESS : DXGI_FORMAT_UNKNOWN;
+        desc.ViewDimension = D3D12_UAV_DIMENSION_BUFFER;
+        desc.Buffer.FirstElement = first_element;
+        desc.Buffer.NumElements = static_cast<UINT>(element_count);
+        desc.Buffer.StructureByteStride = pending.view.structure_stride;
+        desc.Buffer.CounterOffsetInBytes = 0;
+        desc.Buffer.Flags = pending.view.structure_stride == 0U
+            ? D3D12_BUFFER_UAV_FLAG_RAW
+            : D3D12_BUFFER_UAV_FLAG_NONE;
+        device_->CreateUnorderedAccessView(pending.buffer->native(), nullptr, &desc, handle);
+        transition(*pending.buffer, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+        return true;
+    }
+
+    [[nodiscard]] static D3D12_SHADER_RESOURCE_VIEW_DESC texture_srv_desc(
+        const TextureDesc& texture
+    ) noexcept {
+        D3D12_SHADER_RESOURCE_VIEW_DESC desc{};
+        desc.Format = shader_view_format(texture.format);
+        desc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+        switch (texture.dimension) {
+        case TextureDimension::d1:
+            if (texture.array_layers > 1U) {
+                desc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE1DARRAY;
+                desc.Texture1DArray.MostDetailedMip = 0;
+                desc.Texture1DArray.MipLevels = texture.mip_levels;
+                desc.Texture1DArray.FirstArraySlice = 0;
+                desc.Texture1DArray.ArraySize = texture.array_layers;
+                desc.Texture1DArray.ResourceMinLODClamp = 0.0F;
+            } else {
+                desc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE1D;
+                desc.Texture1D.MostDetailedMip = 0;
+                desc.Texture1D.MipLevels = texture.mip_levels;
+                desc.Texture1D.ResourceMinLODClamp = 0.0F;
+            }
+            break;
+        case TextureDimension::d2:
+            if (texture.sample_count > 1U) {
+                desc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2DMS;
+            } else if (texture.array_layers > 1U) {
+                desc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2DARRAY;
+                desc.Texture2DArray.MostDetailedMip = 0;
+                desc.Texture2DArray.MipLevels = texture.mip_levels;
+                desc.Texture2DArray.FirstArraySlice = 0;
+                desc.Texture2DArray.ArraySize = texture.array_layers;
+                desc.Texture2DArray.PlaneSlice = 0;
+                desc.Texture2DArray.ResourceMinLODClamp = 0.0F;
+            } else {
+                desc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+                desc.Texture2D.MostDetailedMip = 0;
+                desc.Texture2D.MipLevels = texture.mip_levels;
+                desc.Texture2D.PlaneSlice = 0;
+                desc.Texture2D.ResourceMinLODClamp = 0.0F;
+            }
+            break;
+        case TextureDimension::d3:
+            desc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE3D;
+            desc.Texture3D.MostDetailedMip = 0;
+            desc.Texture3D.MipLevels = texture.mip_levels;
+            desc.Texture3D.ResourceMinLODClamp = 0.0F;
+            break;
+        }
+        return desc;
+    }
+
+    [[nodiscard]] static D3D12_UNORDERED_ACCESS_VIEW_DESC texture_uav_desc(
+        const TextureDesc& texture
+    ) noexcept {
+        D3D12_UNORDERED_ACCESS_VIEW_DESC desc{};
+        desc.Format = pixel_format(texture.format);
+        switch (texture.dimension) {
+        case TextureDimension::d1:
+            if (texture.array_layers > 1U) {
+                desc.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE1DARRAY;
+                desc.Texture1DArray.MipSlice = 0;
+                desc.Texture1DArray.FirstArraySlice = 0;
+                desc.Texture1DArray.ArraySize = texture.array_layers;
+            } else {
+                desc.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE1D;
+                desc.Texture1D.MipSlice = 0;
+            }
+            break;
+        case TextureDimension::d2:
+            if (texture.array_layers > 1U) {
+                desc.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2DARRAY;
+                desc.Texture2DArray.MipSlice = 0;
+                desc.Texture2DArray.FirstArraySlice = 0;
+                desc.Texture2DArray.ArraySize = texture.array_layers;
+                desc.Texture2DArray.PlaneSlice = 0;
+            } else {
+                desc.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
+                desc.Texture2D.MipSlice = 0;
+                desc.Texture2D.PlaneSlice = 0;
+            }
+            break;
+        case TextureDimension::d3:
+            desc.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE3D;
+            desc.Texture3D.MipSlice = 0;
+            desc.Texture3D.FirstWSlice = 0;
+            desc.Texture3D.WSize = texture.depth;
+            break;
+        }
+        return desc;
+    }
+
+    [[nodiscard]] bool create_texture_srv(
+        const PendingGraphicsBinding& pending,
+        const D3D12_CPU_DESCRIPTOR_HANDLE handle
+    ) {
+        if (pending.texture == nullptr) {
+            return false;
+        }
+        const auto desc = texture_srv_desc(pending.texture->desc());
+        device_->CreateShaderResourceView(pending.texture->native(), &desc, handle);
+        transition(
+            *pending.texture,
+            static_cast<D3D12_RESOURCE_STATES>(
+                D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE |
+                D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE
+            )
+        );
+        return true;
+    }
+
+    [[nodiscard]] bool create_texture_uav(
+        const PendingGraphicsBinding& pending,
+        const D3D12_CPU_DESCRIPTOR_HANDLE handle
+    ) {
+        if (pending.texture == nullptr || pending.texture->format() == TextureFormat::depth32_float) {
+            return false;
+        }
+        const auto desc = texture_uav_desc(pending.texture->desc());
+        device_->CreateUnorderedAccessView(pending.texture->native(), nullptr, &desc, handle);
+        transition(*pending.texture, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+        return true;
+    }
+
+    [[nodiscard]] bool write_descriptor(
+        const PendingGraphicsBinding& pending,
+        const D3D12_CPU_DESCRIPTOR_HANDLE handle
+    ) {
+        switch (pending.kind) {
+        case PendingGraphicsBindingKind::constant_buffer:
+            return create_constant_buffer_view(pending, handle);
+        case PendingGraphicsBindingKind::shader_buffer:
+            return create_buffer_srv(pending, handle);
+        case PendingGraphicsBindingKind::storage_buffer:
+            return create_buffer_uav(pending, handle);
+        case PendingGraphicsBindingKind::texture:
+            return create_texture_srv(pending, handle);
+        case PendingGraphicsBindingKind::storage_texture:
+            return create_texture_uav(pending, handle);
+        case PendingGraphicsBindingKind::sampler:
+            if (pending.sampler == nullptr) {
+                return false;
+            }
+            device_->CreateSampler(&pending.sampler->native_desc(), handle);
+            return true;
+        }
+        return false;
+    }
+
+    [[nodiscard]] bool materialize_graphics_bindings() {
+        if (active_pipeline_ == nullptr) {
+            return false;
+        }
+        const auto& root = active_pipeline_->root_layout();
+        if (root.bindings.empty()) {
+            return true;
+        }
+        if (!bindings_dirty_) {
+            return active_resource_heap_ != nullptr || active_sampler_heap_ != nullptr;
+        }
+
+        for (const auto& location : root.bindings) {
+            std::uint32_t required_count = 0;
+            if (!binding_set_is_complete(location, required_count)) {
+                core::log(core::LogLevel::error, "VICE draw is missing one or more required shader resource bindings.");
+                return false;
+            }
+        }
+
+        std::vector<DescriptorTableAllocation> allocations;
+        allocations.reserve(root.tables.size());
+        std::uint64_t resource_count = 0;
+        std::uint64_t sampler_count = 0;
+        for (const auto& table : root.tables) {
+            std::uint32_t descriptor_count = 0;
+            if (!table_descriptor_count(table, descriptor_count)) {
+                return false;
+            }
+            std::uint64_t& total = table.heap_class == D3D12DescriptorHeapClass::samplers
+                ? sampler_count
+                : resource_count;
+            if (total > std::numeric_limits<std::uint32_t>::max() - descriptor_count) {
+                return false;
+            }
+            allocations.push_back(DescriptorTableAllocation{
+                .root_parameter_index = table.root_parameter_index,
+                .heap_class = table.heap_class,
+                .heap_offset = static_cast<std::uint32_t>(total),
+                .descriptor_count = descriptor_count,
+            });
+            total += descriptor_count;
+        }
+
+        ComPtr<ID3D12DescriptorHeap> resource_heap;
+        ComPtr<ID3D12DescriptorHeap> sampler_heap;
+        if (!create_shader_visible_heap(
+            D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV,
+            static_cast<std::uint32_t>(resource_count),
+            resource_heap
+        ) || !create_shader_visible_heap(
+            D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER,
+            static_cast<std::uint32_t>(sampler_count),
+            sampler_heap
+        )) {
+            return false;
+        }
+
+        for (const auto& pending : pending_bindings_) {
+            const auto* location = active_pipeline_->binding_location(pending.key);
+            if (location == nullptr) {
+                return false;
+            }
+            const auto* allocation = table_allocation(allocations, location->root_parameter_index);
+            if (allocation == nullptr) {
+                return false;
+            }
+            const std::uint64_t descriptor_index =
+                static_cast<std::uint64_t>(allocation->heap_offset) +
+                static_cast<std::uint64_t>(location->table_offset) +
+                static_cast<std::uint64_t>(pending.key.array_element);
+            if (descriptor_index >=
+                static_cast<std::uint64_t>(allocation->heap_offset) + allocation->descriptor_count) {
+                return false;
+            }
+
+            ID3D12DescriptorHeap* heap = allocation->heap_class == D3D12DescriptorHeapClass::samplers
+                ? sampler_heap.Get()
+                : resource_heap.Get();
+            if (heap == nullptr) {
+                return false;
+            }
+            D3D12_CPU_DESCRIPTOR_HANDLE handle = heap->GetCPUDescriptorHandleForHeapStart();
+            const UINT increment = allocation->heap_class == D3D12DescriptorHeapClass::samplers
+                ? sampler_descriptor_size_
+                : resource_descriptor_size_;
+            handle.ptr += static_cast<SIZE_T>(descriptor_index) * static_cast<SIZE_T>(increment);
+            if (!write_descriptor(pending, handle)) {
+                return false;
+            }
+        }
+
+        std::array<ID3D12DescriptorHeap*, 2> heaps{};
+        UINT heap_count = 0;
+        if (resource_heap != nullptr) {
+            heaps[heap_count++] = resource_heap.Get();
+        }
+        if (sampler_heap != nullptr) {
+            heaps[heap_count++] = sampler_heap.Get();
+        }
+        if (heap_count > 0U) {
+            command_list_->SetDescriptorHeaps(heap_count, heaps.data());
+        }
+
+        for (const auto& allocation : allocations) {
+            ID3D12DescriptorHeap* heap = allocation.heap_class == D3D12DescriptorHeapClass::samplers
+                ? sampler_heap.Get()
+                : resource_heap.Get();
+            if (heap == nullptr) {
+                return false;
+            }
+            D3D12_GPU_DESCRIPTOR_HANDLE handle = heap->GetGPUDescriptorHandleForHeapStart();
+            const UINT increment = allocation.heap_class == D3D12DescriptorHeapClass::samplers
+                ? sampler_descriptor_size_
+                : resource_descriptor_size_;
+            handle.ptr += static_cast<UINT64>(allocation.heap_offset) * static_cast<UINT64>(increment);
+            command_list_->SetGraphicsRootDescriptorTable(allocation.root_parameter_index, handle);
+        }
+
+        active_resource_heap_ = std::move(resource_heap);
+        active_sampler_heap_ = std::move(sampler_heap);
+        bindings_dirty_ = false;
+        return true;
+    }
+
     void transition(D3D12Buffer& buffer, const D3D12_RESOURCE_STATES desired) {
         const auto current = buffer.state();
         if (current == desired || (current & desired) == desired) {
@@ -769,6 +1497,21 @@ private:
         barrier.Transition.StateAfter = desired;
         command_list_->ResourceBarrier(1, &barrier);
         buffer.set_state(desired);
+    }
+
+    void transition(D3D12Texture& texture, const D3D12_RESOURCE_STATES desired) {
+        const auto current = texture.state();
+        if (current == desired || (current & desired) == desired) {
+            return;
+        }
+        D3D12_RESOURCE_BARRIER barrier{};
+        barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+        barrier.Transition.pResource = texture.native();
+        barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+        barrier.Transition.StateBefore = current;
+        barrier.Transition.StateAfter = desired;
+        command_list_->ResourceBarrier(1, &barrier);
+        texture.set_state(desired);
     }
 
     void transition_back_buffer(
@@ -788,11 +1531,28 @@ private:
         command_list_->ResourceBarrier(1, &barrier);
     }
 
+    void reset_graphics_bindings() {
+        active_pipeline_ = nullptr;
+        pending_bindings_.clear();
+        active_resource_heap_.Reset();
+        active_sampler_heap_.Reset();
+        bindings_dirty_ = true;
+        pipeline_bound_ = false;
+    }
+
     ComPtr<ID3D12Device> device_;
     ComPtr<ID3D12CommandAllocator> allocator_;
     ComPtr<ID3D12GraphicsCommandList> command_list_;
+    std::vector<PendingGraphicsBinding> pending_bindings_;
+    std::vector<ComPtr<ID3D12DescriptorHeap>> retained_heaps_;
+    ComPtr<ID3D12DescriptorHeap> active_resource_heap_;
+    ComPtr<ID3D12DescriptorHeap> active_sampler_heap_;
+    D3D12GraphicsPipeline* active_pipeline_ = nullptr;
     D3D12Swapchain* active_swapchain_ = nullptr;
     D3D12Swapchain* present_swapchain_ = nullptr;
+    UINT resource_descriptor_size_ = 0;
+    UINT sampler_descriptor_size_ = 0;
+    bool bindings_dirty_ = true;
     bool render_pass_active_ = false;
     bool pipeline_bound_ = false;
     bool valid_ = false;
@@ -860,13 +1620,18 @@ public:
             core::log(core::LogLevel::error, "VICE rejected an invalid buffer description.");
             return nullptr;
         }
+        std::uint64_t allocation_size = desc.size;
+        if (has_usage(desc.usage, BufferUsage::uniform) &&
+            !aligned_size(desc.size, constant_buffer_alignment, allocation_size)) {
+            return nullptr;
+        }
         D3D12_HEAP_PROPERTIES heap{};
         heap.Type = heap_type(desc.memory);
         heap.CreationNodeMask = 1;
         heap.VisibleNodeMask = 1;
         D3D12_RESOURCE_DESC native_desc{};
         native_desc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
-        native_desc.Width = desc.size;
+        native_desc.Width = allocation_size;
         native_desc.Height = 1;
         native_desc.DepthOrArraySize = 1;
         native_desc.MipLevels = 1;
@@ -886,7 +1651,12 @@ public:
         if (const auto name = wide_name(desc.debug_name); !name.empty()) {
             (void)resource->SetName(name.c_str());
         }
-        return std::make_unique<D3D12Buffer>(desc, std::move(resource), initial_state);
+        return std::make_unique<D3D12Buffer>(
+            desc,
+            std::move(resource),
+            allocation_size,
+            initial_state
+        );
     }
 
     [[nodiscard]] std::unique_ptr<Texture> create_texture(const TextureDesc& desc) override {
@@ -924,7 +1694,7 @@ public:
             desc.dimension == TextureDimension::d3 ? desc.depth : desc.array_layers
         );
         native_desc.MipLevels = static_cast<UINT16>(desc.mip_levels);
-        native_desc.Format = pixel_format(desc.format);
+        native_desc.Format = texture_resource_format(desc);
         native_desc.SampleDesc.Count = desc.sample_count;
         native_desc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
         native_desc.Flags = texture_flags(desc.usage);
@@ -941,7 +1711,11 @@ public:
         if (const auto name = wide_name(desc.debug_name); !name.empty()) {
             (void)resource->SetName(name.c_str());
         }
-        return std::make_unique<D3D12Texture>(desc, std::move(resource));
+        return std::make_unique<D3D12Texture>(
+            desc,
+            std::move(resource),
+            D3D12_RESOURCE_STATE_COMMON
+        );
     }
 
     [[nodiscard]] std::unique_ptr<Sampler> create_sampler(const SamplerDesc& desc) override {
@@ -1042,7 +1816,7 @@ public:
             );
             return nullptr;
         }
-        const D3D12RootSignatureResult serialized_root = serialize_d3d12_root_signature(layout);
+        D3D12RootSignatureResult serialized_root = serialize_d3d12_root_signature(layout);
         if (!serialized_root.success) {
             core::log(
                 core::LogLevel::error,
@@ -1119,7 +1893,8 @@ public:
         return std::make_unique<D3D12GraphicsPipeline>(
             std::move(root_signature),
             std::move(state),
-            desc.topology
+            desc.topology,
+            std::move(serialized_root)
         );
     }
 

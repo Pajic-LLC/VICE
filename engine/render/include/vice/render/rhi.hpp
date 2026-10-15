@@ -305,6 +305,32 @@ struct ShaderResourceBindingDesc {
     return desc.unbounded ? desc.count == 0U : desc.count > 0U;
 }
 
+struct ShaderBindingKey {
+    ShaderRegisterClass register_class = ShaderRegisterClass::shader_resource;
+    std::uint32_t binding = 0;
+    std::uint32_t space = 0;
+    std::uint32_t array_element = 0;
+};
+
+[[nodiscard]] constexpr bool same_binding_namespace(
+    const ShaderBindingKey& left,
+    const ShaderBindingKey& right
+) noexcept {
+    return left.register_class == right.register_class &&
+        left.binding == right.binding && left.space == right.space;
+}
+
+struct BufferViewDesc {
+    std::uint64_t offset = 0;
+    std::uint64_t size = 0;
+    std::uint32_t structure_stride = 0;
+};
+
+[[nodiscard]] constexpr bool is_valid(const BufferViewDesc& desc) noexcept {
+    return desc.structure_stride == 0U ||
+        (desc.size == 0U || desc.size % desc.structure_stride == 0U);
+}
+
 struct ShaderModuleDesc {
     ShaderStage stage = ShaderStage::vertex;
     ShaderSourceLanguage language = ShaderSourceLanguage::hlsl;
@@ -447,6 +473,28 @@ public:
 
     virtual bool begin_render_pass(Swapchain& swapchain, const RenderPassDesc& desc) = 0;
     virtual bool set_graphics_pipeline(GraphicsPipeline& pipeline) = 0;
+    virtual bool set_graphics_constant_buffer(
+        const ShaderBindingKey& binding,
+        Buffer& buffer,
+        std::uint64_t offset = 0,
+        std::uint64_t size = 0
+    ) = 0;
+    virtual bool set_graphics_buffer(
+        const ShaderBindingKey& binding,
+        Buffer& buffer,
+        const BufferViewDesc& view = {}
+    ) = 0;
+    virtual bool set_graphics_storage_buffer(
+        const ShaderBindingKey& binding,
+        Buffer& buffer,
+        const BufferViewDesc& view = {}
+    ) = 0;
+    virtual bool set_graphics_texture(const ShaderBindingKey& binding, Texture& texture) = 0;
+    virtual bool set_graphics_storage_texture(
+        const ShaderBindingKey& binding,
+        Texture& texture
+    ) = 0;
+    virtual bool set_graphics_sampler(const ShaderBindingKey& binding, Sampler& sampler) = 0;
     virtual bool draw(
         std::uint32_t vertex_count,
         std::uint32_t instance_count = 1,
