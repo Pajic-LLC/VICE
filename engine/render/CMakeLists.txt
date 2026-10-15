@@ -35,7 +35,12 @@ if(APPLE)
       ${QUARTZCORE_FRAMEWORK}
   )
 elseif(WIN32)
-  target_sources(vice_render PRIVATE src/d3d12/rhi.cpp)
+  target_sources(
+    vice_render
+    PRIVATE
+      src/d3d12/rhi.cpp
+      src/d3d12/root_signature.cpp
+  )
   target_compile_definitions(vice_render PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX UNICODE _UNICODE)
   target_link_libraries(vice_render PRIVATE d3d12 d3dcompiler dxgi dxguid)
 else()
