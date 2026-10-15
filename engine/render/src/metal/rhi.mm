@@ -5,6 +5,7 @@
 
 #include <vice/core/log.hpp>
 #include <vice/platform/native_window.hpp>
+#include <vice/render/pipeline_layout.hpp>
 #include <vice/render/rhi.hpp>
 
 #include <algorithm>
@@ -13,6 +14,7 @@
 #include <memory>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace vice::render {
 namespace {
@@ -200,16 +202,21 @@ public:
     MetalShaderModule(
         const ShaderStage stage,
         id<MTLLibrary> library,
-        id<MTLFunction> function
-    ) : stage_{stage}, library_{library}, function_{function} {}
+        id<MTLFunction> function,
+        std::vector<ShaderResourceBindingDesc> resources = {}
+    ) : stage_{stage}, library_{library}, function_{function}, resources_{std::move(resources)} {}
 
     [[nodiscard]] ShaderStage stage() const noexcept override { return stage_; }
+    [[nodiscard]] std::span<const ShaderResourceBindingDesc> resources() const noexcept override {
+        return resources_;
+    }
     [[nodiscard]] id<MTLFunction> function() const noexcept { return function_; }
 
 private:
     ShaderStage stage_ = ShaderStage::vertex;
     id<MTLLibrary> library_ = nil;
     id<MTLFunction> function_ = nil;
+    std::vector<ShaderResourceBindingDesc> resources_;
 };
 
 class MetalGraphicsPipeline final : public GraphicsPipeline {
@@ -654,7 +661,12 @@ public:
         if (NSString* label = make_label(desc.debug_name)) {
             function.label = label;
         }
-        return std::make_unique<MetalShaderModule>(desc.stage, library, function);
+        return std::make_unique<MetalShaderModule>(
+            desc.stage,
+            library,
+            function,
+            std::vector<ShaderResourceBindingDesc>{desc.resources.begin(), desc.resources.end()}
+        );
     }
 
     [[nodiscard]] std::unique_ptr<GraphicsPipeline> create_graphics_pipeline(
@@ -670,6 +682,19 @@ public:
         if (vertex == nullptr || fragment == nullptr) {
             return nullptr;
         }
+
+        const PipelineLayout layout = compile_graphics_pipeline_layout(
+            vertex->resources(),
+            fragment->resources()
+        );
+        if (!layout.valid) {
+            core::log(
+                core::LogLevel::error,
+                "VICE rejected the graphics pipeline resource layout. " + layout.diagnostics
+            );
+            return nullptr;
+        }
+
         MTLRenderPipelineDescriptor* native_desc = [[MTLRenderPipelineDescriptor alloc] init];
         native_desc.vertexFunction = vertex->function();
         native_desc.fragmentFunction = fragment->function();

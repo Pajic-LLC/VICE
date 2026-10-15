@@ -1,5 +1,7 @@
 #include <vice/core/log.hpp>
 #include <vice/platform/native_window.hpp>
+#include <vice/render/d3d12_root_signature.hpp>
+#include <vice/render/pipeline_layout.hpp>
 #include <vice/render/rhi.hpp>
 
 #include <d3d12.h>
@@ -272,10 +274,16 @@ private:
 
 class D3D12ShaderModule final : public ShaderModule {
 public:
-    D3D12ShaderModule(const ShaderStage stage, std::vector<std::byte> bytecode)
-        : stage_{stage}, bytecode_{std::move(bytecode)} {}
+    D3D12ShaderModule(
+        const ShaderStage stage,
+        std::vector<std::byte> bytecode,
+        std::vector<ShaderResourceBindingDesc> resources = {}
+    ) : stage_{stage}, bytecode_{std::move(bytecode)}, resources_{std::move(resources)} {}
 
     [[nodiscard]] ShaderStage stage() const noexcept override { return stage_; }
+    [[nodiscard]] std::span<const ShaderResourceBindingDesc> resources() const noexcept override {
+        return resources_;
+    }
     [[nodiscard]] D3D12_SHADER_BYTECODE native_bytecode() const noexcept {
         D3D12_SHADER_BYTECODE result{};
         result.pShaderBytecode = bytecode_.empty() ? nullptr : bytecode_.data();
@@ -286,6 +294,7 @@ public:
 private:
     ShaderStage stage_ = ShaderStage::vertex;
     std::vector<std::byte> bytecode_;
+    std::vector<ShaderResourceBindingDesc> resources_;
 };
 
 class D3D12GraphicsPipeline final : public GraphicsPipeline {
@@ -1003,7 +1012,8 @@ public:
         }
         return std::make_unique<D3D12ShaderModule>(
             desc.stage,
-            std::vector<std::byte>{desc.binary.begin(), desc.binary.end()}
+            std::vector<std::byte>{desc.binary.begin(), desc.binary.end()},
+            std::vector<ShaderResourceBindingDesc>{desc.resources.begin(), desc.resources.end()}
         );
     }
 
@@ -1021,27 +1031,32 @@ public:
             return nullptr;
         }
 
-        D3D12_ROOT_SIGNATURE_DESC root_desc{};
-        root_desc.Flags = D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT;
-        ComPtr<ID3DBlob> serialized_root;
-        ComPtr<ID3DBlob> root_errors;
-        if (!succeeded(
-            D3D12SerializeRootSignature(
-                &root_desc,
-                D3D_ROOT_SIGNATURE_VERSION_1,
-                &serialized_root,
-                &root_errors
-            ),
-            "Direct3D 12 could not serialize the VICE root signature."
-        )) {
+        const PipelineLayout layout = compile_graphics_pipeline_layout(
+            vertex->resources(),
+            fragment->resources()
+        );
+        if (!layout.valid) {
+            core::log(
+                core::LogLevel::error,
+                "VICE rejected the graphics pipeline resource layout. " + layout.diagnostics
+            );
             return nullptr;
         }
+        const D3D12RootSignatureResult serialized_root = serialize_d3d12_root_signature(layout);
+        if (!serialized_root.success) {
+            core::log(
+                core::LogLevel::error,
+                "Direct3D 12 root signature generation failed. " + serialized_root.diagnostics
+            );
+            return nullptr;
+        }
+
         ComPtr<ID3D12RootSignature> root_signature;
         if (!succeeded(
             device_->CreateRootSignature(
                 0,
-                serialized_root->GetBufferPointer(),
-                serialized_root->GetBufferSize(),
+                serialized_root.blob.data(),
+                serialized_root.blob.size(),
                 IID_PPV_ARGS(&root_signature)
             ),
             "Direct3D 12 could not create the VICE root signature."
