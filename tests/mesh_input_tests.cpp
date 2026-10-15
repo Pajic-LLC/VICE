@@ -16,7 +16,7 @@ int main() {
     static_assert(index_format_size(IndexFormat::uint16) == 2U);
     static_assert(index_format_size(IndexFormat::uint32) == 4U);
 
-    constexpr std::array attributes{
+    static constexpr std::array attributes{
         VertexAttributeDesc{
             .semantic = "POSITION",
             .semantic_index = 0,
@@ -32,7 +32,7 @@ int main() {
             .offset = 8,
         },
     };
-    constexpr VertexBufferLayoutDesc interleaved{
+    static constexpr VertexBufferLayoutDesc interleaved{
         .stride = 20,
         .step_mode = VertexStepMode::per_vertex,
         .step_rate = 1,
@@ -40,10 +40,10 @@ int main() {
     };
     static_assert(is_valid(interleaved));
 
-    constexpr std::array layouts{interleaved};
+    static constexpr std::array layouts{interleaved};
     static_assert(is_valid(layouts));
 
-    constexpr std::array duplicate_locations{
+    static constexpr std::array duplicate_locations{
         VertexAttributeDesc{
             .semantic = "POSITION",
             .semantic_index = 0,
@@ -59,16 +59,16 @@ int main() {
             .offset = 8,
         },
     };
-    constexpr VertexBufferLayoutDesc duplicate_location_layout{
+    static constexpr VertexBufferLayoutDesc duplicate_location_layout{
         .stride = 20,
         .step_mode = VertexStepMode::per_vertex,
         .step_rate = 1,
         .attributes = duplicate_locations,
     };
-    constexpr std::array duplicate_layouts{duplicate_location_layout};
+    static constexpr std::array duplicate_layouts{duplicate_location_layout};
     static_assert(!is_valid(duplicate_layouts));
 
-    constexpr std::array overflowing_attribute{
+    static constexpr std::array overflowing_attribute{
         VertexAttributeDesc{
             .semantic = "POSITION",
             .semantic_index = 0,
@@ -77,7 +77,7 @@ int main() {
             .offset = 8,
         },
     };
-    constexpr VertexBufferLayoutDesc invalid_stride{
+    static constexpr VertexBufferLayoutDesc invalid_stride{
         .stride = 20,
         .step_mode = VertexStepMode::per_vertex,
         .step_rate = 1,
@@ -85,7 +85,7 @@ int main() {
     };
     static_assert(!is_valid(invalid_stride));
 
-    constexpr VertexBufferLayoutDesc invalid_vertex_rate{
+    static constexpr VertexBufferLayoutDesc invalid_vertex_rate{
         .stride = 20,
         .step_mode = VertexStepMode::per_vertex,
         .step_rate = 2,
@@ -93,7 +93,7 @@ int main() {
     };
     static_assert(!is_valid(invalid_vertex_rate));
 
-    constexpr VertexBufferLayoutDesc valid_instance_rate{
+    static constexpr VertexBufferLayoutDesc valid_instance_rate{
         .stride = 20,
         .step_mode = VertexStepMode::per_instance,
         .step_rate = 3,
@@ -101,7 +101,7 @@ int main() {
     };
     static_assert(is_valid(valid_instance_rate));
 
-    constexpr std::array empty_semantic{
+    static constexpr std::array empty_semantic{
         VertexAttributeDesc{
             .semantic = "",
             .semantic_index = 0,
@@ -110,7 +110,7 @@ int main() {
             .offset = 0,
         },
     };
-    constexpr VertexBufferLayoutDesc invalid_semantic{
+    static constexpr VertexBufferLayoutDesc invalid_semantic{
         .stride = 8,
         .step_mode = VertexStepMode::per_vertex,
         .step_rate = 1,
