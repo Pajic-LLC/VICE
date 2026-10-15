@@ -3,12 +3,16 @@
 #include <vice/core/platform.hpp>
 #include <vice/core/time.hpp>
 #include <vice/core/version.hpp>
+#include <vice/jobs/jobs.hpp>
 #include <vice/platform/event.hpp>
 #include <vice/platform/services.hpp>
 #include <vice/render/rhi.hpp>
 #include <vice/world/world.hpp>
 
+#include <array>
+#include <atomic>
 #include <chrono>
+#include <span>
 #include <string>
 #include <thread>
 #include <type_traits>
@@ -31,6 +35,36 @@ int main() {
         LogLevel::info,
         std::string{"Build: "} + std::string{build_configuration_name(current_build_configuration())}
     );
+
+    vice::jobs::Scheduler jobs;
+    log(LogLevel::info, std::string{"Job workers: "} + std::to_string(jobs.worker_count()));
+
+    std::atomic<bool> background_ready{false};
+    vice::jobs::TaskDesc background_startup;
+    background_startup.name = "vice_lab.background_startup";
+    background_startup.priority = vice::jobs::Priority::high;
+    background_startup.function = [&] {
+        background_ready.store(true, std::memory_order_release);
+    };
+    const auto background_job = jobs.schedule(std::move(background_startup));
+
+    vice::jobs::TaskDesc main_startup;
+    main_startup.name = "vice_lab.main_startup";
+    main_startup.lane = vice::jobs::Lane::main_thread;
+    main_startup.function = [&] {
+        if (background_ready.load(std::memory_order_acquire)) {
+            log(LogLevel::debug, "VICE Lab job dependency completed.");
+        }
+    };
+    const std::array startup_dependencies{background_job};
+    const auto main_job = jobs.schedule(
+        std::move(main_startup),
+        std::span<const vice::jobs::TaskHandle>{startup_dependencies}
+    );
+    if (jobs.wait(main_job) != vice::jobs::Status::succeeded) {
+        log(LogLevel::error, "VICE Lab job system startup check failed.");
+        return 1;
+    }
 
     auto platform_services = vice::platform::PlatformServices::create();
     if (!platform_services) {
@@ -99,7 +133,7 @@ int main() {
                     ) {
                         running = false;
                     } else if constexpr (std::is_same_v<Payload, vice::platform::WindowMetricsChanged>) {
-                        swapchain->resize(payload.metrics);
+                        (void)swapchain->resize(payload.metrics);
                     } else if constexpr (std::is_same_v<Payload, vice::platform::KeyEvent>) {
                         if (payload.pressed && payload.key == vice::platform::Key::escape) {
                             running = false;
@@ -110,8 +144,10 @@ int main() {
             );
         }
 
+        (void)jobs.pump_main(64);
+
         if (running) {
-            swapchain->clear_and_present(clear_color);
+            (void)swapchain->clear_and_present(clear_color);
         }
 
         clock.tick();
@@ -121,6 +157,7 @@ int main() {
     swapchain.reset();
     render_device.reset();
     window.reset();
+    jobs.shutdown();
     log(LogLevel::info, "VICE Lab closed.");
     return 0;
 }
