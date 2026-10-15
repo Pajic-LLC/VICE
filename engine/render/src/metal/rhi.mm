@@ -9,6 +9,7 @@
 #include <vice/render/rhi.hpp>
 
 #include <algorithm>
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -23,6 +24,8 @@ namespace vice::render {
 namespace {
 
 constexpr NSUInteger metal_shader_converter_argument_buffer_bind_point = 2U;
+constexpr NSUInteger metal_shader_converter_vertex_buffer_base = 6U;
+constexpr NSUInteger metal_shader_converter_vertex_attribute_base = 11U;
 constexpr std::uint64_t metal_descriptor_entry_size = 3U * sizeof(std::uint64_t);
 
 struct alignas(std::uint64_t) MetalDescriptorTableEntry {
@@ -72,6 +75,46 @@ void log_error(const char* prefix, NSError* error) {
     case TextureFormat::undefined: return MTLPixelFormatInvalid;
     }
     return MTLPixelFormatInvalid;
+}
+
+[[nodiscard]] MTLVertexFormat vertex_format(const VertexFormat format) noexcept {
+    switch (format) {
+    case VertexFormat::float32: return MTLVertexFormatFloat;
+    case VertexFormat::float32x2: return MTLVertexFormatFloat2;
+    case VertexFormat::float32x3: return MTLVertexFormatFloat3;
+    case VertexFormat::float32x4: return MTLVertexFormatFloat4;
+    case VertexFormat::float16x2: return MTLVertexFormatHalf2;
+    case VertexFormat::float16x4: return MTLVertexFormatHalf4;
+    case VertexFormat::uint32: return MTLVertexFormatUInt;
+    case VertexFormat::uint32x2: return MTLVertexFormatUInt2;
+    case VertexFormat::uint32x3: return MTLVertexFormatUInt3;
+    case VertexFormat::uint32x4: return MTLVertexFormatUInt4;
+    case VertexFormat::sint32: return MTLVertexFormatInt;
+    case VertexFormat::sint32x2: return MTLVertexFormatInt2;
+    case VertexFormat::sint32x3: return MTLVertexFormatInt3;
+    case VertexFormat::sint32x4: return MTLVertexFormatInt4;
+    case VertexFormat::uint8x2: return MTLVertexFormatUChar2;
+    case VertexFormat::uint8x4: return MTLVertexFormatUChar4;
+    case VertexFormat::sint8x2: return MTLVertexFormatChar2;
+    case VertexFormat::sint8x4: return MTLVertexFormatChar4;
+    case VertexFormat::unorm8x2: return MTLVertexFormatUChar2Normalized;
+    case VertexFormat::unorm8x4: return MTLVertexFormatUChar4Normalized;
+    case VertexFormat::snorm8x2: return MTLVertexFormatChar2Normalized;
+    case VertexFormat::snorm8x4: return MTLVertexFormatChar4Normalized;
+    case VertexFormat::uint16x2: return MTLVertexFormatUShort2;
+    case VertexFormat::uint16x4: return MTLVertexFormatUShort4;
+    case VertexFormat::sint16x2: return MTLVertexFormatShort2;
+    case VertexFormat::sint16x4: return MTLVertexFormatShort4;
+    case VertexFormat::unorm16x2: return MTLVertexFormatUShort2Normalized;
+    case VertexFormat::unorm16x4: return MTLVertexFormatUShort4Normalized;
+    case VertexFormat::snorm16x2: return MTLVertexFormatShort2Normalized;
+    case VertexFormat::snorm16x4: return MTLVertexFormatShort4Normalized;
+    }
+    return MTLVertexFormatInvalid;
+}
+
+[[nodiscard]] MTLIndexType index_type(const IndexFormat format) noexcept {
+    return format == IndexFormat::uint16 ? MTLIndexTypeUInt16 : MTLIndexTypeUInt32;
 }
 
 [[nodiscard]] MTLTextureUsage texture_usage(const TextureUsage usage) noexcept {
@@ -213,6 +256,12 @@ void log_error(const char* prefix, NSError* error) {
     return true;
 }
 
+struct MetalVertexStreamInfo {
+    std::uint32_t stride = 0;
+    VertexStepMode step_mode = VertexStepMode::per_vertex;
+    std::uint32_t step_rate = 1;
+};
+
 class MetalBuffer final : public Buffer {
 public:
     MetalBuffer(const BufferDesc& desc, id<MTLBuffer> buffer)
@@ -329,16 +378,22 @@ public:
         const FrontFace front,
         PipelineLayout layout,
         std::vector<MetalShaderResourceLocationDesc> vertex_locations,
-        std::vector<MetalShaderResourceLocationDesc> fragment_locations
+        std::vector<MetalShaderResourceLocationDesc> fragment_locations,
+        std::vector<MetalVertexStreamInfo> vertex_streams
     ) : state_{state}, topology_{topology}, cull_{cull}, front_{front},
         layout_{std::move(layout)}, vertex_locations_{std::move(vertex_locations)},
-        fragment_locations_{std::move(fragment_locations)} {}
+        fragment_locations_{std::move(fragment_locations)},
+        vertex_streams_{std::move(vertex_streams)} {}
 
     [[nodiscard]] PrimitiveTopology topology() const noexcept override { return topology_; }
     [[nodiscard]] id<MTLRenderPipelineState> native() const noexcept { return state_; }
     [[nodiscard]] CullMode cull() const noexcept { return cull_; }
     [[nodiscard]] FrontFace front() const noexcept { return front_; }
     [[nodiscard]] const PipelineLayout& layout() const noexcept { return layout_; }
+    [[nodiscard]] std::size_t vertex_stream_count() const noexcept { return vertex_streams_.size(); }
+    [[nodiscard]] const MetalVertexStreamInfo* vertex_stream(const std::uint32_t slot) const noexcept {
+        return slot < vertex_streams_.size() ? &vertex_streams_[slot] : nullptr;
+    }
 
     [[nodiscard]] bool has_binding(
         const ShaderBindingKey& key,
@@ -377,6 +432,7 @@ private:
     PipelineLayout layout_;
     std::vector<MetalShaderResourceLocationDesc> vertex_locations_;
     std::vector<MetalShaderResourceLocationDesc> fragment_locations_;
+    std::vector<MetalVertexStreamInfo> vertex_streams_;
 };
 
 class MetalSwapchain final : public Swapchain {
@@ -578,6 +634,7 @@ public:
         );
         render_encoder_ = [command_buffer_ renderCommandEncoderWithDescriptor:pass];
         active_swapchain_ = metal_swapchain;
+        reset_mesh_state();
         active_pipeline_ = nullptr;
         bound_resources_.clear();
         pipeline_bound_ = false;
@@ -597,7 +654,60 @@ public:
         [render_encoder_ setFrontFacingWinding:front_winding(metal_pipeline->front())];
         active_pipeline_ = metal_pipeline;
         bound_resources_.clear();
+        reset_mesh_state();
         pipeline_bound_ = true;
+        return true;
+    }
+
+    bool set_vertex_buffer(
+        const std::uint32_t slot,
+        Buffer& buffer,
+        const std::uint64_t offset
+    ) override {
+        auto* metal_buffer = dynamic_cast<MetalBuffer*>(&buffer);
+        if (render_encoder_ == nil || !pipeline_bound_ || active_pipeline_ == nullptr ||
+            metal_buffer == nullptr || !has_usage(buffer.usage(), BufferUsage::vertex) ||
+            offset > buffer.size()) {
+            return false;
+        }
+        const MetalVertexStreamInfo* stream = active_pipeline_->vertex_stream(slot);
+        if (stream == nullptr || stream->stride == 0U) {
+            return false;
+        }
+        const std::uint64_t remaining = buffer.size() - offset;
+        if (remaining < stream->stride ||
+            metal_shader_converter_vertex_buffer_base + slot >= 31U) {
+            return false;
+        }
+        [render_encoder_ setVertexBuffer:metal_buffer->native()
+                                  offset:static_cast<NSUInteger>(offset)
+                                 atIndex:metal_shader_converter_vertex_buffer_base + slot];
+        vertex_buffers_bound_[slot] = true;
+        vertex_capacities_[slot] = remaining / stream->stride;
+        return true;
+    }
+
+    bool set_index_buffer(
+        Buffer& buffer,
+        const IndexFormat format,
+        const std::uint64_t offset
+    ) override {
+        auto* metal_buffer = dynamic_cast<MetalBuffer*>(&buffer);
+        const std::uint32_t element_size = index_format_size(format);
+        if (render_encoder_ == nil || !pipeline_bound_ || metal_buffer == nullptr ||
+            !has_usage(buffer.usage(), BufferUsage::index) || element_size == 0U ||
+            offset > buffer.size() || offset % element_size != 0U) {
+            return false;
+        }
+        const std::uint64_t remaining = buffer.size() - offset;
+        if (remaining < element_size) {
+            return false;
+        }
+        index_buffer_ = metal_buffer;
+        index_format_ = format;
+        index_offset_ = offset;
+        index_capacity_ = remaining / element_size;
+        index_buffer_bound_ = true;
         return true;
     }
 
@@ -724,15 +834,11 @@ public:
         const std::uint32_t first_instance
     ) override {
         if (render_encoder_ == nil || !pipeline_bound_ || active_pipeline_ == nullptr ||
-            vertex_count == 0 || instance_count == 0) {
+            vertex_count == 0 || instance_count == 0 ||
+            !vertex_streams_cover_draw(vertex_count, instance_count, first_vertex, first_instance)) {
             return false;
         }
-        if (!all_required_resources_bound()) {
-            core::log(core::LogLevel::error, "Metal draw is missing a reflected shader resource.");
-            return false;
-        }
-        if (!encode_stage_argument_buffer(ShaderStage::vertex) ||
-            !encode_stage_argument_buffer(ShaderStage::fragment)) {
+        if (!prepare_draw_resources()) {
             return false;
         }
         [render_encoder_ drawPrimitives:MTLPrimitiveTypeTriangle
@@ -740,6 +846,39 @@ public:
                             vertexCount:vertex_count
                           instanceCount:instance_count
                            baseInstance:first_instance];
+        return true;
+    }
+
+    bool draw_indexed(
+        const std::uint32_t index_count,
+        const std::uint32_t instance_count,
+        const std::uint32_t first_index,
+        const std::int32_t vertex_offset,
+        const std::uint32_t first_instance
+    ) override {
+        if (render_encoder_ == nil || !pipeline_bound_ || active_pipeline_ == nullptr ||
+            !index_buffer_bound_ || index_buffer_ == nullptr || index_buffer_->native() == nil ||
+            index_count == 0U || instance_count == 0U ||
+            first_index > index_capacity_ || index_count > index_capacity_ - first_index ||
+            !vertex_streams_cover_instances(instance_count, first_instance)) {
+            return false;
+        }
+        if (!prepare_draw_resources()) {
+            return false;
+        }
+        const std::uint64_t byte_offset = index_offset_ +
+            static_cast<std::uint64_t>(first_index) * index_format_size(index_format_);
+        if (byte_offset > static_cast<std::uint64_t>(std::numeric_limits<NSUInteger>::max())) {
+            return false;
+        }
+        [render_encoder_ drawIndexedPrimitives:MTLPrimitiveTypeTriangle
+                                    indexCount:index_count
+                                     indexType:index_type(index_format_)
+                                   indexBuffer:index_buffer_->native()
+                             indexBufferOffset:static_cast<NSUInteger>(byte_offset)
+                                 instanceCount:instance_count
+                                    baseVertex:vertex_offset
+                                  baseInstance:first_instance];
         return true;
     }
 
@@ -751,6 +890,7 @@ public:
         render_encoder_ = nil;
         active_pipeline_ = nullptr;
         bound_resources_.clear();
+        reset_mesh_state();
         pipeline_bound_ = false;
         return true;
     }
@@ -775,6 +915,60 @@ private:
     ) const noexcept {
         return render_encoder_ != nil && pipeline_bound_ && active_pipeline_ != nullptr &&
             active_pipeline_->has_binding(binding, expected_class);
+    }
+
+    [[nodiscard]] bool all_vertex_buffers_bound() const noexcept {
+        if (active_pipeline_ == nullptr) {
+            return false;
+        }
+        for (std::size_t slot = 0; slot < active_pipeline_->vertex_stream_count(); ++slot) {
+            if (!vertex_buffers_bound_[slot]) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    [[nodiscard]] bool vertex_streams_cover_instances(
+        const std::uint32_t instance_count,
+        const std::uint32_t first_instance
+    ) const noexcept {
+        if (!all_vertex_buffers_bound() || active_pipeline_ == nullptr || instance_count == 0U) {
+            return false;
+        }
+        const std::uint64_t last_instance =
+            static_cast<std::uint64_t>(first_instance) + instance_count - 1U;
+        for (std::size_t slot = 0; slot < active_pipeline_->vertex_stream_count(); ++slot) {
+            const auto* stream = active_pipeline_->vertex_stream(static_cast<std::uint32_t>(slot));
+            if (stream == nullptr || stream->step_mode != VertexStepMode::per_instance) {
+                continue;
+            }
+            const std::uint64_t required_element = last_instance / stream->step_rate;
+            if (required_element >= vertex_capacities_[slot]) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    [[nodiscard]] bool vertex_streams_cover_draw(
+        const std::uint32_t vertex_count,
+        const std::uint32_t instance_count,
+        const std::uint32_t first_vertex,
+        const std::uint32_t first_instance
+    ) const noexcept {
+        if (!vertex_streams_cover_instances(instance_count, first_instance) || active_pipeline_ == nullptr) {
+            return false;
+        }
+        const std::uint64_t vertex_end = static_cast<std::uint64_t>(first_vertex) + vertex_count;
+        for (std::size_t slot = 0; slot < active_pipeline_->vertex_stream_count(); ++slot) {
+            const auto* stream = active_pipeline_->vertex_stream(static_cast<std::uint32_t>(slot));
+            if (stream != nullptr && stream->step_mode == VertexStepMode::per_vertex &&
+                vertex_end > vertex_capacities_[slot]) {
+                return false;
+            }
+        }
+        return true;
     }
 
     [[nodiscard]] static bool resolve_buffer_view(
@@ -864,6 +1058,17 @@ private:
             }
         }
         return true;
+    }
+
+    [[nodiscard]] bool prepare_draw_resources() {
+        if (!all_required_resources_bound()) {
+            if (active_pipeline_ != nullptr && !active_pipeline_->layout().resources.empty()) {
+                core::log(core::LogLevel::error, "Metal draw is missing a reflected shader resource.");
+                return false;
+            }
+        }
+        return encode_stage_argument_buffer(ShaderStage::vertex) &&
+            encode_stage_argument_buffer(ShaderStage::fragment);
     }
 
     [[nodiscard]] bool encode_stage_argument_buffer(const ShaderStage stage) {
@@ -998,6 +1203,16 @@ private:
         return false;
     }
 
+    void reset_mesh_state() noexcept {
+        vertex_buffers_bound_.fill(false);
+        vertex_capacities_.fill(0U);
+        index_buffer_ = nullptr;
+        index_format_ = IndexFormat::uint16;
+        index_offset_ = 0U;
+        index_capacity_ = 0U;
+        index_buffer_bound_ = false;
+    }
+
     id<MTLDevice> device_ = nil;
     id<MTLCommandBuffer> command_buffer_ = nil;
     id<MTLRenderCommandEncoder> render_encoder_ = nil;
@@ -1005,8 +1220,15 @@ private:
     MetalGraphicsPipeline* active_pipeline_ = nullptr;
     MetalSwapchain* active_swapchain_ = nullptr;
     std::vector<MetalBoundResource> bound_resources_;
+    std::array<bool, max_vertex_buffers> vertex_buffers_bound_{};
+    std::array<std::uint64_t, max_vertex_buffers> vertex_capacities_{};
+    MetalBuffer* index_buffer_ = nullptr;
+    IndexFormat index_format_ = IndexFormat::uint16;
+    std::uint64_t index_offset_ = 0U;
+    std::uint64_t index_capacity_ = 0U;
     NSMutableArray<id<MTLBuffer>>* retained_argument_buffers_ = nil;
     NSMutableArray<id<MTLSamplerState>>* retained_samplers_ = nil;
+    bool index_buffer_bound_ = false;
     bool pipeline_bound_ = false;
     bool present_scheduled_ = false;
 };
@@ -1248,9 +1470,48 @@ public:
             return nullptr;
         }
 
+        MTLVertexDescriptor* vertex_descriptor = nil;
+        std::vector<MetalVertexStreamInfo> vertex_streams;
+        vertex_streams.reserve(desc.vertex_buffers.size());
+        if (!desc.vertex_buffers.empty()) {
+            vertex_descriptor = [[MTLVertexDescriptor alloc] init];
+            for (std::size_t slot = 0; slot < desc.vertex_buffers.size(); ++slot) {
+                const auto& stream = desc.vertex_buffers[slot];
+                const NSUInteger buffer_index = metal_shader_converter_vertex_buffer_base + slot;
+                if (buffer_index >= 31U) {
+                    return nullptr;
+                }
+                auto* native_layout = vertex_descriptor.layouts[buffer_index];
+                native_layout.stride = stream.stride;
+                native_layout.stepFunction = stream.step_mode == VertexStepMode::per_instance
+                    ? MTLVertexStepFunctionPerInstance
+                    : MTLVertexStepFunctionPerVertex;
+                native_layout.stepRate = stream.step_rate;
+                vertex_streams.push_back(MetalVertexStreamInfo{
+                    .stride = stream.stride,
+                    .step_mode = stream.step_mode,
+                    .step_rate = stream.step_rate,
+                });
+
+                for (const auto& attribute : stream.attributes) {
+                    const NSUInteger attribute_index =
+                        metal_shader_converter_vertex_attribute_base + attribute.shader_location;
+                    const MTLVertexFormat format = vertex_format(attribute.format);
+                    if (attribute_index >= 31U || format == MTLVertexFormatInvalid) {
+                        return nullptr;
+                    }
+                    auto* native_attribute = vertex_descriptor.attributes[attribute_index];
+                    native_attribute.format = format;
+                    native_attribute.offset = attribute.offset;
+                    native_attribute.bufferIndex = buffer_index;
+                }
+            }
+        }
+
         MTLRenderPipelineDescriptor* native_desc = [[MTLRenderPipelineDescriptor alloc] init];
         native_desc.vertexFunction = vertex->function();
         native_desc.fragmentFunction = fragment->function();
+        native_desc.vertexDescriptor = vertex_descriptor;
         native_desc.colorAttachments[0].pixelFormat = pixel_format(desc.color_format);
         if (NSString* label = make_label(desc.debug_name)) {
             native_desc.label = label;
@@ -1274,7 +1535,8 @@ public:
             std::vector<MetalShaderResourceLocationDesc>{
                 fragment->locations().begin(),
                 fragment->locations().end()
-            }
+            },
+            std::move(vertex_streams)
         );
     }
 
