@@ -18,7 +18,9 @@ The register classes map to HLSL registers:
 - unordered access: `u`
 - sampler: `s`
 
-The shader cooker gets this information from DXC reflection. Game code does not assign Direct3D 12 descriptor handles or Metal argument-buffer offsets.
+The shader cooker gets this information from DXC reflection. Cooked shader modules copy and own the logical binding metadata when the binary is loaded. Game code does not assign Direct3D 12 descriptor handles or Metal argument-buffer offsets.
+
+Development source shaders currently have an empty reflected binding list. This keeps runtime source compilation available as a fallback without inventing reflection outside the production cooker.
 
 ## Pipeline layout
 
@@ -29,6 +31,8 @@ Identical logical bindings used by more than one stage are merged and keep a sta
 Overlapping ranges in the same register class and register space are rejected. An unbounded range therefore cannot be followed by another range in the same register namespace and space.
 
 The compiled layout is sorted by register class, register space, and binding index. Pipeline layout ordering does not depend on shader declaration order.
+
+Both Tier 1 backends compile and validate this layout before native graphics pipeline creation. A conflict therefore fails at the same VICE boundary on Metal and Direct3D 12.
 
 ## Direct3D 12
 
@@ -44,13 +48,17 @@ Stage visibility maps as follows:
 - fragment only: `D3D12_SHADER_VISIBILITY_PIXEL`
 - shared vertex and fragment bindings: `D3D12_SHADER_VISIBILITY_ALL`
 
-Windows tests deserialize the generated root-signature blob and inspect the native descriptor ranges. This does not require a GPU device.
+Graphics pipeline creation now serializes the compiled VICE layout and creates the native Direct3D 12 root signature from that blob before creating the PSO.
+
+Windows tests deserialize generated root-signature blobs and inspect the native descriptor ranges. This does not require a GPU device.
 
 ## Metal
 
 Shaders produced by Metal Shader Converter use argument buffers for resource binding.
 
 VICE does not assume that an HLSL register index is a Metal argument-buffer offset. Automatic Metal Shader Converter layout is implementation-defined, so the converter reflection output is the authority for top-level argument-buffer resource locations.
+
+Metal graphics pipeline creation already performs the same logical layout validation as Direct3D 12. It does not yet turn that layout into argument-buffer offsets because those offsets must come from Metal Shader Converter reflection.
 
 The Metal asset path will store those converter-derived locations next to the same logical VICE binding identity. Runtime Metal binding will use the converter locations and make indirectly accessed resources resident before draw or dispatch.
 
