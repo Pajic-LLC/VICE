@@ -120,6 +120,42 @@ constexpr std::uint64_t maximum_constant_buffer_size = 64U * 1024U;
     return DXGI_FORMAT_UNKNOWN;
 }
 
+[[nodiscard]] DXGI_FORMAT vertex_format(const VertexFormat format) noexcept {
+    switch (format) {
+    case VertexFormat::float32: return DXGI_FORMAT_R32_FLOAT;
+    case VertexFormat::float32x2: return DXGI_FORMAT_R32G32_FLOAT;
+    case VertexFormat::float32x3: return DXGI_FORMAT_R32G32B32_FLOAT;
+    case VertexFormat::float32x4: return DXGI_FORMAT_R32G32B32A32_FLOAT;
+    case VertexFormat::float16x2: return DXGI_FORMAT_R16G16_FLOAT;
+    case VertexFormat::float16x4: return DXGI_FORMAT_R16G16B16A16_FLOAT;
+    case VertexFormat::uint32: return DXGI_FORMAT_R32_UINT;
+    case VertexFormat::uint32x2: return DXGI_FORMAT_R32G32_UINT;
+    case VertexFormat::uint32x3: return DXGI_FORMAT_R32G32B32_UINT;
+    case VertexFormat::uint32x4: return DXGI_FORMAT_R32G32B32A32_UINT;
+    case VertexFormat::sint32: return DXGI_FORMAT_R32_SINT;
+    case VertexFormat::sint32x2: return DXGI_FORMAT_R32G32_SINT;
+    case VertexFormat::sint32x3: return DXGI_FORMAT_R32G32B32_SINT;
+    case VertexFormat::sint32x4: return DXGI_FORMAT_R32G32B32A32_SINT;
+    case VertexFormat::uint8x2: return DXGI_FORMAT_R8G8_UINT;
+    case VertexFormat::uint8x4: return DXGI_FORMAT_R8G8B8A8_UINT;
+    case VertexFormat::sint8x2: return DXGI_FORMAT_R8G8_SINT;
+    case VertexFormat::sint8x4: return DXGI_FORMAT_R8G8B8A8_SINT;
+    case VertexFormat::unorm8x2: return DXGI_FORMAT_R8G8_UNORM;
+    case VertexFormat::unorm8x4: return DXGI_FORMAT_R8G8B8A8_UNORM;
+    case VertexFormat::snorm8x2: return DXGI_FORMAT_R8G8_SNORM;
+    case VertexFormat::snorm8x4: return DXGI_FORMAT_R8G8B8A8_SNORM;
+    case VertexFormat::uint16x2: return DXGI_FORMAT_R16G16_UINT;
+    case VertexFormat::uint16x4: return DXGI_FORMAT_R16G16B16A16_UINT;
+    case VertexFormat::sint16x2: return DXGI_FORMAT_R16G16_SINT;
+    case VertexFormat::sint16x4: return DXGI_FORMAT_R16G16B16A16_SINT;
+    case VertexFormat::unorm16x2: return DXGI_FORMAT_R16G16_UNORM;
+    case VertexFormat::unorm16x4: return DXGI_FORMAT_R16G16B16A16_UNORM;
+    case VertexFormat::snorm16x2: return DXGI_FORMAT_R16G16_SNORM;
+    case VertexFormat::snorm16x4: return DXGI_FORMAT_R16G16B16A16_SNORM;
+    }
+    return DXGI_FORMAT_UNKNOWN;
+}
+
 [[nodiscard]] DXGI_FORMAT texture_resource_format(const TextureDesc& desc) noexcept {
     if (desc.format == TextureFormat::depth32_float && has_usage(desc.usage, TextureUsage::sampled)) {
         return DXGI_FORMAT_R32_TYPELESS;
@@ -208,6 +244,12 @@ constexpr std::uint64_t maximum_constant_buffer_size = 64U * 1024U;
 ) noexcept {
     return same_binding_namespace(left, right) && left.array_element == right.array_element;
 }
+
+struct D3D12VertexStreamInfo {
+    std::uint32_t stride = 0;
+    VertexStepMode step_mode = VertexStepMode::per_vertex;
+    std::uint32_t step_rate = 1;
+};
 
 class D3D12Buffer final : public Buffer {
 public:
@@ -349,14 +391,19 @@ public:
         ComPtr<ID3D12RootSignature> root_signature,
         ComPtr<ID3D12PipelineState> state,
         const PrimitiveTopology topology,
-        D3D12RootSignatureResult root_layout
+        D3D12RootSignatureResult root_layout,
+        std::vector<D3D12VertexStreamInfo> vertex_streams
     ) : root_signature_{std::move(root_signature)}, state_{std::move(state)}, topology_{topology},
-        root_layout_{std::move(root_layout)} {}
+        root_layout_{std::move(root_layout)}, vertex_streams_{std::move(vertex_streams)} {}
 
     [[nodiscard]] PrimitiveTopology topology() const noexcept override { return topology_; }
     [[nodiscard]] ID3D12RootSignature* root_signature() const noexcept { return root_signature_.Get(); }
     [[nodiscard]] ID3D12PipelineState* state() const noexcept { return state_.Get(); }
     [[nodiscard]] const D3D12RootSignatureResult& root_layout() const noexcept { return root_layout_; }
+    [[nodiscard]] std::size_t vertex_stream_count() const noexcept { return vertex_streams_.size(); }
+    [[nodiscard]] const D3D12VertexStreamInfo* vertex_stream(const std::uint32_t slot) const noexcept {
+        return slot < vertex_streams_.size() ? &vertex_streams_[slot] : nullptr;
+    }
     [[nodiscard]] const D3D12BindingLocation* binding_location(
         const ShaderBindingKey& binding
     ) const noexcept {
@@ -368,6 +415,7 @@ private:
     ComPtr<ID3D12PipelineState> state_;
     PrimitiveTopology topology_ = PrimitiveTopology::triangle_list;
     D3D12RootSignatureResult root_layout_;
+    std::vector<D3D12VertexStreamInfo> vertex_streams_;
 };
 
 class D3D12Swapchain final : public Swapchain {
@@ -792,8 +840,69 @@ public:
         pending_bindings_.clear();
         active_resource_heap_.Reset();
         active_sampler_heap_.Reset();
+        vertex_buffers_bound_.fill(false);
+        vertex_capacities_.fill(0U);
+        index_buffer_bound_ = false;
+        index_capacity_ = 0U;
         bindings_dirty_ = true;
         pipeline_bound_ = true;
+        return true;
+    }
+
+    bool set_vertex_buffer(
+        const std::uint32_t slot,
+        Buffer& buffer,
+        const std::uint64_t offset
+    ) override {
+        auto* native_buffer = dynamic_cast<D3D12Buffer*>(&buffer);
+        if (!render_pass_active_ || !pipeline_bound_ || active_pipeline_ == nullptr ||
+            native_buffer == nullptr || !has_usage(buffer.usage(), BufferUsage::vertex) ||
+            offset > buffer.size()) {
+            return false;
+        }
+        const D3D12VertexStreamInfo* stream = active_pipeline_->vertex_stream(slot);
+        if (stream == nullptr || stream->stride == 0U) {
+            return false;
+        }
+        const std::uint64_t remaining = buffer.size() - offset;
+        if (remaining < stream->stride || remaining > std::numeric_limits<UINT>::max()) {
+            return false;
+        }
+        transition(*native_buffer, D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER);
+        D3D12_VERTEX_BUFFER_VIEW view{};
+        view.BufferLocation = native_buffer->native()->GetGPUVirtualAddress() + offset;
+        view.SizeInBytes = static_cast<UINT>(remaining);
+        view.StrideInBytes = stream->stride;
+        command_list_->IASetVertexBuffers(slot, 1, &view);
+        vertex_buffers_bound_[slot] = true;
+        vertex_capacities_[slot] = remaining / stream->stride;
+        return true;
+    }
+
+    bool set_index_buffer(
+        Buffer& buffer,
+        const IndexFormat format,
+        const std::uint64_t offset
+    ) override {
+        auto* native_buffer = dynamic_cast<D3D12Buffer*>(&buffer);
+        const std::uint32_t element_size = index_format_size(format);
+        if (!render_pass_active_ || !pipeline_bound_ || native_buffer == nullptr ||
+            !has_usage(buffer.usage(), BufferUsage::index) || element_size == 0U ||
+            offset > buffer.size() || offset % element_size != 0U) {
+            return false;
+        }
+        const std::uint64_t remaining = buffer.size() - offset;
+        if (remaining < element_size || remaining > std::numeric_limits<UINT>::max()) {
+            return false;
+        }
+        transition(*native_buffer, D3D12_RESOURCE_STATE_INDEX_BUFFER);
+        D3D12_INDEX_BUFFER_VIEW view{};
+        view.BufferLocation = native_buffer->native()->GetGPUVirtualAddress() + offset;
+        view.SizeInBytes = static_cast<UINT>(remaining);
+        view.Format = format == IndexFormat::uint16 ? DXGI_FORMAT_R16_UINT : DXGI_FORMAT_R32_UINT;
+        command_list_->IASetIndexBuffer(&view);
+        index_buffer_bound_ = true;
+        index_capacity_ = remaining / element_size;
         return true;
     }
 
@@ -910,13 +1019,40 @@ public:
         const std::uint32_t first_instance
     ) override {
         if (!render_pass_active_ || !pipeline_bound_ || active_pipeline_ == nullptr ||
-            vertex_count == 0 || instance_count == 0) {
+            vertex_count == 0 || instance_count == 0 ||
+            !vertex_streams_cover_draw(vertex_count, instance_count, first_vertex, first_instance)) {
             return false;
         }
         if (!materialize_graphics_bindings()) {
             return false;
         }
         command_list_->DrawInstanced(vertex_count, instance_count, first_vertex, first_instance);
+        return true;
+    }
+
+    bool draw_indexed(
+        const std::uint32_t index_count,
+        const std::uint32_t instance_count,
+        const std::uint32_t first_index,
+        const std::int32_t vertex_offset,
+        const std::uint32_t first_instance
+    ) override {
+        if (!render_pass_active_ || !pipeline_bound_ || active_pipeline_ == nullptr ||
+            !index_buffer_bound_ || index_count == 0U || instance_count == 0U ||
+            first_index > index_capacity_ || index_count > index_capacity_ - first_index ||
+            !vertex_streams_cover_instances(instance_count, first_instance)) {
+            return false;
+        }
+        if (!materialize_graphics_bindings()) {
+            return false;
+        }
+        command_list_->DrawIndexedInstanced(
+            index_count,
+            instance_count,
+            first_index,
+            vertex_offset,
+            first_instance
+        );
         return true;
     }
 
@@ -966,6 +1102,63 @@ private:
         return render_pass_active_ && pipeline_bound_ && active_pipeline_ != nullptr &&
             binding.register_class == expected_class &&
             active_pipeline_->binding_location(binding) != nullptr;
+    }
+
+    [[nodiscard]] bool all_vertex_buffers_bound() const noexcept {
+        if (active_pipeline_ == nullptr) {
+            return false;
+        }
+        for (std::size_t slot = 0; slot < active_pipeline_->vertex_stream_count(); ++slot) {
+            if (!vertex_buffers_bound_[slot]) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    [[nodiscard]] bool vertex_streams_cover_instances(
+        const std::uint32_t instance_count,
+        const std::uint32_t first_instance
+    ) const noexcept {
+        if (!all_vertex_buffers_bound() || active_pipeline_ == nullptr) {
+            return false;
+        }
+        if (instance_count == 0U) {
+            return false;
+        }
+        const std::uint64_t last_instance =
+            static_cast<std::uint64_t>(first_instance) + instance_count - 1U;
+        for (std::size_t slot = 0; slot < active_pipeline_->vertex_stream_count(); ++slot) {
+            const auto* stream = active_pipeline_->vertex_stream(static_cast<std::uint32_t>(slot));
+            if (stream == nullptr || stream->step_mode != VertexStepMode::per_instance) {
+                continue;
+            }
+            const std::uint64_t required_element = last_instance / stream->step_rate;
+            if (required_element >= vertex_capacities_[slot]) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    [[nodiscard]] bool vertex_streams_cover_draw(
+        const std::uint32_t vertex_count,
+        const std::uint32_t instance_count,
+        const std::uint32_t first_vertex,
+        const std::uint32_t first_instance
+    ) const noexcept {
+        if (!vertex_streams_cover_instances(instance_count, first_instance) || active_pipeline_ == nullptr) {
+            return false;
+        }
+        const std::uint64_t vertex_end = static_cast<std::uint64_t>(first_vertex) + vertex_count;
+        for (std::size_t slot = 0; slot < active_pipeline_->vertex_stream_count(); ++slot) {
+            const auto* stream = active_pipeline_->vertex_stream(static_cast<std::uint32_t>(slot));
+            if (stream != nullptr && stream->step_mode == VertexStepMode::per_vertex &&
+                vertex_end > vertex_capacities_[slot]) {
+                return false;
+            }
+        }
+        return true;
     }
 
     [[nodiscard]] static bool valid_buffer_view(
@@ -1536,6 +1729,10 @@ private:
         pending_bindings_.clear();
         active_resource_heap_.Reset();
         active_sampler_heap_.Reset();
+        vertex_buffers_bound_.fill(false);
+        vertex_capacities_.fill(0U);
+        index_buffer_bound_ = false;
+        index_capacity_ = 0U;
         bindings_dirty_ = true;
         pipeline_bound_ = false;
     }
@@ -1547,11 +1744,15 @@ private:
     std::vector<ComPtr<ID3D12DescriptorHeap>> retained_heaps_;
     ComPtr<ID3D12DescriptorHeap> active_resource_heap_;
     ComPtr<ID3D12DescriptorHeap> active_sampler_heap_;
+    std::array<bool, max_vertex_buffers> vertex_buffers_bound_{};
+    std::array<std::uint64_t, max_vertex_buffers> vertex_capacities_{};
     D3D12GraphicsPipeline* active_pipeline_ = nullptr;
     D3D12Swapchain* active_swapchain_ = nullptr;
     D3D12Swapchain* present_swapchain_ = nullptr;
+    std::uint64_t index_capacity_ = 0U;
     UINT resource_descriptor_size_ = 0;
     UINT sampler_descriptor_size_ = 0;
+    bool index_buffer_bound_ = false;
     bool bindings_dirty_ = true;
     bool render_pass_active_ = false;
     bool pipeline_bound_ = false;
@@ -1838,6 +2039,55 @@ public:
             return nullptr;
         }
 
+        std::size_t attribute_count = 0;
+        for (const auto& stream : desc.vertex_buffers) {
+            attribute_count += stream.attributes.size();
+        }
+        if (attribute_count > std::numeric_limits<UINT>::max()) {
+            return nullptr;
+        }
+
+        std::vector<std::string> semantic_names;
+        semantic_names.reserve(attribute_count);
+        for (const auto& stream : desc.vertex_buffers) {
+            for (const auto& attribute : stream.attributes) {
+                semantic_names.emplace_back(attribute.semantic);
+            }
+        }
+
+        std::vector<D3D12_INPUT_ELEMENT_DESC> input_elements;
+        input_elements.reserve(attribute_count);
+        std::vector<D3D12VertexStreamInfo> vertex_streams;
+        vertex_streams.reserve(desc.vertex_buffers.size());
+        std::size_t semantic_index = 0;
+        for (std::size_t slot = 0; slot < desc.vertex_buffers.size(); ++slot) {
+            const auto& stream = desc.vertex_buffers[slot];
+            vertex_streams.push_back(D3D12VertexStreamInfo{
+                .stride = stream.stride,
+                .step_mode = stream.step_mode,
+                .step_rate = stream.step_rate,
+            });
+            for (const auto& attribute : stream.attributes) {
+                const DXGI_FORMAT format = vertex_format(attribute.format);
+                if (format == DXGI_FORMAT_UNKNOWN) {
+                    return nullptr;
+                }
+                D3D12_INPUT_ELEMENT_DESC input{};
+                input.SemanticName = semantic_names[semantic_index++].c_str();
+                input.SemanticIndex = attribute.semantic_index;
+                input.Format = format;
+                input.InputSlot = static_cast<UINT>(slot);
+                input.AlignedByteOffset = attribute.offset;
+                input.InputSlotClass = stream.step_mode == VertexStepMode::per_instance
+                    ? D3D12_INPUT_CLASSIFICATION_PER_INSTANCE_DATA
+                    : D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA;
+                input.InstanceDataStepRate = stream.step_mode == VertexStepMode::per_instance
+                    ? stream.step_rate
+                    : 0U;
+                input_elements.push_back(input);
+            }
+        }
+
         D3D12_RENDER_TARGET_BLEND_DESC blend{};
         blend.BlendEnable = FALSE;
         blend.LogicOpEnable = FALSE;
@@ -1874,7 +2124,10 @@ public:
         pipeline_desc.DepthStencilState.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ZERO;
         pipeline_desc.DepthStencilState.DepthFunc = D3D12_COMPARISON_FUNC_ALWAYS;
         pipeline_desc.DepthStencilState.StencilEnable = FALSE;
-        pipeline_desc.InputLayout = {nullptr, 0};
+        pipeline_desc.InputLayout = {
+            input_elements.empty() ? nullptr : input_elements.data(),
+            static_cast<UINT>(input_elements.size())
+        };
         pipeline_desc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
         pipeline_desc.NumRenderTargets = 1;
         pipeline_desc.RTVFormats[0] = pixel_format(desc.color_format);
@@ -1894,7 +2147,8 @@ public:
             std::move(root_signature),
             std::move(state),
             desc.topology,
-            std::move(serialized_root)
+            std::move(serialized_root),
+            std::move(vertex_streams)
         );
     }
 
