@@ -21,6 +21,7 @@ include(ViceCompiler)
 add_subdirectory(engine/core)
 add_subdirectory(engine/platform)
 add_subdirectory(engine/world)
+add_subdirectory(engine/render)
 
 if(VICE_BUILD_LAB)
   add_subdirectory(apps/vice_lab)
