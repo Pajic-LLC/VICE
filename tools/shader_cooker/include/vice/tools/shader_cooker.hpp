@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -46,6 +47,20 @@ struct ShaderReflection {
     std::string diagnostics;
 };
 
+struct MetalResourceLocation {
+    ShaderRegisterClass register_class = ShaderRegisterClass::shader_resource;
+    std::uint32_t binding = 0;
+    std::uint32_t space = 0;
+    std::uint32_t top_level_offset = 0;
+    std::uint32_t size_bytes = 0;
+};
+
+struct MetalBindingReflection {
+    bool valid = false;
+    std::vector<MetalResourceLocation> resources;
+    std::string diagnostics;
+};
+
 struct Toolchain {
     std::filesystem::path dxc;
     std::filesystem::path metal_shader_converter;
@@ -73,6 +88,7 @@ struct CookResult {
     std::optional<std::filesystem::path> metal_reflection_path;
     std::filesystem::path manifest_path;
     ShaderReflection reflection;
+    MetalBindingReflection metal_bindings;
     std::string diagnostics;
 };
 
@@ -81,6 +97,10 @@ struct CookResult {
 [[nodiscard]] std::string_view shader_register_class_name(ShaderRegisterClass register_class) noexcept;
 [[nodiscard]] std::string shader_profile(ShaderStage stage, std::string_view shader_model);
 [[nodiscard]] ShaderReflection parse_dxc_resource_bindings(std::string_view assembly);
+[[nodiscard]] MetalBindingReflection parse_metal_resource_locations(
+    std::string_view converter_json,
+    std::span<const ShaderResourceReflection> logical_resources
+);
 [[nodiscard]] std::string make_cache_key(
     std::string_view source,
     const CookRequest& request,
