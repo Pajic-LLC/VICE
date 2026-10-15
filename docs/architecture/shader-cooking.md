@@ -51,6 +51,20 @@ A successful cook writes:
 
 The JSON file is the first VICE shader manifest. It records the shader identity, compiler profile, cache key, tool versions, and backend artifact names.
 
+## Runtime loading
+
+The RHI accepts cooked shaders through `ShaderBinaryDesc`.
+
+The descriptor contains the shader stage, backend binary format, byte span, entry point, and debug name. It does not contain a file path.
+
+Higher-level asset code reads the cooked artifact and passes its bytes into the RHI. The input span only needs to remain valid during module creation.
+
+Direct3D 12 accepts `ShaderBinaryFormat::dxil`. The backend owns a copy of the DXIL bytes and uses them directly when creating pipeline state.
+
+Metal accepts `ShaderBinaryFormat::metallib`. The backend creates an `MTLLibrary` from the supplied data and resolves the requested entry point.
+
+Both paths produce the same `ShaderModule` interface used by graphics pipelines. Runtime source compilation remains available as a development fallback while the asset layer is being connected.
+
 ## Cache key
 
 The cache key is SHA-256 over the inputs that affect generated shader code:

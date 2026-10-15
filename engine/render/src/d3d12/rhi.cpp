@@ -22,6 +22,7 @@
 #include <string>
 #include <string_view>
 #include <utility>
+#include <vector>
 
 namespace vice::render {
 namespace {
@@ -271,20 +272,20 @@ private:
 
 class D3D12ShaderModule final : public ShaderModule {
 public:
-    D3D12ShaderModule(const ShaderStage stage, ComPtr<ID3DBlob> bytecode)
+    D3D12ShaderModule(const ShaderStage stage, std::vector<std::byte> bytecode)
         : stage_{stage}, bytecode_{std::move(bytecode)} {}
 
     [[nodiscard]] ShaderStage stage() const noexcept override { return stage_; }
     [[nodiscard]] D3D12_SHADER_BYTECODE native_bytecode() const noexcept {
         D3D12_SHADER_BYTECODE result{};
-        result.pShaderBytecode = bytecode_ != nullptr ? bytecode_->GetBufferPointer() : nullptr;
-        result.BytecodeLength = bytecode_ != nullptr ? bytecode_->GetBufferSize() : 0;
+        result.pShaderBytecode = bytecode_.empty() ? nullptr : bytecode_.data();
+        result.BytecodeLength = bytecode_.size();
         return result;
     }
 
 private:
     ShaderStage stage_ = ShaderStage::vertex;
-    ComPtr<ID3DBlob> bytecode_;
+    std::vector<std::byte> bytecode_;
 };
 
 class D3D12GraphicsPipeline final : public GraphicsPipeline {
@@ -987,7 +988,23 @@ public:
             }
             return nullptr;
         }
-        return std::make_unique<D3D12ShaderModule>(desc.stage, std::move(bytecode));
+
+        std::vector<std::byte> compiled(bytecode->GetBufferSize());
+        std::memcpy(compiled.data(), bytecode->GetBufferPointer(), compiled.size());
+        return std::make_unique<D3D12ShaderModule>(desc.stage, std::move(compiled));
+    }
+
+    [[nodiscard]] std::unique_ptr<ShaderModule> create_shader_module(
+        const ShaderBinaryDesc& desc
+    ) override {
+        if (!is_valid(desc) || desc.format != ShaderBinaryFormat::dxil) {
+            core::log(core::LogLevel::error, "Direct3D 12 requires a valid DXIL shader binary.");
+            return nullptr;
+        }
+        return std::make_unique<D3D12ShaderModule>(
+            desc.stage,
+            std::vector<std::byte>{desc.binary.begin(), desc.binary.end()}
+        );
     }
 
     [[nodiscard]] std::unique_ptr<GraphicsPipeline> create_graphics_pipeline(

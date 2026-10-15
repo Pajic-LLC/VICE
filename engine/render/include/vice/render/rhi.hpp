@@ -260,6 +260,11 @@ enum class ShaderSourceLanguage : std::uint8_t {
     hlsl,
 };
 
+enum class ShaderBinaryFormat : std::uint8_t {
+    dxil,
+    metallib,
+};
+
 [[nodiscard]] constexpr std::string_view shader_stage_name(const ShaderStage stage) noexcept {
     switch (stage) {
     case ShaderStage::vertex: return "vertex";
@@ -277,8 +282,20 @@ struct ShaderModuleDesc {
     std::string_view debug_name;
 };
 
+struct ShaderBinaryDesc {
+    ShaderStage stage = ShaderStage::vertex;
+    ShaderBinaryFormat format = ShaderBinaryFormat::dxil;
+    std::span<const std::byte> binary;
+    std::string_view entry_point = "main";
+    std::string_view debug_name;
+};
+
 [[nodiscard]] constexpr bool is_valid(const ShaderModuleDesc& desc) noexcept {
     return !desc.source.empty() && !desc.entry_point.empty();
+}
+
+[[nodiscard]] constexpr bool is_valid(const ShaderBinaryDesc& desc) noexcept {
+    return !desc.binary.empty() && !desc.entry_point.empty();
 }
 
 enum class PrimitiveTopology : std::uint8_t {
@@ -424,6 +441,9 @@ public:
     [[nodiscard]] virtual std::unique_ptr<Sampler> create_sampler(const SamplerDesc& desc) = 0;
     [[nodiscard]] virtual std::unique_ptr<ShaderModule> create_shader_module(
         const ShaderModuleDesc& desc
+    ) = 0;
+    [[nodiscard]] virtual std::unique_ptr<ShaderModule> create_shader_module(
+        const ShaderBinaryDesc& desc
     ) = 0;
     [[nodiscard]] virtual std::unique_ptr<GraphicsPipeline> create_graphics_pipeline(
         const GraphicsPipelineDesc& desc

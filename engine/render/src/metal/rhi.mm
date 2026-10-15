@@ -1,6 +1,7 @@
 #import <AppKit/AppKit.h>
 #import <Metal/Metal.h>
 #import <QuartzCore/CAMetalLayer.h>
+#import <dispatch/dispatch.h>
 
 #include <vice/core/log.hpp>
 #include <vice/platform/native_window.hpp>
@@ -606,6 +607,48 @@ public:
         id<MTLFunction> function = [library newFunctionWithName:entry];
         if (function == nil) {
             core::log(core::LogLevel::error, "Metal could not find the requested shader entry point.");
+            return nullptr;
+        }
+        if (NSString* label = make_label(desc.debug_name)) {
+            function.label = label;
+        }
+        return std::make_unique<MetalShaderModule>(desc.stage, library, function);
+    }
+
+    [[nodiscard]] std::unique_ptr<ShaderModule> create_shader_module(
+        const ShaderBinaryDesc& desc
+    ) override {
+        if (!is_valid(desc) || desc.format != ShaderBinaryFormat::metallib) {
+            core::log(core::LogLevel::error, "Metal requires a valid metallib shader binary.");
+            return nullptr;
+        }
+
+        NSString* entry = make_label(desc.entry_point);
+        if (entry == nil) {
+            return nullptr;
+        }
+
+        dispatch_data_t data = dispatch_data_create(
+            desc.binary.data(),
+            desc.binary.size(),
+            nullptr,
+            DISPATCH_DATA_DESTRUCTOR_DEFAULT
+        );
+        if (data == nullptr) {
+            core::log(core::LogLevel::error, "Metal could not copy the cooked shader binary.");
+            return nullptr;
+        }
+
+        NSError* error = nil;
+        id<MTLLibrary> library = [device_ newLibraryWithData:data error:&error];
+        if (library == nil) {
+            log_error("Metal could not load the cooked metallib.", error);
+            return nullptr;
+        }
+
+        id<MTLFunction> function = [library newFunctionWithName:entry];
+        if (function == nil) {
+            core::log(core::LogLevel::error, "Metal could not find the requested cooked shader entry point.");
             return nullptr;
         }
         if (NSString* label = make_label(desc.debug_name)) {
