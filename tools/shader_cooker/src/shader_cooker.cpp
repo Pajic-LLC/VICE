@@ -3,12 +3,20 @@
 #include <array>
 #include <bit>
 #include <cctype>
+#include <cstdint>
 #include <cstdlib>
 #include <fstream>
 #include <iomanip>
+#include <limits>
 #include <optional>
 #include <sstream>
 #include <system_error>
+
+#ifdef _WIN32
+#define WIN32_LEAN_AND_MEAN
+#define NOMINMAX
+#include <windows.h>
+#endif
 
 namespace vice::tools::shader_cooker {
 namespace {
@@ -91,18 +99,141 @@ namespace {
     return shell_quote(std::string_view{value});
 }
 
+[[nodiscard]] std::optional<std::string> environment_value(const std::string_view name) {
+    const std::string key{name};
+#ifdef _WIN32
+    char* value = nullptr;
+    std::size_t length = 0;
+    if (_dupenv_s(&value, &length, key.c_str()) != 0 || value == nullptr) {
+        return std::nullopt;
+    }
+    std::string result{value};
+    std::free(value);
+    if (result.empty()) {
+        return std::nullopt;
+    }
+    return result;
+#else
+    const char* value = std::getenv(key.c_str());
+    if (value == nullptr || value[0] == '\0') {
+        return std::nullopt;
+    }
+    return std::string{value};
+#endif
+}
+
 struct ProcessResult {
     int exit_code = -1;
     std::string output;
 };
 
+#ifdef _WIN32
+[[nodiscard]] std::wstring utf8_to_wide(const std::string_view value) {
+    if (value.empty() || value.size() > static_cast<std::size_t>(std::numeric_limits<int>::max())) {
+        return {};
+    }
+    const int input_length = static_cast<int>(value.size());
+    const int required = MultiByteToWideChar(
+        CP_UTF8,
+        MB_ERR_INVALID_CHARS,
+        value.data(),
+        input_length,
+        nullptr,
+        0
+    );
+    if (required <= 0) {
+        return {};
+    }
+    std::wstring result(static_cast<std::size_t>(required), L'\0');
+    const int converted = MultiByteToWideChar(
+        CP_UTF8,
+        MB_ERR_INVALID_CHARS,
+        value.data(),
+        input_length,
+        result.data(),
+        required
+    );
+    if (converted != required) {
+        return {};
+    }
+    return result;
+}
+#endif
+
 [[nodiscard]] ProcessResult run_capture(
     const std::string& command,
     const std::filesystem::path& log_path
 ) {
+#ifdef _WIN32
+    SECURITY_ATTRIBUTES security{};
+    security.nLength = sizeof(security);
+    security.bInheritHandle = TRUE;
+
+    HANDLE log_handle = CreateFileW(
+        log_path.c_str(),
+        GENERIC_WRITE,
+        FILE_SHARE_READ | FILE_SHARE_WRITE,
+        &security,
+        CREATE_ALWAYS,
+        FILE_ATTRIBUTE_NORMAL,
+        nullptr
+    );
+    if (log_handle == INVALID_HANDLE_VALUE) {
+        return ProcessResult{-1, "Could not open shader tool log file."};
+    }
+
+    std::wstring command_line = utf8_to_wide(command);
+    if (command_line.empty()) {
+        CloseHandle(log_handle);
+        return ProcessResult{-1, "Could not encode shader tool command line."};
+    }
+
+    STARTUPINFOW startup{};
+    startup.cb = sizeof(startup);
+    startup.dwFlags = STARTF_USESTDHANDLES;
+    startup.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
+    startup.hStdOutput = log_handle;
+    startup.hStdError = log_handle;
+
+    PROCESS_INFORMATION process{};
+    const BOOL created = CreateProcessW(
+        nullptr,
+        command_line.data(),
+        nullptr,
+        nullptr,
+        TRUE,
+        CREATE_NO_WINDOW,
+        nullptr,
+        nullptr,
+        &startup,
+        &process
+    );
+    if (created == FALSE) {
+        const DWORD error_code = GetLastError();
+        CloseHandle(log_handle);
+        return ProcessResult{
+            -1,
+            "Could not launch shader tool. Win32 error " + std::to_string(error_code) + "."
+        };
+    }
+
+    const DWORD wait_result = WaitForSingleObject(process.hProcess, INFINITE);
+    DWORD exit_code = 0;
+    const BOOL have_exit_code = GetExitCodeProcess(process.hProcess, &exit_code);
+    CloseHandle(process.hThread);
+    CloseHandle(process.hProcess);
+    CloseHandle(log_handle);
+
+    if (wait_result != WAIT_OBJECT_0 || have_exit_code == FALSE ||
+        exit_code > static_cast<DWORD>(std::numeric_limits<int>::max())) {
+        return ProcessResult{-1, read_file(log_path)};
+    }
+    return ProcessResult{static_cast<int>(exit_code), read_file(log_path)};
+#else
     const std::string redirected = command + " > " + shell_quote_path(log_path) + " 2>&1";
     const int result = std::system(redirected.c_str());
     return ProcessResult{result, read_file(log_path)};
+#endif
 }
 
 [[nodiscard]] std::string tool_version(
@@ -377,17 +508,15 @@ std::filesystem::path discover_executable(
         return {};
     }
 
-    const std::string environment_name{environment_variable};
-    if (const char* configured = std::getenv(environment_name.c_str());
-        configured != nullptr && configured[0] != '\0') {
-        const std::filesystem::path configured_path{configured};
+    if (const auto configured = environment_value(environment_variable); configured.has_value()) {
+        const std::filesystem::path configured_path{*configured};
         if (std::filesystem::exists(configured_path, error)) {
             return configured_path;
         }
     }
 
-    const char* path_value = std::getenv("PATH");
-    if (path_value == nullptr) {
+    const auto path_value = environment_value("PATH");
+    if (!path_value.has_value()) {
         return {};
     }
 
@@ -398,7 +527,7 @@ std::filesystem::path discover_executable(
 #endif
 
     const std::string candidate_name = executable_candidate_name(executable_name);
-    std::string_view remaining{path_value};
+    std::string_view remaining{*path_value};
     while (!remaining.empty()) {
         const std::size_t split = remaining.find(separator);
         const std::string_view segment = remaining.substr(0, split);
