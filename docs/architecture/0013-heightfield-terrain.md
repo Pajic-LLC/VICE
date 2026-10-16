@@ -20,7 +20,9 @@ The backend uses 16 bits per height sample in Jolt to minimize runtime quantizat
 
 ## Collision assets
 
-`VICECOLL` version 1 predates heightfields and is not extended silently. Heightfield cooking requires a new collision asset format version with an explicit compatibility path. Runtime heightfields can be registered directly until that format extension lands.
+`VICECOLL` version 1 predates heightfields and remains unchanged. `VICECOLL` version 2 adds heightfield terrain as a new shape tag. The runtime accepts both versions.
+
+The collision cooker writes version 1 when all source shapes fit the original format and version 2 when at least one heightfield is present. This keeps legacy cooked geometry on its existing representation while allowing terrain assets to use the new payload.
 
 ## Consequences
 
