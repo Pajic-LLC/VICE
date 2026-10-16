@@ -1,7 +1,6 @@
 #include <vice/world/world.hpp>
 
 #include <algorithm>
-#include <limits>
 
 namespace vice::world {
 
@@ -33,6 +32,7 @@ EntityId World::allocate(const PersistentId persistent_id) {
 
     auto& slot = slots_[index];
     slot.persistent_id = persistent_id;
+    slot.spatial_state.reset();
     slot.alive = true;
 
     const EntityId entity{index, slot.generation};
@@ -49,6 +49,7 @@ bool World::destroy_entity(const EntityId entity) {
     auto& slot = slots_[entity.index];
     persistent_lookup_.erase(slot.persistent_id);
     slot.persistent_id = PersistentId{};
+    slot.spatial_state.reset();
     slot.alive = false;
 
     ++slot.generation;
@@ -119,6 +120,149 @@ bool World::remove_relation(const Relation& relation) {
 
 std::span<const Relation> World::relations() const noexcept {
     return relations_;
+}
+
+bool World::register_region(const RegionDesc region) {
+    if (!region.id.valid() || !region.simulation_island.valid() || !finite(region.origin)) {
+        return false;
+    }
+    return regions_.emplace(region.id, region).second;
+}
+
+bool World::remove_region(const RegionId region_id) {
+    const auto found = regions_.find(region_id);
+    if (found == regions_.end()) {
+        return false;
+    }
+
+    const bool in_use = std::any_of(slots_.begin(), slots_.end(), [region_id](const Slot& slot) {
+        return slot.alive && slot.spatial_state.has_value() && slot.spatial_state->region == region_id;
+    });
+    if (in_use) {
+        return false;
+    }
+
+    regions_.erase(found);
+    return true;
+}
+
+bool World::set_region_fidelity(const RegionId region_id, const RegionFidelity fidelity) {
+    const auto found = regions_.find(region_id);
+    if (found == regions_.end()) {
+        return false;
+    }
+    found->second.fidelity = fidelity;
+    return true;
+}
+
+std::optional<RegionDesc> World::region(const RegionId region_id) const noexcept {
+    const auto found = regions_.find(region_id);
+    if (found == regions_.end()) {
+        return std::nullopt;
+    }
+    return found->second;
+}
+
+bool World::set_spatial_state(const EntityId entity, const SpatialState state) {
+    if (!alive(entity) || !state.region.valid() || !finite(state.global_position) ||
+        !regions_.contains(state.region)) {
+        return false;
+    }
+
+    slots_[entity.index].spatial_state = state;
+    return true;
+}
+
+bool World::clear_spatial_state(const EntityId entity) {
+    if (!alive(entity) || !slots_[entity.index].spatial_state.has_value()) {
+        return false;
+    }
+    slots_[entity.index].spatial_state.reset();
+    return true;
+}
+
+bool World::set_local_position(const EntityId entity, const LocalPosition position) {
+    if (!alive(entity) || !finite(position)) {
+        return false;
+    }
+
+    auto& slot = slots_[entity.index];
+    if (!slot.spatial_state.has_value()) {
+        return false;
+    }
+
+    const auto found = regions_.find(slot.spatial_state->region);
+    if (found == regions_.end()) {
+        return false;
+    }
+
+    const auto global = to_global_position(position, found->second.origin);
+    if (!global.has_value()) {
+        return false;
+    }
+
+    slot.spatial_state->global_position = *global;
+    return true;
+}
+
+bool World::handoff_spatial(const EntityId entity, const RegionId target_region) {
+    if (!alive(entity)) {
+        return false;
+    }
+
+    auto& slot = slots_[entity.index];
+    if (!slot.spatial_state.has_value() || !regions_.contains(target_region)) {
+        return false;
+    }
+
+    slot.spatial_state->region = target_region;
+    return true;
+}
+
+std::optional<SpatialState> World::spatial_state(const EntityId entity) const noexcept {
+    if (!alive(entity)) {
+        return std::nullopt;
+    }
+    return slots_[entity.index].spatial_state;
+}
+
+std::optional<LocalPosition> World::local_position(const EntityId entity) const noexcept {
+    const auto state = spatial_state(entity);
+    if (!state.has_value()) {
+        return std::nullopt;
+    }
+
+    const auto found = regions_.find(state->region);
+    if (found == regions_.end()) {
+        return std::nullopt;
+    }
+    return to_local_position(state->global_position, found->second.origin);
+}
+
+std::optional<SimulationIslandId> World::simulation_island(const EntityId entity) const noexcept {
+    const auto state = spatial_state(entity);
+    if (!state.has_value()) {
+        return std::nullopt;
+    }
+
+    const auto found = regions_.find(state->region);
+    if (found == regions_.end()) {
+        return std::nullopt;
+    }
+    return found->second.simulation_island;
+}
+
+std::optional<StreamingCellId> World::streaming_cell(const EntityId entity) const noexcept {
+    const auto state = spatial_state(entity);
+    if (!state.has_value()) {
+        return std::nullopt;
+    }
+
+    const auto found = regions_.find(state->region);
+    if (found == regions_.end()) {
+        return std::nullopt;
+    }
+    return found->second.streaming_cell;
 }
 
 } // namespace vice::world

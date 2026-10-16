@@ -16,6 +16,8 @@ Owns operating system integration. macOS and Windows implementations live behind
 
 Owns entities, components, relationships, spatial state, serialization boundaries, and authoritative world data. It must not assume a specific game genre.
 
+Authoritative spatial state uses double-precision global positions. Regions provide local float coordinate frames for simulation, and rendering derives camera-relative float positions from global world truth. Region, streaming-cell, and simulation-island ownership do not replace persistent entity identity.
+
 ### Simulation
 
 Owns world rules, materials, interactions, simulation scheduling, fidelity policy, and communication between simulation domains.
