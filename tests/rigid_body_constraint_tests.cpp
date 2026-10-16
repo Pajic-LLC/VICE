@@ -9,8 +9,10 @@ namespace {
 
 using namespace vice;
 
+constexpr float fixed_step_seconds = 1.0F / 120.0F;
+
 void step(rigid_body::Domain& domain, const std::size_t count) {
-    simulation::Coordinator coordinator{1.0 / 120.0};
+    simulation::Coordinator coordinator{fixed_step_seconds};
     assert(coordinator.register_domain(domain));
     for (std::size_t index = 0; index < count; ++index) {
         coordinator.step();
@@ -274,7 +276,7 @@ void test_hinge_motor_controls() {
     joint.max_angle = 1.2F;
     joint.motor.mode = rigid_body::ConstraintMotorMode::velocity;
     joint.motor.target_angular_velocity = 1.5F;
-    joint.motor.max_torque = 80.0F;
+    joint.motor.max_torque = 4000.0F;
     assert(domain->create_constraint(joint));
 
     step(*domain, 40U);
@@ -287,6 +289,7 @@ void test_hinge_motor_controls() {
     assert(std::abs(velocity_body->angular_velocity.y) > 0.50F);
     assert(std::isfinite(state->motor_impulse));
     assert(state->motor_impulse >= 0.0F);
+    assert(state->motor_impulse <= joint.motor.max_torque * fixed_step_seconds + 0.05F);
 
     rigid_body::HingeMotorDesc invalid_motor;
     invalid_motor.mode = rigid_body::ConstraintMotorMode::velocity;
@@ -299,7 +302,7 @@ void test_hinge_motor_controls() {
     position_motor.target_angle = -0.5F;
     position_motor.drive_spring.frequency_hz = 4.0F;
     position_motor.drive_spring.damping_ratio = 1.0F;
-    position_motor.max_torque = 120.0F;
+    position_motor.max_torque = 6000.0F;
     assert(domain->set_hinge_motor(joint.id, position_motor));
     assert(!domain->set_slider_motor(joint.id, rigid_body::SliderMotorDesc{}));
 
@@ -313,6 +316,7 @@ void test_hinge_motor_controls() {
     assert(std::isfinite(state->angular_impulse));
     assert(std::isfinite(state->limit_impulse));
     assert(std::isfinite(state->motor_impulse));
+    assert(state->motor_impulse <= position_motor.max_torque * fixed_step_seconds + 0.05F);
 
     assert(domain->destroy_constraint(joint.id));
     assert(domain->destroy_body(door));
@@ -325,7 +329,7 @@ void test_slider_motor_controls() {
 
     const simulation::ParticipantId anchor{61};
     const simulation::ParticipantId carriage{62};
-    create_box(*domain, anchor, rigid_body::MotionType::static_body, math::Vec3{0.0F, 0.0F, 0.0F});
+    create_box(*domain, anchor, rigid_body::MotionType::static_body, math::Vec3{0.0F, 0.0F, 2.0F});
     create_box(*domain, carriage, rigid_body::MotionType::dynamic_body, math::Vec3{0.0F, 0.0F, 0.0F});
 
     rigid_body::SliderConstraintDesc joint;
@@ -337,7 +341,7 @@ void test_slider_motor_controls() {
     joint.max_position = 2.0F;
     joint.motor.mode = rigid_body::ConstraintMotorMode::velocity;
     joint.motor.target_velocity = 1.0F;
-    joint.motor.max_force = 100.0F;
+    joint.motor.max_force = 2000.0F;
     assert(domain->create_constraint(joint));
 
     step(*domain, 40U);
@@ -349,13 +353,14 @@ void test_slider_motor_controls() {
     assert(state->coordinate.has_value());
     assert(std::abs(velocity_body->linear_velocity.x) > 0.30F);
     assert(std::isfinite(state->motor_impulse));
+    assert(state->motor_impulse <= joint.motor.max_force * fixed_step_seconds + 0.05F);
 
     rigid_body::SliderMotorDesc position_motor;
     position_motor.mode = rigid_body::ConstraintMotorMode::position;
     position_motor.target_position = -0.75F;
     position_motor.drive_spring.frequency_hz = 4.0F;
     position_motor.drive_spring.damping_ratio = 1.0F;
-    position_motor.max_force = 160.0F;
+    position_motor.max_force = 4000.0F;
     assert(domain->set_slider_motor(joint.id, position_motor));
 
     step(*domain, 240U);
@@ -366,6 +371,7 @@ void test_slider_motor_controls() {
     assert(std::abs(*state->coordinate - position_motor.target_position) < 0.18F);
     assert(std::isfinite(state->linear_impulse));
     assert(std::isfinite(state->angular_impulse));
+    assert(state->motor_impulse <= position_motor.max_force * fixed_step_seconds + 0.05F);
 
     assert(domain->destroy_constraint(joint.id));
     assert(domain->destroy_body(carriage));
@@ -380,9 +386,9 @@ void test_breakable_constraints() {
     const simulation::ParticipantId payload_a{72};
     const simulation::ParticipantId anchor_b{73};
     const simulation::ParticipantId payload_b{74};
-    create_box(*domain, anchor_a, rigid_body::MotionType::static_body, math::Vec3{-2.0F, 3.0F, 0.0F});
+    create_box(*domain, anchor_a, rigid_body::MotionType::static_body, math::Vec3{-2.0F, 3.0F, 2.0F});
     create_box(*domain, payload_a, rigid_body::MotionType::dynamic_body, math::Vec3{-2.0F, 3.0F, 0.0F});
-    create_box(*domain, anchor_b, rigid_body::MotionType::static_body, math::Vec3{2.0F, 3.0F, 0.0F});
+    create_box(*domain, anchor_b, rigid_body::MotionType::static_body, math::Vec3{2.0F, 3.0F, 2.0F});
     create_box(*domain, payload_b, rigid_body::MotionType::dynamic_body, math::Vec3{2.0F, 3.0F, 0.0F});
 
     rigid_body::FixedConstraintDesc invalid;
