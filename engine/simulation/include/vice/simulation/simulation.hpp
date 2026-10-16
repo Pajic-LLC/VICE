@@ -92,7 +92,7 @@ public:
     [[nodiscard]] virtual std::string_view name() const noexcept = 0;
     [[nodiscard]] virtual Fidelity fidelity() const noexcept = 0;
     virtual void set_fidelity(Fidelity fidelity) noexcept = 0;
-    virtual bool step(const StepContext& context, InteractionEmitter& emitter) = 0;
+    virtual void step(const StepContext& context, InteractionEmitter& emitter) = 0;
 };
 
 struct DomainDebugSnapshot {
@@ -121,7 +121,7 @@ public:
         return step_index_;
     }
 
-    bool step();
+    void step();
 
     [[nodiscard]] std::vector<DomainDebugSnapshot> debug_snapshots() const;
 
