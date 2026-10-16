@@ -35,7 +35,9 @@ add_library(
   vice_rigid_body
   STATIC
     src/collision_asset.cpp
-    src/jolt_rigid_body.cpp
+    src/jolt_job_system.cpp
+    src/jolt_rigid_body_jobs.cpp
+    src/scheduler_domain.cpp
 )
 
 add_library(VICE::RigidBody ALIAS vice_rigid_body)
@@ -51,12 +53,18 @@ target_include_directories(
 target_link_libraries(
   vice_rigid_body
   PUBLIC
+    VICE::Jobs
     VICE::Math
     VICE::Simulation
   PRIVATE
     Jolt
 )
 target_compile_features(vice_rigid_body PUBLIC cxx_std_23)
+if(MSVC)
+  target_compile_options(vice_rigid_body PRIVATE /GR-)
+else()
+  target_compile_options(vice_rigid_body PRIVATE -fno-rtti)
+endif()
 vice_enable_warnings(vice_rigid_body)
 
 add_library(

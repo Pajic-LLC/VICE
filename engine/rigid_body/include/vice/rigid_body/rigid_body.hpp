@@ -15,6 +15,10 @@
 #include <variant>
 #include <vector>
 
+namespace vice::jobs {
+class Scheduler;
+}
+
 namespace vice::rigid_body {
 
 inline constexpr std::string_view material_property_owner = "rigid_body";
@@ -207,6 +211,13 @@ public:
     [[nodiscard]] static std::unique_ptr<Domain> create(
         simulation::DomainId id,
         std::string name,
+        DomainConfig config = {}
+    );
+
+    [[nodiscard]] static std::unique_ptr<Domain> create(
+        simulation::DomainId id,
+        std::string name,
+        jobs::Scheduler& scheduler,
         DomainConfig config = {}
     );
 

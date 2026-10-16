@@ -97,6 +97,12 @@ if(VICE_ENABLE_JOLT_RIGID_BODY)
   vice_enable_warnings(vice_rigid_body_tests)
   add_test(NAME vice_rigid_body_tests COMMAND vice_rigid_body_tests)
 
+  add_executable(vice_rigid_body_jobs_tests rigid_body_jobs_tests.cpp)
+  target_link_libraries(vice_rigid_body_jobs_tests PRIVATE VICE::RigidBody)
+  target_compile_features(vice_rigid_body_jobs_tests PRIVATE cxx_std_23)
+  vice_enable_warnings(vice_rigid_body_jobs_tests)
+  add_test(NAME vice_rigid_body_jobs_tests COMMAND vice_rigid_body_jobs_tests)
+
   add_executable(vice_rigid_body_contact_tests rigid_body_contact_tests.cpp)
   target_link_libraries(vice_rigid_body_contact_tests PRIVATE VICE::RigidBody)
   target_compile_features(vice_rigid_body_contact_tests PRIVATE cxx_std_23)

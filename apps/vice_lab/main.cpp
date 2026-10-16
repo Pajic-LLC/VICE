@@ -536,7 +536,7 @@ int main() {
     constexpr vice::simulation::ParticipantId floor_participant{1};
     constexpr vice::simulation::ParticipantId cube_participant{2};
 
-    auto rigid_domain = vice::rigid_body::Domain::create(rigid_domain_id, "lab.rigid");
+    auto rigid_domain = vice::rigid_body::Domain::create(rigid_domain_id, "lab.rigid", jobs);
     vice::simulation::Coordinator simulation{1.0 / 120.0};
     vice::simulation::EntityBindings bindings;
     if (!rigid_domain || !simulation.register_domain(*rigid_domain)) {
