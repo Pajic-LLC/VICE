@@ -255,6 +255,10 @@ int main() {
         assert(saw_persisted);
         assert(saw_ended);
 
+        for (int step = 0; step < 120; ++step) {
+            coordinator.step();
+        }
+
         const auto visitor_state = domain->body_state(visitor_participant);
         assert(visitor_state.has_value());
         assert(visitor_state->position.y < 0.0F);
