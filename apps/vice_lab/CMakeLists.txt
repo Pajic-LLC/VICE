@@ -1,4 +1,4 @@
-add_executable(vice_lab main.cpp)
+add_executable(vice_lab app.cpp)
 
 target_link_libraries(
   vice_lab
