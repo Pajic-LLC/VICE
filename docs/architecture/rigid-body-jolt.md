@@ -12,9 +12,10 @@ Public VICE rigid-body headers expose:
 - static or dynamic motion
 - box half extents
 - local position and orientation
-- linear velocity
+- linear and angular velocity
 - friction and restitution
 - VICE-owned body state
+- explicit active-state control
 
 Orientation uses `vice::math::Quat`. Solver state is converted to VICE math types before it leaves the backend.
 
@@ -24,19 +25,35 @@ No Jolt type, body ID, shape type, allocator, job system, or physics system appe
 
 ## World ownership
 
-`VICE::World` owns entity identity and lifetime.
+`VICE::World` owns entity identity, persistent identity, global position, and spatial region ownership.
 
-`VICE::SimulationWorld` can associate a world entity with a rigid participant, but the association does not own the solver body. Destroying a solver body does not destroy the world entity. Destroying a world entity does not implicitly call into Jolt.
+`VICE::SimulationWorld` associates a world entity with a simulation participant. The association does not own the solver body.
 
-Lifecycle coordination stays explicit so streamed worlds and specialized simulation domains can choose their own teardown policy later.
+`VICE::RigidBodyWorld` coordinates rigid-body creation and transfer for World entities without making the local rigid-body backend depend on World.
+
+Destroying a solver body does not destroy the world entity. Destroying a world entity does not implicitly call into Jolt.
 
 ## Coordinates
 
-This first backend uses Jolt single-precision positions for local simulation state.
+Jolt uses single-precision positions for each local rigid simulation domain.
 
-That does not define VICE large-world coordinates. Global world positions, simulation islands, and camera-relative rendering remain separate work. A future large-world layer can move entities between local simulation spaces without changing persistent world identity.
+VICE World stores authoritative global positions in double precision. A registered rigid region provides the local coordinate frame for one rigid simulation island. `VICE::RigidBodyWorld` converts between global World positions and local Jolt positions during creation, synchronization, and island handoff.
+
+Rendering remains camera-relative and does not consume large global float coordinates.
 
 VICE math uses column-major matrices and column vectors. The rigid-body pose is converted to a VICE model matrix before rendering.
+
+## Island handoff
+
+A bridge-created box can move from one registered rigid simulation island to another without changing its World entity handle or persistent ID.
+
+The bridge reads the live source body pose and velocities, computes the current double-precision global position, creates the target body in the target local coordinate frame, moves the simulation binding, updates World spatial state, and only then removes the source body.
+
+The transfer preserves box extents, motion type, orientation, linear velocity, angular velocity, friction, restitution, and active state.
+
+Target-side failures roll back without destroying the source body.
+
+See `docs/architecture/rigid-body-island-handoff.md` for the exact transfer contract.
 
 ## Fixed stepping
 
@@ -64,7 +81,7 @@ Jolt supports replacing this with an engine job-system implementation. A later p
 
 ## Current scope
 
-The first slice supports static and dynamic boxes, body destruction, position and orientation reads, linear velocity reads, fixed-step simulation, world binding, and a solver-driven rendering proof.
+The rigid-body foundation supports static and dynamic boxes, body destruction, position and orientation reads, linear and angular velocity reads, active-state control, fixed-step simulation, world binding, a solver-driven rendering proof, World position synchronization, and box handoff between local rigid simulation islands.
 
 It does not yet define:
 
@@ -73,8 +90,7 @@ It does not yet define:
 - constraints
 - queries and casts
 - continuous collision policy
-- sleeping policy
 - material mapping
 - solver serialization
-- simulation islands
-- large-world handoff
+- constraint transfer between islands
+- contact-cache or warm-start transfer between islands

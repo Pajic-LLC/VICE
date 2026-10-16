@@ -32,6 +32,7 @@ struct BoxBodyDesc {
     math::Vec3 position{};
     math::Quat orientation{};
     math::Vec3 linear_velocity{};
+    math::Vec3 angular_velocity{};
     float friction = 0.5F;
     float restitution = 0.0F;
 };
@@ -40,6 +41,7 @@ struct BodyState {
     math::Vec3 position{};
     math::Quat orientation{};
     math::Vec3 linear_velocity{};
+    math::Vec3 angular_velocity{};
     bool active = false;
 };
 
@@ -69,6 +71,7 @@ public:
 
     bool create_box(const BoxBodyDesc& desc);
     bool destroy_body(simulation::ParticipantId participant);
+    bool set_body_active(simulation::ParticipantId participant, bool active);
 
     [[nodiscard]] std::optional<BodyState> body_state(
         simulation::ParticipantId participant
