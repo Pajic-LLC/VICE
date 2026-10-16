@@ -17,6 +17,7 @@ Public VICE rigid-body headers expose:
 - hinge and slider motor controls
 - constraint break thresholds and break events
 - static or dynamic motion
+- discrete or continuous body motion quality
 - local position and orientation
 - linear and angular velocity
 - friction and restitution
@@ -27,9 +28,9 @@ Public VICE rigid-body headers expose:
 - VICE-owned material-pair interaction rules
 - VICE-owned raycast, overlap, and sweep results
 
-Orientation uses `vice::math::Quat`. Solver state, contact data, query results, constraint state, solver impulse measurements, and constraint break events are converted to VICE types before they leave the backend.
+Orientation uses `vice::math::Quat`. Solver state, contact data, query results, constraint state, solver impulse measurements, constraint break events, and body motion quality are converted to VICE types before they leave the backend.
 
-No Jolt type, body ID, constraint pointer, shape pointer, allocator, job system, contact manifold, collector, mesh tree, sub-shape ID, or physics system appears in the public API.
+No Jolt type, body ID, constraint pointer, shape pointer, allocator, job system, contact manifold, collector, mesh tree, sub-shape ID, motion-quality enum, or physics system appears in the public API.
 
 `ParticipantId` maps to a native Jolt `BodyID` only inside the backend implementation. `ShapeId` maps to a native Jolt shape only inside one rigid domain. `ConstraintId` is stored as native constraint user data and resolves to the live native constraint only inside the backend.
 
@@ -61,7 +62,7 @@ A bridge-created box can move from one registered rigid simulation island to ano
 
 The bridge reads the live source body pose and velocities, computes the current double-precision global position, creates the target body in the target local coordinate frame, moves the simulation binding, updates World spatial state, and only then removes the source body.
 
-The transfer preserves box extents, motion type, orientation, linear velocity, angular velocity, material ID, trigger state, fallback friction and restitution, and active state.
+The transfer preserves box extents, motion type, live motion quality, orientation, linear velocity, angular velocity, material ID, trigger state, fallback friction and restitution, and active state.
 
 A material used by the transferred body must be registered in the target rigid domain. If the target domain is not prepared for that material, target body creation fails and the source side stays intact.
 
@@ -96,6 +97,22 @@ The spatial query set is closest-hit raycast, all-hit shape overlap, and closest
 VICE defines public query ordering independently from native collector order. Equal ray or sweep fractions resolve by participant ID. Overlaps are reduced to one hit per participant and sorted by participant ID.
 
 See `docs/architecture/rigid-body-shapes-queries.md` for the base shape and query contract, `docs/architecture/rigid-body-game-geometry.md` for authored geometry rules, and `docs/architecture/0013-heightfield-terrain.md` for terrain.
+
+## Motion quality and continuous collision
+
+Dynamic rigid bodies use VICE-owned `MotionQuality` values. `discrete` is the default and uses normal per-step collision detection. `continuous` requests swept collision handling for fast linear travel.
+
+The current Jolt backend maps VICE continuous mode to Jolt linear-cast motion quality. The body shape is cast from the start of the step toward its integrated destination using the starting rotation. This prevents the common case where a fast small body moves completely through thin collision geometry between discrete samples.
+
+Continuous mode is more expensive, so VICE does not enable it automatically based on speed. Gameplay and higher-level systems select it for bodies that need the stronger collision policy. `Domain::set_body_motion_quality` can change the mode at runtime for dynamic bodies, and `BodyState` reports the current VICE mode.
+
+Static bodies reject continuous mode. Invalid motion-quality values are also rejected rather than silently mapped to a backend default.
+
+The current continuous mode is not full rotational continuous collision detection. A long, thin body with high angular velocity can still tunnel because the current backend sweep uses the rotation from the start of the step.
+
+Continuous bodies can also produce short-lived contact candidates in multi-body sweep edge cases. Completed body state is the authoritative physical result until VICE defines a stronger post-solve contact graph.
+
+See `docs/architecture/0014-continuous-collision.md` for the exact contract, limitations, handoff behavior, and regression policy.
 
 ## Constraints
 
@@ -176,11 +193,11 @@ The collision import handoff accepts importer-produced mesh data, source transfo
 
 ## Current scope
 
-The rigid-body foundation supports static and dynamic primitive and convex bodies, reusable box, sphere, capsule, convex hull, triangle mesh, heightfield, and compound shape resources, authored level geometry, general bodies created from registered shapes, body destruction, pose and velocity reads, active-state control, fixed-step simulation, VICE-owned parallel job scheduling, shared material mapping, material-pair response overrides, collision events, trigger events, raycasts, shape overlaps, shape sweeps, fixed, hinge, slider, and distance constraints, frequency/damping limit springs, hinge and slider motors, runtime motor retargeting, force and torque caps, completed-step constraint impulse reporting, deterministic breakable constraints, offline collision cooking, collision import handoff, world binding, a solver-driven rendering proof, World position synchronization, and box handoff between local rigid simulation islands when no live constraint blocks the transfer.
+The rigid-body foundation supports static and dynamic primitive and convex bodies, reusable box, sphere, capsule, convex hull, triangle mesh, heightfield, and compound shape resources, authored level geometry, general bodies created from registered shapes, body destruction, pose and velocity reads, active-state control, per-body discrete and continuous motion quality, runtime motion-quality switching, fixed-step simulation, VICE-owned parallel job scheduling, shared material mapping, material-pair response overrides, collision events, trigger events, raycasts, shape overlaps, shape sweeps, fixed, hinge, slider, and distance constraints, frequency/damping limit springs, hinge and slider motors, runtime motor retargeting, force and torque caps, completed-step constraint impulse reporting, deterministic breakable constraints, offline collision cooking, collision import handoff, world binding, a solver-driven rendering proof, World position synchronization, and box handoff between local rigid simulation islands when no live constraint blocks the transfer.
 
 It does not yet define:
 
-- continuous collision policy
+- full rotational continuous collision detection
 - exact post-solve contact impulse reporting
 - solver or constraint serialization
 - general registered-shape transfer between large-world islands
