@@ -7,6 +7,7 @@
 #include <Jolt/Core/TempAllocator.h>
 #include <Jolt/Physics/Body/BodyCreationSettings.h>
 #include <Jolt/Physics/Collision/BroadPhase/BroadPhaseLayer.h>
+#include <Jolt/Physics/Collision/CastResult.h>
 #include <Jolt/Physics/Collision/CollideShape.h>
 #include <Jolt/Physics/Collision/CollisionCollectorImpl.h>
 #include <Jolt/Physics/Collision/ContactListener.h>
@@ -30,6 +31,7 @@
 #include <string>
 #include <thread>
 #include <tuple>
+#include <type_traits>
 #include <unordered_map>
 #include <utility>
 #include <variant>
@@ -175,11 +177,8 @@ public:
     return JPH::Vec3{value.x, value.y, value.z};
 }
 
-[[nodiscard]] math::Vec3 vec3(const JPH::Vec3 value) noexcept {
-    return math::Vec3{value.GetX(), value.GetY(), value.GetZ()};
-}
-
-[[nodiscard]] math::Vec3 vec3(const JPH::RVec3 value) noexcept {
+template <typename Vector>
+[[nodiscard]] math::Vec3 vec3(const Vector& value) noexcept {
     return math::Vec3{
         static_cast<float>(value.GetX()),
         static_cast<float>(value.GetY()),
@@ -981,7 +980,7 @@ bool Domain::create_body(const BodyDesc& desc) {
     if (!desc.shape || shape == nullptr) {
         return false;
     }
-    return impl_->create_native_body(desc, shape->shape.Get(), desc.shape);
+    return impl_->create_native_body(desc, shape->shape.GetPtr(), desc.shape);
 }
 
 bool Domain::create_box(const BoxBodyDesc& desc) {
@@ -1146,7 +1145,7 @@ std::vector<QueryHit> Domain::overlap_shape(
     JPH::AllHitCollisionCollector<JPH::CollideShapeCollector> collector;
     JPH::CollideShapeSettings settings;
     impl_->physics_system_.GetNarrowPhaseQuery().CollideShape(
-        shape->shape.Get(),
+        shape->shape.GetPtr(),
         JPH::Vec3::sOne(),
         JPH::RMat44::sRotationTranslation(
             jolt_quaternion(pose.orientation),
@@ -1221,7 +1220,7 @@ std::optional<QueryHit> Domain::sweep_shape(
 
     const JPH::Vec3 displacement = query_displacement(desc.direction, desc.max_distance);
     const JPH::RShapeCast cast{
-        shape->shape.Get(),
+        shape->shape.GetPtr(),
         JPH::Vec3::sOne(),
         JPH::RMat44::sRotationTranslation(
             jolt_quaternion(desc.pose.orientation),
