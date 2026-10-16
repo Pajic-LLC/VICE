@@ -32,6 +32,7 @@ add_subdirectory(engine/math)
 add_subdirectory(engine/jobs)
 add_subdirectory(engine/platform)
 add_subdirectory(engine/world)
+add_subdirectory(engine/simulation)
 add_subdirectory(engine/render)
 
 if(VICE_BUILD_TOOLS)
