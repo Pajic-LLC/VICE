@@ -69,6 +69,7 @@ int main() {
     rigid_body::BoxBodyDesc box;
     box.participant = participant;
     box.motion = rigid_body::MotionType::dynamic_body;
+    box.motion_quality = rigid_body::MotionQuality::continuous;
     box.half_extents = math::Vec3{0.5F, 0.75F, 1.0F};
     box.orientation = math::Quat{0.0F, 0.0F, 0.2588190451F, 0.9659258263F};
     box.linear_velocity = math::Vec3{5.0F, 0.0F, 0.0F};
@@ -87,6 +88,7 @@ int main() {
     assert(near(initial->position.y, 8.0F));
     assert(near(initial->linear_velocity.x, 5.0F));
     assert(near(initial->angular_velocity.y, 1.5F));
+    assert(initial->motion_quality == rigid_body::MotionQuality::continuous);
 
     for (int step = 0; step < 60; ++step) {
         coordinator.step();
@@ -99,6 +101,7 @@ int main() {
     assert(live_source->linear_velocity.x > 1.0F);
     assert(std::abs(live_source->angular_velocity.y) > 0.1F);
     assert(std::isfinite(live_source->orientation.x));
+    assert(live_source->motion_quality == rigid_body::MotionQuality::continuous);
 
     const auto blocker = world.create_entity();
     assert(bindings.bind(world, coordinator, blocker, domain_b->id(), participant));
@@ -146,6 +149,7 @@ int main() {
     assert(near(transferred->linear_velocity.x, live_source->linear_velocity.x));
     assert(near(transferred->angular_velocity.y, live_source->angular_velocity.y));
     assert(transferred->active);
+    assert(transferred->motion_quality == rigid_body::MotionQuality::continuous);
 
     for (int step = 0; step < 12; ++step) {
         coordinator.step();
@@ -167,10 +171,14 @@ int main() {
         static_cast<double>(after_target_steps->position.y)
     ));
 
+    assert(domain_b->set_body_motion_quality(participant, rigid_body::MotionQuality::discrete));
+    assert(domain_b->body_state(participant)->motion_quality ==
+        rigid_body::MotionQuality::discrete);
     assert(domain_b->set_body_active(participant, false));
     const auto inactive_source = domain_b->body_state(participant);
     assert(inactive_source.has_value());
     assert(!inactive_source->active);
+    assert(inactive_source->motion_quality == rigid_body::MotionQuality::discrete);
 
     assert(bridge.handoff_box(world, coordinator, bindings, entity, region_a));
     assert(world.alive(entity));
@@ -186,6 +194,7 @@ int main() {
     assert(!transferred_back->active);
     assert(near(transferred_back->linear_velocity.x, inactive_source->linear_velocity.x));
     assert(near(transferred_back->angular_velocity.y, inactive_source->angular_velocity.y));
+    assert(transferred_back->motion_quality == rigid_body::MotionQuality::discrete);
 
     assert(bindings.unbind(entity, domain_a->id()));
     assert(domain_a->destroy_body(participant));
