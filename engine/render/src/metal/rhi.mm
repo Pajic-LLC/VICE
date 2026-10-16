@@ -313,7 +313,7 @@ public:
         if (source == nullptr) {
             return false;
         }
-        std::memcpy(data.data(), source + static_cast<std::size_t>(offset), data.size());
+        std::memcpy(data.data(), source + static_cast<std::size_t>(offset), data.data(), data.size());
         return true;
     }
 
@@ -1583,7 +1583,9 @@ public:
         id<MTLDepthStencilState> depth_state = nil;
         if (desc.depth.format != TextureFormat::undefined) {
             MTLDepthStencilDescriptor* depth_desc = [[MTLDepthStencilDescriptor alloc] init];
-            depth_desc.depthCompareFunction = comparison_func(desc.depth.compare);
+            depth_desc.depthCompareFunction = desc.depth.test_enabled
+                ? comparison_func(desc.depth.compare)
+                : MTLCompareFunctionAlways;
             depth_desc.depthWriteEnabled = desc.depth.write_enabled;
             depth_state = [device_ newDepthStencilStateWithDescriptor:depth_desc];
             if (depth_state == nil) {
