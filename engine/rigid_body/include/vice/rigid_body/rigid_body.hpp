@@ -30,6 +30,7 @@ struct BoxBodyDesc {
     MotionType motion = MotionType::dynamic_body;
     math::Vec3 half_extents{0.5F, 0.5F, 0.5F};
     math::Vec3 position{};
+    math::Quat orientation{};
     math::Vec3 linear_velocity{};
     float friction = 0.5F;
     float restitution = 0.0F;
@@ -37,6 +38,7 @@ struct BoxBodyDesc {
 
 struct BodyState {
     math::Vec3 position{};
+    math::Quat orientation{};
     math::Vec3 linear_velocity{};
     bool active = false;
 };
