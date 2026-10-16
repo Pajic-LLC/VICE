@@ -51,6 +51,7 @@ public:
     bool remove_region(RegionId region);
     bool set_region_fidelity(RegionId region, RegionFidelity fidelity);
     [[nodiscard]] std::optional<RegionDesc> region(RegionId region) const noexcept;
+    [[nodiscard]] std::optional<RegionId> region_containing(GlobalPosition position) const noexcept;
 
     bool set_spatial_state(EntityId entity, SpatialState state);
     bool clear_spatial_state(EntityId entity);
