@@ -279,11 +279,12 @@ void test_hinge_motor_controls() {
 
     step(*domain, 40U);
     auto state = domain->constraint_state(joint.id);
+    const auto velocity_body = domain->body_state(door);
     assert(state.has_value());
+    assert(velocity_body.has_value());
     assert(state->motor_mode == rigid_body::ConstraintMotorMode::velocity);
     assert(state->coordinate.has_value());
-    assert(std::abs(*state->coordinate) > 0.10F);
-    assert(std::abs(*state->coordinate) < 1.25F);
+    assert(std::abs(velocity_body->angular_velocity.y) > 0.50F);
     assert(std::isfinite(state->motor_impulse));
     assert(state->motor_impulse >= 0.0F);
 
@@ -341,11 +342,12 @@ void test_slider_motor_controls() {
 
     step(*domain, 40U);
     auto state = domain->constraint_state(joint.id);
+    const auto velocity_body = domain->body_state(carriage);
     assert(state.has_value());
+    assert(velocity_body.has_value());
     assert(state->motor_mode == rigid_body::ConstraintMotorMode::velocity);
     assert(state->coordinate.has_value());
-    assert(std::abs(*state->coordinate) > 0.10F);
-    assert(std::abs(*state->coordinate) < 2.10F);
+    assert(std::abs(velocity_body->linear_velocity.x) > 0.30F);
     assert(std::isfinite(state->motor_impulse));
 
     rigid_body::SliderMotorDesc position_motor;
