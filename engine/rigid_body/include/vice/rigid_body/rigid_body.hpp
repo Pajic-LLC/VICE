@@ -47,6 +47,16 @@ struct ConstraintId {
     constexpr auto operator<=>(const ConstraintId&) const noexcept = default;
 };
 
+struct CharacterId {
+    std::uint32_t value = 0;
+
+    [[nodiscard]] constexpr explicit operator bool() const noexcept {
+        return value != 0;
+    }
+
+    constexpr auto operator<=>(const CharacterId&) const noexcept = default;
+};
+
 enum class MotionType : std::uint8_t {
     static_body,
     dynamic_body,
@@ -55,6 +65,13 @@ enum class MotionType : std::uint8_t {
 enum class MotionQuality : std::uint8_t {
     discrete,
     continuous,
+};
+
+enum class CharacterGroundState : std::uint8_t {
+    grounded,
+    steep_ground,
+    unsupported,
+    airborne,
 };
 
 enum class ContactPhase : std::uint8_t {
@@ -247,6 +264,35 @@ using ShapeDesc = std::variant<
     CompoundShapeDesc
 >;
 
+struct CharacterCollisionFilter {
+    bool include_static = true;
+    bool include_dynamic = true;
+    bool include_triggers = false;
+};
+
+struct CharacterDesc {
+    CharacterId id{};
+    math::Vec3 position{};
+    float height = 1.8F;
+    float radius = 0.3F;
+    float mass = 70.0F;
+    float max_strength = 100.0F;
+    float max_slope_angle = 0.872664626F;
+    float step_height = 0.4F;
+    float stick_to_floor_distance = 0.5F;
+    CharacterCollisionFilter collision{};
+};
+
+struct CharacterState {
+    math::Vec3 position{};
+    math::Vec3 velocity{};
+    CharacterGroundState ground_state = CharacterGroundState::airborne;
+    math::Vec3 ground_normal{};
+    math::Vec3 ground_velocity{};
+    std::optional<simulation::ParticipantId> ground_participant;
+    std::optional<simulation::MaterialId> ground_material;
+};
+
 struct BodyDesc {
     simulation::ParticipantId participant{};
     simulation::MaterialId material{};
@@ -398,6 +444,12 @@ public:
         MotionQuality motion_quality
     );
 
+    bool create_character(const CharacterDesc& desc);
+    bool destroy_character(CharacterId id);
+    bool set_character_horizontal_velocity(CharacterId id, math::Vec3 velocity);
+    bool request_character_jump(CharacterId id, float speed);
+    bool set_character_position(CharacterId id, math::Vec3 position);
+
     bool create_constraint(const FixedConstraintDesc& desc);
     bool create_constraint(const HingeConstraintDesc& desc);
     bool create_constraint(const SliderConstraintDesc& desc);
@@ -409,6 +461,10 @@ public:
 
     [[nodiscard]] std::optional<BodyState> body_state(
         simulation::ParticipantId participant
+    ) const noexcept;
+
+    [[nodiscard]] std::optional<CharacterState> character_state(
+        CharacterId id
     ) const noexcept;
 
     [[nodiscard]] std::optional<ConstraintState> constraint_state(
@@ -433,6 +489,7 @@ public:
     [[nodiscard]] std::span<const ContactEvent> contact_events() const noexcept;
     [[nodiscard]] std::span<const ConstraintBreakEvent> constraint_break_events() const noexcept;
     [[nodiscard]] std::size_t body_count() const noexcept;
+    [[nodiscard]] std::size_t character_count() const noexcept;
     [[nodiscard]] std::size_t material_count() const noexcept;
     [[nodiscard]] std::size_t material_interaction_count() const noexcept;
     [[nodiscard]] std::size_t shape_count() const noexcept;
@@ -440,10 +497,15 @@ public:
 
 private:
     class Impl;
+    struct CharacterRuntimeState;
     struct ConstraintRuntimeState;
 
     explicit Domain(std::unique_ptr<Impl> impl) noexcept;
     void step_unchecked(
+        const simulation::StepContext& context,
+        simulation::InteractionEmitter& emitter
+    );
+    void step_constraints_unchecked(
         const simulation::StepContext& context,
         simulation::InteractionEmitter& emitter
     );
@@ -455,6 +517,7 @@ private:
     ) const noexcept;
 
     std::unique_ptr<Impl> impl_;
+    std::shared_ptr<CharacterRuntimeState> character_runtime_;
     std::shared_ptr<ConstraintRuntimeState> constraint_runtime_;
 };
 

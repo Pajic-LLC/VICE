@@ -24,4 +24,9 @@ using ViceJobSystem = ::vice::rigid_body::detail::JoltJobSystem;
 #undef JobSystemThreadPool
 
 #include "jolt_motion_quality.inc"
+
+#define step step_constraints_unchecked
 #include "jolt_constraints.inc"
+#undef step
+
+#include "jolt_character.inc"
