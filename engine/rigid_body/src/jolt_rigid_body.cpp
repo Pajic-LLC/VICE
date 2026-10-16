@@ -7,10 +7,17 @@
 #include <Jolt/Core/TempAllocator.h>
 #include <Jolt/Physics/Body/BodyCreationSettings.h>
 #include <Jolt/Physics/Collision/BroadPhase/BroadPhaseLayer.h>
+#include <Jolt/Physics/Collision/CollideShape.h>
+#include <Jolt/Physics/Collision/CollisionCollectorImpl.h>
 #include <Jolt/Physics/Collision/ContactListener.h>
 #include <Jolt/Physics/Collision/EstimateCollisionResponse.h>
+#include <Jolt/Physics/Collision/NarrowPhaseQuery.h>
+#include <Jolt/Physics/Collision/RayCast.h>
 #include <Jolt/Physics/Collision/Shape/BoxShape.h>
+#include <Jolt/Physics/Collision/Shape/CapsuleShape.h>
+#include <Jolt/Physics/Collision/Shape/SphereShape.h>
 #include <Jolt/Physics/Collision/Shape/SubShapeIDPair.h>
+#include <Jolt/Physics/Collision/ShapeCast.h>
 #include <Jolt/Physics/PhysicsSystem.h>
 
 #include <algorithm>
@@ -142,6 +149,10 @@ public:
         std::isfinite(value.z) && std::isfinite(value.w);
 }
 
+[[nodiscard]] float length_squared(const math::Vec3 value) noexcept {
+    return value.x * value.x + value.y * value.y + value.z * value.z;
+}
+
 [[nodiscard]] float length_squared(const math::Quat value) noexcept {
     return value.x * value.x + value.y * value.y + value.z * value.z + value.w * value.w;
 }
@@ -153,6 +164,37 @@ public:
         value.y * inverse_length,
         value.z * inverse_length,
         value.w * inverse_length,
+    };
+}
+
+[[nodiscard]] JPH::RVec3 jolt_position(const math::Vec3 value) noexcept {
+    return JPH::RVec3{value.x, value.y, value.z};
+}
+
+[[nodiscard]] JPH::Vec3 jolt_vector(const math::Vec3 value) noexcept {
+    return JPH::Vec3{value.x, value.y, value.z};
+}
+
+[[nodiscard]] math::Vec3 vec3(const JPH::Vec3 value) noexcept {
+    return math::Vec3{value.GetX(), value.GetY(), value.GetZ()};
+}
+
+[[nodiscard]] math::Vec3 vec3(const JPH::RVec3 value) noexcept {
+    return math::Vec3{
+        static_cast<float>(value.GetX()),
+        static_cast<float>(value.GetY()),
+        static_cast<float>(value.GetZ()),
+    };
+}
+
+[[nodiscard]] math::Vec3 point_between(
+    const JPH::RVec3 point1,
+    const JPH::RVec3 point2
+) noexcept {
+    return math::Vec3{
+        static_cast<float>((point1.GetX() + point2.GetX()) * 0.5),
+        static_cast<float>((point1.GetY() + point2.GetY()) * 0.5),
+        static_cast<float>((point1.GetZ() + point2.GetZ()) * 0.5),
     };
 }
 
@@ -174,6 +216,33 @@ public:
 
 [[nodiscard]] bool valid_nonnegative(const float value) noexcept {
     return std::isfinite(value) && value >= 0.0F;
+}
+
+[[nodiscard]] bool valid_positive(const float value) noexcept {
+    return std::isfinite(value) && value > 0.0F;
+}
+
+[[nodiscard]] bool valid_pose(const math::Vec3 position, const math::Quat orientation) noexcept {
+    return finite(position) && finite(orientation) && length_squared(orientation) > 0.000001F;
+}
+
+[[nodiscard]] bool valid_query_direction(
+    const math::Vec3 direction,
+    const float max_distance
+) noexcept {
+    return finite(direction) && valid_positive(max_distance) && length_squared(direction) > 0.000001F;
+}
+
+[[nodiscard]] JPH::Vec3 query_displacement(
+    const math::Vec3 direction,
+    const float max_distance
+) noexcept {
+    const float inverse_length = 1.0F / std::sqrt(length_squared(direction));
+    return JPH::Vec3{
+        direction.x * inverse_length * max_distance,
+        direction.y * inverse_length * max_distance,
+        direction.z * inverse_length * max_distance,
+    };
 }
 
 [[nodiscard]] bool read_material_scalar(
@@ -208,19 +277,50 @@ public:
     return true;
 }
 
-[[nodiscard]] math::Vec3 vec3(const JPH::Vec3 value) noexcept {
-    return math::Vec3{value.GetX(), value.GetY(), value.GetZ()};
-}
-
-[[nodiscard]] math::Vec3 point_between(
-    const JPH::RVec3 point1,
-    const JPH::RVec3 point2
-) noexcept {
-    return math::Vec3{
-        static_cast<float>((point1.GetX() + point2.GetX()) * 0.5),
-        static_cast<float>((point1.GetY() + point2.GetY()) * 0.5),
-        static_cast<float>((point1.GetZ() + point2.GetZ()) * 0.5),
-    };
+[[nodiscard]] std::optional<JPH::RefConst<JPH::Shape>> create_shape(
+    const ShapeDesc& desc
+) {
+    return std::visit(
+        [](const auto& shape_desc) -> std::optional<JPH::RefConst<JPH::Shape>> {
+            using T = std::decay_t<decltype(shape_desc)>;
+            if constexpr (std::is_same_v<T, BoxShapeDesc>) {
+                if (!finite(shape_desc.half_extents) ||
+                    shape_desc.half_extents.x <= 0.0F ||
+                    shape_desc.half_extents.y <= 0.0F ||
+                    shape_desc.half_extents.z <= 0.0F) {
+                    return std::nullopt;
+                }
+                JPH::BoxShapeSettings settings{jolt_vector(shape_desc.half_extents)};
+                const auto result = settings.Create();
+                if (result.HasError()) {
+                    return std::nullopt;
+                }
+                return JPH::RefConst<JPH::Shape>{result.Get()};
+            } else if constexpr (std::is_same_v<T, SphereShapeDesc>) {
+                if (!valid_positive(shape_desc.radius)) {
+                    return std::nullopt;
+                }
+                JPH::SphereShapeSettings settings{shape_desc.radius};
+                const auto result = settings.Create();
+                if (result.HasError()) {
+                    return std::nullopt;
+                }
+                return JPH::RefConst<JPH::Shape>{result.Get()};
+            } else {
+                if (!std::isfinite(shape_desc.half_height) || shape_desc.half_height < 0.0F ||
+                    !valid_positive(shape_desc.radius)) {
+                    return std::nullopt;
+                }
+                JPH::CapsuleShapeSettings settings{shape_desc.half_height, shape_desc.radius};
+                const auto result = settings.Create();
+                if (result.HasError()) {
+                    return std::nullopt;
+                }
+                return JPH::RefConst<JPH::Shape>{result.Get()};
+            }
+        },
+        desc
+    );
 }
 
 } // namespace
@@ -230,6 +330,7 @@ public:
     struct BodyEntry {
         simulation::ParticipantId participant{};
         simulation::MaterialId material{};
+        ShapeId shape{};
         MotionType motion = MotionType::dynamic_body;
         bool trigger = false;
         JPH::BodyID body_id{};
@@ -247,6 +348,12 @@ public:
         MaterialInteraction interaction;
     };
 
+    struct ShapeEntry {
+        ShapeId id{};
+        ShapeDesc desc;
+        JPH::RefConst<JPH::Shape> shape;
+    };
+
     class ContactListener final : public JPH::ContactListener {
     public:
         explicit ContactListener(Impl& owner) noexcept : owner_{owner} {}
@@ -257,13 +364,7 @@ public:
             const JPH::ContactManifold& manifold,
             JPH::ContactSettings& settings
         ) override {
-            owner_.on_contact(
-                ContactPhase::began,
-                body1,
-                body2,
-                manifold,
-                settings
-            );
+            owner_.on_contact(ContactPhase::began, body1, body2, manifold, settings);
         }
 
         void OnContactPersisted(
@@ -272,13 +373,7 @@ public:
             const JPH::ContactManifold& manifold,
             JPH::ContactSettings& settings
         ) override {
-            owner_.on_contact(
-                ContactPhase::persisted,
-                body1,
-                body2,
-                manifold,
-                settings
-            );
+            owner_.on_contact(ContactPhase::persisted, body1, body2, manifold, settings);
         }
 
         void OnContactRemoved(const JPH::SubShapeIDPair& pair) override {
@@ -349,6 +444,17 @@ public:
         return found != bodies_.end() ? &*found : nullptr;
     }
 
+    [[nodiscard]] const BodyEntry* find(const JPH::BodyID id) const noexcept {
+        const auto found = std::find_if(
+            bodies_.begin(),
+            bodies_.end(),
+            [id](const BodyEntry& body) {
+                return body.body_id == id;
+            }
+        );
+        return found != bodies_.end() ? &*found : nullptr;
+    }
+
     [[nodiscard]] const MaterialEntry* find_material(
         const simulation::MaterialId id
     ) const noexcept {
@@ -360,6 +466,17 @@ public:
             }
         );
         return found != materials_.end() ? &*found : nullptr;
+    }
+
+    [[nodiscard]] const ShapeEntry* find_shape(const ShapeId id) const noexcept {
+        const auto found = std::find_if(
+            shapes_.begin(),
+            shapes_.end(),
+            [id](const ShapeEntry& shape) {
+                return shape.id == id;
+            }
+        );
+        return found != shapes_.end() ? &*found : nullptr;
     }
 
     [[nodiscard]] static std::pair<simulation::MaterialId, simulation::MaterialId>
@@ -391,6 +508,26 @@ public:
         return found != material_interactions_.end() ? &*found : nullptr;
     }
 
+    [[nodiscard]] bool accepts_query_body(
+        const BodyEntry& body,
+        const QueryFilter& filter
+    ) const noexcept {
+        if (filter.exclude_participant.has_value() &&
+            body.participant == *filter.exclude_participant) {
+            return false;
+        }
+        if (body.trigger && !filter.include_triggers) {
+            return false;
+        }
+        if (body.motion == MotionType::static_body && !filter.include_static) {
+            return false;
+        }
+        if (body.motion == MotionType::dynamic_body && !filter.include_dynamic) {
+            return false;
+        }
+        return true;
+    }
+
     void apply_material_interaction(
         const BodyEntry& first,
         const BodyEntry& second,
@@ -406,6 +543,67 @@ public:
         if (interaction->interaction.restitution.has_value()) {
             settings.mCombinedRestitution = *interaction->interaction.restitution;
         }
+    }
+
+    bool create_native_body(
+        const BodyDesc& desc,
+        const JPH::Shape* shape,
+        const ShapeId shape_id
+    ) {
+        const auto* material = desc.material ? find_material(desc.material) : nullptr;
+        if (!desc.participant || find(desc.participant) != nullptr || shape == nullptr ||
+            (desc.material && material == nullptr) ||
+            !valid_pose(desc.position, desc.orientation) ||
+            !finite(desc.linear_velocity) || !finite(desc.angular_velocity) ||
+            !valid_nonnegative(desc.friction) || !valid_nonnegative(desc.restitution)) {
+            return false;
+        }
+
+        const bool dynamic = desc.motion == MotionType::dynamic_body;
+        JPH::BodyCreationSettings body_settings{
+            shape,
+            jolt_position(desc.position),
+            jolt_quaternion(desc.orientation),
+            dynamic ? JPH::EMotionType::Dynamic : JPH::EMotionType::Static,
+            dynamic ? object_layers::dynamic_body : object_layers::static_body
+        };
+        body_settings.mFriction = material != nullptr && material->friction.has_value()
+            ? *material->friction
+            : desc.friction;
+        body_settings.mRestitution = material != nullptr && material->restitution.has_value()
+            ? *material->restitution
+            : desc.restitution;
+        body_settings.mIsSensor = desc.trigger;
+        body_settings.mUserData = desc.participant.value;
+        if (dynamic) {
+            body_settings.mLinearVelocity = jolt_vector(desc.linear_velocity);
+            body_settings.mAngularVelocity = jolt_vector(desc.angular_velocity);
+        }
+
+        auto& body_interface = physics_system_.GetBodyInterface();
+        const JPH::BodyID body_id = body_interface.CreateAndAddBody(
+            body_settings,
+            dynamic ? JPH::EActivation::Activate : JPH::EActivation::DontActivate
+        );
+        if (body_id.IsInvalid()) {
+            return false;
+        }
+
+        try {
+            bodies_.push_back(BodyEntry{
+                .participant = desc.participant,
+                .material = desc.material,
+                .shape = shape_id,
+                .motion = desc.motion,
+                .trigger = desc.trigger,
+                .body_id = body_id,
+            });
+        } catch (...) {
+            body_interface.RemoveBody(body_id);
+            body_interface.DestroyBody(body_id);
+            throw;
+        }
+        return true;
     }
 
     void on_contact(
@@ -569,6 +767,7 @@ public:
     std::vector<BodyEntry> bodies_;
     std::vector<MaterialEntry> materials_;
     std::vector<MaterialInteractionEntry> material_interactions_;
+    std::vector<ShapeEntry> shapes_;
     std::mutex contact_mutex_;
     std::unordered_map<JPH::SubShapeIDPair, ContactEvent> contact_cache_;
     std::vector<ContactEvent> pending_contact_events_;
@@ -736,82 +935,79 @@ bool Domain::remove_material_interaction(
     return true;
 }
 
+bool Domain::register_shape(const ShapeId id, const ShapeDesc& desc) {
+    if (!id || impl_->find_shape(id) != nullptr) {
+        return false;
+    }
+    const auto shape = create_shape(desc);
+    if (!shape.has_value()) {
+        return false;
+    }
+    impl_->shapes_.push_back(Impl::ShapeEntry{
+        .id = id,
+        .desc = desc,
+        .shape = *shape,
+    });
+    return true;
+}
+
+bool Domain::unregister_shape(const ShapeId id) {
+    const auto found = std::find_if(
+        impl_->shapes_.begin(),
+        impl_->shapes_.end(),
+        [id](const Impl::ShapeEntry& entry) {
+            return entry.id == id;
+        }
+    );
+    if (found == impl_->shapes_.end()) {
+        return false;
+    }
+    const bool in_use = std::any_of(
+        impl_->bodies_.begin(),
+        impl_->bodies_.end(),
+        [id](const Impl::BodyEntry& body) {
+            return body.shape == id;
+        }
+    );
+    if (in_use) {
+        return false;
+    }
+    impl_->shapes_.erase(found);
+    return true;
+}
+
+bool Domain::create_body(const BodyDesc& desc) {
+    const auto* shape = impl_->find_shape(desc.shape);
+    if (!desc.shape || shape == nullptr) {
+        return false;
+    }
+    return impl_->create_native_body(desc, shape->shape.Get(), desc.shape);
+}
+
 bool Domain::create_box(const BoxBodyDesc& desc) {
-    const float orientation_length_squared = length_squared(desc.orientation);
-    const auto* material = desc.material ? impl_->find_material(desc.material) : nullptr;
-    if (!desc.participant || impl_->find(desc.participant) != nullptr ||
-        (desc.material && material == nullptr) ||
-        !finite(desc.half_extents) || !finite(desc.position) || !finite(desc.orientation) ||
-        !finite(desc.linear_velocity) || !finite(desc.angular_velocity) ||
-        orientation_length_squared <= 0.000001F ||
-        desc.half_extents.x <= 0.0F || desc.half_extents.y <= 0.0F ||
-        desc.half_extents.z <= 0.0F || !valid_nonnegative(desc.friction) ||
-        !valid_nonnegative(desc.restitution)) {
+    if (!finite(desc.half_extents) || desc.half_extents.x <= 0.0F ||
+        desc.half_extents.y <= 0.0F || desc.half_extents.z <= 0.0F) {
         return false;
     }
 
-    JPH::BoxShapeSettings shape_settings{JPH::Vec3{
-        desc.half_extents.x,
-        desc.half_extents.y,
-        desc.half_extents.z
-    }};
-    const auto shape_result = shape_settings.Create();
+    JPH::BoxShapeSettings settings{jolt_vector(desc.half_extents)};
+    const auto shape_result = settings.Create();
     if (shape_result.HasError()) {
         return false;
     }
 
-    const bool dynamic = desc.motion == MotionType::dynamic_body;
-    JPH::BodyCreationSettings body_settings{
-        shape_result.Get(),
-        JPH::RVec3{desc.position.x, desc.position.y, desc.position.z},
-        jolt_quaternion(desc.orientation),
-        dynamic ? JPH::EMotionType::Dynamic : JPH::EMotionType::Static,
-        dynamic ? object_layers::dynamic_body : object_layers::static_body
-    };
-    body_settings.mFriction = material != nullptr && material->friction.has_value()
-        ? *material->friction
-        : desc.friction;
-    body_settings.mRestitution = material != nullptr && material->restitution.has_value()
-        ? *material->restitution
-        : desc.restitution;
-    body_settings.mIsSensor = desc.trigger;
-    body_settings.mUserData = desc.participant.value;
-    if (dynamic) {
-        body_settings.mLinearVelocity = JPH::Vec3{
-            desc.linear_velocity.x,
-            desc.linear_velocity.y,
-            desc.linear_velocity.z
-        };
-        body_settings.mAngularVelocity = JPH::Vec3{
-            desc.angular_velocity.x,
-            desc.angular_velocity.y,
-            desc.angular_velocity.z
-        };
-    }
-
-    auto& body_interface = impl_->physics_system_.GetBodyInterface();
-    const JPH::BodyID body_id = body_interface.CreateAndAddBody(
-        body_settings,
-        dynamic ? JPH::EActivation::Activate : JPH::EActivation::DontActivate
-    );
-    if (body_id.IsInvalid()) {
-        return false;
-    }
-
-    try {
-        impl_->bodies_.push_back(Impl::BodyEntry{
-            .participant = desc.participant,
-            .material = desc.material,
-            .motion = desc.motion,
-            .trigger = desc.trigger,
-            .body_id = body_id,
-        });
-    } catch (...) {
-        body_interface.RemoveBody(body_id);
-        body_interface.DestroyBody(body_id);
-        throw;
-    }
-    return true;
+    BodyDesc body;
+    body.participant = desc.participant;
+    body.material = desc.material;
+    body.motion = desc.motion;
+    body.position = desc.position;
+    body.orientation = desc.orientation;
+    body.linear_velocity = desc.linear_velocity;
+    body.angular_velocity = desc.angular_velocity;
+    body.friction = desc.friction;
+    body.restitution = desc.restitution;
+    body.trigger = desc.trigger;
+    return impl_->create_native_body(body, shape_result.Get(), ShapeId{});
 }
 
 bool Domain::destroy_body(const simulation::ParticipantId participant) {
@@ -869,29 +1065,210 @@ std::optional<BodyState> Domain::body_state(
     const JPH::Vec3 velocity = body_interface.GetLinearVelocity(body->body_id);
     const JPH::Vec3 angular_velocity = body_interface.GetAngularVelocity(body->body_id);
     return BodyState{
-        .position = math::Vec3{
-            static_cast<float>(position.GetX()),
-            static_cast<float>(position.GetY()),
-            static_cast<float>(position.GetZ()),
-        },
+        .position = vec3(position),
         .orientation = math::Quat{
             orientation.GetX(),
             orientation.GetY(),
             orientation.GetZ(),
             orientation.GetW(),
         },
-        .linear_velocity = math::Vec3{
-            velocity.GetX(),
-            velocity.GetY(),
-            velocity.GetZ(),
-        },
-        .angular_velocity = math::Vec3{
-            angular_velocity.GetX(),
-            angular_velocity.GetY(),
-            angular_velocity.GetZ(),
-        },
+        .linear_velocity = vec3(velocity),
+        .angular_velocity = vec3(angular_velocity),
         .active = body_interface.IsActive(body->body_id),
     };
+}
+
+std::optional<QueryHit> Domain::raycast(
+    const RaycastDesc& desc,
+    const QueryFilter& filter
+) const {
+    if (!finite(desc.origin) || !valid_query_direction(desc.direction, desc.max_distance) ||
+        (!filter.include_static && !filter.include_dynamic)) {
+        return std::nullopt;
+    }
+
+    const JPH::Vec3 displacement = query_displacement(desc.direction, desc.max_distance);
+    const JPH::RRayCast ray{jolt_position(desc.origin), displacement};
+    JPH::AllHitCollisionCollector<JPH::CastRayCollector> collector;
+    impl_->physics_system_.GetNarrowPhaseQuery().CastRay(
+        ray,
+        JPH::RayCastSettings{},
+        collector
+    );
+
+    const auto& body_interface = impl_->physics_system_.GetBodyInterface();
+    std::optional<QueryHit> closest;
+    for (const auto& hit : collector.mHits) {
+        const auto* body = impl_->find(hit.mBodyID);
+        if (body == nullptr || !impl_->accepts_query_body(*body, filter)) {
+            continue;
+        }
+        if (!std::isfinite(hit.mFraction) || hit.mFraction < 0.0F || hit.mFraction > 1.0F) {
+            continue;
+        }
+
+        const JPH::RVec3 point = ray.GetPointOnRay(hit.mFraction);
+        const auto transformed = body_interface.GetTransformedShape(hit.mBodyID);
+        const JPH::Vec3 normal = transformed.GetWorldSpaceSurfaceNormal(
+            hit.mSubShapeID2,
+            point
+        );
+        QueryHit converted{
+            .participant = body->participant,
+            .material = body->material,
+            .trigger = body->trigger,
+            .point = vec3(point),
+            .normal = vec3(normal),
+            .distance = hit.mFraction * desc.max_distance,
+            .fraction = hit.mFraction,
+            .penetration_depth = 0.0F,
+        };
+        if (!closest.has_value() || converted.fraction < closest->fraction ||
+            (converted.fraction == closest->fraction &&
+                converted.participant.value < closest->participant.value)) {
+            closest = converted;
+        }
+    }
+    return closest;
+}
+
+std::vector<QueryHit> Domain::overlap_shape(
+    const ShapePose& pose,
+    const QueryFilter& filter
+) const {
+    std::vector<QueryHit> results;
+    const auto* shape = impl_->find_shape(pose.shape);
+    if (shape == nullptr || !pose.shape || !valid_pose(pose.position, pose.orientation) ||
+        (!filter.include_static && !filter.include_dynamic)) {
+        return results;
+    }
+
+    JPH::AllHitCollisionCollector<JPH::CollideShapeCollector> collector;
+    JPH::CollideShapeSettings settings;
+    impl_->physics_system_.GetNarrowPhaseQuery().CollideShape(
+        shape->shape.Get(),
+        JPH::Vec3::sOne(),
+        JPH::RMat44::sRotationTranslation(
+            jolt_quaternion(pose.orientation),
+            jolt_position(pose.position)
+        ),
+        settings,
+        JPH::RVec3::sZero(),
+        collector
+    );
+
+    for (const auto& hit : collector.mHits) {
+        const auto* body = impl_->find(hit.mBodyID2);
+        if (body == nullptr || !impl_->accepts_query_body(*body, filter)) {
+            continue;
+        }
+        JPH::Vec3 normal = -hit.mPenetrationAxis;
+        if (normal.LengthSq() > 0.000001F) {
+            normal = normal.Normalized();
+        } else {
+            normal = JPH::Vec3::sZero();
+        }
+        results.push_back(QueryHit{
+            .participant = body->participant,
+            .material = body->material,
+            .trigger = body->trigger,
+            .point = vec3(hit.mContactPointOn2),
+            .normal = vec3(normal),
+            .distance = 0.0F,
+            .fraction = 0.0F,
+            .penetration_depth = std::max(0.0F, hit.mPenetrationDepth),
+        });
+    }
+
+    std::sort(
+        results.begin(),
+        results.end(),
+        [](const QueryHit& left, const QueryHit& right) {
+            if (left.participant.value != right.participant.value) {
+                return left.participant.value < right.participant.value;
+            }
+            if (left.penetration_depth != right.penetration_depth) {
+                return left.penetration_depth > right.penetration_depth;
+            }
+            return std::tuple{left.point.x, left.point.y, left.point.z} <
+                std::tuple{right.point.x, right.point.y, right.point.z};
+        }
+    );
+    results.erase(
+        std::unique(
+            results.begin(),
+            results.end(),
+            [](const QueryHit& left, const QueryHit& right) {
+                return left.participant == right.participant;
+            }
+        ),
+        results.end()
+    );
+    return results;
+}
+
+std::optional<QueryHit> Domain::sweep_shape(
+    const SweepDesc& desc,
+    const QueryFilter& filter
+) const {
+    const auto* shape = impl_->find_shape(desc.pose.shape);
+    if (shape == nullptr || !desc.pose.shape ||
+        !valid_pose(desc.pose.position, desc.pose.orientation) ||
+        !valid_query_direction(desc.direction, desc.max_distance) ||
+        (!filter.include_static && !filter.include_dynamic)) {
+        return std::nullopt;
+    }
+
+    const JPH::Vec3 displacement = query_displacement(desc.direction, desc.max_distance);
+    const JPH::RShapeCast cast{
+        shape->shape.Get(),
+        JPH::Vec3::sOne(),
+        JPH::RMat44::sRotationTranslation(
+            jolt_quaternion(desc.pose.orientation),
+            jolt_position(desc.pose.position)
+        ),
+        displacement
+    };
+    JPH::AllHitCollisionCollector<JPH::CastShapeCollector> collector;
+    impl_->physics_system_.GetNarrowPhaseQuery().CastShape(
+        cast,
+        JPH::ShapeCastSettings{},
+        JPH::RVec3::sZero(),
+        collector
+    );
+
+    std::optional<QueryHit> closest;
+    for (const auto& hit : collector.mHits) {
+        const auto* body = impl_->find(hit.mBodyID2);
+        if (body == nullptr || !impl_->accepts_query_body(*body, filter)) {
+            continue;
+        }
+        if (!std::isfinite(hit.mFraction) || hit.mFraction < 0.0F || hit.mFraction > 1.0F) {
+            continue;
+        }
+        JPH::Vec3 normal = -hit.mPenetrationAxis;
+        if (normal.LengthSq() > 0.000001F) {
+            normal = normal.Normalized();
+        } else {
+            normal = JPH::Vec3::sZero();
+        }
+        QueryHit converted{
+            .participant = body->participant,
+            .material = body->material,
+            .trigger = body->trigger,
+            .point = vec3(hit.mContactPointOn2),
+            .normal = vec3(normal),
+            .distance = hit.mFraction * desc.max_distance,
+            .fraction = hit.mFraction,
+            .penetration_depth = std::max(0.0F, hit.mPenetrationDepth),
+        };
+        if (!closest.has_value() || converted.fraction < closest->fraction ||
+            (converted.fraction == closest->fraction &&
+                converted.participant.value < closest->participant.value)) {
+            closest = converted;
+        }
+    }
+    return closest;
 }
 
 std::span<const ContactEvent> Domain::contact_events() const noexcept {
@@ -908,6 +1285,10 @@ std::size_t Domain::material_count() const noexcept {
 
 std::size_t Domain::material_interaction_count() const noexcept {
     return impl_->material_interactions_.size();
+}
+
+std::size_t Domain::shape_count() const noexcept {
+    return impl_->shapes_.size();
 }
 
 } // namespace vice::rigid_body
