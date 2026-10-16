@@ -3,6 +3,7 @@
 #include <vice/world/entity.hpp>
 #include <vice/world/persistent_id.hpp>
 #include <vice/world/relation.hpp>
+#include <vice/world/spatial.hpp>
 
 #include <cstddef>
 #include <cstdint>
@@ -30,9 +31,25 @@ public:
     bool remove_relation(const Relation& relation);
     [[nodiscard]] std::span<const Relation> relations() const noexcept;
 
+    bool register_region(RegionDesc region);
+    bool remove_region(RegionId region);
+    bool set_region_fidelity(RegionId region, RegionFidelity fidelity);
+    [[nodiscard]] std::optional<RegionDesc> region(RegionId region) const noexcept;
+
+    bool set_spatial_state(EntityId entity, SpatialState state);
+    bool clear_spatial_state(EntityId entity);
+    bool set_local_position(EntityId entity, LocalPosition position);
+    bool handoff_spatial(EntityId entity, RegionId target_region);
+
+    [[nodiscard]] std::optional<SpatialState> spatial_state(EntityId entity) const noexcept;
+    [[nodiscard]] std::optional<LocalPosition> local_position(EntityId entity) const noexcept;
+    [[nodiscard]] std::optional<SimulationIslandId> simulation_island(EntityId entity) const noexcept;
+    [[nodiscard]] std::optional<StreamingCellId> streaming_cell(EntityId entity) const noexcept;
+
 private:
     struct Slot {
         PersistentId persistent_id;
+        std::optional<SpatialState> spatial_state;
         std::uint32_t generation = 1;
         bool alive = false;
     };
@@ -43,6 +60,7 @@ private:
     std::vector<std::uint32_t> free_indices_;
     std::unordered_map<PersistentId, EntityId, PersistentIdHash> persistent_lookup_;
     std::vector<Relation> relations_;
+    std::unordered_map<RegionId, RegionDesc, RegionIdHash> regions_;
     std::size_t entity_count_ = 0;
 };
 
