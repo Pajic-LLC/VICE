@@ -313,7 +313,7 @@ public:
         if (source == nullptr) {
             return false;
         }
-        std::memcpy(data.data(), source + static_cast<std::size_t>(offset), data.data(), data.size());
+        std::memcpy(data.data(), source + static_cast<std::size_t>(offset), data.size());
         return true;
     }
 
