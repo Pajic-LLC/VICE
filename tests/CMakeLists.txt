@@ -66,6 +66,12 @@ target_compile_features(vice_world_tests PRIVATE cxx_std_23)
 vice_enable_warnings(vice_world_tests)
 add_test(NAME vice_world_tests COMMAND vice_world_tests)
 
+add_executable(vice_world_primitives_tests world_primitives_tests.cpp)
+target_link_libraries(vice_world_primitives_tests PRIVATE VICE::World)
+target_compile_features(vice_world_primitives_tests PRIVATE cxx_std_23)
+vice_enable_warnings(vice_world_primitives_tests)
+add_test(NAME vice_world_primitives_tests COMMAND vice_world_primitives_tests)
+
 add_executable(vice_simulation_tests simulation_tests.cpp)
 target_link_libraries(vice_simulation_tests PRIVATE VICE::Simulation)
 target_compile_features(vice_simulation_tests PRIVATE cxx_std_23)

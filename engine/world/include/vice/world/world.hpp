@@ -1,8 +1,11 @@
 #pragma once
 
+#include <vice/world/component.hpp>
 #include <vice/world/entity.hpp>
 #include <vice/world/persistent_id.hpp>
 #include <vice/world/relation.hpp>
+#include <vice/world/resource.hpp>
+#include <vice/world/snapshot.hpp>
 #include <vice/world/spatial.hpp>
 
 #include <cstddef>
@@ -27,6 +30,19 @@ public:
     [[nodiscard]] std::optional<PersistentId> persistent_id(EntityId entity) const noexcept;
     [[nodiscard]] std::optional<EntityId> find(PersistentId persistent_id) const noexcept;
 
+    bool register_component_type(ComponentTypeDesc type);
+    bool unregister_component_type(ComponentTypeId id);
+    [[nodiscard]] std::optional<ComponentTypeDesc> component_type(ComponentTypeId id) const;
+    [[nodiscard]] std::size_t component_type_count() const noexcept;
+
+    [[nodiscard]] ResourceHandle create_resource();
+    [[nodiscard]] std::optional<ResourceHandle> create_resource(ResourceId resource_id);
+    bool destroy_resource(ResourceHandle resource);
+    [[nodiscard]] bool resource_alive(ResourceHandle resource) const noexcept;
+    [[nodiscard]] std::size_t resource_count() const noexcept;
+    [[nodiscard]] std::optional<ResourceId> resource_id(ResourceHandle resource) const noexcept;
+    [[nodiscard]] std::optional<ResourceHandle> find_resource(ResourceId resource_id) const noexcept;
+
     bool add_relation(Relation relation);
     bool remove_relation(const Relation& relation);
     [[nodiscard]] std::span<const Relation> relations() const noexcept;
@@ -46,6 +62,9 @@ public:
     [[nodiscard]] std::optional<SimulationIslandId> simulation_island(EntityId entity) const noexcept;
     [[nodiscard]] std::optional<StreamingCellId> streaming_cell(EntityId entity) const noexcept;
 
+    [[nodiscard]] WorldSnapshot snapshot() const;
+    bool restore(const WorldSnapshot& snapshot);
+
 private:
     struct Slot {
         PersistentId persistent_id;
@@ -54,14 +73,26 @@ private:
         bool alive = false;
     };
 
+    struct ResourceSlot {
+        ResourceId resource_id;
+        std::uint32_t generation = 1;
+        bool alive = false;
+    };
+
     [[nodiscard]] EntityId allocate(PersistentId persistent_id);
+    [[nodiscard]] ResourceHandle allocate_resource(ResourceId resource_id);
 
     std::vector<Slot> slots_;
     std::vector<std::uint32_t> free_indices_;
     std::unordered_map<PersistentId, EntityId, PersistentIdHash> persistent_lookup_;
+    std::unordered_map<ComponentTypeId, ComponentTypeDesc, ComponentTypeIdHash> component_types_;
+    std::vector<ResourceSlot> resource_slots_;
+    std::vector<std::uint32_t> free_resource_indices_;
+    std::unordered_map<ResourceId, ResourceHandle, ResourceIdHash> resource_lookup_;
     std::vector<Relation> relations_;
     std::unordered_map<RegionId, RegionDesc, RegionIdHash> regions_;
     std::size_t entity_count_ = 0;
+    std::size_t resource_count_ = 0;
 };
 
 } // namespace vice::world

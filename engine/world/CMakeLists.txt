@@ -2,6 +2,7 @@ add_library(
   vice_world
   STATIC
     src/persistent_id.cpp
+    src/primitives.cpp
     src/world.cpp
 )
 
