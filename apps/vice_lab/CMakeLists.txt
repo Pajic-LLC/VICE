@@ -1,6 +1,15 @@
 add_executable(vice_lab main.cpp)
 
-target_link_libraries(vice_lab PRIVATE VICE::Core VICE::Jobs VICE::Platform VICE::Render VICE::World)
+target_link_libraries(
+  vice_lab
+  PRIVATE
+    VICE::Core
+    VICE::Math
+    VICE::Jobs
+    VICE::Platform
+    VICE::Render
+    VICE::World
+)
 target_compile_features(vice_lab PRIVATE cxx_std_23)
 target_compile_definitions(
   vice_lab
@@ -22,13 +31,13 @@ if(VICE_BUILD_TOOLS)
   endif()
 
   if(_vice_lab_shader_target)
-    set(_vice_lab_shader_source "${PROJECT_SOURCE_DIR}/assets/shaders/vice_lab_triangle.hlsl")
+    set(_vice_lab_shader_source "${PROJECT_SOURCE_DIR}/assets/shaders/vice_lab_cube.hlsl")
 
     vice_add_cooked_shader(
-      NAME vice_lab_triangle_vs_shader
+      NAME vice_lab_cube_vs_shader
       INPUT "${_vice_lab_shader_source}"
-      OUTPUT "${CMAKE_BINARY_DIR}/cooked/vice_lab_triangle_vs"
-      ENTRY vice_triangle_vs
+      OUTPUT "${CMAKE_BINARY_DIR}/cooked/vice_lab_cube_vs"
+      ENTRY vice_cube_vs
       STAGE vertex
       TARGET "${_vice_lab_shader_target}"
       DXC "${_vice_lab_dxc}"
@@ -36,10 +45,10 @@ if(VICE_BUILD_TOOLS)
     )
 
     vice_add_cooked_shader(
-      NAME vice_lab_triangle_fs_shader
+      NAME vice_lab_cube_fs_shader
       INPUT "${_vice_lab_shader_source}"
-      OUTPUT "${CMAKE_BINARY_DIR}/cooked/vice_lab_triangle_fs"
-      ENTRY vice_triangle_fs
+      OUTPUT "${CMAKE_BINARY_DIR}/cooked/vice_lab_cube_fs"
+      ENTRY vice_cube_fs
       STAGE fragment
       TARGET "${_vice_lab_shader_target}"
       DXC "${_vice_lab_dxc}"
@@ -49,8 +58,8 @@ if(VICE_BUILD_TOOLS)
     add_custom_target(
       vice_lab_shaders
       DEPENDS
-        vice_lab_triangle_vs_shader
-        vice_lab_triangle_fs_shader
+        vice_lab_cube_vs_shader
+        vice_lab_cube_fs_shader
     )
     add_dependencies(vice_lab vice_lab_shaders)
 

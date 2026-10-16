@@ -156,6 +156,20 @@ constexpr std::uint64_t maximum_constant_buffer_size = 64U * 1024U;
     return DXGI_FORMAT_UNKNOWN;
 }
 
+[[nodiscard]] D3D12_COMPARISON_FUNC comparison_func(const CompareOp compare) noexcept {
+    switch (compare) {
+    case CompareOp::never: return D3D12_COMPARISON_FUNC_NEVER;
+    case CompareOp::less: return D3D12_COMPARISON_FUNC_LESS;
+    case CompareOp::less_equal: return D3D12_COMPARISON_FUNC_LESS_EQUAL;
+    case CompareOp::greater: return D3D12_COMPARISON_FUNC_GREATER;
+    case CompareOp::greater_equal: return D3D12_COMPARISON_FUNC_GREATER_EQUAL;
+    case CompareOp::equal: return D3D12_COMPARISON_FUNC_EQUAL;
+    case CompareOp::not_equal: return D3D12_COMPARISON_FUNC_NOT_EQUAL;
+    case CompareOp::always: return D3D12_COMPARISON_FUNC_ALWAYS;
+    }
+    return D3D12_COMPARISON_FUNC_ALWAYS;
+}
+
 [[nodiscard]] DXGI_FORMAT texture_resource_format(const TextureDesc& desc) noexcept {
     if (desc.format == TextureFormat::depth32_float && has_usage(desc.usage, TextureUsage::sampled)) {
         return DXGI_FORMAT_R32_TYPELESS;
@@ -330,8 +344,9 @@ public:
     D3D12Texture(
         const TextureDesc& desc,
         ComPtr<ID3D12Resource> resource,
-        const D3D12_RESOURCE_STATES state
-    ) : desc_{desc}, resource_{std::move(resource)}, state_{state} {
+        const D3D12_RESOURCE_STATES state,
+        ComPtr<ID3D12DescriptorHeap> dsv_heap = {}
+    ) : desc_{desc}, resource_{std::move(resource)}, state_{state}, dsv_heap_{std::move(dsv_heap)} {
         desc_.debug_name = {};
     }
 
@@ -345,11 +360,18 @@ public:
     [[nodiscard]] ID3D12Resource* native() const noexcept { return resource_.Get(); }
     [[nodiscard]] D3D12_RESOURCE_STATES state() const noexcept { return state_; }
     void set_state(const D3D12_RESOURCE_STATES state) noexcept { state_ = state; }
+    [[nodiscard]] bool has_dsv() const noexcept { return dsv_heap_ != nullptr; }
+    [[nodiscard]] D3D12_CPU_DESCRIPTOR_HANDLE dsv() const noexcept {
+        return dsv_heap_ != nullptr
+            ? dsv_heap_->GetCPUDescriptorHandleForHeapStart()
+            : D3D12_CPU_DESCRIPTOR_HANDLE{};
+    }
 
 private:
     TextureDesc desc_{};
     ComPtr<ID3D12Resource> resource_;
     D3D12_RESOURCE_STATES state_ = D3D12_RESOURCE_STATE_COMMON;
+    ComPtr<ID3D12DescriptorHeap> dsv_heap_;
 };
 
 class D3D12Sampler final : public Sampler {
@@ -392,14 +414,16 @@ public:
         ComPtr<ID3D12PipelineState> state,
         const PrimitiveTopology topology,
         D3D12RootSignatureResult root_layout,
-        std::vector<D3D12VertexStreamInfo> vertex_streams
+        std::vector<D3D12VertexStreamInfo> vertex_streams,
+        const DepthStateDesc depth
     ) : root_signature_{std::move(root_signature)}, state_{std::move(state)}, topology_{topology},
-        root_layout_{std::move(root_layout)}, vertex_streams_{std::move(vertex_streams)} {}
+        root_layout_{std::move(root_layout)}, vertex_streams_{std::move(vertex_streams)}, depth_{depth} {}
 
     [[nodiscard]] PrimitiveTopology topology() const noexcept override { return topology_; }
     [[nodiscard]] ID3D12RootSignature* root_signature() const noexcept { return root_signature_.Get(); }
     [[nodiscard]] ID3D12PipelineState* state() const noexcept { return state_.Get(); }
     [[nodiscard]] const D3D12RootSignatureResult& root_layout() const noexcept { return root_layout_; }
+    [[nodiscard]] const DepthStateDesc& depth() const noexcept { return depth_; }
     [[nodiscard]] std::size_t vertex_stream_count() const noexcept { return vertex_streams_.size(); }
     [[nodiscard]] const D3D12VertexStreamInfo* vertex_stream(const std::uint32_t slot) const noexcept {
         return slot < vertex_streams_.size() ? &vertex_streams_[slot] : nullptr;
@@ -416,6 +440,7 @@ private:
     PrimitiveTopology topology_ = PrimitiveTopology::triangle_list;
     D3D12RootSignatureResult root_layout_;
     std::vector<D3D12VertexStreamInfo> vertex_streams_;
+    DepthStateDesc depth_{};
 };
 
 class D3D12Swapchain final : public Swapchain {
@@ -786,13 +811,33 @@ public:
         if (d3d_swapchain == nullptr || d3d_swapchain->current_back_buffer() == nullptr) {
             return false;
         }
+
+        D3D12Texture* depth_texture = nullptr;
+        D3D12_CPU_DESCRIPTOR_HANDLE depth_handle{};
+        if (desc.depth_attachment != nullptr) {
+            depth_texture = dynamic_cast<D3D12Texture*>(desc.depth_attachment);
+            if (depth_texture == nullptr || depth_texture->format() != TextureFormat::depth32_float ||
+                !has_usage(depth_texture->usage(), TextureUsage::depth_attachment) ||
+                !depth_texture->has_dsv() || depth_texture->width() != d3d_swapchain->width() ||
+                depth_texture->height() != d3d_swapchain->height()) {
+                return false;
+            }
+            transition(*depth_texture, D3D12_RESOURCE_STATE_DEPTH_WRITE);
+            depth_handle = depth_texture->dsv();
+        }
+
         transition_back_buffer(
             d3d_swapchain->current_back_buffer(),
             D3D12_RESOURCE_STATE_PRESENT,
             D3D12_RESOURCE_STATE_RENDER_TARGET
         );
         const auto rtv = d3d_swapchain->current_rtv();
-        command_list_->OMSetRenderTargets(1, &rtv, FALSE, nullptr);
+        command_list_->OMSetRenderTargets(
+            1,
+            &rtv,
+            FALSE,
+            depth_texture != nullptr ? &depth_handle : nullptr
+        );
         if (desc.clear_color_attachment) {
             const FLOAT clear_color[4] = {
                 desc.clear_color.red,
@@ -801,6 +846,16 @@ public:
                 desc.clear_color.alpha
             };
             command_list_->ClearRenderTargetView(rtv, clear_color, 0, nullptr);
+        }
+        if (depth_texture != nullptr && desc.clear_depth_attachment) {
+            command_list_->ClearDepthStencilView(
+                depth_handle,
+                D3D12_CLEAR_FLAG_DEPTH,
+                desc.clear_depth,
+                0,
+                0,
+                nullptr
+            );
         }
         const D3D12_VIEWPORT viewport{
             0.0F,
@@ -819,6 +874,7 @@ public:
         command_list_->RSSetViewports(1, &viewport);
         command_list_->RSSetScissorRects(1, &scissor);
         active_swapchain_ = d3d_swapchain;
+        active_depth_texture_ = depth_texture;
         render_pass_active_ = true;
         reset_graphics_bindings();
         return true;
@@ -831,6 +887,11 @@ public:
         auto* d3d_pipeline = dynamic_cast<D3D12GraphicsPipeline*>(&pipeline);
         if (d3d_pipeline == nullptr || d3d_pipeline->state() == nullptr ||
             d3d_pipeline->root_signature() == nullptr) {
+            return false;
+        }
+        const auto& depth = d3d_pipeline->depth();
+        if (depth.format != TextureFormat::undefined &&
+            (active_depth_texture_ == nullptr || active_depth_texture_->format() != depth.format)) {
             return false;
         }
         command_list_->SetGraphicsRootSignature(d3d_pipeline->root_signature());
@@ -1061,6 +1122,7 @@ public:
             return false;
         }
         render_pass_active_ = false;
+        active_depth_texture_ = nullptr;
         reset_graphics_bindings();
         return true;
     }
@@ -1749,6 +1811,7 @@ private:
     D3D12GraphicsPipeline* active_pipeline_ = nullptr;
     D3D12Swapchain* active_swapchain_ = nullptr;
     D3D12Swapchain* present_swapchain_ = nullptr;
+    D3D12Texture* active_depth_texture_ = nullptr;
     std::uint64_t index_capacity_ = 0U;
     UINT resource_descriptor_size_ = 0;
     UINT sampler_descriptor_size_ = 0;
@@ -1865,6 +1928,11 @@ public:
             core::log(core::LogLevel::error, "VICE rejected an invalid texture description.");
             return nullptr;
         }
+        if (has_usage(desc.usage, TextureUsage::depth_attachment) &&
+            (desc.dimension != TextureDimension::d2 || desc.array_layers != 1U || desc.sample_count != 1U)) {
+            core::log(core::LogLevel::error, "Direct3D 12 depth attachments currently require one non-MSAA 2D layer.");
+            return nullptr;
+        }
         const bool size_supported =
             (desc.dimension == TextureDimension::d1 &&
                 desc.width <= capabilities_.max_texture_dimension_1d &&
@@ -1899,11 +1967,21 @@ public:
         native_desc.SampleDesc.Count = desc.sample_count;
         native_desc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
         native_desc.Flags = texture_flags(desc.usage);
+
+        D3D12_CLEAR_VALUE clear_value{};
+        const D3D12_CLEAR_VALUE* optimized_clear = nullptr;
+        if (has_usage(desc.usage, TextureUsage::depth_attachment)) {
+            clear_value.Format = DXGI_FORMAT_D32_FLOAT;
+            clear_value.DepthStencil.Depth = 1.0F;
+            clear_value.DepthStencil.Stencil = 0;
+            optimized_clear = &clear_value;
+        }
+
         ComPtr<ID3D12Resource> resource;
         if (!succeeded(
             device_->CreateCommittedResource(
                 &heap, D3D12_HEAP_FLAG_NONE, &native_desc,
-                D3D12_RESOURCE_STATE_COMMON, nullptr, IID_PPV_ARGS(&resource)
+                D3D12_RESOURCE_STATE_COMMON, optimized_clear, IID_PPV_ARGS(&resource)
             ),
             "Direct3D 12 could not create a VICE texture."
         )) {
@@ -1912,10 +1990,36 @@ public:
         if (const auto name = wide_name(desc.debug_name); !name.empty()) {
             (void)resource->SetName(name.c_str());
         }
+
+        ComPtr<ID3D12DescriptorHeap> dsv_heap;
+        if (has_usage(desc.usage, TextureUsage::depth_attachment)) {
+            D3D12_DESCRIPTOR_HEAP_DESC heap_desc{};
+            heap_desc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_DSV;
+            heap_desc.NumDescriptors = 1;
+            heap_desc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
+            if (!succeeded(
+                device_->CreateDescriptorHeap(&heap_desc, IID_PPV_ARGS(&dsv_heap)),
+                "Direct3D 12 could not create a VICE depth descriptor heap."
+            )) {
+                return nullptr;
+            }
+            D3D12_DEPTH_STENCIL_VIEW_DESC dsv_desc{};
+            dsv_desc.Format = DXGI_FORMAT_D32_FLOAT;
+            dsv_desc.ViewDimension = D3D12_DSV_DIMENSION_TEXTURE2D;
+            dsv_desc.Flags = D3D12_DSV_FLAG_NONE;
+            dsv_desc.Texture2D.MipSlice = 0;
+            device_->CreateDepthStencilView(
+                resource.Get(),
+                &dsv_desc,
+                dsv_heap->GetCPUDescriptorHandleForHeapStart()
+            );
+        }
+
         return std::make_unique<D3D12Texture>(
             desc,
             std::move(resource),
-            D3D12_RESOURCE_STATE_COMMON
+            D3D12_RESOURCE_STATE_COMMON,
+            std::move(dsv_heap)
         );
     }
 
@@ -2120,9 +2224,11 @@ public:
         pipeline_desc.RasterizerState.AntialiasedLineEnable = FALSE;
         pipeline_desc.RasterizerState.ForcedSampleCount = 0;
         pipeline_desc.RasterizerState.ConservativeRaster = D3D12_CONSERVATIVE_RASTERIZATION_MODE_OFF;
-        pipeline_desc.DepthStencilState.DepthEnable = FALSE;
-        pipeline_desc.DepthStencilState.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ZERO;
-        pipeline_desc.DepthStencilState.DepthFunc = D3D12_COMPARISON_FUNC_ALWAYS;
+        pipeline_desc.DepthStencilState.DepthEnable = desc.depth.test_enabled ? TRUE : FALSE;
+        pipeline_desc.DepthStencilState.DepthWriteMask = desc.depth.write_enabled
+            ? D3D12_DEPTH_WRITE_MASK_ALL
+            : D3D12_DEPTH_WRITE_MASK_ZERO;
+        pipeline_desc.DepthStencilState.DepthFunc = comparison_func(desc.depth.compare);
         pipeline_desc.DepthStencilState.StencilEnable = FALSE;
         pipeline_desc.InputLayout = {
             input_elements.empty() ? nullptr : input_elements.data(),
@@ -2131,6 +2237,7 @@ public:
         pipeline_desc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
         pipeline_desc.NumRenderTargets = 1;
         pipeline_desc.RTVFormats[0] = pixel_format(desc.color_format);
+        pipeline_desc.DSVFormat = pixel_format(desc.depth.format);
         pipeline_desc.SampleDesc.Count = 1;
 
         ComPtr<ID3D12PipelineState> state;
@@ -2148,7 +2255,8 @@ public:
             std::move(state),
             desc.topology,
             std::move(serialized_root),
-            std::move(vertex_streams)
+            std::move(vertex_streams),
+            desc.depth
         );
     }
 

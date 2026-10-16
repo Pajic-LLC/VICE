@@ -117,6 +117,20 @@ void log_error(const char* prefix, NSError* error) {
     return format == IndexFormat::uint16 ? MTLIndexTypeUInt16 : MTLIndexTypeUInt32;
 }
 
+[[nodiscard]] MTLCompareFunction comparison_func(const CompareOp compare) noexcept {
+    switch (compare) {
+    case CompareOp::never: return MTLCompareFunctionNever;
+    case CompareOp::less: return MTLCompareFunctionLess;
+    case CompareOp::less_equal: return MTLCompareFunctionLessEqual;
+    case CompareOp::greater: return MTLCompareFunctionGreater;
+    case CompareOp::greater_equal: return MTLCompareFunctionGreaterEqual;
+    case CompareOp::equal: return MTLCompareFunctionEqual;
+    case CompareOp::not_equal: return MTLCompareFunctionNotEqual;
+    case CompareOp::always: return MTLCompareFunctionAlways;
+    }
+    return MTLCompareFunctionAlways;
+}
+
 [[nodiscard]] MTLTextureUsage texture_usage(const TextureUsage usage) noexcept {
     MTLTextureUsage result = MTLTextureUsageUnknown;
     if (has_usage(usage, TextureUsage::sampled)) {
@@ -373,22 +387,26 @@ class MetalGraphicsPipeline final : public GraphicsPipeline {
 public:
     MetalGraphicsPipeline(
         id<MTLRenderPipelineState> state,
+        id<MTLDepthStencilState> depth_state,
         const PrimitiveTopology topology,
         const CullMode cull,
         const FrontFace front,
+        const DepthStateDesc depth,
         PipelineLayout layout,
         std::vector<MetalShaderResourceLocationDesc> vertex_locations,
         std::vector<MetalShaderResourceLocationDesc> fragment_locations,
         std::vector<MetalVertexStreamInfo> vertex_streams
-    ) : state_{state}, topology_{topology}, cull_{cull}, front_{front},
-        layout_{std::move(layout)}, vertex_locations_{std::move(vertex_locations)},
+    ) : state_{state}, depth_state_{depth_state}, topology_{topology}, cull_{cull}, front_{front},
+        depth_{depth}, layout_{std::move(layout)}, vertex_locations_{std::move(vertex_locations)},
         fragment_locations_{std::move(fragment_locations)},
         vertex_streams_{std::move(vertex_streams)} {}
 
     [[nodiscard]] PrimitiveTopology topology() const noexcept override { return topology_; }
     [[nodiscard]] id<MTLRenderPipelineState> native() const noexcept { return state_; }
+    [[nodiscard]] id<MTLDepthStencilState> depth_state() const noexcept { return depth_state_; }
     [[nodiscard]] CullMode cull() const noexcept { return cull_; }
     [[nodiscard]] FrontFace front() const noexcept { return front_; }
+    [[nodiscard]] const DepthStateDesc& depth() const noexcept { return depth_; }
     [[nodiscard]] const PipelineLayout& layout() const noexcept { return layout_; }
     [[nodiscard]] std::size_t vertex_stream_count() const noexcept { return vertex_streams_.size(); }
     [[nodiscard]] const MetalVertexStreamInfo* vertex_stream(const std::uint32_t slot) const noexcept {
@@ -426,9 +444,11 @@ public:
 
 private:
     id<MTLRenderPipelineState> state_ = nil;
+    id<MTLDepthStencilState> depth_state_ = nil;
     PrimitiveTopology topology_ = PrimitiveTopology::triangle_list;
     CullMode cull_ = CullMode::back;
     FrontFace front_ = FrontFace::counter_clockwise;
+    DepthStateDesc depth_{};
     PipelineLayout layout_;
     std::vector<MetalShaderResourceLocationDesc> vertex_locations_;
     std::vector<MetalShaderResourceLocationDesc> fragment_locations_;
@@ -620,6 +640,19 @@ public:
         if (drawable_ == nil) {
             return false;
         }
+
+        MetalTexture* depth_texture = nullptr;
+        if (desc.depth_attachment != nullptr) {
+            depth_texture = dynamic_cast<MetalTexture*>(desc.depth_attachment);
+            if (depth_texture == nullptr || depth_texture->native() == nil ||
+                depth_texture->format() != TextureFormat::depth32_float ||
+                !has_usage(depth_texture->usage(), TextureUsage::depth_attachment) ||
+                depth_texture->width() != drawable_.texture.width ||
+                depth_texture->height() != drawable_.texture.height) {
+                return false;
+            }
+        }
+
         MTLRenderPassDescriptor* pass = [MTLRenderPassDescriptor renderPassDescriptor];
         pass.colorAttachments[0].texture = drawable_.texture;
         pass.colorAttachments[0].loadAction = desc.clear_color_attachment
@@ -632,8 +665,18 @@ public:
             desc.clear_color.blue,
             desc.clear_color.alpha
         );
+        if (depth_texture != nullptr) {
+            pass.depthAttachment.texture = depth_texture->native();
+            pass.depthAttachment.loadAction = desc.clear_depth_attachment
+                ? MTLLoadActionClear
+                : MTLLoadActionLoad;
+            pass.depthAttachment.storeAction = MTLStoreActionStore;
+            pass.depthAttachment.clearDepth = desc.clear_depth;
+        }
+
         render_encoder_ = [command_buffer_ renderCommandEncoderWithDescriptor:pass];
         active_swapchain_ = metal_swapchain;
+        active_depth_texture_ = depth_texture;
         reset_mesh_state();
         active_pipeline_ = nullptr;
         bound_resources_.clear();
@@ -649,7 +692,13 @@ public:
         if (metal_pipeline == nullptr || metal_pipeline->native() == nil) {
             return false;
         }
+        const auto& depth = metal_pipeline->depth();
+        if (depth.format != TextureFormat::undefined &&
+            (active_depth_texture_ == nullptr || active_depth_texture_->format() != depth.format)) {
+            return false;
+        }
         [render_encoder_ setRenderPipelineState:metal_pipeline->native()];
+        [render_encoder_ setDepthStencilState:metal_pipeline->depth_state()];
         [render_encoder_ setCullMode:cull_mode(metal_pipeline->cull())];
         [render_encoder_ setFrontFacingWinding:front_winding(metal_pipeline->front())];
         active_pipeline_ = metal_pipeline;
@@ -889,6 +938,7 @@ public:
         [render_encoder_ endEncoding];
         render_encoder_ = nil;
         active_pipeline_ = nullptr;
+        active_depth_texture_ = nullptr;
         bound_resources_.clear();
         reset_mesh_state();
         pipeline_bound_ = false;
@@ -1219,6 +1269,7 @@ private:
     id<CAMetalDrawable> drawable_ = nil;
     MetalGraphicsPipeline* active_pipeline_ = nullptr;
     MetalSwapchain* active_swapchain_ = nullptr;
+    MetalTexture* active_depth_texture_ = nullptr;
     std::vector<MetalBoundResource> bound_resources_;
     std::array<bool, max_vertex_buffers> vertex_buffers_bound_{};
     std::array<std::uint64_t, max_vertex_buffers> vertex_capacities_{};
@@ -1276,6 +1327,11 @@ public:
     [[nodiscard]] std::unique_ptr<Texture> create_texture(const TextureDesc& desc) override {
         if (!is_valid(desc)) {
             core::log(core::LogLevel::error, "VICE rejected an invalid texture description.");
+            return nullptr;
+        }
+        if (has_usage(desc.usage, TextureUsage::depth_attachment) &&
+            (desc.dimension != TextureDimension::d2 || desc.array_layers != 1U || desc.sample_count != 1U)) {
+            core::log(core::LogLevel::error, "Metal depth attachments currently require one non-MSAA 2D layer.");
             return nullptr;
         }
         const bool size_supported =
@@ -1513,6 +1569,7 @@ public:
         native_desc.fragmentFunction = fragment->function();
         native_desc.vertexDescriptor = vertex_descriptor;
         native_desc.colorAttachments[0].pixelFormat = pixel_format(desc.color_format);
+        native_desc.depthAttachmentPixelFormat = pixel_format(desc.depth.format);
         if (NSString* label = make_label(desc.debug_name)) {
             native_desc.label = label;
         }
@@ -1522,11 +1579,26 @@ public:
             log_error("Metal graphics pipeline creation failed.", error);
             return nullptr;
         }
+
+        id<MTLDepthStencilState> depth_state = nil;
+        if (desc.depth.format != TextureFormat::undefined) {
+            MTLDepthStencilDescriptor* depth_desc = [[MTLDepthStencilDescriptor alloc] init];
+            depth_desc.depthCompareFunction = comparison_func(desc.depth.compare);
+            depth_desc.depthWriteEnabled = desc.depth.write_enabled;
+            depth_state = [device_ newDepthStencilStateWithDescriptor:depth_desc];
+            if (depth_state == nil) {
+                core::log(core::LogLevel::error, "Metal could not create the VICE depth-stencil state.");
+                return nullptr;
+            }
+        }
+
         return std::make_unique<MetalGraphicsPipeline>(
             state,
+            depth_state,
             desc.topology,
             desc.cull_mode,
             desc.front_face,
+            desc.depth,
             std::move(layout),
             std::vector<MetalShaderResourceLocationDesc>{
                 vertex->locations().begin(),

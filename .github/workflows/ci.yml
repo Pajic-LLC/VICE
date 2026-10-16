@@ -40,7 +40,7 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          foreach ($stage in @("vice_lab_triangle_vs", "vice_lab_triangle_fs")) {
+          foreach ($stage in @("vice_lab_cube_vs", "vice_lab_cube_fs")) {
             $manifestPath = "build/cooked/$stage/shader.vice.json"
             $dxilPath = "build/cooked/$stage/shader.dxil"
             if (-not (Test-Path $manifestPath)) {
@@ -61,6 +61,17 @@ jobs:
                 $labManifest.artifacts.metal_reflection -ne $null) {
               throw "A Windows VICE Lab cook must not declare Metal artifacts."
             }
+          }
+
+          $cubeVertexManifest = Get-Content "build/cooked/vice_lab_cube_vs/shader.vice.json" -Raw | ConvertFrom-Json
+          $frameData = $cubeVertexManifest.reflection.resources | Where-Object { $_.name -eq "FrameData" }
+          if (-not $frameData -or
+              $frameData.class -ne "constant_buffer" -or
+              $frameData.binding -ne 0 -or
+              $frameData.space -ne 0 -or
+              $frameData.count -ne 1 -or
+              $frameData.unbounded) {
+            throw "VICE Lab cube vertex shader did not preserve the b0 FrameData binding."
           }
 
           $sdkRoot = "${env:ProgramFiles(x86)}\Windows Kits\10\bin"
