@@ -9,17 +9,21 @@ Jolt is an implementation behind VICE-owned contracts. It does not define the si
 Public VICE rigid-body headers expose:
 
 - `ParticipantId`
+- shared `MaterialId`
 - static or dynamic motion
 - box half extents
 - local position and orientation
 - linear and angular velocity
 - friction and restitution
+- trigger state
 - VICE-owned body state
 - explicit active-state control
+- VICE-owned contact and trigger events
+- VICE-owned material-pair interaction rules
 
-Orientation uses `vice::math::Quat`. Solver state is converted to VICE math types before it leaves the backend.
+Orientation uses `vice::math::Quat`. Solver state and contact data are converted to VICE types before they leave the backend.
 
-No Jolt type, body ID, shape type, allocator, job system, or physics system appears in the public API.
+No Jolt type, body ID, shape type, allocator, job system, contact manifold, or physics system appears in the public API.
 
 `ParticipantId` maps to a native Jolt `BodyID` only inside the backend implementation.
 
@@ -39,6 +43,8 @@ Jolt uses single-precision positions for each local rigid simulation domain.
 
 VICE World stores authoritative global positions in double precision. A registered rigid region provides the local coordinate frame for one rigid simulation island. `VICE::RigidBodyWorld` converts between global World positions and local Jolt positions during creation, synchronization, and island handoff.
 
+Contact points reported by a rigid domain are local to that domain. Systems that need authoritative global positions can combine the event with the World region that owns the participant.
+
 Rendering remains camera-relative and does not consume large global float coordinates.
 
 VICE math uses column-major matrices and column vectors. The rigid-body pose is converted to a VICE model matrix before rendering.
@@ -49,11 +55,25 @@ A bridge-created box can move from one registered rigid simulation island to ano
 
 The bridge reads the live source body pose and velocities, computes the current double-precision global position, creates the target body in the target local coordinate frame, moves the simulation binding, updates World spatial state, and only then removes the source body.
 
-The transfer preserves box extents, motion type, orientation, linear velocity, angular velocity, friction, restitution, and active state.
+The transfer preserves box extents, motion type, orientation, linear velocity, angular velocity, material ID, trigger state, fallback friction and restitution, and active state.
+
+A material used by the transferred body must be registered in the target rigid domain. If the target domain is not prepared for that material, target body creation fails and the source side stays intact.
 
 Target-side failures roll back without destroying the source body.
 
 See `docs/architecture/rigid-body-island-handoff.md` for the exact transfer contract.
+
+## Contacts and materials
+
+Rigid domains use Jolt contact callbacks internally and publish VICE-owned events only after the physics update completes.
+
+Jolt can invoke contact callbacks on worker threads. The backend copies the callback data into VICE types under synchronization and sorts the public event list deterministically before returning from the simulation step.
+
+Shared `simulation::Material` data can provide rigid friction and restitution. Material-pair rules can override the combined response and attach a project-defined interaction label to the event.
+
+Impact strength is reported as an estimated normal impulse from Jolt's pre-solve collision response estimator. It is not an exact post-solve impulse.
+
+See `docs/architecture/rigid-body-contacts.md` for the event and material contract.
 
 ## Fixed stepping
 
@@ -61,7 +81,7 @@ The backend implements the existing `simulation::Domain` interface and consumes 
 
 VICE Lab steps the rigid domain at 120 Hz with a frame-time accumulator. Rendering samples the latest completed solver state.
 
-Jolt cross-platform deterministic build mode is enabled for the pinned backend. This is a starting policy, not a promise that every future physics query has deterministic ordering. VICE must define its own ordering rules for any query where ordering becomes authoritative.
+Jolt cross-platform deterministic build mode is enabled for the pinned backend. This is a starting policy, not a promise that every future physics query has deterministic ordering. VICE defines public contact event ordering independently from Jolt worker callback order.
 
 ## Rendering proof
 
@@ -81,16 +101,15 @@ Jolt supports replacing this with an engine job-system implementation. A later p
 
 ## Current scope
 
-The rigid-body foundation supports static and dynamic boxes, body destruction, position and orientation reads, linear and angular velocity reads, active-state control, fixed-step simulation, world binding, a solver-driven rendering proof, World position synchronization, and box handoff between local rigid simulation islands.
+The rigid-body foundation supports static and dynamic boxes, body destruction, position and orientation reads, linear and angular velocity reads, active-state control, fixed-step simulation, shared material mapping, material-pair response overrides, collision events, trigger events, world binding, a solver-driven rendering proof, World position synchronization, and box handoff between local rigid simulation islands.
 
 It does not yet define:
 
 - general shape assets
-- collision or trigger events
 - constraints
 - queries and casts
 - continuous collision policy
-- material mapping
+- exact post-solve impulse reporting
 - solver serialization
 - constraint transfer between islands
 - contact-cache or warm-start transfer between islands
