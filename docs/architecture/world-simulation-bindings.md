@@ -20,6 +20,8 @@ An entity can have one binding per domain and can participate in several domains
 
 A participant ID must be unique inside its domain. The same numeric participant value can be used by another domain because participant identity is domain-scoped.
 
+Bindings are associations only. They do not transfer entity or participant ownership to the registry.
+
 ## Validation
 
 A new binding is accepted only when:
