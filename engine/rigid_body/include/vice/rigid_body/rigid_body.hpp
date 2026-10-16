@@ -52,6 +52,11 @@ enum class MotionType : std::uint8_t {
     dynamic_body,
 };
 
+enum class MotionQuality : std::uint8_t {
+    discrete,
+    continuous,
+};
+
 enum class ContactPhase : std::uint8_t {
     began,
     persisted,
@@ -247,6 +252,7 @@ struct BodyDesc {
     simulation::MaterialId material{};
     ShapeId shape{};
     MotionType motion = MotionType::dynamic_body;
+    MotionQuality motion_quality = MotionQuality::discrete;
     math::Vec3 position{};
     math::Quat orientation{};
     math::Vec3 linear_velocity{};
@@ -260,6 +266,7 @@ struct BoxBodyDesc {
     simulation::ParticipantId participant{};
     simulation::MaterialId material{};
     MotionType motion = MotionType::dynamic_body;
+    MotionQuality motion_quality = MotionQuality::discrete;
     math::Vec3 half_extents{0.5F, 0.5F, 0.5F};
     math::Vec3 position{};
     math::Quat orientation{};
@@ -275,6 +282,7 @@ struct BodyState {
     math::Quat orientation{};
     math::Vec3 linear_velocity{};
     math::Vec3 angular_velocity{};
+    MotionQuality motion_quality = MotionQuality::discrete;
     bool active = false;
 };
 
@@ -385,6 +393,10 @@ public:
     bool create_box(const BoxBodyDesc& desc);
     bool destroy_body(simulation::ParticipantId participant);
     bool set_body_active(simulation::ParticipantId participant, bool active);
+    bool set_body_motion_quality(
+        simulation::ParticipantId participant,
+        MotionQuality motion_quality
+    );
 
     bool create_constraint(const FixedConstraintDesc& desc);
     bool create_constraint(const HingeConstraintDesc& desc);
@@ -435,7 +447,12 @@ private:
         const simulation::StepContext& context,
         simulation::InteractionEmitter& emitter
     );
+    bool create_body_unchecked(const BodyDesc& desc);
+    bool create_box_unchecked(const BoxBodyDesc& desc);
     bool destroy_body_unchecked(simulation::ParticipantId participant);
+    [[nodiscard]] std::optional<BodyState> body_state_unchecked(
+        simulation::ParticipantId participant
+    ) const noexcept;
 
     std::unique_ptr<Impl> impl_;
     std::shared_ptr<ConstraintRuntimeState> constraint_runtime_;
