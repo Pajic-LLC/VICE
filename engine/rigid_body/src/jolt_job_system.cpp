@@ -1,19 +1,46 @@
 #include "jolt_job_system.hpp"
 
+#include <algorithm>
 #include <utility>
 
 namespace vice::rigid_body::detail {
+namespace {
+thread_local jobs::Scheduler* active_scheduler = nullptr;
+} // namespace
 
-JoltJobSystem::JoltJobSystem(jobs::Scheduler& scheduler)
-    : JPH::JobSystemWithBarrier{JPH::cMaxPhysicsBarriers},
-      scheduler_{scheduler} {}
+SchedulerBinding::SchedulerBinding(jobs::Scheduler& scheduler) noexcept
+    : previous_{active_scheduler} {
+    active_scheduler = &scheduler;
+}
+
+SchedulerBinding::~SchedulerBinding() {
+    active_scheduler = previous_;
+}
+
+JoltJobSystem::JoltJobSystem(
+    const JPH::uint max_jobs,
+    const JPH::uint max_barriers,
+    const int concurrency_hint
+) : JPH::JobSystemWithBarrier{max_barriers},
+    scheduler_{active_scheduler},
+    concurrency_hint_{concurrency_hint} {
+    (void)max_jobs;
+}
 
 JoltJobSystem::~JoltJobSystem() {
     drain();
 }
 
 int JoltJobSystem::GetMaxConcurrency() const {
-    return static_cast<int>(scheduler_.worker_count()) + 1;
+    if (scheduler_ == nullptr) {
+        return 1;
+    }
+
+    int workers = static_cast<int>(scheduler_->worker_count());
+    if (concurrency_hint_ >= 0) {
+        workers = std::min(workers, concurrency_hint_);
+    }
+    return std::max(1, workers + 1);
 }
 
 JoltJobSystem::JobHandle JoltJobSystem::CreateJob(
@@ -50,6 +77,10 @@ void JoltJobSystem::WaitForJobs(Barrier* barrier) {
 }
 
 void JoltJobSystem::queue(Job* job) {
+    if (scheduler_ == nullptr || GetMaxConcurrency() <= 1) {
+        return;
+    }
+
     job->AddRef();
 
     jobs::TaskDesc task;
@@ -61,7 +92,7 @@ void JoltJobSystem::queue(Job* job) {
         job->Release();
     };
 
-    auto handle = scheduler_.schedule(std::move(task));
+    auto handle = scheduler_->schedule(std::move(task));
     if (!handle.valid()) {
         (void)job->Execute();
         job->Release();
@@ -73,6 +104,10 @@ void JoltJobSystem::queue(Job* job) {
 }
 
 void JoltJobSystem::drain() {
+    if (scheduler_ == nullptr) {
+        return;
+    }
+
     for (;;) {
         std::vector<jobs::TaskHandle> handles;
         {
@@ -84,7 +119,7 @@ void JoltJobSystem::drain() {
         }
 
         for (const auto& handle : handles) {
-            (void)scheduler_.wait(handle);
+            (void)scheduler_->wait(handle);
         }
     }
 }
