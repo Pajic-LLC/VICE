@@ -11,6 +11,7 @@
 #include <string>
 #include <unordered_set>
 #include <utility>
+#include <variant>
 #include <vector>
 
 namespace vice::rigid_body {
@@ -25,6 +26,7 @@ constexpr std::uint32_t max_points = 1'000'000;
 constexpr std::uint32_t max_vertices = 1'000'000;
 constexpr std::uint32_t max_indices = 3'000'000;
 constexpr std::uint32_t max_compound_children = 65'536;
+constexpr std::uint32_t max_heightfield_sample_count = 16'384;
 constexpr std::uint64_t fnv_offset_basis = 14'695'981'039'346'656'037ULL;
 constexpr std::uint64_t fnv_prime = 1'099'511'628'211ULL;
 
@@ -35,7 +37,13 @@ enum class ShapeTag : std::uint32_t {
     convex_hull = 4,
     triangle_mesh = 5,
     compound = 6,
+    heightfield = 7,
 };
+
+[[nodiscard]] bool supported_version(const std::uint32_t version) noexcept {
+    return version == collision_asset_format_version_v1 ||
+        version == collision_asset_format_version_v2;
+}
 
 [[nodiscard]] std::uint64_t fingerprint(std::span<const std::byte> bytes) noexcept {
     std::uint64_t hash = fnv_offset_basis;
@@ -93,6 +101,10 @@ public:
             read_f32(value.z) && read_f32(value.w);
     }
 
+    [[nodiscard]] std::size_t remaining() const noexcept {
+        return bytes_.size() - position_;
+    }
+
     [[nodiscard]] bool finished() const noexcept {
         return position_ == bytes_.size();
     }
@@ -128,6 +140,7 @@ private:
 [[nodiscard]] bool read_shape(
     Reader& reader,
     const ShapeTag tag,
+    const std::uint32_t version,
     ShapeDesc& output,
     std::string& diagnostics
 ) {
@@ -161,7 +174,8 @@ private:
     }
     case ShapeTag::convex_hull: {
         std::uint32_t count = 0;
-        if (!reader.read_u32(count) || count > max_points) {
+        if (!reader.read_u32(count) || count > max_points ||
+            static_cast<std::size_t>(count) > reader.remaining() / (3U * sizeof(float))) {
             diagnostics = "Collision asset has an invalid convex hull point count.";
             return false;
         }
@@ -182,6 +196,15 @@ private:
         if (!reader.read_u32(vertex_count) || !reader.read_u32(index_count) ||
             vertex_count > max_vertices || index_count > max_indices) {
             diagnostics = "Collision asset has invalid triangle mesh counts.";
+            return false;
+        }
+        const std::size_t vertex_bytes = static_cast<std::size_t>(vertex_count) *
+            3U * sizeof(float);
+        const std::size_t index_bytes = static_cast<std::size_t>(index_count) *
+            sizeof(std::uint32_t);
+        if (vertex_bytes > reader.remaining() ||
+            index_bytes > reader.remaining() - vertex_bytes) {
+            diagnostics = "Collision asset triangle mesh data is incomplete.";
             return false;
         }
         TriangleMeshShapeDesc desc;
@@ -208,6 +231,12 @@ private:
             diagnostics = "Collision asset has an invalid compound child count.";
             return false;
         }
+        constexpr std::size_t child_bytes = sizeof(std::uint64_t) +
+            3U * sizeof(float) + 4U * sizeof(float);
+        if (static_cast<std::size_t>(child_count) > reader.remaining() / child_bytes) {
+            diagnostics = "Collision asset compound child data is incomplete.";
+            return false;
+        }
         CompoundShapeDesc desc;
         desc.children.resize(child_count);
         for (auto& child : desc.children) {
@@ -225,6 +254,58 @@ private:
         output = std::move(desc);
         return true;
     }
+    case ShapeTag::heightfield: {
+        if (version < collision_asset_format_version_v2) {
+            diagnostics = "VICECOLL version 1 cannot contain heightfield terrain.";
+            return false;
+        }
+        HeightFieldShapeDesc desc;
+        if (!reader.read_u32(desc.sample_count) ||
+            desc.sample_count < 4U || desc.sample_count > max_heightfield_sample_count ||
+            !reader.read_vec3(desc.offset) ||
+            !reader.read_f32(desc.sample_spacing_x) ||
+            !reader.read_f32(desc.sample_spacing_z) ||
+            !reader.read_f32(desc.vertical_scale) ||
+            !finite(desc.offset) ||
+            !std::isfinite(desc.sample_spacing_x) || desc.sample_spacing_x <= 0.0F ||
+            !std::isfinite(desc.sample_spacing_z) || desc.sample_spacing_z <= 0.0F ||
+            !std::isfinite(desc.vertical_scale) || desc.vertical_scale <= 0.0F) {
+            diagnostics = "Collision asset has invalid heightfield metadata.";
+            return false;
+        }
+        const std::size_t sample_count = static_cast<std::size_t>(desc.sample_count);
+        if (sample_count > std::numeric_limits<std::size_t>::max() / sample_count) {
+            diagnostics = "Collision asset heightfield sample count overflows the runtime.";
+            return false;
+        }
+        const std::size_t total_samples = sample_count * sample_count;
+        if (total_samples > reader.remaining() / sizeof(float)) {
+            diagnostics = "Collision asset heightfield samples are incomplete.";
+            return false;
+        }
+        desc.samples.resize(total_samples);
+        bool has_surface = false;
+        for (float& sample : desc.samples) {
+            if (!reader.read_f32(sample)) {
+                diagnostics = "Collision asset ended inside heightfield samples.";
+                return false;
+            }
+            if (sample == heightfield_hole_sample) {
+                continue;
+            }
+            if (!std::isfinite(sample)) {
+                diagnostics = "Collision asset heightfield contains an invalid sample.";
+                return false;
+            }
+            has_surface = true;
+        }
+        if (!has_surface) {
+            diagnostics = "Collision asset heightfield contains no collidable samples.";
+            return false;
+        }
+        output = std::move(desc);
+        return true;
+    }
     }
 
     diagnostics = "Collision asset contains an unknown shape tag.";
@@ -238,7 +319,7 @@ CollisionAssetDecodeResult decode_collision_asset(
 ) {
     CollisionAssetDecodeResult result;
     if (bytes.size() < header_size) {
-        result.diagnostics = "Collision asset is smaller than the version 1 header.";
+        result.diagnostics = "Collision asset is smaller than the VICECOLL header.";
         return result;
     }
 
@@ -258,7 +339,7 @@ CollisionAssetDecodeResult decode_collision_asset(
         result.diagnostics = "Collision asset header is incomplete.";
         return result;
     }
-    if (version != collision_asset_format_version) {
+    if (!supported_version(version)) {
         result.diagnostics = "Collision asset format version is not supported.";
         return result;
     }
@@ -291,12 +372,20 @@ CollisionAssetDecodeResult decode_collision_asset(
             result.diagnostics = "Collision asset contains a zero or duplicate shape ID.";
             return result;
         }
-        if (raw_tag < static_cast<std::uint32_t>(ShapeTag::box) ||
-            raw_tag > static_cast<std::uint32_t>(ShapeTag::compound)) {
+        const std::uint32_t max_tag = version == collision_asset_format_version_v1
+            ? static_cast<std::uint32_t>(ShapeTag::compound)
+            : static_cast<std::uint32_t>(ShapeTag::heightfield);
+        if (raw_tag < static_cast<std::uint32_t>(ShapeTag::box) || raw_tag > max_tag) {
             result.diagnostics = "Collision asset contains an unknown shape tag.";
             return result;
         }
-        if (!read_shape(reader, static_cast<ShapeTag>(raw_tag), shape.desc, result.diagnostics)) {
+        if (!read_shape(
+                reader,
+                static_cast<ShapeTag>(raw_tag),
+                version,
+                shape.desc,
+                result.diagnostics
+            )) {
             return result;
         }
         if (const auto* compound = std::get_if<CompoundShapeDesc>(&shape.desc)) {
@@ -332,8 +421,18 @@ bool register_collision_asset(
         return false;
     };
 
-    if (asset.version != collision_asset_format_version) {
+    if (!supported_version(asset.version)) {
         return fail("Collision asset version is not supported by this runtime.");
+    }
+    if (asset.version == collision_asset_format_version_v1 &&
+        std::any_of(
+            asset.shapes.begin(),
+            asset.shapes.end(),
+            [](const CollisionAssetShape& shape) {
+                return std::holds_alternative<HeightFieldShapeDesc>(shape.desc);
+            }
+        )) {
+        return fail("VICECOLL version 1 cannot register heightfield terrain.");
     }
 
     std::vector<ShapeId> registered;
