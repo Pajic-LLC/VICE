@@ -70,6 +70,13 @@ enum class ConstraintType : std::uint8_t {
     distance,
 };
 
+enum class ConstraintMotorMode : std::uint8_t {
+    off,
+    velocity,
+    position,
+    position_and_velocity,
+};
+
 struct DomainConfig {
     std::uint32_t max_bodies = 4096;
     std::uint32_t max_body_pairs = 4096;
@@ -89,10 +96,32 @@ struct ConstraintSpring {
     float damping_ratio = 0.0F;
 };
 
+struct ConstraintBreakThresholds {
+    std::optional<float> linear_impulse;
+    std::optional<float> angular_impulse;
+};
+
+struct HingeMotorDesc {
+    ConstraintMotorMode mode = ConstraintMotorMode::off;
+    float target_angular_velocity = 0.0F;
+    float target_angle = 0.0F;
+    ConstraintSpring drive_spring{2.0F, 1.0F};
+    float max_torque = 0.0F;
+};
+
+struct SliderMotorDesc {
+    ConstraintMotorMode mode = ConstraintMotorMode::off;
+    float target_velocity = 0.0F;
+    float target_position = 0.0F;
+    ConstraintSpring drive_spring{2.0F, 1.0F};
+    float max_force = 0.0F;
+};
+
 struct FixedConstraintDesc {
     ConstraintId id{};
     simulation::ParticipantId first{};
     simulation::ParticipantId second{};
+    ConstraintBreakThresholds break_thresholds{};
     bool enabled = true;
 };
 
@@ -107,6 +136,8 @@ struct HingeConstraintDesc {
     float max_angle = pi;
     ConstraintSpring limits_spring{};
     float max_friction_torque = 0.0F;
+    HingeMotorDesc motor{};
+    ConstraintBreakThresholds break_thresholds{};
     bool enabled = true;
 };
 
@@ -120,6 +151,8 @@ struct SliderConstraintDesc {
     std::optional<float> max_position;
     ConstraintSpring limits_spring{};
     float max_friction_force = 0.0F;
+    SliderMotorDesc motor{};
+    ConstraintBreakThresholds break_thresholds{};
     bool enabled = true;
 };
 
@@ -132,6 +165,7 @@ struct DistanceConstraintDesc {
     std::optional<float> min_distance;
     std::optional<float> max_distance;
     ConstraintSpring limits_spring{};
+    ConstraintBreakThresholds break_thresholds{};
     bool enabled = true;
 };
 
@@ -141,6 +175,20 @@ struct ConstraintState {
     simulation::ParticipantId second{};
     bool enabled = false;
     std::optional<float> coordinate;
+    ConstraintMotorMode motor_mode = ConstraintMotorMode::off;
+    float linear_impulse = 0.0F;
+    float angular_impulse = 0.0F;
+    float limit_impulse = 0.0F;
+    float motor_impulse = 0.0F;
+};
+
+struct ConstraintBreakEvent {
+    ConstraintId id{};
+    ConstraintType type = ConstraintType::fixed;
+    simulation::ParticipantId first{};
+    simulation::ParticipantId second{};
+    float linear_impulse = 0.0F;
+    float angular_impulse = 0.0F;
 };
 
 struct BoxShapeDesc {
@@ -344,6 +392,8 @@ public:
     bool create_constraint(const DistanceConstraintDesc& desc);
     bool destroy_constraint(ConstraintId id);
     bool set_constraint_enabled(ConstraintId id, bool enabled);
+    bool set_hinge_motor(ConstraintId id, const HingeMotorDesc& motor);
+    bool set_slider_motor(ConstraintId id, const SliderMotorDesc& motor);
 
     [[nodiscard]] std::optional<BodyState> body_state(
         simulation::ParticipantId participant
@@ -369,6 +419,7 @@ public:
     ) const;
 
     [[nodiscard]] std::span<const ContactEvent> contact_events() const noexcept;
+    [[nodiscard]] std::span<const ConstraintBreakEvent> constraint_break_events() const noexcept;
     [[nodiscard]] std::size_t body_count() const noexcept;
     [[nodiscard]] std::size_t material_count() const noexcept;
     [[nodiscard]] std::size_t material_interaction_count() const noexcept;
@@ -377,11 +428,17 @@ public:
 
 private:
     class Impl;
+    struct ConstraintRuntimeState;
 
     explicit Domain(std::unique_ptr<Impl> impl) noexcept;
+    void step_unchecked(
+        const simulation::StepContext& context,
+        simulation::InteractionEmitter& emitter
+    );
     bool destroy_body_unchecked(simulation::ParticipantId participant);
 
     std::unique_ptr<Impl> impl_;
+    std::shared_ptr<ConstraintRuntimeState> constraint_runtime_;
 };
 
 } // namespace vice::rigid_body
