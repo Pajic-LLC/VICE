@@ -271,6 +271,7 @@ bool WorldBridge::handoff_box(
     recreated.orientation = source_state->orientation;
     recreated.linear_velocity = source_state->linear_velocity;
     recreated.angular_velocity = source_state->angular_velocity;
+    recreated.motion_quality = source_state->motion_quality;
 
     if (!target->domain->create_box(recreated)) {
         return false;
@@ -327,6 +328,7 @@ bool WorldBridge::handoff_box(
     record->creation.orientation = recreated.orientation;
     record->creation.linear_velocity = recreated.linear_velocity;
     record->creation.angular_velocity = recreated.angular_velocity;
+    record->creation.motion_quality = recreated.motion_quality;
     return true;
 }
 
