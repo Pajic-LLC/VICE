@@ -19,6 +19,17 @@ int main() {
     };
     static_assert(is_valid(enabled));
 
+    constexpr DepthStateDesc write_only{
+        .format = TextureFormat::depth32_float,
+        .test_enabled = false,
+        .write_enabled = true,
+        .compare = CompareOp::never,
+    };
+    static_assert(is_valid(write_only));
+    static_assert(!write_only.test_enabled);
+    static_assert(write_only.write_enabled);
+    static_assert(write_only.compare == CompareOp::never);
+
     constexpr DepthStateDesc invalid_disabled_write{
         .format = TextureFormat::undefined,
         .test_enabled = false,
