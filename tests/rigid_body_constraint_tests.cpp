@@ -69,6 +69,13 @@ void test_fixed_constraint() {
     assert(std::abs(body->position.y - 2.0F) < 0.08F);
     assert(std::abs(body->position.z) < 0.08F);
 
+    const auto loaded = domain->constraint_state(joint.id);
+    assert(loaded.has_value());
+    assert(std::isfinite(loaded->linear_impulse));
+    assert(std::isfinite(loaded->angular_impulse));
+    assert(loaded->linear_impulse >= 0.0F);
+    assert(loaded->angular_impulse >= 0.0F);
+
     assert(!domain->destroy_body(payload));
     assert(domain->set_constraint_enabled(joint.id, false));
     assert(!domain->destroy_body(payload));
@@ -236,10 +243,190 @@ void test_distance_constraint() {
     assert(state.has_value());
     assert(state->type == rigid_body::ConstraintType::distance);
     assert(!state->coordinate.has_value());
+    assert(std::isfinite(state->linear_impulse));
 
     assert(domain->destroy_constraint(joint.id));
     assert(domain->destroy_body(payload));
     assert(domain->destroy_body(anchor));
+}
+
+void test_hinge_motor_controls() {
+    auto domain = rigid_body::Domain::create(simulation::DomainId{715}, "constraints.hinge_motor");
+    assert(domain);
+
+    const simulation::ParticipantId anchor{51};
+    const simulation::ParticipantId door{52};
+    create_box(*domain, anchor, rigid_body::MotionType::static_body, math::Vec3{0.0F, 0.0F, 0.0F});
+    create_box(
+        *domain,
+        door,
+        rigid_body::MotionType::dynamic_body,
+        math::Vec3{1.0F, 0.0F, 0.0F},
+        math::Vec3{0.35F, 0.8F, 0.12F}
+    );
+
+    rigid_body::HingeConstraintDesc joint;
+    joint.id = rigid_body::ConstraintId{6001};
+    joint.first = anchor;
+    joint.second = door;
+    joint.anchor = math::Vec3{0.0F, 0.0F, 0.0F};
+    joint.min_angle = -1.2F;
+    joint.max_angle = 1.2F;
+    joint.motor.mode = rigid_body::ConstraintMotorMode::velocity;
+    joint.motor.target_angular_velocity = 1.5F;
+    joint.motor.max_torque = 80.0F;
+    assert(domain->create_constraint(joint));
+
+    step(*domain, 40U);
+    auto state = domain->constraint_state(joint.id);
+    assert(state.has_value());
+    assert(state->motor_mode == rigid_body::ConstraintMotorMode::velocity);
+    assert(state->coordinate.has_value());
+    assert(*state->coordinate > 0.10F);
+    assert(*state->coordinate < 1.25F);
+    assert(std::isfinite(state->motor_impulse));
+    assert(state->motor_impulse >= 0.0F);
+
+    rigid_body::HingeMotorDesc invalid_motor;
+    invalid_motor.mode = rigid_body::ConstraintMotorMode::velocity;
+    invalid_motor.target_angular_velocity = 1.0F;
+    invalid_motor.max_torque = 0.0F;
+    assert(!domain->set_hinge_motor(joint.id, invalid_motor));
+
+    rigid_body::HingeMotorDesc position_motor;
+    position_motor.mode = rigid_body::ConstraintMotorMode::position;
+    position_motor.target_angle = -0.5F;
+    position_motor.drive_spring.frequency_hz = 4.0F;
+    position_motor.drive_spring.damping_ratio = 1.0F;
+    position_motor.max_torque = 120.0F;
+    assert(domain->set_hinge_motor(joint.id, position_motor));
+    assert(!domain->set_slider_motor(joint.id, rigid_body::SliderMotorDesc{}));
+
+    step(*domain, 240U);
+    state = domain->constraint_state(joint.id);
+    assert(state.has_value());
+    assert(state->motor_mode == rigid_body::ConstraintMotorMode::position);
+    assert(state->coordinate.has_value());
+    assert(std::abs(*state->coordinate - position_motor.target_angle) < 0.18F);
+    assert(std::isfinite(state->linear_impulse));
+    assert(std::isfinite(state->angular_impulse));
+    assert(std::isfinite(state->limit_impulse));
+    assert(std::isfinite(state->motor_impulse));
+
+    assert(domain->destroy_constraint(joint.id));
+    assert(domain->destroy_body(door));
+    assert(domain->destroy_body(anchor));
+}
+
+void test_slider_motor_controls() {
+    auto domain = rigid_body::Domain::create(simulation::DomainId{716}, "constraints.slider_motor");
+    assert(domain);
+
+    const simulation::ParticipantId anchor{61};
+    const simulation::ParticipantId carriage{62};
+    create_box(*domain, anchor, rigid_body::MotionType::static_body, math::Vec3{0.0F, 0.0F, 0.0F});
+    create_box(*domain, carriage, rigid_body::MotionType::dynamic_body, math::Vec3{0.0F, 0.0F, 0.0F});
+
+    rigid_body::SliderConstraintDesc joint;
+    joint.id = rigid_body::ConstraintId{7001};
+    joint.first = anchor;
+    joint.second = carriage;
+    joint.axis = math::Vec3{1.0F, 0.0F, 0.0F};
+    joint.min_position = -2.0F;
+    joint.max_position = 2.0F;
+    joint.motor.mode = rigid_body::ConstraintMotorMode::velocity;
+    joint.motor.target_velocity = 1.0F;
+    joint.motor.max_force = 100.0F;
+    assert(domain->create_constraint(joint));
+
+    step(*domain, 40U);
+    auto state = domain->constraint_state(joint.id);
+    assert(state.has_value());
+    assert(state->motor_mode == rigid_body::ConstraintMotorMode::velocity);
+    assert(state->coordinate.has_value());
+    assert(*state->coordinate > 0.10F);
+    assert(*state->coordinate < 2.10F);
+    assert(std::isfinite(state->motor_impulse));
+
+    rigid_body::SliderMotorDesc position_motor;
+    position_motor.mode = rigid_body::ConstraintMotorMode::position;
+    position_motor.target_position = -0.75F;
+    position_motor.drive_spring.frequency_hz = 4.0F;
+    position_motor.drive_spring.damping_ratio = 1.0F;
+    position_motor.max_force = 160.0F;
+    assert(domain->set_slider_motor(joint.id, position_motor));
+
+    step(*domain, 240U);
+    state = domain->constraint_state(joint.id);
+    assert(state.has_value());
+    assert(state->motor_mode == rigid_body::ConstraintMotorMode::position);
+    assert(state->coordinate.has_value());
+    assert(std::abs(*state->coordinate - position_motor.target_position) < 0.18F);
+    assert(std::isfinite(state->linear_impulse));
+    assert(std::isfinite(state->angular_impulse));
+
+    assert(domain->destroy_constraint(joint.id));
+    assert(domain->destroy_body(carriage));
+    assert(domain->destroy_body(anchor));
+}
+
+void test_breakable_constraints() {
+    auto domain = rigid_body::Domain::create(simulation::DomainId{717}, "constraints.breakable");
+    assert(domain);
+
+    const simulation::ParticipantId anchor_a{71};
+    const simulation::ParticipantId payload_a{72};
+    const simulation::ParticipantId anchor_b{73};
+    const simulation::ParticipantId payload_b{74};
+    create_box(*domain, anchor_a, rigid_body::MotionType::static_body, math::Vec3{-2.0F, 3.0F, 0.0F});
+    create_box(*domain, payload_a, rigid_body::MotionType::dynamic_body, math::Vec3{-2.0F, 3.0F, 0.0F});
+    create_box(*domain, anchor_b, rigid_body::MotionType::static_body, math::Vec3{2.0F, 3.0F, 0.0F});
+    create_box(*domain, payload_b, rigid_body::MotionType::dynamic_body, math::Vec3{2.0F, 3.0F, 0.0F});
+
+    rigid_body::FixedConstraintDesc invalid;
+    invalid.id = rigid_body::ConstraintId{8000};
+    invalid.first = anchor_a;
+    invalid.second = payload_a;
+    invalid.break_thresholds.linear_impulse = 0.0F;
+    assert(!domain->create_constraint(invalid));
+
+    rigid_body::FixedConstraintDesc high_id;
+    high_id.id = rigid_body::ConstraintId{8002};
+    high_id.first = anchor_a;
+    high_id.second = payload_a;
+    high_id.break_thresholds.linear_impulse = 0.000001F;
+    assert(domain->create_constraint(high_id));
+
+    rigid_body::FixedConstraintDesc low_id;
+    low_id.id = rigid_body::ConstraintId{8001};
+    low_id.first = anchor_b;
+    low_id.second = payload_b;
+    low_id.break_thresholds.linear_impulse = 0.000001F;
+    assert(domain->create_constraint(low_id));
+    assert(domain->constraint_count() == 2U);
+    assert(!domain->destroy_body(payload_a));
+    assert(!domain->destroy_body(payload_b));
+
+    step(*domain, 1U);
+    assert(domain->constraint_count() == 0U);
+    assert(!domain->constraint_state(low_id.id).has_value());
+    assert(!domain->constraint_state(high_id.id).has_value());
+
+    const auto events = domain->constraint_break_events();
+    assert(events.size() == 2U);
+    assert(events[0].id == low_id.id);
+    assert(events[1].id == high_id.id);
+    assert(events[0].type == rigid_body::ConstraintType::fixed);
+    assert(events[1].type == rigid_body::ConstraintType::fixed);
+    assert(events[0].linear_impulse > 0.000001F);
+    assert(events[1].linear_impulse > 0.000001F);
+    assert(std::isfinite(events[0].angular_impulse));
+    assert(std::isfinite(events[1].angular_impulse));
+
+    assert(domain->destroy_body(payload_a));
+    assert(domain->destroy_body(payload_b));
+    assert(domain->destroy_body(anchor_a));
+    assert(domain->destroy_body(anchor_b));
 }
 
 void test_domain_shutdown_with_live_constraint() {
@@ -273,6 +460,9 @@ int main() {
     test_hinge_constraint();
     test_slider_constraint();
     test_distance_constraint();
+    test_hinge_motor_controls();
+    test_slider_motor_controls();
+    test_breakable_constraints();
     test_domain_shutdown_with_live_constraint();
     return 0;
 }
