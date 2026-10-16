@@ -177,9 +177,9 @@ void test_snapshot_restore_and_transactionality() {
     const auto child_state = restored.spatial_state(*child);
     assert(child_state.has_value());
     assert(child_state->region == RegionId{2});
-    assert(child_state->global_position == GlobalPosition{1'010.0, 2.0, 3.0});
+    assert((child_state->global_position == GlobalPosition{1'010.0, 2.0, 3.0}));
     assert(restored.relations().size() == 1U);
-    assert(restored.relations()[0] == Relation{*child, fixed_id(50), *parent});
+    assert((restored.relations()[0] == Relation{*child, fixed_id(50), *parent}));
 
     const WorldSnapshot round_trip = restored.snapshot();
     assert(round_trip.component_types == saved.component_types);
