@@ -11,23 +11,25 @@ Public VICE rigid-body headers expose:
 - `ParticipantId`
 - shared `MaterialId`
 - rigid `ShapeId`
+- rigid `ConstraintId`
 - box, sphere, capsule, convex hull, indexed triangle mesh, heightfield, and compound shape descriptions
+- fixed, hinge, slider, and distance constraint descriptions
 - static or dynamic motion
 - local position and orientation
 - linear and angular velocity
 - friction and restitution
 - trigger state
-- VICE-owned body state
-- explicit active-state control
+- VICE-owned body and constraint state
+- explicit active-state and constraint enable control
 - VICE-owned contact and trigger events
 - VICE-owned material-pair interaction rules
 - VICE-owned raycast, overlap, and sweep results
 
-Orientation uses `vice::math::Quat`. Solver state, contact data, and query results are converted to VICE types before they leave the backend.
+Orientation uses `vice::math::Quat`. Solver state, contact data, query results, and constraint state are converted to VICE types before they leave the backend.
 
-No Jolt type, body ID, shape pointer, allocator, job system, contact manifold, collector, mesh tree, sub-shape ID, or physics system appears in the public API.
+No Jolt type, body ID, constraint pointer, shape pointer, allocator, job system, contact manifold, collector, mesh tree, sub-shape ID, or physics system appears in the public API.
 
-`ParticipantId` maps to a native Jolt `BodyID` only inside the backend implementation. `ShapeId` maps to a native Jolt shape only inside one rigid domain.
+`ParticipantId` maps to a native Jolt `BodyID` only inside the backend implementation. `ShapeId` maps to a native Jolt shape only inside one rigid domain. `ConstraintId` is stored as native constraint user data and resolves to the live native constraint only inside the backend.
 
 ## World ownership
 
@@ -45,7 +47,7 @@ Jolt uses single-precision positions for each local rigid simulation domain.
 
 VICE World stores authoritative global positions in double precision. A registered rigid region provides the local coordinate frame for one rigid simulation island. `VICE::RigidBodyWorld` converts between global World positions and local Jolt positions during creation, synchronization, and island handoff.
 
-Contact points and spatial query results reported by a rigid domain are local to that domain. Systems that need authoritative global positions combine the result with the World region that owns the simulation island.
+Contact points, spatial query results, and public constraint anchors and axes are local to the rigid domain. Systems that need authoritative global positions combine local data with the World region that owns the simulation island.
 
 Rendering remains camera-relative and does not consume large global float coordinates.
 
@@ -62,6 +64,8 @@ The transfer preserves box extents, motion type, orientation, linear velocity, a
 A material used by the transferred body must be registered in the target rigid domain. If the target domain is not prepared for that material, target body creation fails and the source side stays intact.
 
 Target-side failures roll back without destroying the source body.
+
+A body with a live constraint cannot currently be handed off because the rigid domain refuses to destroy a body while a constraint references it. Constraint-aware island transfer is a separate feature and must transfer the complete connected constraint graph intentionally.
 
 See `docs/architecture/rigid-body-island-handoff.md` for the exact transfer contract.
 
@@ -90,6 +94,29 @@ The spatial query set is closest-hit raycast, all-hit shape overlap, and closest
 VICE defines public query ordering independently from native collector order. Equal ray or sweep fractions resolve by participant ID. Overlaps are reduced to one hit per participant and sorted by participant ID.
 
 See `docs/architecture/rigid-body-shapes-queries.md` for the base shape and query contract, `docs/architecture/rigid-body-game-geometry.md` for authored geometry rules, and `docs/architecture/0013-heightfield-terrain.md` for terrain.
+
+## Constraints
+
+Rigid constraints use VICE-owned `ConstraintId` values and reference connected bodies through `ParticipantId`. Native Jolt constraint pointers never leave the backend.
+
+Constraints are local to one rigid domain. Both referenced participants must already exist in that domain, must be different participants, and at least one body must be dynamic. A `ConstraintId` must be unique among live constraints in the domain.
+
+The initial constraint set is fixed, hinge, slider, and distance:
+
+- fixed captures the bodies' current relative position and orientation when it is created
+- hinge uses a common local-domain anchor, hinge axis, and perpendicular normal axis; its current coordinate is the hinge angle in radians
+- slider uses a common local-domain anchor and translation axis; its current coordinate is displacement from the rest position
+- distance keeps two anchor points inside a configured distance range; if anchors are omitted, the bodies' current centers of mass are used
+
+Hinge limits use radians. The minimum angle is in `[-pi, 0]` and the maximum angle is in `[0, pi]`. Slider limits are optional. A supplied slider minimum is non-positive and a supplied maximum is non-negative. Distance minimum and maximum values are either both supplied or both omitted. When the distance range is omitted, creation preserves the current anchor distance.
+
+Hinge, slider, and distance limits can use `ConstraintSpring`. The public spring form is frequency in hertz plus damping ratio. A frequency of zero keeps the native hard-limit behavior. Spring values must be finite and non-negative.
+
+A disabled constraint remains a live constraint. Disabling it stops solver enforcement but does not release lifetime ownership. A body cannot be destroyed while any live two-body constraint references it. The constraint must be destroyed first. This keeps native solver references valid and makes teardown requirements explicit.
+
+Constraint enable and destroy operations wake referenced dynamic bodies when needed. Constraint IDs are also used to derive stable native solver priority, which avoids relying only on incidental pointer identity for solver ordering.
+
+The current constraint API does not yet define motors, break thresholds, exact constraint impulse reporting, serialized constraint state, or automatic constraint transfer between large-world islands.
 
 ## Fixed stepping
 
@@ -135,13 +162,15 @@ The collision import handoff accepts importer-produced mesh data, source transfo
 
 ## Current scope
 
-The rigid-body foundation supports static and dynamic primitive and convex bodies, reusable box, sphere, capsule, convex hull, triangle mesh, heightfield, and compound shape resources, authored level geometry, general bodies created from registered shapes, body destruction, pose and velocity reads, active-state control, fixed-step simulation, VICE-owned parallel job scheduling, shared material mapping, material-pair response overrides, collision events, trigger events, raycasts, shape overlaps, shape sweeps, offline collision cooking, collision import handoff, world binding, a solver-driven rendering proof, World position synchronization, and box handoff between local rigid simulation islands.
+The rigid-body foundation supports static and dynamic primitive and convex bodies, reusable box, sphere, capsule, convex hull, triangle mesh, heightfield, and compound shape resources, authored level geometry, general bodies created from registered shapes, body destruction, pose and velocity reads, active-state control, fixed-step simulation, VICE-owned parallel job scheduling, shared material mapping, material-pair response overrides, collision events, trigger events, raycasts, shape overlaps, shape sweeps, fixed, hinge, slider, and distance constraints, frequency/damping limit springs, offline collision cooking, collision import handoff, world binding, a solver-driven rendering proof, World position synchronization, and box handoff between local rigid simulation islands when no live constraint blocks the transfer.
 
 It does not yet define:
 
-- constraints
+- constraint motors or powered actuation
+- breakable constraint thresholds
+- exact constraint impulse reporting
 - continuous collision policy
-- exact post-solve impulse reporting
+- exact post-solve contact impulse reporting
 - solver serialization
 - general registered-shape transfer between large-world islands
 - constraint transfer between islands
