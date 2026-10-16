@@ -39,7 +39,7 @@ public:
         emit_next_ = true;
     }
 
-    bool step(
+    void step(
         const vice::simulation::StepContext& context,
         vice::simulation::InteractionEmitter& emitter
     ) override {
@@ -51,11 +51,8 @@ public:
         if (emit_next_) {
             emit_next_ = false;
             std::vector<std::byte> payload{std::byte{0x2A}};
-            if (!emitter.emit(emit_target_, "mock.contact", std::move(payload))) {
-                return false;
-            }
+            assert(emitter.emit(emit_target_, "mock.contact", std::move(payload)));
         }
-        return true;
     }
 
     [[nodiscard]] std::uint64_t steps() const noexcept { return steps_; }
@@ -117,14 +114,14 @@ int main() {
     assert(!coordinator.register_domain(unnamed));
 
     source.emit_next_to(receiver.id());
-    assert(coordinator.step());
+    coordinator.step();
     assert(source.steps() == 1U);
     assert(receiver.steps() == 1U);
     assert(receiver.received().empty());
     assert(source.last_step_index() == 0U);
     assert(source.last_delta_seconds() == coordinator.fixed_delta_seconds());
 
-    assert(coordinator.step());
+    coordinator.step();
     assert(receiver.received().size() == 1U);
     const auto& interaction = receiver.received().front();
     assert(interaction.source == source.id());
@@ -144,11 +141,11 @@ int main() {
 
     receiver.set_fidelity(Fidelity::off);
     const auto receiver_steps_before_off = receiver.steps();
-    assert(coordinator.step());
+    coordinator.step();
     assert(receiver.steps() == receiver_steps_before_off);
 
     receiver.set_fidelity(Fidelity::reduced);
-    assert(coordinator.step());
+    coordinator.step();
     assert(receiver.steps() == receiver_steps_before_off + 1U);
 
     assert(coordinator.unregister_domain(receiver.id()));
