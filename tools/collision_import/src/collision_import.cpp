@@ -126,7 +126,11 @@ constexpr std::uint64_t fnv_prime = 1'099'511'628'211ULL;
     if (!valid_transform(mesh.local_transform)) {
         return "Collision source transform is invalid.";
     }
-    if (!std::all_of(mesh.positions.begin(), mesh.positions.end(), finite)) {
+    if (!std::all_of(
+            mesh.positions.begin(),
+            mesh.positions.end(),
+            [](const math::Vec3 point) { return finite(point); }
+        )) {
         return "Collision source contains a non-finite position.";
     }
 
