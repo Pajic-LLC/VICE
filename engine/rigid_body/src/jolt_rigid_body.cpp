@@ -18,6 +18,7 @@
 #include <Jolt/Physics/Collision/Shape/CapsuleShape.h>
 #include <Jolt/Physics/Collision/Shape/CompoundShape.h>
 #include <Jolt/Physics/Collision/Shape/ConvexHullShape.h>
+#include <Jolt/Physics/Collision/Shape/HeightFieldShape.h>
 #include <Jolt/Physics/Collision/Shape/MeshShape.h>
 #include <Jolt/Physics/Collision/Shape/SphereShape.h>
 #include <Jolt/Physics/Collision/Shape/StaticCompoundShape.h>
@@ -290,6 +291,30 @@ template <typename Vector>
     return true;
 }
 
+[[nodiscard]] bool valid_heightfield(const HeightFieldShapeDesc& desc) noexcept {
+    if (desc.sample_count < 4U || desc.sample_count > 16'384U ||
+        !finite(desc.offset) || !valid_positive(desc.sample_spacing_x) ||
+        !valid_positive(desc.sample_spacing_z) || !valid_positive(desc.vertical_scale)) {
+        return false;
+    }
+    const std::size_t count = static_cast<std::size_t>(desc.sample_count);
+    if (count > std::numeric_limits<std::size_t>::max() / count ||
+        desc.samples.size() != count * count) {
+        return false;
+    }
+    bool has_surface = false;
+    for (const float sample : desc.samples) {
+        if (sample == heightfield_hole_sample) {
+            continue;
+        }
+        if (!std::isfinite(sample)) {
+            return false;
+        }
+        has_surface = true;
+    }
+    return has_surface;
+}
+
 [[nodiscard]] bool read_material_scalar(
     const simulation::Material& material,
     const std::string_view name,
@@ -401,6 +426,33 @@ template <typename Vector>
                     );
                 }
                 JPH::MeshShapeSettings settings{std::move(vertices), std::move(triangles)};
+                const auto result = settings.Create();
+                if (result.HasError()) {
+                    return std::nullopt;
+                }
+                return JPH::RefConst<JPH::Shape>{result.Get()};
+            } else if constexpr (std::is_same_v<T, HeightFieldShapeDesc>) {
+                if (!valid_heightfield(shape_desc)) {
+                    return std::nullopt;
+                }
+                std::vector<float> samples = shape_desc.samples;
+                for (float& sample : samples) {
+                    if (sample == heightfield_hole_sample) {
+                        sample = JPH::HeightFieldShapeConstants::cNoCollisionValue;
+                    }
+                }
+                JPH::HeightFieldShapeSettings settings{
+                    samples.data(),
+                    jolt_vector(shape_desc.offset),
+                    JPH::Vec3{
+                        shape_desc.sample_spacing_x,
+                        shape_desc.vertical_scale,
+                        shape_desc.sample_spacing_z,
+                    },
+                    shape_desc.sample_count
+                };
+                settings.mBlockSize = 2;
+                settings.mBitsPerSample = 16;
                 const auto result = settings.Create();
                 if (result.HasError()) {
                     return std::nullopt;

@@ -109,6 +109,12 @@ if(VICE_ENABLE_JOLT_RIGID_BODY)
   vice_enable_warnings(vice_rigid_body_geometry_tests)
   add_test(NAME vice_rigid_body_geometry_tests COMMAND vice_rigid_body_geometry_tests)
 
+  add_executable(vice_rigid_body_heightfield_tests rigid_body_heightfield_tests.cpp)
+  target_link_libraries(vice_rigid_body_heightfield_tests PRIVATE VICE::RigidBody)
+  target_compile_features(vice_rigid_body_heightfield_tests PRIVATE cxx_std_23)
+  vice_enable_warnings(vice_rigid_body_heightfield_tests)
+  add_test(NAME vice_rigid_body_heightfield_tests COMMAND vice_rigid_body_heightfield_tests)
+
   add_executable(vice_rigid_body_world_tests rigid_body_world_tests.cpp)
   target_link_libraries(vice_rigid_body_world_tests PRIVATE VICE::RigidBodyWorld)
   target_compile_features(vice_rigid_body_world_tests PRIVATE cxx_std_23)
@@ -129,5 +135,20 @@ if(VICE_BUILD_TOOLS)
     target_compile_features(vice_collision_cooker_tests PRIVATE cxx_std_23)
     vice_enable_warnings(vice_collision_cooker_tests)
     add_test(NAME vice_collision_cooker_tests COMMAND vice_collision_cooker_tests)
+
+    add_executable(
+      vice_collision_cooker_heightfield_guard_tests
+      collision_cooker_heightfield_guard_tests.cpp
+    )
+    target_link_libraries(
+      vice_collision_cooker_heightfield_guard_tests
+      PRIVATE VICE::CollisionCooker
+    )
+    target_compile_features(vice_collision_cooker_heightfield_guard_tests PRIVATE cxx_std_23)
+    vice_enable_warnings(vice_collision_cooker_heightfield_guard_tests)
+    add_test(
+      NAME vice_collision_cooker_heightfield_guard_tests
+      COMMAND vice_collision_cooker_heightfield_guard_tests
+    )
   endif()
 endif()

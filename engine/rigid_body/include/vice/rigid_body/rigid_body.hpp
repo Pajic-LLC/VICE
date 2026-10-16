@@ -6,6 +6,7 @@
 #include <compare>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <span>
@@ -19,6 +20,7 @@ namespace vice::rigid_body {
 inline constexpr std::string_view material_property_owner = "rigid_body";
 inline constexpr std::string_view material_friction_property = "friction";
 inline constexpr std::string_view material_restitution_property = "restitution";
+inline constexpr float heightfield_hole_sample = std::numeric_limits<float>::infinity();
 
 struct ShapeId {
     std::uint64_t value = 0;
@@ -82,6 +84,15 @@ struct TriangleMeshShapeDesc {
     std::vector<std::uint32_t> indices;
 };
 
+struct HeightFieldShapeDesc {
+    std::uint32_t sample_count = 0;
+    math::Vec3 offset{};
+    float sample_spacing_x = 1.0F;
+    float sample_spacing_z = 1.0F;
+    float vertical_scale = 1.0F;
+    std::vector<float> samples;
+};
+
 struct CompoundShapeChild {
     ShapeId shape{};
     math::Vec3 position{};
@@ -98,6 +109,7 @@ using ShapeDesc = std::variant<
     CapsuleShapeDesc,
     ConvexHullShapeDesc,
     TriangleMeshShapeDesc,
+    HeightFieldShapeDesc,
     CompoundShapeDesc
 >;
 
