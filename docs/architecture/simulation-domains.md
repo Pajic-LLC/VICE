@@ -4,11 +4,13 @@ VICE treats simulation as a set of engine-owned domains instead of one global ph
 
 A simulation domain can represent rigid bodies, fluids, structures, aerodynamics, thermal behavior, gameplay simulation, or another solver. The public VICE contract does not expose solver-specific types.
 
-## Domain identity
+## Domain identity and lifetime
 
 Every domain has a nonzero `DomainId` and a human-readable name.
 
 The coordinator rejects duplicate IDs. Domain IDs are runtime simulation identities. They are not entity IDs and they are not a persistence format.
+
+The coordinator does not own registered domains. A domain must remain alive until it is unregistered or until the coordinator is destroyed.
 
 ## Fixed steps
 
@@ -26,6 +28,8 @@ Domains expose three fidelity states:
 
 VICE does not prescribe what reduced fidelity means for a particular solver.
 
+A domain that is `off` does not receive interaction events for that step. Interaction events are step-scoped and are not replayed later if a domain was inactive.
+
 ## Interaction exchange
 
 Domains publish interactions through a VICE-owned emitter.
@@ -37,7 +41,7 @@ An interaction contains:
 - a string kind
 - an opaque byte payload owned by the event
 
-A missing target means broadcast.
+A missing target means broadcast to every registered domain, including the source domain.
 
 Interactions emitted during one coordinator step become visible during the next coordinator step. This prevents domain registration order from changing whether another domain sees an event in the same step.
 
