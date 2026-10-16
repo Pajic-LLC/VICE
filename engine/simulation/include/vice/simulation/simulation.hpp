@@ -33,6 +33,16 @@ struct ParticipantId {
     constexpr auto operator<=>(const ParticipantId&) const noexcept = default;
 };
 
+struct MaterialId {
+    std::uint64_t value = 0;
+
+    [[nodiscard]] constexpr explicit operator bool() const noexcept {
+        return value != 0;
+    }
+
+    constexpr auto operator<=>(const MaterialId&) const noexcept = default;
+};
+
 enum class Fidelity : std::uint8_t {
     off,
     reduced,
