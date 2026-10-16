@@ -1,3 +1,5 @@
+#include "lab_materials.hpp"
+
 #include <vice/core/build.hpp>
 #include <vice/core/log.hpp>
 #include <vice/core/platform.hpp>
@@ -11,6 +13,7 @@
 #include <vice/render/rhi.hpp>
 #include <vice/render/shader_asset.hpp>
 #include <vice/rigid_body/collision_asset.hpp>
+#include <vice/rigid_body/material_asset.hpp>
 #include <vice/rigid_body/rigid_body.hpp>
 #include <vice/rigid_body/world_bridge.hpp>
 #include <vice/simulation/entity_bindings.hpp>
@@ -597,6 +600,11 @@ int main() {
 
     vice::world::World world;
     if (!restore_lab_world(world)) return 1;
+    std::string material_role_diagnostics;
+    if (!vice::lab::ensure_material_roles(world, &material_role_diagnostics)) {
+        log(LogLevel::error, "VICE Lab material role migration failed: " + material_role_diagnostics);
+        return 1;
+    }
 
     const auto player_persistent_id = vice::world::PersistentId::parse(player_persistent_id_text);
     const auto cube_persistent_id = vice::world::PersistentId::parse(cube_persistent_id_text);
@@ -641,6 +649,50 @@ int main() {
         return nullptr;
     };
 
+    std::optional<vice::lab::LabMaterialSet> lab_materials;
+#if defined(VICE_LAB_COOKED_RIGID_MATERIALS)
+    auto loaded_materials = vice::lab::load_materials(world, VICE_LAB_COOKED_RIGID_MATERIALS);
+    if (!loaded_materials.materials.has_value()) {
+        log(LogLevel::error, "VICE Lab rigid material load failed: " + loaded_materials.diagnostics);
+        return 1;
+    }
+    lab_materials = std::move(*loaded_materials.materials);
+    std::string material_diagnostics;
+    if (!vice::rigid_body::register_rigid_material_asset(
+            *rigid_domain_a,
+            lab_materials->asset,
+            &material_diagnostics
+        ) ||
+        !vice::rigid_body::register_rigid_material_asset(
+            *rigid_domain_b,
+            lab_materials->asset,
+            &material_diagnostics
+        )) {
+        log(LogLevel::error, "VICE Lab rigid material registration failed: " + material_diagnostics);
+        return 1;
+    }
+    log(
+        LogLevel::info,
+        "VICE Lab materials: cube=" + lab_materials->cube.name + " (" +
+            std::to_string(lab_materials->cube.runtime_id.value) + "), terrain=" +
+            lab_materials->terrain_a.name + " (" +
+            std::to_string(lab_materials->terrain_a.runtime_id.value) + ")"
+    );
+#endif
+
+    const auto terrain_a_material = lab_materials.has_value()
+        ? lab_materials->terrain_a.runtime_id
+        : vice::simulation::MaterialId{};
+    const auto terrain_b_material = lab_materials.has_value()
+        ? lab_materials->terrain_b.runtime_id
+        : vice::simulation::MaterialId{};
+    const auto ramp_material = lab_materials.has_value()
+        ? lab_materials->ramp.runtime_id
+        : vice::simulation::MaterialId{};
+    const auto cube_material = lab_materials.has_value()
+        ? lab_materials->cube.runtime_id
+        : vice::simulation::MaterialId{};
+
     bool authored_collision_ready = false;
 #if defined(VICE_LAB_COOKED_SCENE_COLLISION) && defined(VICE_LAB_COOKED_TERRAIN_COLLISION)
     auto terrain_collision = vice::rigid_body::load_collision_asset(
@@ -684,18 +736,22 @@ int main() {
         return 1;
     }
 
-    vice::rigid_body::BodyDesc terrain_body;
-    terrain_body.participant = terrain_participant;
-    terrain_body.shape = terrain_collision.asset->shapes.front().id;
-    terrain_body.motion = vice::rigid_body::MotionType::static_body;
+    vice::rigid_body::BodyDesc terrain_body_a;
+    terrain_body_a.participant = terrain_participant;
+    terrain_body_a.shape = terrain_collision.asset->shapes.front().id;
+    terrain_body_a.material = terrain_a_material;
+    terrain_body_a.motion = vice::rigid_body::MotionType::static_body;
+    vice::rigid_body::BodyDesc terrain_body_b = terrain_body_a;
+    terrain_body_b.material = terrain_b_material;
 
     vice::rigid_body::BodyDesc ramp_body;
     ramp_body.participant = ramp_participant;
     ramp_body.shape = ramp_collision.asset->shapes.front().id;
+    ramp_body.material = ramp_material;
     ramp_body.motion = vice::rigid_body::MotionType::static_body;
 
-    if (!rigid_domain_a->create_body(terrain_body) ||
-        !rigid_domain_b->create_body(terrain_body) ||
+    if (!rigid_domain_a->create_body(terrain_body_a) ||
+        !rigid_domain_b->create_body(terrain_body_b) ||
         !rigid_domain_a->create_body(ramp_body)) {
         log(LogLevel::error, "VICE Lab could not create cooked scene collision bodies.");
         return 1;
@@ -707,10 +763,12 @@ int main() {
     if (!authored_collision_ready) {
         vice::rigid_body::BoxBodyDesc floor_a;
         floor_a.participant = terrain_participant;
+        floor_a.material = terrain_a_material;
         floor_a.motion = vice::rigid_body::MotionType::static_body;
         floor_a.half_extents = vice::math::Vec3{4.0F, 0.25F, 20.0F};
         floor_a.position = vice::math::Vec3{4.0F, -0.25F, 0.0F};
         vice::rigid_body::BoxBodyDesc floor_b = floor_a;
+        floor_b.material = terrain_b_material;
         if (!rigid_domain_a->create_box(floor_a) || !rigid_domain_b->create_box(floor_b)) {
             log(LogLevel::error, "VICE Lab could not create fallback regional floor collision.");
             return 1;
@@ -762,12 +820,11 @@ int main() {
 
     vice::rigid_body::BoxBodyDesc simulated_cube;
     simulated_cube.participant = cube_participant;
+    simulated_cube.material = cube_material;
     simulated_cube.motion = vice::rigid_body::MotionType::dynamic_body;
     simulated_cube.motion_quality = vice::rigid_body::MotionQuality::continuous;
     simulated_cube.half_extents = vice::math::Vec3{0.7F, 0.7F, 0.7F};
     simulated_cube.orientation = vice::math::Quat{0.0F, 0.0F, 0.2588190451F, 0.9659258263F};
-    simulated_cube.friction = 0.65F;
-    simulated_cube.restitution = 0.15F;
     if (second_region->fidelity == vice::world::RegionFidelity::inactive &&
         initial_cube_spatial->region == region_a) {
         simulated_cube.linear_velocity = vice::math::Vec3{5.0F, 0.0F, 0.0F};
@@ -792,12 +849,41 @@ int main() {
     log(LogLevel::info, std::string{"VICE Lab player: "} + player_persistent_id->to_string());
     log(
         LogLevel::info,
-        std::string{"VICE Lab region: "} + std::to_string(initial_player_spatial->region.value)
+        std::string{"VICE Lab player region: "} + std::to_string(initial_player_spatial->region.value)
+    );
+    log(
+        LogLevel::info,
+        std::string{"VICE Lab cube region: "} + std::to_string(initial_cube_spatial->region.value)
+    );
+    log(
+        LogLevel::info,
+        std::string{"VICE Lab active rigid regions: "} +
+            std::to_string(world_bridge.registered_region_count())
     );
     if (!region_b_needed_at_start) {
         log(LogLevel::info, "VICE Lab adjacent region 2 is inactive until requested.");
     }
     log(LogLevel::info, "VICE Lab controls: W/A/S/D or arrows move, Space jumps, Escape quits.");
+
+    const auto log_material_contacts = [&](
+        const vice::rigid_body::Domain& domain,
+        const vice::world::RegionId region
+    ) {
+        for (const auto& event : domain.contact_events()) {
+            if (event.phase != vice::rigid_body::ContactPhase::began ||
+                event.material_interaction.empty() ||
+                (event.first != cube_participant && event.second != cube_participant)) {
+                continue;
+            }
+            log(
+                LogLevel::info,
+                "VICE Lab material interaction: region=" + std::to_string(region.value) +
+                    " label=" + event.material_interaction +
+                    " friction=" + std::to_string(event.combined_friction) +
+                    " restitution=" + std::to_string(event.combined_restitution)
+            );
+        }
+    };
 
     constexpr float player_speed = 3.5F;
     constexpr float player_jump_speed = 5.5F;
@@ -920,6 +1006,13 @@ int main() {
             }
 
             simulation.step();
+            if (simulation.registered(rigid_domain_a_id)) {
+                log_material_contacts(*rigid_domain_a, region_a);
+            }
+            if (simulation.registered(rigid_domain_b_id)) {
+                log_material_contacts(*rigid_domain_b, region_b);
+            }
+
             world_bridge.orchestrate_characters(world, simulation);
             if (world_bridge.character_region_events().empty() ||
                 world_bridge.character_region_events().front().action ==
