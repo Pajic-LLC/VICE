@@ -8,11 +8,9 @@
 #include <cstdint>
 #include <fstream>
 #include <functional>
-#include <limits>
 #include <queue>
 #include <sstream>
 #include <string>
-#include <tuple>
 #include <type_traits>
 #include <unordered_map>
 #include <utility>
@@ -79,12 +77,16 @@ public:
         }
     }
 
-    [[nodiscard]] std::vector<std::byte> take() && {
-        return std::move(bytes_);
+    void write_bytes(const std::span<const std::byte> bytes) {
+        bytes_.insert(bytes_.end(), bytes.begin(), bytes.end());
     }
 
     [[nodiscard]] std::span<const std::byte> bytes() const noexcept {
         return bytes_;
+    }
+
+    [[nodiscard]] std::vector<std::byte> take() && {
+        return std::move(bytes_);
     }
 
 private:
@@ -119,14 +121,11 @@ private:
     return finite(position) && finite(orientation) && length_squared > 0.000001F;
 }
 
-[[nodiscard]] float distance_squared(
+[[nodiscard]] math::Vec3 subtract(
     const math::Vec3 left,
     const math::Vec3 right
 ) noexcept {
-    const float x = right.x - left.x;
-    const float y = right.y - left.y;
-    const float z = right.z - left.z;
-    return x * x + y * y + z * z;
+    return math::Vec3{left.x - right.x, left.y - right.y, left.z - right.z};
 }
 
 [[nodiscard]] math::Vec3 cross(
@@ -140,19 +139,19 @@ private:
     };
 }
 
-[[nodiscard]] math::Vec3 subtract(
-    const math::Vec3 left,
-    const math::Vec3 right
-) noexcept {
-    return math::Vec3{left.x - right.x, left.y - right.y, left.z - right.z};
-}
-
 [[nodiscard]] float dot(const math::Vec3 left, const math::Vec3 right) noexcept {
     return left.x * right.x + left.y * right.y + left.z * right.z;
 }
 
-[[nodiscard]] float vector_length_squared(const math::Vec3 value) noexcept {
+[[nodiscard]] float length_squared(const math::Vec3 value) noexcept {
     return dot(value, value);
+}
+
+[[nodiscard]] float distance_squared(
+    const math::Vec3 left,
+    const math::Vec3 right
+) noexcept {
+    return length_squared(subtract(right, left));
 }
 
 [[nodiscard]] bool hull_has_volume(
@@ -162,7 +161,7 @@ private:
         return false;
     }
 
-    const auto origin = desc.points.front();
+    const math::Vec3 origin = desc.points.front();
     std::size_t line_index = desc.points.size();
     for (std::size_t index = 1; index < desc.points.size(); ++index) {
         if (distance_squared(origin, desc.points[index]) > 1.0e-12F) {
@@ -174,7 +173,7 @@ private:
         return false;
     }
 
-    const auto line = subtract(desc.points[line_index], origin);
+    const math::Vec3 line = subtract(desc.points[line_index], origin);
     std::size_t plane_index = desc.points.size();
     math::Vec3 plane_normal{};
     for (std::size_t index = 1; index < desc.points.size(); ++index) {
@@ -182,7 +181,7 @@ private:
             continue;
         }
         plane_normal = cross(line, subtract(desc.points[index], origin));
-        if (vector_length_squared(plane_normal) > 1.0e-12F) {
+        if (length_squared(plane_normal) > 1.0e-12F) {
             plane_index = index;
             break;
         }
@@ -208,7 +207,7 @@ private:
     const math::Vec3 b,
     const math::Vec3 c
 ) noexcept {
-    return vector_length_squared(cross(subtract(b, a), subtract(c, a)));
+    return length_squared(cross(subtract(b, a), subtract(c, a)));
 }
 
 [[nodiscard]] std::string validate_shape(
@@ -295,9 +294,9 @@ private:
     );
 }
 
-[[nodiscard]] std::optional<ShapeTag> shape_tag(const rigid_body::ShapeDesc& desc) noexcept {
+[[nodiscard]] ShapeTag shape_tag(const rigid_body::ShapeDesc& desc) noexcept {
     return std::visit(
-        [](const auto& value) -> std::optional<ShapeTag> {
+        [](const auto& value) {
             using T = std::decay_t<decltype(value)>;
             if constexpr (std::is_same_v<T, rigid_body::BoxShapeDesc>) {
                 return ShapeTag::box;
@@ -309,10 +308,9 @@ private:
                 return ShapeTag::convex_hull;
             } else if constexpr (std::is_same_v<T, rigid_body::TriangleMeshShapeDesc>) {
                 return ShapeTag::triangle_mesh;
-            } else if constexpr (std::is_same_v<T, rigid_body::CompoundShapeDesc>) {
+            } else {
                 return ShapeTag::compound;
             }
-            return std::nullopt;
         },
         desc
     );
@@ -356,7 +354,7 @@ void write_shape_payload(Writer& writer, const rigid_body::ShapeDesc& desc) {
     );
 }
 
-[[nodiscard]] bool parse_trailing(std::istringstream& stream) {
+[[nodiscard]] bool has_trailing_token(std::istringstream& stream) {
     std::string extra;
     return static_cast<bool>(stream >> extra);
 }
@@ -393,7 +391,7 @@ ManifestParseResult parse_source_manifest(const std::string_view source) {
         if (!header_seen) {
             std::uint32_t version = 0;
             if (keyword != "vice-collision-source" || !(stream >> version) ||
-                version != 1U || parse_trailing(stream)) {
+                version != 1U || has_trailing_token(stream)) {
                 result.diagnostics = line_error(
                     line_number,
                     "expected 'vice-collision-source 1'."
@@ -499,7 +497,7 @@ ManifestParseResult parse_source_manifest(const std::string_view source) {
             return result;
         }
 
-        if (parse_trailing(stream)) {
+        if (has_trailing_token(stream)) {
             result.diagnostics = line_error(line_number, "unexpected trailing data.");
             return result;
         }
@@ -510,6 +508,7 @@ ManifestParseResult parse_source_manifest(const std::string_view source) {
         result.diagnostics = "Collision source manifest is missing its version header.";
         return result;
     }
+
     result.shapes = std::move(shapes);
     return result;
 }
@@ -584,8 +583,8 @@ CookResult cook(const std::span<const rigid_body::CollisionAssetShape> shapes) {
     std::vector<std::size_t> order;
     order.reserve(shapes.size());
     while (!ready.empty()) {
-        const auto [id, index] = ready.top();
-        (void)id;
+        const auto [shape_id, index] = ready.top();
+        (void)shape_id;
         ready.pop();
         order.push_back(index);
         for (const auto dependent : dependents[index]) {
@@ -602,13 +601,8 @@ CookResult cook(const std::span<const rigid_body::CollisionAssetShape> shapes) {
     Writer payload;
     for (const auto index : order) {
         const auto& shape = shapes[index];
-        const auto tag = shape_tag(shape.desc);
-        if (!tag.has_value()) {
-            result.diagnostics = "Collision source contains an unsupported shape type.";
-            return result;
-        }
         payload.write_u64(shape.id.value);
-        payload.write_u32(static_cast<std::uint32_t>(*tag));
+        payload.write_u32(static_cast<std::uint32_t>(shape_tag(shape.desc)));
         write_shape_payload(payload, shape.desc);
     }
 
@@ -619,293 +613,9 @@ CookResult cook(const std::span<const rigid_body::CollisionAssetShape> shapes) {
     file.write_u32(rigid_body::collision_asset_format_version);
     file.write_u32(static_cast<std::uint32_t>(shapes.size()));
     file.write_u64(result.source_fingerprint);
-    for (const std::byte value : payload.bytes()) {
-        const auto raw = static_cast<std::uint8_t>(value);
-        file.write_u32(0U);
-        auto temp = std::move(file).take();
-        temp.resize(temp.size() - 4U);
-        temp.push_back(static_cast<std::byte>(raw));
-        file = Writer{};
-        for (const auto existing : temp) {
-            const auto byte = static_cast<std::uint8_t>(existing);
-            file.write_u32(0U);
-            auto rebuilding = std::move(file).take();
-            rebuilding.resize(rebuilding.size() - 4U);
-            rebuilding.push_back(static_cast<std::byte>(byte));
-            file = Writer{};
-            for (const auto restored : rebuilding) {
-                const auto restored_byte = static_cast<std::uint8_t>(restored);
-                file.write_u32(0U);
-                auto next = std::move(file).take();
-                next.resize(next.size() - 4U);
-                next.push_back(static_cast<std::byte>(restored_byte));
-                file = Writer{};
-                for (const auto final_byte : next) {
-                    file.write_u32(0U);
-                    auto final_bytes = std::move(file).take();
-                    final_bytes.resize(final_bytes.size() - 4U);
-                    final_bytes.push_back(final_byte);
-                    file = Writer{};
-                    for (const auto copied : final_bytes) {
-                        file.write_u32(0U);
-                        auto copied_bytes = std::move(file).take();
-                        copied_bytes.resize(copied_bytes.size() - 4U);
-                        copied_bytes.push_back(copied);
-                        file = Writer{};
-                        for (const auto last : copied_bytes) {
-                            file.write_u32(0U);
-                            auto last_bytes = std::move(file).take();
-                            last_bytes.resize(last_bytes.size() - 4U);
-                            last_bytes.push_back(last);
-                            file = Writer{};
-                            for (const auto preserved : last_bytes) {
-                                file.write_u32(0U);
-                                auto preserved_bytes = std::move(file).take();
-                                preserved_bytes.resize(preserved_bytes.size() - 4U);
-                                preserved_bytes.push_back(preserved);
-                                file = Writer{};
-                                for (const auto final_preserved : preserved_bytes) {
-                                    file.write_u32(0U);
-                                    auto bytes = std::move(file).take();
-                                    bytes.resize(bytes.size() - 4U);
-                                    bytes.push_back(final_preserved);
-                                    file = Writer{};
-                                    for (const auto append : bytes) {
-                                        file.write_u32(0U);
-                                        auto append_bytes = std::move(file).take();
-                                        append_bytes.resize(append_bytes.size() - 4U);
-                                        append_bytes.push_back(append);
-                                        file = Writer{};
-                                        for (const auto stable : append_bytes) {
-                                            file.write_u32(0U);
-                                            auto stable_bytes = std::move(file).take();
-                                            stable_bytes.resize(stable_bytes.size() - 4U);
-                                            stable_bytes.push_back(stable);
-                                            file = Writer{};
-                                            for (const auto output : stable_bytes) {
-                                                file.write_u32(0U);
-                                                auto output_bytes = std::move(file).take();
-                                                output_bytes.resize(output_bytes.size() - 4U);
-                                                output_bytes.push_back(output);
-                                                file = Writer{};
-                                                for (const auto retained : output_bytes) {
-                                                    file.write_u32(0U);
-                                                    auto retained_bytes = std::move(file).take();
-                                                    retained_bytes.resize(retained_bytes.size() - 4U);
-                                                    retained_bytes.push_back(retained);
-                                                    file = Writer{};
-                                                    for (const auto byte_to_keep : retained_bytes) {
-                                                        file.write_u32(0U);
-                                                        auto keep = std::move(file).take();
-                                                        keep.resize(keep.size() - 4U);
-                                                        keep.push_back(byte_to_keep);
-                                                        file = Writer{};
-                                                        for (const auto actual : keep) {
-                                                            file.write_u32(0U);
-                                                            auto actual_bytes = std::move(file).take();
-                                                            actual_bytes.resize(actual_bytes.size() - 4U);
-                                                            actual_bytes.push_back(actual);
-                                                            file = Writer{};
-                                                            for (const auto complete : actual_bytes) {
-                                                                file.write_u32(0U);
-                                                                auto complete_bytes = std::move(file).take();
-                                                                complete_bytes.resize(complete_bytes.size() - 4U);
-                                                                complete_bytes.push_back(complete);
-                                                                file = Writer{};
-                                                                for (const auto value_to_copy : complete_bytes) {
-                                                                    file.write_u32(0U);
-                                                                    auto final = std::move(file).take();
-                                                                    final.resize(final.size() - 4U);
-                                                                    final.push_back(value_to_copy);
-                                                                    file = Writer{};
-                                                                    for (const auto value_to_restore : final) {
-                                                                        file.write_u32(0U);
-                                                                        auto restored = std::move(file).take();
-                                                                        restored.resize(restored.size() - 4U);
-                                                                        restored.push_back(value_to_restore);
-                                                                        file = Writer{};
-                                                                        for (const auto one_byte : restored) {
-                                                                            file.write_u32(0U);
-                                                                            auto one = std::move(file).take();
-                                                                            one.resize(one.size() - 4U);
-                                                                            one.push_back(one_byte);
-                                                                            file = Writer{};
-                                                                            for (const auto preserved_byte : one) {
-                                                                                file.write_u32(0U);
-                                                                                auto preserved_vector = std::move(file).take();
-                                                                                preserved_vector.resize(preserved_vector.size() - 4U);
-                                                                                preserved_vector.push_back(preserved_byte);
-                                                                                file = Writer{};
-                                                                                for (const auto copied_byte : preserved_vector) {
-                                                                                    file.write_u32(0U);
-                                                                                    auto copied_vector = std::move(file).take();
-                                                                                    copied_vector.resize(copied_vector.size() - 4U);
-                                                                                    copied_vector.push_back(copied_byte);
-                                                                                    file = Writer{};
-                                                                                    for (const auto restored_byte : copied_vector) {
-                                                                                        file.write_u32(0U);
-                                                                                        auto restored_vector = std::move(file).take();
-                                                                                        restored_vector.resize(restored_vector.size() - 4U);
-                                                                                        restored_vector.push_back(restored_byte);
-                                                                                        file = Writer{};
-                                                                                        for (const auto final_value : restored_vector) {
-                                                                                            file.write_u32(0U);
-                                                                                            auto final_vector = std::move(file).take();
-                                                                                            final_vector.resize(final_vector.size() - 4U);
-                                                                                            final_vector.push_back(final_value);
-                                                                                            file = Writer{};
-                                                                                            for (const auto raw_value : final_vector) {
-                                                                                                file.write_u32(0U);
-                                                                                                auto raw_vector = std::move(file).take();
-                                                                                                raw_vector.resize(raw_vector.size() - 4U);
-                                                                                                raw_vector.push_back(raw_value);
-                                                                                                file = Writer{};
-                                                                                                for (const auto final_raw : raw_vector) {
-                                                                                                    file.write_u32(0U);
-                                                                                                    auto finished = std::move(file).take();
-                                                                                                    finished.resize(finished.size() - 4U);
-                                                                                                    finished.push_back(final_raw);
-                                                                                                    file = Writer{};
-                                                                                                    for (const auto done : finished) {
-                                                                                                        file.write_u32(0U);
-                                                                                                        auto done_bytes = std::move(file).take();
-                                                                                                        done_bytes.resize(done_bytes.size() - 4U);
-                                                                                                        done_bytes.push_back(done);
-                                                                                                        file = Writer{};
-                                                                                                        for (const auto byte_done : done_bytes) {
-                                                                                                            file.write_u32(0U);
-                                                                                                            auto all = std::move(file).take();
-                                                                                                            all.resize(all.size() - 4U);
-                                                                                                            all.push_back(byte_done);
-                                                                                                            file = Writer{};
-                                                                                                            for (const auto final_copy : all) {
-                                                                                                                file.write_u32(0U);
-                                                                                                                auto final_all = std::move(file).take();
-                                                                                                                final_all.resize(final_all.size() - 4U);
-                                                                                                                final_all.push_back(final_copy);
-                                                                                                                file = Writer{};
-                                                                                                                for (const auto actual_final : final_all) {
-                                                                                                                    file.write_u32(0U);
-                                                                                                                    auto actual_all = std::move(file).take();
-                                                                                                                    actual_all.resize(actual_all.size() - 4U);
-                                                                                                                    actual_all.push_back(actual_final);
-                                                                                                                    file = Writer{};
-                                                                                                                    for (const auto last_value : actual_all) {
-                                                                                                                        file.write_u32(0U);
-                                                                                                                        auto last_vector = std::move(file).take();
-                                                                                                                        last_vector.resize(last_vector.size() - 4U);
-                                                                                                                        last_vector.push_back(last_value);
-                                                                                                                        file = Writer{};
-                                                                                                                        for (const auto appended : last_vector) {
-                                                                                                                            file.write_u32(0U);
-                                                                                                                            auto appended_vector = std::move(file).take();
-                                                                                                                            appended_vector.resize(appended_vector.size() - 4U);
-                                                                                                                            appended_vector.push_back(appended);
-                                                                                                                            file = Writer{};
-                                                                                                                            for (const auto keep_value : appended_vector) {
-                                                                                                                                file.write_u32(0U);
-                                                                                                                                auto keep_vector = std::move(file).take();
-                                                                                                                                keep_vector.resize(keep_vector.size() - 4U);
-                                                                                                                                keep_vector.push_back(keep_value);
-                                                                                                                                file = Writer{};
-                                                                                                                                for (const auto preserved_actual : keep_vector) {
-                                                                                                                                    file.write_u32(0U);
-                                                                                                                                    auto preserved_actual_vector = std::move(file).take();
-                                                                                                                                    preserved_actual_vector.resize(preserved_actual_vector.size() - 4U);
-                                                                                                                                    preserved_actual_vector.push_back(preserved_actual);
-                                                                                                                                    file = Writer{};
-                                                                                                                                    for (const auto final_actual : preserved_actual_vector) {
-                                                                                                                                        file.write_u32(0U);
-                                                                                                                                        auto final_actual_vector = std::move(file).take();
-                                                                                                                                        final_actual_vector.resize(final_actual_vector.size() - 4U);
-                                                                                                                                        final_actual_vector.push_back(final_actual);
-                                                                                                                                        file = Writer{};
-                                                                                                                                        for (const auto byte_final : final_actual_vector) {
-                                                                                                                                            file.write_u32(0U);
-                                                                                                                                            auto complete_final = std::move(file).take();
-                                                                                                                                            complete_final.resize(complete_final.size() - 4U);
-                                                                                                                                            complete_final.push_back(byte_final);
-                                                                                                                                            file = Writer{};
-                                                                                                                                            for (const auto x : complete_final) {
-                                                                                                                                                file.write_u32(0U);
-                                                                                                                                                auto y = std::move(file).take();
-                                                                                                                                                y.resize(y.size() - 4U);
-                                                                                                                                                y.push_back(x);
-                                                                                                                                                file = Writer{};
-                                                                                                                                                for (const auto z : y) {
-                                                                                                                                                    file.write_u32(0U);
-                                                                                                                                                    auto q = std::move(file).take();
-                                                                                                                                                    q.resize(q.size() - 4U);
-                                                                                                                                                    q.push_back(z);
-                                                                                                                                                    file = Writer{};
-                                                                                                                                                    for (const auto final_byte_value : q) {
-                                                                                                                                                        file.write_u32(0U);
-                                                                                                                                                        auto end = std::move(file).take();
-                                                                                                                                                        end.resize(end.size() - 4U);
-                                                                                                                                                        end.push_back(final_byte_value);
-                                                                                                                                                        file = Writer{};
-                                                                                                                                                        for (const auto restored_final : end) {
-                                                                                                                                                            file.write_u32(0U);
-                                                                                                                                                            auto restored_end = std::move(file).take();
-                                                                                                                                                            restored_end.resize(restored_end.size() - 4U);
-                                                                                                                                                            restored_end.push_back(restored_final);
-                                                                                                                                                            file = Writer{};
-                                                                                                                                                            for (const auto actual_end : restored_end) {
-                                                                                                                                                                file.write_u32(0U);
-                                                                                                                                                                auto actual_end_bytes = std::move(file).take();
-                                                                                                                                                                actual_end_bytes.resize(actual_end_bytes.size() - 4U);
-                                                                                                                                                                actual_end_bytes.push_back(actual_end);
-                                                                                                                                                                file = Writer{};
-                                                                                                                                                                for (const auto final_end : actual_end_bytes) {
-                                                                                                                                                                    file.write_u32(0U);
-                                                                                                                                                                    auto final_end_bytes = std::move(file).take();
-                                                                                                                                                                    final_end_bytes.resize(final_end_bytes.size() - 4U);
-                                                                                                                                                                    final_end_bytes.push_back(final_end);
-                                                                                                                                                                    result.bytes = std::move(final_end_bytes);
-                                                                                                                                                                }
-                                                                                                                                                            }
-                                                                                                                                                        }
-                                                                                                                                                    }
-                                                                                                                                                }
-                                                                                                                                            }
-                                                                                                                                        }
-                                                                                                                                    }
-                                                                                                                                }
-                                                                                                                            }
-                                                                                                                        }
-                                                                                                                    }
-                                                                                                                }
-                                                                                                            }
-                                                                                                        }
-                                                                                                    }
-                                                                                                }
-                                                                                            }
-                                                                                        }
-                                                                                    }
-                                                                                }
-                                                                            }
-                                                                        }
-                                                                    }
-                                                                }
-                                                            }
-                                                        }
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
+    file.write_bytes(payload.bytes());
 
-    if (result.bytes.empty()) {
-        result.bytes = std::move(file).take();
-    }
+    result.bytes = std::move(file).take();
     result.success = true;
     return result;
 }
@@ -920,7 +630,8 @@ bool write_asset(
         std::filesystem::create_directories(path.parent_path(), error);
         if (error) {
             if (diagnostics != nullptr) {
-                *diagnostics = "Could not create collision asset output directory: " + error.message();
+                *diagnostics =
+                    "Could not create collision asset output directory: " + error.message();
             }
             return false;
         }
