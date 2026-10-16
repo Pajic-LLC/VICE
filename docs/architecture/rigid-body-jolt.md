@@ -14,6 +14,8 @@ Public VICE rigid-body headers expose:
 - rigid `ConstraintId`
 - box, sphere, capsule, convex hull, indexed triangle mesh, heightfield, and compound shape descriptions
 - fixed, hinge, slider, and distance constraint descriptions
+- hinge and slider motor controls
+- constraint break thresholds and break events
 - static or dynamic motion
 - local position and orientation
 - linear and angular velocity
@@ -25,7 +27,7 @@ Public VICE rigid-body headers expose:
 - VICE-owned material-pair interaction rules
 - VICE-owned raycast, overlap, and sweep results
 
-Orientation uses `vice::math::Quat`. Solver state, contact data, query results, and constraint state are converted to VICE types before they leave the backend.
+Orientation uses `vice::math::Quat`. Solver state, contact data, query results, constraint state, solver impulse measurements, and constraint break events are converted to VICE types before they leave the backend.
 
 No Jolt type, body ID, constraint pointer, shape pointer, allocator, job system, contact manifold, collector, mesh tree, sub-shape ID, or physics system appears in the public API.
 
@@ -101,7 +103,7 @@ Rigid constraints use VICE-owned `ConstraintId` values and reference connected b
 
 Constraints are local to one rigid domain. Both referenced participants must already exist in that domain, must be different participants, and at least one body must be dynamic. A `ConstraintId` must be unique among live constraints in the domain.
 
-The initial constraint set is fixed, hinge, slider, and distance:
+The constraint set is fixed, hinge, slider, and distance:
 
 - fixed captures the bodies' current relative position and orientation when it is created
 - hinge uses a common local-domain anchor, hinge axis, and perpendicular normal axis; its current coordinate is the hinge angle in radians
@@ -112,11 +114,23 @@ Hinge limits use radians. The minimum angle is in `[-pi, 0]` and the maximum ang
 
 Hinge, slider, and distance limits can use `ConstraintSpring`. The public spring form is frequency in hertz plus damping ratio. A frequency of zero keeps the native hard-limit behavior. Spring values must be finite and non-negative.
 
+Hinge and slider constraints can be powered. `ConstraintMotorMode` supports off, velocity, position, and combined position plus velocity control. Hinge motors accept target angular velocity and target angle. Slider motors accept target linear velocity and target position. Runtime setters can change the motor without recreating the constraint.
+
+Motor caps are expressed as force or torque, not impulse. The hinge cap is maximum torque and the slider cap is maximum force. The native solver converts those caps to per-step impulse limits using the fixed simulation timestep. Position control also requires an active drive spring. VICE exposes the completed-step motor impulse so tests and higher-level systems can verify actuator loading without depending on Jolt types.
+
+`ConstraintState` reports completed-step linear and angular solver impulse magnitudes for all supported constraints. Hinge and slider state also reports the limit impulse, motor impulse, current motor mode, and current joint coordinate. These are native solver impulses converted to VICE scalar values after the physics update completes.
+
+Each constraint can optionally define linear and angular break impulse thresholds. Thresholds must be finite and greater than zero. Break thresholds are impulses measured from one completed physics step. They are intentionally not named forces because VICE does not hide an implicit timestep conversion in the break contract.
+
+Break evaluation happens only after Jolt finishes the update and all solver jobs are complete. VICE collects every threshold violation, sorts candidates by `ConstraintId`, removes the broken constraints in that stable order, and then publishes `ConstraintBreakEvent` records in the same order. A broken constraint therefore never mutates Jolt's live constraint list while the solver is using it.
+
+A break event reports the constraint ID and type, both participant IDs, and the completed-step linear and angular impulse magnitudes that caused the decision. A broken constraint is removed, so it no longer blocks destruction of its former bodies.
+
 A disabled constraint remains a live constraint. Disabling it stops solver enforcement but does not release lifetime ownership. A body cannot be destroyed while any live two-body constraint references it. The constraint must be destroyed first. This keeps native solver references valid and makes teardown requirements explicit.
 
-Constraint enable and destroy operations wake referenced dynamic bodies when needed. Constraint IDs are also used to derive stable native solver priority, which avoids relying only on incidental pointer identity for solver ordering.
+Constraint enable, motor update, and destroy operations wake referenced dynamic bodies when needed. Constraint IDs are also used to derive stable native solver priority, which avoids relying only on incidental pointer identity for solver ordering.
 
-The current constraint API does not yet define motors, break thresholds, exact constraint impulse reporting, serialized constraint state, or automatic constraint transfer between large-world islands.
+The current constraint API does not yet define serialized constraint state or automatic constraint transfer between large-world islands.
 
 ## Fixed stepping
 
@@ -124,7 +138,7 @@ The backend implements the existing `simulation::Domain` interface and consumes 
 
 VICE Lab steps the rigid domain at 120 Hz with a frame-time accumulator. Rendering samples the latest completed solver state.
 
-Jolt cross-platform deterministic build mode is enabled for the pinned backend. This is a starting policy, not a promise that every future physics operation has deterministic ordering. VICE defines public contact and query ordering independently from Jolt callback or collector order.
+Jolt cross-platform deterministic build mode is enabled for the pinned backend. This is a starting policy, not a promise that every future physics operation has deterministic ordering. VICE defines public contact, query, and break-event ordering independently from Jolt callback, collector, or native constraint-list order.
 
 ## Rendering proof
 
@@ -162,16 +176,13 @@ The collision import handoff accepts importer-produced mesh data, source transfo
 
 ## Current scope
 
-The rigid-body foundation supports static and dynamic primitive and convex bodies, reusable box, sphere, capsule, convex hull, triangle mesh, heightfield, and compound shape resources, authored level geometry, general bodies created from registered shapes, body destruction, pose and velocity reads, active-state control, fixed-step simulation, VICE-owned parallel job scheduling, shared material mapping, material-pair response overrides, collision events, trigger events, raycasts, shape overlaps, shape sweeps, fixed, hinge, slider, and distance constraints, frequency/damping limit springs, offline collision cooking, collision import handoff, world binding, a solver-driven rendering proof, World position synchronization, and box handoff between local rigid simulation islands when no live constraint blocks the transfer.
+The rigid-body foundation supports static and dynamic primitive and convex bodies, reusable box, sphere, capsule, convex hull, triangle mesh, heightfield, and compound shape resources, authored level geometry, general bodies created from registered shapes, body destruction, pose and velocity reads, active-state control, fixed-step simulation, VICE-owned parallel job scheduling, shared material mapping, material-pair response overrides, collision events, trigger events, raycasts, shape overlaps, shape sweeps, fixed, hinge, slider, and distance constraints, frequency/damping limit springs, hinge and slider motors, runtime motor retargeting, force and torque caps, completed-step constraint impulse reporting, deterministic breakable constraints, offline collision cooking, collision import handoff, world binding, a solver-driven rendering proof, World position synchronization, and box handoff between local rigid simulation islands when no live constraint blocks the transfer.
 
 It does not yet define:
 
-- constraint motors or powered actuation
-- breakable constraint thresholds
-- exact constraint impulse reporting
 - continuous collision policy
 - exact post-solve contact impulse reporting
-- solver serialization
+- solver or constraint serialization
 - general registered-shape transfer between large-world islands
 - constraint transfer between islands
 - contact-cache or warm-start transfer between islands

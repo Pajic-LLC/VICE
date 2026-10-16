@@ -11,7 +11,9 @@ using ViceJobSystem = ::vice::rigid_body::detail::JoltJobSystem;
 
 #define JobSystemThreadPool ViceJobSystem
 #define destroy_body destroy_body_unchecked
+#define step step_unchecked
 #include "jolt_rigid_body.cpp"
+#undef step
 #undef destroy_body
 #undef JobSystemThreadPool
 
