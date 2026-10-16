@@ -20,6 +20,7 @@
 #include <Jolt/Physics/Collision/Shape/ConvexHullShape.h>
 #include <Jolt/Physics/Collision/Shape/MeshShape.h>
 #include <Jolt/Physics/Collision/Shape/SphereShape.h>
+#include <Jolt/Physics/Collision/Shape/StaticCompoundShape.h>
 #include <Jolt/Physics/Collision/Shape/SubShapeIDPair.h>
 #include <Jolt/Physics/Collision/ShapeCast.h>
 #include <Jolt/Physics/PhysicsSystem.h>
@@ -269,7 +270,11 @@ template <typename Vector>
         desc.indices.size() % 3U != 0U) {
         return false;
     }
-    if (!std::all_of(desc.vertices.begin(), desc.vertices.end(), finite)) {
+    if (!std::all_of(
+            desc.vertices.begin(),
+            desc.vertices.end(),
+            [](const math::Vec3 value) { return finite(value); }
+        )) {
         return false;
     }
     for (std::size_t index = 0; index < desc.indices.size(); index += 3U) {
@@ -359,7 +364,11 @@ template <typename Vector>
                 return JPH::RefConst<JPH::Shape>{result.Get()};
             } else if constexpr (std::is_same_v<T, ConvexHullShapeDesc>) {
                 if (shape_desc.points.size() < 4U ||
-                    !std::all_of(shape_desc.points.begin(), shape_desc.points.end(), finite)) {
+                    !std::all_of(
+                        shape_desc.points.begin(),
+                        shape_desc.points.end(),
+                        [](const math::Vec3 value) { return finite(value); }
+                    )) {
                     return std::nullopt;
                 }
                 JPH::Array<JPH::Vec3> points;
