@@ -11,7 +11,7 @@ Public VICE rigid-body headers expose:
 - `ParticipantId`
 - shared `MaterialId`
 - rigid `ShapeId`
-- box, sphere, capsule, convex hull, indexed triangle mesh, and compound shape descriptions
+- box, sphere, capsule, convex hull, indexed triangle mesh, heightfield, and compound shape descriptions
 - static or dynamic motion
 - local position and orientation
 - linear and angular velocity
@@ -79,17 +79,17 @@ See `docs/architecture/rigid-body-contacts.md` for the event and material contra
 
 ## Shapes and queries
 
-Rigid domains can register immutable box, sphere, capsule, convex hull, indexed triangle mesh, and compound shape resources through VICE-owned `ShapeId` values. Multiple bodies can share one registered shape.
+Rigid domains can register immutable box, sphere, capsule, convex hull, indexed triangle mesh, heightfield, and compound shape resources through VICE-owned `ShapeId` values. Multiple bodies can share one registered shape.
 
 A registered shape cannot be removed while a live body references it. A child shape also cannot be removed while a registered compound references it. The older `create_box` entry point remains available as a compatibility path and does not require a public shape registration.
 
-Convex shapes can be used by static and dynamic bodies and as moving overlap or sweep probes. Triangle meshes are environment geometry and are static-only. A compound inherits static-only behavior when any child requires it.
+Convex shapes can be used by static and dynamic bodies and as moving overlap or sweep probes. Triangle meshes and heightfields are environment geometry and are static-only. A compound inherits static-only behavior when any child requires it.
 
 The spatial query set is closest-hit raycast, all-hit shape overlap, and closest-hit shape sweep. Filters can include or exclude static bodies, dynamic bodies, triggers, and one participant.
 
 VICE defines public query ordering independently from native collector order. Equal ray or sweep fractions resolve by participant ID. Overlaps are reduced to one hit per participant and sorted by participant ID.
 
-See `docs/architecture/rigid-body-shapes-queries.md` for the base shape and query contract and `docs/architecture/rigid-body-game-geometry.md` for authored geometry rules.
+See `docs/architecture/rigid-body-shapes-queries.md` for the base shape and query contract, `docs/architecture/rigid-body-game-geometry.md` for authored geometry rules, and `docs/architecture/0013-heightfield-terrain.md` for terrain.
 
 ## Fixed stepping
 
@@ -111,18 +111,34 @@ The old elapsed-time cube animation is not part of this path. The visible cube t
 
 ## Jobs
 
-The first backend uses Jolt's reference thread-pool job system internally.
+Rigid physics uses `VICE::Jobs` for parallel solver work.
 
-Jolt supports replacing this with an engine job-system implementation. A later performance slice should adapt Jolt jobs onto `VICE::Jobs` so VICE owns scheduling policy across simulation domains.
+`Domain::create` accepts a caller-owned `jobs::Scheduler`. VICE Lab passes the same scheduler it already uses for engine work. The scheduler must outlive every rigid domain that uses it. Multiple rigid domains may share one scheduler.
+
+The backend implements Jolt's job-system contract privately. Jolt still owns job dependencies and barrier semantics, but executable Jolt jobs are submitted to the VICE scheduler as high-priority worker tasks named `jolt.physics`. Jolt job objects never leave the backend.
+
+After a Jolt barrier wait completes, the adapter waits for the VICE wrapper tasks submitted by that update. A physics update therefore does not return while one of its VICE job wrappers is still outstanding.
+
+`DomainConfig::worker_threads` is retained as a concurrency hint for the Jolt adapter. It does not create or own threads. The scheduler owns worker threads and scheduling policy.
+
+The legacy domain creation overload without a scheduler uses a single-thread compatibility path. It does not create a private Jolt worker pool.
+
+VICE job event sinks can observe `jolt.physics` submission, start, completion, and failure events through the normal job instrumentation path.
+
+## Collision assets and import
+
+Authored rigid geometry can be cooked offline into VICE collision assets. Runtime code consumes VICE-owned collision data and never parses FBX, glTF, OBJ, or another authoring format inside the physics backend.
+
+The collision import handoff accepts importer-produced mesh data, source transforms, stable source keys, and collision authoring metadata. It feeds structured VICE geometry to the collision cooker while allowing render and collision meshes to remain separate.
+
+`VICECOLL` version 1 remains valid for legacy geometry. Version 2 adds heightfield terrain while preserving the existing header and fingerprint model.
 
 ## Current scope
 
-The rigid-body foundation supports static and dynamic primitive and convex bodies, reusable box, sphere, capsule, convex hull, triangle mesh, and compound shape resources, static authored level meshes, general bodies created from registered shapes, body destruction, position and orientation reads, linear and angular velocity reads, active-state control, fixed-step simulation, shared material mapping, material-pair response overrides, collision events, trigger events, raycasts, shape overlaps, shape sweeps, world binding, a solver-driven rendering proof, World position synchronization, and box handoff between local rigid simulation islands.
+The rigid-body foundation supports static and dynamic primitive and convex bodies, reusable box, sphere, capsule, convex hull, triangle mesh, heightfield, and compound shape resources, authored level geometry, general bodies created from registered shapes, body destruction, pose and velocity reads, active-state control, fixed-step simulation, VICE-owned parallel job scheduling, shared material mapping, material-pair response overrides, collision events, trigger events, raycasts, shape overlaps, shape sweeps, offline collision cooking, collision import handoff, world binding, a solver-driven rendering proof, World position synchronization, and box handoff between local rigid simulation islands.
 
 It does not yet define:
 
-- heightfield terrain shapes
-- offline collision asset cooking
 - constraints
 - continuous collision policy
 - exact post-solve impulse reporting
