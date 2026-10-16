@@ -11,6 +11,7 @@ target_link_libraries(
     VICE::World
     VICE::SimulationWorld
     VICE::RigidBody
+    VICE::RigidBodyWorld
 )
 target_compile_features(vice_lab PRIVATE cxx_std_23)
 target_compile_definitions(
