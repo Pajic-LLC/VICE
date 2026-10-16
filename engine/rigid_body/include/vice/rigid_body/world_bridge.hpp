@@ -35,6 +35,10 @@ struct RegionActivationRequest {
     world::StreamingCellId target_cell{};
 };
 
+struct CharacterRegionOrchestrationConfig {
+    float prefetch_seconds = 0.5F;
+};
+
 class WorldBridge {
 public:
     bool register_region(
@@ -97,7 +101,8 @@ public:
 
     void orchestrate_characters(
         world::World& world,
-        const simulation::Coordinator& coordinator
+        const simulation::Coordinator& coordinator,
+        CharacterRegionOrchestrationConfig config = {}
     );
 
     [[nodiscard]] std::span<const CharacterRegionEvent> character_region_events() const noexcept {
