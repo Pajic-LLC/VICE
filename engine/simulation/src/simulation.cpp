@@ -110,7 +110,7 @@ bool Coordinator::set_fixed_delta_seconds(const double seconds) noexcept {
     return true;
 }
 
-bool Coordinator::step() {
+void Coordinator::step() {
     std::vector<InteractionEvent> emitted_interactions;
 
     for (auto& entry : domains_) {
@@ -167,9 +167,7 @@ bool Coordinator::step() {
             .fixed_delta_seconds = fixed_delta_seconds_,
             .incoming = incoming,
         };
-        if (!entry.domain->step(context, emitter)) {
-            return false;
-        }
+        entry.domain->step(context, emitter);
 
         ++entry.completed_steps;
         entry.received_interactions += incoming.size();
@@ -178,7 +176,6 @@ bool Coordinator::step() {
 
     pending_interactions_ = std::move(emitted_interactions);
     ++step_index_;
-    return true;
 }
 
 std::vector<DomainDebugSnapshot> Coordinator::debug_snapshots() const {
