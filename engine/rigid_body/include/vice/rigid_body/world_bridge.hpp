@@ -27,6 +27,21 @@ struct CharacterRegionEvent {
     CharacterRegionAction action = CharacterRegionAction::stayed;
 };
 
+enum class BoxRegionAction : std::uint8_t {
+    stayed,
+    handed_off,
+    activation_requested,
+    no_target,
+    failed,
+};
+
+struct BoxRegionEvent {
+    world::PersistentId owner{};
+    world::RegionId source_region{};
+    std::optional<world::RegionId> target_region;
+    BoxRegionAction action = BoxRegionAction::stayed;
+};
+
 struct RegionActivationRequest {
     world::PersistentId owner{};
     world::RegionId source_region{};
@@ -39,11 +54,22 @@ struct CharacterRegionOrchestrationConfig {
     float prefetch_seconds = 0.5F;
 };
 
+struct BoxRegionOrchestrationConfig {
+    float prefetch_seconds = 0.5F;
+};
+
 class WorldBridge {
 public:
     bool register_region(
         const world::World& world,
         const simulation::Coordinator& coordinator,
+        world::RegionId region,
+        Domain& domain
+    );
+
+    bool activate_region(
+        world::World& world,
+        simulation::Coordinator& coordinator,
         world::RegionId region,
         Domain& domain
     );
@@ -71,6 +97,13 @@ public:
         simulation::EntityBindings& bindings,
         world::EntityId entity,
         world::RegionId target_region
+    );
+
+    void orchestrate_boxes(
+        world::World& world,
+        const simulation::Coordinator& coordinator,
+        simulation::EntityBindings& bindings,
+        BoxRegionOrchestrationConfig config = {}
     );
 
     bool create_character(
@@ -109,6 +142,10 @@ public:
         return character_region_events_;
     }
 
+    [[nodiscard]] std::span<const BoxRegionEvent> box_region_events() const noexcept {
+        return box_region_events_;
+    }
+
     [[nodiscard]] std::span<const RegionActivationRequest> region_activation_requests() const noexcept {
         return region_activation_requests_;
     }
@@ -119,6 +156,10 @@ public:
 
     [[nodiscard]] std::size_t registered_region_count() const noexcept {
         return regions_.size();
+    }
+
+    [[nodiscard]] std::size_t box_count() const noexcept {
+        return boxes_.size();
     }
 
     [[nodiscard]] std::size_t character_count() const noexcept {
@@ -168,6 +209,7 @@ private:
     std::vector<BoxRecord> boxes_;
     std::vector<CharacterRecord> characters_;
     std::vector<CharacterRegionEvent> character_region_events_;
+    std::vector<BoxRegionEvent> box_region_events_;
     std::vector<RegionActivationRequest> region_activation_requests_;
 };
 
