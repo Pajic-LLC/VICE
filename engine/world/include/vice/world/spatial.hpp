@@ -67,12 +67,20 @@ enum class RegionFidelity : std::uint8_t {
     full,
 };
 
+struct RegionBounds {
+    LocalPosition min{};
+    LocalPosition max{};
+
+    friend bool operator==(const RegionBounds&, const RegionBounds&) = default;
+};
+
 struct RegionDesc {
     RegionId id{};
     SimulationIslandId simulation_island{};
     GlobalPosition origin{};
     StreamingCellId streaming_cell{};
     RegionFidelity fidelity = RegionFidelity::full;
+    std::optional<RegionBounds> bounds;
 };
 
 struct SpatialState {
@@ -91,6 +99,23 @@ struct SpatialReference {
 
 [[nodiscard]] inline bool finite(const LocalPosition value) noexcept {
     return std::isfinite(value.x) && std::isfinite(value.y) && std::isfinite(value.z);
+}
+
+[[nodiscard]] inline bool valid(const RegionBounds& bounds) noexcept {
+    return finite(bounds.min) && finite(bounds.max) &&
+        bounds.min.x < bounds.max.x &&
+        bounds.min.y < bounds.max.y &&
+        bounds.min.z < bounds.max.z;
+}
+
+[[nodiscard]] inline bool contains(
+    const RegionBounds& bounds,
+    const LocalPosition position
+) noexcept {
+    return valid(bounds) && finite(position) &&
+        position.x >= bounds.min.x && position.x < bounds.max.x &&
+        position.y >= bounds.min.y && position.y < bounds.max.y &&
+        position.z >= bounds.min.z && position.z < bounds.max.z;
 }
 
 [[nodiscard]] inline std::optional<LocalPosition> to_local_position(
@@ -137,6 +162,17 @@ struct SpatialReference {
         return std::nullopt;
     }
     return global;
+}
+
+[[nodiscard]] inline bool contains(
+    const RegionDesc& region,
+    const GlobalPosition position
+) noexcept {
+    if (!region.bounds.has_value()) {
+        return false;
+    }
+    const auto local = to_local_position(position, region.origin);
+    return local.has_value() && contains(*region.bounds, *local);
 }
 
 [[nodiscard]] inline std::optional<LocalPosition> camera_relative_position(
