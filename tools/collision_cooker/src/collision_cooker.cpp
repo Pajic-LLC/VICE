@@ -128,7 +128,7 @@ private:
     return math::Vec3{left.x - right.x, left.y - right.y, left.z - right.z};
 }
 
-[[nodiscard]] math::Vec3 cross(
+[[nodiscard]] math::Vec3 vector_cross(
     const math::Vec3 left,
     const math::Vec3 right
 ) noexcept {
@@ -139,12 +139,15 @@ private:
     };
 }
 
-[[nodiscard]] float dot(const math::Vec3 left, const math::Vec3 right) noexcept {
+[[nodiscard]] float vector_dot(
+    const math::Vec3 left,
+    const math::Vec3 right
+) noexcept {
     return left.x * right.x + left.y * right.y + left.z * right.z;
 }
 
 [[nodiscard]] float length_squared(const math::Vec3 value) noexcept {
-    return dot(value, value);
+    return vector_dot(value, value);
 }
 
 [[nodiscard]] float distance_squared(
@@ -180,7 +183,7 @@ private:
         if (index == line_index) {
             continue;
         }
-        plane_normal = cross(line, subtract(desc.points[index], origin));
+        plane_normal = vector_cross(line, subtract(desc.points[index], origin));
         if (length_squared(plane_normal) > 1.0e-12F) {
             plane_index = index;
             break;
@@ -194,7 +197,10 @@ private:
         if (index == line_index || index == plane_index) {
             continue;
         }
-        const float volume = dot(plane_normal, subtract(desc.points[index], origin));
+        const float volume = vector_dot(
+            plane_normal,
+            subtract(desc.points[index], origin)
+        );
         if (volume * volume > 1.0e-12F) {
             return true;
         }
@@ -207,7 +213,7 @@ private:
     const math::Vec3 b,
     const math::Vec3 c
 ) noexcept {
-    return length_squared(cross(subtract(b, a), subtract(c, a)));
+    return length_squared(vector_cross(subtract(b, a), subtract(c, a)));
 }
 
 [[nodiscard]] std::string validate_shape(
