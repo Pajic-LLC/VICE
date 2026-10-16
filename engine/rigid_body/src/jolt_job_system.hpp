@@ -2,6 +2,7 @@
 
 #include <vice/jobs/jobs.hpp>
 
+#include <Jolt/Jolt.h>
 #include <Jolt/Core/JobSystemWithBarrier.h>
 
 #include <mutex>
