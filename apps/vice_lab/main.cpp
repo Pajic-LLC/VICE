@@ -9,6 +9,8 @@
 #include <vice/platform/services.hpp>
 #include <vice/render/rhi.hpp>
 #include <vice/render/shader_asset.hpp>
+#include <vice/rigid_body/rigid_body.hpp>
+#include <vice/simulation/entity_bindings.hpp>
 #include <vice/world/world.hpp>
 
 #include <algorithm>
@@ -34,6 +36,7 @@ struct LabVertex {
 };
 
 static_assert(sizeof(LabVertex) == 24U);
+static_assert(sizeof(vice::math::Mat4) == 64U);
 
 static constexpr std::array<LabVertex, 8> cube_vertices{{
     {{-0.7F, -0.7F, -0.7F}, {0.16F, 0.68F, 1.00F}},
@@ -55,7 +58,7 @@ static constexpr std::array<std::uint16_t, 36> cube_indices{
     0, 1, 5, 0, 5, 4,
 };
 
-static constexpr std::array cube_attributes{
+static constexpr std::array cube_vertex_attributes{
     vice::render::VertexAttributeDesc{
         .semantic = "POSITION",
         .semantic_index = 0,
@@ -72,12 +75,49 @@ static constexpr std::array cube_attributes{
     },
 };
 
+static constexpr std::array cube_instance_attributes{
+    vice::render::VertexAttributeDesc{
+        .semantic = "TEXCOORD",
+        .semantic_index = 0,
+        .shader_location = 2,
+        .format = vice::render::VertexFormat::float32x4,
+        .offset = 0,
+    },
+    vice::render::VertexAttributeDesc{
+        .semantic = "TEXCOORD",
+        .semantic_index = 1,
+        .shader_location = 3,
+        .format = vice::render::VertexFormat::float32x4,
+        .offset = 16,
+    },
+    vice::render::VertexAttributeDesc{
+        .semantic = "TEXCOORD",
+        .semantic_index = 2,
+        .shader_location = 4,
+        .format = vice::render::VertexFormat::float32x4,
+        .offset = 32,
+    },
+    vice::render::VertexAttributeDesc{
+        .semantic = "TEXCOORD",
+        .semantic_index = 3,
+        .shader_location = 5,
+        .format = vice::render::VertexFormat::float32x4,
+        .offset = 48,
+    },
+};
+
 static constexpr std::array cube_vertex_layouts{
     vice::render::VertexBufferLayoutDesc{
         .stride = sizeof(LabVertex),
         .step_mode = vice::render::VertexStepMode::per_vertex,
         .step_rate = 1,
-        .attributes = cube_attributes,
+        .attributes = cube_vertex_attributes,
+    },
+    vice::render::VertexBufferLayoutDesc{
+        .stride = sizeof(vice::math::Mat4),
+        .step_mode = vice::render::VertexStepMode::per_instance,
+        .step_rate = 1,
+        .attributes = cube_instance_attributes,
     },
 };
 
@@ -88,6 +128,10 @@ using namespace metal;
 struct VertexIn {
     float3 position [[attribute(11)]];
     float3 color [[attribute(12)]];
+    float4 model_col0 [[attribute(13)]];
+    float4 model_col1 [[attribute(14)]];
+    float4 model_col2 [[attribute(15)]];
+    float4 model_col3 [[attribute(16)]];
 };
 
 struct VertexOut {
@@ -96,27 +140,17 @@ struct VertexOut {
 };
 
 vertex VertexOut vice_cube_vs(VertexIn input [[stage_in]]) {
-    constexpr float cy = 0.8525245;
-    constexpr float sy = 0.5226872;
-    constexpr float cx = 0.9393727;
-    constexpr float sx = -0.3428978;
-
-    float3 yawed = float3(
-        cy * input.position.x + sy * input.position.z,
-        input.position.y,
-        -sy * input.position.x + cy * input.position.z
-    );
-    float3 rotated = float3(
-        yawed.x,
-        cx * yawed.y - sx * yawed.z,
-        sx * yawed.y + cx * yawed.z
-    );
-    float z_view = rotated.z - 3.2;
+    float4 world_position =
+        input.model_col0 * input.position.x +
+        input.model_col1 * input.position.y +
+        input.model_col2 * input.position.z +
+        input.model_col3;
+    float z_view = world_position.z - 5.0;
 
     VertexOut out;
     out.position = float4(
-        0.9742786 * rotated.x,
-        1.7320508 * rotated.y,
+        0.9742786 * world_position.x,
+        1.7320508 * world_position.y,
         -1.001001 * z_view - 0.1001001,
         -z_view
     );
@@ -133,6 +167,10 @@ constexpr std::string_view hlsl_cube_source = R"(
 struct VertexIn {
     float3 position : POSITION0;
     float3 color : COLOR0;
+    float4 model_col0 : TEXCOORD0;
+    float4 model_col1 : TEXCOORD1;
+    float4 model_col2 : TEXCOORD2;
+    float4 model_col3 : TEXCOORD3;
 };
 
 struct VertexOut {
@@ -141,27 +179,17 @@ struct VertexOut {
 };
 
 VertexOut vice_cube_vs(VertexIn input) {
-    const float cy = 0.8525245;
-    const float sy = 0.5226872;
-    const float cx = 0.9393727;
-    const float sx = -0.3428978;
-
-    float3 yawed = float3(
-        cy * input.position.x + sy * input.position.z,
-        input.position.y,
-        -sy * input.position.x + cy * input.position.z
-    );
-    float3 rotated = float3(
-        yawed.x,
-        cx * yawed.y - sx * yawed.z,
-        sx * yawed.y + cx * yawed.z
-    );
-    float z_view = rotated.z - 3.2;
+    float4 world_position =
+        input.model_col0 * input.position.x +
+        input.model_col1 * input.position.y +
+        input.model_col2 * input.position.z +
+        input.model_col3;
+    float z_view = world_position.z - 5.0;
 
     VertexOut output;
     output.position = float4(
-        0.9742786 * rotated.x,
-        1.7320508 * rotated.y,
+        0.9742786 * world_position.x,
+        1.7320508 * world_position.y,
         -1.001001 * z_view - 0.1001001,
         -z_view
     );
@@ -411,6 +439,12 @@ int main() {
     vertex_buffer_desc.memory = vice::render::MemoryLocation::cpu_to_gpu;
     vertex_buffer_desc.debug_name = "VICE Lab cube vertices";
 
+    vice::render::BufferDesc instance_buffer_desc;
+    instance_buffer_desc.size = sizeof(vice::math::Mat4);
+    instance_buffer_desc.usage = vice::render::BufferUsage::vertex;
+    instance_buffer_desc.memory = vice::render::MemoryLocation::cpu_to_gpu;
+    instance_buffer_desc.debug_name = "VICE Lab rigid pose";
+
     vice::render::BufferDesc index_buffer_desc;
     index_buffer_desc.size = sizeof(cube_indices);
     index_buffer_desc.usage = vice::render::BufferUsage::index;
@@ -424,9 +458,10 @@ int main() {
     frame_buffer_desc.debug_name = "VICE Lab frame constants";
 
     auto vertex_buffer = render_device->create_buffer(vertex_buffer_desc);
+    auto instance_buffer = render_device->create_buffer(instance_buffer_desc);
     auto index_buffer = render_device->create_buffer(index_buffer_desc);
     auto frame_buffer = render_device->create_buffer(frame_buffer_desc);
-    if (!vertex_buffer || !index_buffer || !frame_buffer ||
+    if (!vertex_buffer || !instance_buffer || !index_buffer || !frame_buffer ||
         !vertex_buffer->write(0, std::as_bytes(std::span{cube_vertices})) ||
         !index_buffer->write(0, std::as_bytes(std::span{cube_indices}))) {
         log(LogLevel::error, "VICE Lab could not upload cube resources.");
@@ -474,14 +509,14 @@ int main() {
     pipeline_desc.depth.write_enabled = true;
     pipeline_desc.depth.compare = vice::render::CompareOp::less;
     pipeline_desc.vertex_buffers = cube_vertex_layouts;
-    pipeline_desc.debug_name = "VICE Lab depth-tested cube";
+    pipeline_desc.debug_name = "VICE Lab simulated cube";
 
     auto cube_pipeline = render_device->create_graphics_pipeline(pipeline_desc);
     if (!cube_pipeline) {
         log(LogLevel::error, "VICE Lab could not create the cube pipeline.");
         return 1;
     }
-    log(LogLevel::info, "VICE Lab 3D cube pipeline ready.");
+    log(LogLevel::info, "VICE Lab simulated cube pipeline ready.");
 
     const bool cooked_transform_binding = !vertex_shader->resources().empty();
     constexpr vice::render::ShaderBindingKey frame_binding{
@@ -497,9 +532,44 @@ int main() {
         log(LogLevel::info, std::string{"World entity: "} + persistent_id->to_string());
     }
 
+    constexpr vice::simulation::DomainId rigid_domain_id{100};
+    constexpr vice::simulation::ParticipantId floor_participant{1};
+    constexpr vice::simulation::ParticipantId cube_participant{2};
+
+    auto rigid_domain = vice::rigid_body::Domain::create(rigid_domain_id, "lab.rigid");
+    vice::simulation::Coordinator simulation{1.0 / 120.0};
+    vice::simulation::EntityBindings bindings;
+    if (!rigid_domain || !simulation.register_domain(*rigid_domain)) {
+        log(LogLevel::error, "VICE Lab could not initialize rigid simulation.");
+        return 1;
+    }
+
+    vice::rigid_body::BoxBodyDesc floor;
+    floor.participant = floor_participant;
+    floor.motion = vice::rigid_body::MotionType::static_body;
+    floor.half_extents = vice::math::Vec3{8.0F, 0.25F, 8.0F};
+    floor.position = vice::math::Vec3{0.0F, -0.25F, 0.0F};
+
+    vice::rigid_body::BoxBodyDesc simulated_cube;
+    simulated_cube.participant = cube_participant;
+    simulated_cube.motion = vice::rigid_body::MotionType::dynamic_body;
+    simulated_cube.half_extents = vice::math::Vec3{0.7F, 0.7F, 0.7F};
+    simulated_cube.position = vice::math::Vec3{0.0F, 2.2F, 0.0F};
+    simulated_cube.orientation = vice::math::Quat{0.0F, 0.0F, 0.2588190451F, 0.9659258263F};
+    simulated_cube.friction = 0.65F;
+    simulated_cube.restitution = 0.15F;
+
+    if (!rigid_domain->create_box(floor) ||
+        !rigid_domain->create_box(simulated_cube) ||
+        !bindings.bind(world, simulation, entity, rigid_domain_id, cube_participant)) {
+        log(LogLevel::error, "VICE Lab could not create the simulated world entity.");
+        return 1;
+    }
+    log(LogLevel::info, "VICE Lab world entity is bound to a Jolt-backed rigid participant.");
+
     constexpr vice::render::Color clear_color{0.018F, 0.022F, 0.030F, 1.0F};
-    const auto scene_start = std::chrono::steady_clock::now();
     FrameClock clock;
+    double simulation_accumulator = 0.0;
     bool running = true;
     while (running) {
         vice::platform::Event event{vice::platform::QuitRequested{}};
@@ -538,19 +608,32 @@ int main() {
         }
 
         (void)jobs.pump_main(64);
+        clock.tick();
+        simulation_accumulator += std::min(clock.delta_seconds(), 0.25);
+        while (simulation_accumulator >= simulation.fixed_delta_seconds()) {
+            simulation.step();
+            simulation_accumulator -= simulation.fixed_delta_seconds();
+        }
 
         if (running) {
-            const auto elapsed = std::chrono::duration<float>(
-                std::chrono::steady_clock::now() - scene_start
-            ).count();
+            const auto body_state = rigid_domain->body_state(cube_participant);
+            if (!body_state) {
+                log(LogLevel::error, "VICE Lab lost the simulated cube participant.");
+                running = false;
+                continue;
+            }
+
+            const auto model = vice::math::pose(body_state->position, body_state->orientation);
+            if (!instance_buffer->write(0, std::as_bytes(std::span{model.values}))) {
+                log(LogLevel::error, "VICE Lab could not upload the simulated cube pose.");
+                running = false;
+                continue;
+            }
+
             const float aspect = static_cast<float>(depth_target->width()) /
                 static_cast<float>(std::max<std::uint32_t>(1U, depth_target->height()));
-            const auto model = vice::math::multiply(
-                vice::math::rotation_y(elapsed * 0.72F),
-                vice::math::rotation_x(elapsed * 0.41F)
-            );
             const auto view = vice::math::look_at_rh(
-                vice::math::Vec3{0.0F, 0.0F, 3.2F},
+                vice::math::Vec3{0.0F, 0.0F, 5.0F},
                 vice::math::Vec3{0.0F, 0.0F, 0.0F},
                 vice::math::Vec3{0.0F, 1.0F, 0.0F}
             );
@@ -560,11 +643,8 @@ int main() {
                 0.1F,
                 100.0F
             );
-            const auto mvp = vice::math::multiply(
-                projection,
-                vice::math::multiply(view, model)
-            );
-            if (!frame_buffer->write(0, std::as_bytes(std::span{mvp.values}))) {
+            const auto view_projection = vice::math::multiply(projection, view);
+            if (!frame_buffer->write(0, std::as_bytes(std::span{view_projection.values}))) {
                 log(LogLevel::error, "VICE Lab could not update frame constants.");
                 running = false;
                 continue;
@@ -581,6 +661,7 @@ int main() {
                 frame_commands->begin_render_pass(*swapchain, pass_desc) &&
                 frame_commands->set_graphics_pipeline(*cube_pipeline) &&
                 frame_commands->set_vertex_buffer(0, *vertex_buffer) &&
+                frame_commands->set_vertex_buffer(1, *instance_buffer) &&
                 frame_commands->set_index_buffer(
                     *index_buffer,
                     vice::render::IndexFormat::uint16
@@ -599,7 +680,7 @@ int main() {
                 frame_commands->present(*swapchain);
 
             if (!recorded) {
-                log(LogLevel::error, "VICE Lab failed to record the depth-tested cube frame.");
+                log(LogLevel::error, "VICE Lab failed to record the simulated cube frame.");
                 running = false;
             } else {
                 const auto frame_submission = render_device->submit(std::move(frame_commands));
@@ -610,16 +691,21 @@ int main() {
             }
         }
 
-        clock.tick();
         std::this_thread::sleep_for(std::chrono::milliseconds{1});
     }
 
     (void)render_device->wait_idle();
+    (void)bindings.unbind(entity, rigid_domain_id);
+    (void)rigid_domain->destroy_body(cube_participant);
+    (void)rigid_domain->destroy_body(floor_participant);
+    (void)simulation.unregister_domain(rigid_domain_id);
+
     cube_pipeline.reset();
     fragment_shader.reset();
     vertex_shader.reset();
     frame_buffer.reset();
     index_buffer.reset();
+    instance_buffer.reset();
     vertex_buffer.reset();
     depth_target.reset();
     swapchain.reset();
