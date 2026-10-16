@@ -11,7 +11,9 @@
 
 namespace vice::rigid_body {
 
-inline constexpr std::uint32_t collision_asset_format_version = 1;
+inline constexpr std::uint32_t collision_asset_format_version_v1 = 1;
+inline constexpr std::uint32_t collision_asset_format_version_v2 = 2;
+inline constexpr std::uint32_t collision_asset_format_version = collision_asset_format_version_v2;
 inline constexpr std::size_t collision_asset_magic_size = 8;
 
 struct CollisionAssetShape {
