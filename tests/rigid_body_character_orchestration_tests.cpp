@@ -111,6 +111,26 @@ int main() {
     assert(near(second_state->velocity.x, 4.0F));
     assert(near(second_state->horizontal_velocity.x, 3.0F));
 
+    assert(domain_b->set_character_velocity(*second_id, math::Vec3{20.0F, 0.0F, 0.0F}));
+    assert(domain_b->set_character_position(*second_id, math::Vec3{95.0F, 6.0F, 0.0F}));
+    bridge.orchestrate_characters(world, coordinator);
+    assert(bridge.character_region_events().size() == 1U);
+    assert(bridge.character_region_events()[0].action ==
+        rigid_body::CharacterRegionAction::activation_requested);
+    assert(bridge.character_region_events()[0].target_region == region_c);
+    assert(bridge.region_activation_requests().size() == 1U);
+    assert(world.spatial_state(entity)->region == region_b);
+    assert(near(world.spatial_state(entity)->global_position.x, 1'000'000'195.0));
+    assert(domain_b->character_state(*second_id).has_value());
+
+    const world::StreamingCellId expected_target_cell{2, 0, 0};
+    assert(bridge.region_activation_requests()[0].owner == *owner);
+    assert(bridge.region_activation_requests()[0].source_region == region_b);
+    assert(bridge.region_activation_requests()[0].target_region == region_c);
+    assert(bridge.region_activation_requests()[0].target_island ==
+        world::SimulationIslandId{303});
+    assert(bridge.region_activation_requests()[0].target_cell == expected_target_cell);
+
     assert(domain_b->set_character_position(*second_id, math::Vec3{110.0F, 6.0F, 0.0F}));
     bridge.orchestrate_characters(world, coordinator);
     assert(bridge.character_region_events().size() == 1U);
@@ -118,13 +138,6 @@ int main() {
         rigid_body::CharacterRegionAction::activation_requested);
     assert(bridge.character_region_events()[0].target_region == region_c);
     assert(bridge.region_activation_requests().size() == 1U);
-    assert(bridge.region_activation_requests()[0].owner == *owner);
-    assert(bridge.region_activation_requests()[0].source_region == region_b);
-    assert(bridge.region_activation_requests()[0].target_region == region_c);
-    assert(bridge.region_activation_requests()[0].target_island ==
-        world::SimulationIslandId{303});
-    assert(bridge.region_activation_requests()[0].target_cell ==
-        world::StreamingCellId{2, 0, 0});
     assert(world.spatial_state(entity)->region == region_b);
     assert(near(world.spatial_state(entity)->global_position.x, 1'000'000'210.0));
     assert(domain_b->character_state(*second_id).has_value());
@@ -160,7 +173,9 @@ int main() {
     assert(third_state.has_value());
     assert(near(third_state->position.x, 10.0F));
     assert(near(third_state->position.y, 6.0F));
+    assert(near(third_state->velocity.x, 20.0F));
 
+    assert(domain_c->set_character_velocity(*third_id, math::Vec3{}));
     assert(domain_c->set_character_position(*third_id, math::Vec3{150.0F, 8.0F, 0.0F}));
     bridge.orchestrate_characters(world, coordinator);
     assert(bridge.character_region_events().size() == 1U);
