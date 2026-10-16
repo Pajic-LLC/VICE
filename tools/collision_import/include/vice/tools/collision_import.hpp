@@ -3,6 +3,7 @@
 #include <vice/math/math.hpp>
 #include <vice/rigid_body/collision_asset.hpp>
 
+#include <cstddef>
 #include <cstdint>
 #include <optional>
 #include <span>
