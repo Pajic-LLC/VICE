@@ -273,7 +273,8 @@ template <typename ImplType, typename SettingsType>
         two_body.GetBody2()->GetUserData() == participant.value;
 }
 
-void activate_constraint_bodies(Domain::Impl& impl, const JPH::Constraint& constraint) {
+template <typename ImplType>
+void activate_constraint_bodies(ImplType& impl, const JPH::Constraint& constraint) {
     if (constraint.GetType() != JPH::EConstraintType::TwoBodyConstraint) {
         return;
     }
