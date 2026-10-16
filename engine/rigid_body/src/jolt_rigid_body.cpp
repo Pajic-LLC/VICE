@@ -129,6 +129,25 @@ public:
     return std::isfinite(value.x) && std::isfinite(value.y) && std::isfinite(value.z);
 }
 
+[[nodiscard]] bool finite(const math::Quat value) noexcept {
+    return std::isfinite(value.x) && std::isfinite(value.y) &&
+        std::isfinite(value.z) && std::isfinite(value.w);
+}
+
+[[nodiscard]] float length_squared(const math::Quat value) noexcept {
+    return value.x * value.x + value.y * value.y + value.z * value.z + value.w * value.w;
+}
+
+[[nodiscard]] JPH::Quat jolt_quaternion(const math::Quat value) noexcept {
+    const float inverse_length = 1.0F / std::sqrt(length_squared(value));
+    return JPH::Quat{
+        value.x * inverse_length,
+        value.y * inverse_length,
+        value.z * inverse_length,
+        value.w * inverse_length,
+    };
+}
+
 [[nodiscard]] bool valid_config(const DomainConfig& config) noexcept {
     return config.max_bodies > 0U &&
         config.max_bodies <= JPH::BodyID::cMaxBodyIndex + 1U &&
@@ -276,8 +295,10 @@ void Domain::step(
 }
 
 bool Domain::create_box(const BoxBodyDesc& desc) {
+    const float orientation_length_squared = length_squared(desc.orientation);
     if (!desc.participant || impl_->find(desc.participant) != nullptr ||
-        !finite(desc.half_extents) || !finite(desc.position) || !finite(desc.linear_velocity) ||
+        !finite(desc.half_extents) || !finite(desc.position) || !finite(desc.orientation) ||
+        !finite(desc.linear_velocity) || orientation_length_squared <= 0.000001F ||
         desc.half_extents.x <= 0.0F || desc.half_extents.y <= 0.0F ||
         desc.half_extents.z <= 0.0F || !std::isfinite(desc.friction) ||
         !std::isfinite(desc.restitution) || desc.friction < 0.0F ||
@@ -299,7 +320,7 @@ bool Domain::create_box(const BoxBodyDesc& desc) {
     JPH::BodyCreationSettings body_settings{
         shape_result.Get(),
         JPH::RVec3{desc.position.x, desc.position.y, desc.position.z},
-        JPH::Quat::sIdentity(),
+        jolt_quaternion(desc.orientation),
         dynamic ? JPH::EMotionType::Dynamic : JPH::EMotionType::Static,
         dynamic ? object_layers::dynamic_body : object_layers::static_body
     };
@@ -364,12 +385,19 @@ std::optional<BodyState> Domain::body_state(
 
     const auto& body_interface = impl_->physics_system_.GetBodyInterface();
     const JPH::RVec3 position = body_interface.GetCenterOfMassPosition(body->body_id);
+    const JPH::Quat orientation = body_interface.GetRotation(body->body_id);
     const JPH::Vec3 velocity = body_interface.GetLinearVelocity(body->body_id);
     return BodyState{
         .position = math::Vec3{
             static_cast<float>(position.GetX()),
             static_cast<float>(position.GetY()),
             static_cast<float>(position.GetZ()),
+        },
+        .orientation = math::Quat{
+            orientation.GetX(),
+            orientation.GetY(),
+            orientation.GetZ(),
+            orientation.GetW(),
         },
         .linear_velocity = math::Vec3{
             velocity.GetX(),
