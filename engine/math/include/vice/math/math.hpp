@@ -12,6 +12,13 @@ struct Vec3 {
     float z = 0.0F;
 };
 
+struct Quat {
+    float x = 0.0F;
+    float y = 0.0F;
+    float z = 0.0F;
+    float w = 1.0F;
+};
+
 [[nodiscard]] constexpr Vec3 operator-(const Vec3 left, const Vec3 right) noexcept {
     return Vec3{left.x - right.x, left.y - right.y, left.z - right.z};
 }
@@ -84,6 +91,38 @@ struct Mat4 {
     result(0, 3) = offset.x;
     result(1, 3) = offset.y;
     result(2, 3) = offset.z;
+    return result;
+}
+
+[[nodiscard]] inline Mat4 rotation(const Quat value) noexcept {
+    const float xx = value.x * value.x;
+    const float yy = value.y * value.y;
+    const float zz = value.z * value.z;
+    const float xy = value.x * value.y;
+    const float xz = value.x * value.z;
+    const float yz = value.y * value.z;
+    const float wx = value.w * value.x;
+    const float wy = value.w * value.y;
+    const float wz = value.w * value.z;
+
+    Mat4 result = identity();
+    result(0, 0) = 1.0F - 2.0F * (yy + zz);
+    result(0, 1) = 2.0F * (xy - wz);
+    result(0, 2) = 2.0F * (xz + wy);
+    result(1, 0) = 2.0F * (xy + wz);
+    result(1, 1) = 1.0F - 2.0F * (xx + zz);
+    result(1, 2) = 2.0F * (yz - wx);
+    result(2, 0) = 2.0F * (xz - wy);
+    result(2, 1) = 2.0F * (yz + wx);
+    result(2, 2) = 1.0F - 2.0F * (xx + yy);
+    return result;
+}
+
+[[nodiscard]] inline Mat4 pose(const Vec3 position, const Quat orientation) noexcept {
+    Mat4 result = rotation(orientation);
+    result(0, 3) = position.x;
+    result(1, 3) = position.y;
+    result(2, 3) = position.z;
     return result;
 }
 

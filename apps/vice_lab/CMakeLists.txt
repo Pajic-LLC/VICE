@@ -9,6 +9,8 @@ target_link_libraries(
     VICE::Platform
     VICE::Render
     VICE::World
+    VICE::SimulationWorld
+    VICE::RigidBody
 )
 target_compile_features(vice_lab PRIVATE cxx_std_23)
 target_compile_definitions(

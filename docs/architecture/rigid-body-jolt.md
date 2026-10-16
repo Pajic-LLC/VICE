@@ -11,9 +11,12 @@ Public VICE rigid-body headers expose:
 - `ParticipantId`
 - static or dynamic motion
 - box half extents
-- local position and linear velocity
+- local position and orientation
+- linear velocity
 - friction and restitution
 - VICE-owned body state
+
+Orientation uses `vice::math::Quat`. Solver state is converted to VICE math types before it leaves the backend.
 
 No Jolt type, body ID, shape type, allocator, job system, or physics system appears in the public API.
 
@@ -33,25 +36,38 @@ This first backend uses Jolt single-precision positions for local simulation sta
 
 That does not define VICE large-world coordinates. Global world positions, simulation islands, and camera-relative rendering remain separate work. A future large-world layer can move entities between local simulation spaces without changing persistent world identity.
 
+VICE math uses column-major matrices and column vectors. The rigid-body pose is converted to a VICE model matrix before rendering.
+
 ## Fixed stepping
 
 The backend implements the existing `simulation::Domain` interface and consumes the coordinator fixed timestep.
 
+VICE Lab steps the rigid domain at 120 Hz with a frame-time accumulator. Rendering samples the latest completed solver state.
+
 Jolt cross-platform deterministic build mode is enabled for the pinned backend. This is a starting policy, not a promise that every future physics query has deterministic ordering. VICE must define its own ordering rules for any query where ordering becomes authoritative.
+
+## Rendering proof
+
+VICE Lab contains the first complete simulation-to-rendering vertical slice.
+
+The Lab creates a `World` entity, binds it to a dynamic rigid participant, steps the Jolt-backed domain, reads the VICE-owned body pose, converts that pose to a model matrix, and uploads the matrix through a per-instance vertex stream.
+
+The cube shaders consume the same model-matrix stream in cooked and development fallback modes. The renderer therefore does not depend on Jolt and the physics backend does not depend on the renderer.
+
+The old elapsed-time cube animation is not part of this path. The visible cube transform comes from simulation state.
 
 ## Jobs
 
 The first backend uses Jolt's reference thread-pool job system internally.
 
-Jolt explicitly supports replacing this with an engine job-system implementation. A later performance slice should adapt Jolt jobs onto `VICE::Jobs` so VICE owns scheduling policy across simulation domains.
+Jolt supports replacing this with an engine job-system implementation. A later performance slice should adapt Jolt jobs onto `VICE::Jobs` so VICE owns scheduling policy across simulation domains.
 
 ## Current scope
 
-The first slice supports static and dynamic boxes, body destruction, local position and linear velocity reads, and fixed-step simulation.
+The first slice supports static and dynamic boxes, body destruction, position and orientation reads, linear velocity reads, fixed-step simulation, world binding, and a solver-driven rendering proof.
 
 It does not yet define:
 
-- rotation in the VICE rigid-body state
 - general shape assets
 - collision or trigger events
 - constraints
