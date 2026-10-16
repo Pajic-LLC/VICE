@@ -71,6 +71,7 @@ add_library(
   vice_rigid_body_world
   STATIC
     src/world_bridge.cpp
+    src/world_orchestration.cpp
 )
 
 add_library(VICE::RigidBodyWorld ALIAS vice_rigid_body_world)
