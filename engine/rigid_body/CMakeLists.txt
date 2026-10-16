@@ -35,6 +35,7 @@ add_library(
   vice_rigid_body
   STATIC
     src/collision_asset.cpp
+    src/jolt_job_system.cpp
     src/jolt_rigid_body.cpp
 )
 
@@ -51,6 +52,7 @@ target_include_directories(
 target_link_libraries(
   vice_rigid_body
   PUBLIC
+    VICE::Jobs
     VICE::Math
     VICE::Simulation
   PRIVATE
