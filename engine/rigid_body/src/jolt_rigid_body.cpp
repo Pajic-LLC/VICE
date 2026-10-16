@@ -16,6 +16,9 @@
 #include <Jolt/Physics/Collision/RayCast.h>
 #include <Jolt/Physics/Collision/Shape/BoxShape.h>
 #include <Jolt/Physics/Collision/Shape/CapsuleShape.h>
+#include <Jolt/Physics/Collision/Shape/CompoundShape.h>
+#include <Jolt/Physics/Collision/Shape/ConvexHullShape.h>
+#include <Jolt/Physics/Collision/Shape/MeshShape.h>
 #include <Jolt/Physics/Collision/Shape/SphereShape.h>
 #include <Jolt/Physics/Collision/Shape/SubShapeIDPair.h>
 #include <Jolt/Physics/Collision/ShapeCast.h>
@@ -244,6 +247,44 @@ template <typename Vector>
     };
 }
 
+[[nodiscard]] float triangle_area_squared(
+    const math::Vec3 a,
+    const math::Vec3 b,
+    const math::Vec3 c
+) noexcept {
+    const float abx = b.x - a.x;
+    const float aby = b.y - a.y;
+    const float abz = b.z - a.z;
+    const float acx = c.x - a.x;
+    const float acy = c.y - a.y;
+    const float acz = c.z - a.z;
+    const float cross_x = aby * acz - abz * acy;
+    const float cross_y = abz * acx - abx * acz;
+    const float cross_z = abx * acy - aby * acx;
+    return cross_x * cross_x + cross_y * cross_y + cross_z * cross_z;
+}
+
+[[nodiscard]] bool valid_mesh(const TriangleMeshShapeDesc& desc) noexcept {
+    if (desc.vertices.size() < 3U || desc.indices.size() < 3U ||
+        desc.indices.size() % 3U != 0U) {
+        return false;
+    }
+    if (!std::all_of(desc.vertices.begin(), desc.vertices.end(), finite)) {
+        return false;
+    }
+    for (std::size_t index = 0; index < desc.indices.size(); index += 3U) {
+        const std::uint32_t a = desc.indices[index];
+        const std::uint32_t b = desc.indices[index + 1U];
+        const std::uint32_t c = desc.indices[index + 2U];
+        if (a >= desc.vertices.size() || b >= desc.vertices.size() || c >= desc.vertices.size() ||
+            a == b || b == c || a == c ||
+            triangle_area_squared(desc.vertices[a], desc.vertices[b], desc.vertices[c]) <= 1.0e-12F) {
+            return false;
+        }
+    }
+    return true;
+}
+
 [[nodiscard]] bool read_material_scalar(
     const simulation::Material& material,
     const std::string_view name,
@@ -276,7 +317,7 @@ template <typename Vector>
     return true;
 }
 
-[[nodiscard]] std::optional<JPH::RefConst<JPH::Shape>> create_shape(
+[[nodiscard]] std::optional<JPH::RefConst<JPH::Shape>> create_leaf_shape(
     const ShapeDesc& desc
 ) {
     return std::visit(
@@ -305,7 +346,7 @@ template <typename Vector>
                     return std::nullopt;
                 }
                 return JPH::RefConst<JPH::Shape>{result.Get()};
-            } else {
+            } else if constexpr (std::is_same_v<T, CapsuleShapeDesc>) {
                 if (!std::isfinite(shape_desc.half_height) || shape_desc.half_height < 0.0F ||
                     !valid_positive(shape_desc.radius)) {
                     return std::nullopt;
@@ -316,9 +357,65 @@ template <typename Vector>
                     return std::nullopt;
                 }
                 return JPH::RefConst<JPH::Shape>{result.Get()};
+            } else if constexpr (std::is_same_v<T, ConvexHullShapeDesc>) {
+                if (shape_desc.points.size() < 4U ||
+                    !std::all_of(shape_desc.points.begin(), shape_desc.points.end(), finite)) {
+                    return std::nullopt;
+                }
+                JPH::Array<JPH::Vec3> points;
+                points.reserve(shape_desc.points.size());
+                for (const auto point : shape_desc.points) {
+                    points.push_back(jolt_vector(point));
+                }
+                JPH::ConvexHullShapeSettings settings{points};
+                const auto result = settings.Create();
+                if (result.HasError()) {
+                    return std::nullopt;
+                }
+                return JPH::RefConst<JPH::Shape>{result.Get()};
+            } else if constexpr (std::is_same_v<T, TriangleMeshShapeDesc>) {
+                if (!valid_mesh(shape_desc)) {
+                    return std::nullopt;
+                }
+                JPH::VertexList vertices;
+                vertices.reserve(shape_desc.vertices.size());
+                for (const auto vertex : shape_desc.vertices) {
+                    vertices.emplace_back(vertex.x, vertex.y, vertex.z);
+                }
+                JPH::IndexedTriangleList triangles;
+                triangles.reserve(shape_desc.indices.size() / 3U);
+                for (std::size_t index = 0; index < shape_desc.indices.size(); index += 3U) {
+                    triangles.emplace_back(
+                        shape_desc.indices[index],
+                        shape_desc.indices[index + 1U],
+                        shape_desc.indices[index + 2U]
+                    );
+                }
+                JPH::MeshShapeSettings settings{std::move(vertices), std::move(triangles)};
+                const auto result = settings.Create();
+                if (result.HasError()) {
+                    return std::nullopt;
+                }
+                return JPH::RefConst<JPH::Shape>{result.Get()};
+            } else {
+                return std::nullopt;
             }
         },
         desc
+    );
+}
+
+[[nodiscard]] bool shape_references(const ShapeDesc& desc, const ShapeId target) noexcept {
+    const auto* compound = std::get_if<CompoundShapeDesc>(&desc);
+    if (compound == nullptr) {
+        return false;
+    }
+    return std::any_of(
+        compound->children.begin(),
+        compound->children.end(),
+        [target](const CompoundShapeChild& child) {
+            return child.shape == target;
+        }
     );
 }
 
@@ -559,6 +656,10 @@ public:
         }
 
         const bool dynamic = desc.motion == MotionType::dynamic_body;
+        if (dynamic && shape->MustBeStatic()) {
+            return false;
+        }
+
         JPH::BodyCreationSettings body_settings{
             shape,
             jolt_position(desc.position),
@@ -938,7 +1039,37 @@ bool Domain::register_shape(const ShapeId id, const ShapeDesc& desc) {
     if (!id || impl_->find_shape(id) != nullptr) {
         return false;
     }
-    const auto shape = create_shape(desc);
+
+    std::optional<JPH::RefConst<JPH::Shape>> shape;
+    if (const auto* compound = std::get_if<CompoundShapeDesc>(&desc)) {
+        if (compound->children.empty()) {
+            return false;
+        }
+        JPH::StaticCompoundShapeSettings settings;
+        for (const auto& child : compound->children) {
+            if (!child.shape || child.shape == id ||
+                !valid_pose(child.position, child.orientation)) {
+                return false;
+            }
+            const auto* child_shape = impl_->find_shape(child.shape);
+            if (child_shape == nullptr) {
+                return false;
+            }
+            settings.AddShape(
+                jolt_vector(child.position),
+                jolt_quaternion(child.orientation),
+                child_shape->shape.GetPtr()
+            );
+        }
+        const auto result = settings.Create();
+        if (result.HasError()) {
+            return false;
+        }
+        shape = JPH::RefConst<JPH::Shape>{result.Get()};
+    } else {
+        shape = create_leaf_shape(desc);
+    }
+
     if (!shape.has_value()) {
         return false;
     }
@@ -961,14 +1092,21 @@ bool Domain::unregister_shape(const ShapeId id) {
     if (found == impl_->shapes_.end()) {
         return false;
     }
-    const bool in_use = std::any_of(
+    const bool body_in_use = std::any_of(
         impl_->bodies_.begin(),
         impl_->bodies_.end(),
         [id](const Impl::BodyEntry& body) {
             return body.shape == id;
         }
     );
-    if (in_use) {
+    const bool shape_in_use = std::any_of(
+        impl_->shapes_.begin(),
+        impl_->shapes_.end(),
+        [id](const Impl::ShapeEntry& shape) {
+            return shape.id != id && shape_references(shape.desc, id);
+        }
+    );
+    if (body_in_use || shape_in_use) {
         return false;
     }
     impl_->shapes_.erase(found);
@@ -1137,7 +1275,8 @@ std::vector<QueryHit> Domain::overlap_shape(
 ) const {
     std::vector<QueryHit> results;
     const auto* shape = impl_->find_shape(pose.shape);
-    if (shape == nullptr || !pose.shape || !valid_pose(pose.position, pose.orientation) ||
+    if (shape == nullptr || !pose.shape || shape->shape->MustBeStatic() ||
+        !valid_pose(pose.position, pose.orientation) ||
         (!filter.include_static && !filter.include_dynamic)) {
         return results;
     }
@@ -1211,7 +1350,7 @@ std::optional<QueryHit> Domain::sweep_shape(
     const QueryFilter& filter
 ) const {
     const auto* shape = impl_->find_shape(desc.pose.shape);
-    if (shape == nullptr || !desc.pose.shape ||
+    if (shape == nullptr || !desc.pose.shape || shape->shape->MustBeStatic() ||
         !valid_pose(desc.pose.position, desc.pose.orientation) ||
         !valid_query_direction(desc.direction, desc.max_distance) ||
         (!filter.include_static && !filter.include_dynamic)) {
