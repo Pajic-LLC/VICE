@@ -72,6 +72,12 @@ target_compile_features(vice_world_primitives_tests PRIVATE cxx_std_23)
 vice_enable_warnings(vice_world_primitives_tests)
 add_test(NAME vice_world_primitives_tests COMMAND vice_world_primitives_tests)
 
+add_executable(vice_world_region_bounds_tests world_region_bounds_tests.cpp)
+target_link_libraries(vice_world_region_bounds_tests PRIVATE VICE::World)
+target_compile_features(vice_world_region_bounds_tests PRIVATE cxx_std_23)
+vice_enable_warnings(vice_world_region_bounds_tests)
+add_test(NAME vice_world_region_bounds_tests COMMAND vice_world_region_bounds_tests)
+
 add_executable(vice_simulation_tests simulation_tests.cpp)
 target_link_libraries(vice_simulation_tests PRIVATE VICE::Simulation)
 target_compile_features(vice_simulation_tests PRIVATE cxx_std_23)
@@ -114,6 +120,21 @@ if(VICE_ENABLE_JOLT_RIGID_BODY)
   target_compile_features(vice_rigid_body_character_world_tests PRIVATE cxx_std_23)
   vice_enable_warnings(vice_rigid_body_character_world_tests)
   add_test(NAME vice_rigid_body_character_world_tests COMMAND vice_rigid_body_character_world_tests)
+
+  add_executable(
+    vice_rigid_body_character_orchestration_tests
+    rigid_body_character_orchestration_tests.cpp
+  )
+  target_link_libraries(
+    vice_rigid_body_character_orchestration_tests
+    PRIVATE VICE::RigidBodyWorld
+  )
+  target_compile_features(vice_rigid_body_character_orchestration_tests PRIVATE cxx_std_23)
+  vice_enable_warnings(vice_rigid_body_character_orchestration_tests)
+  add_test(
+    NAME vice_rigid_body_character_orchestration_tests
+    COMMAND vice_rigid_body_character_orchestration_tests
+  )
 
   add_executable(vice_rigid_body_jobs_tests rigid_body_jobs_tests.cpp)
   target_link_libraries(vice_rigid_body_jobs_tests PRIVATE VICE::RigidBody)
