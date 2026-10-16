@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <fstream>
 #include <functional>
+#include <limits>
 #include <queue>
 #include <sstream>
 #include <string>
@@ -28,6 +29,7 @@ constexpr std::uint32_t max_points = 1'000'000;
 constexpr std::uint32_t max_vertices = 1'000'000;
 constexpr std::uint32_t max_indices = 3'000'000;
 constexpr std::uint32_t max_compound_children = 65'536;
+constexpr std::uint32_t max_heightfield_sample_count = 16'384;
 constexpr std::uint64_t fnv_offset_basis = 14'695'981'039'346'656'037ULL;
 constexpr std::uint64_t fnv_prime = 1'099'511'628'211ULL;
 
@@ -38,6 +40,7 @@ enum class ShapeTag : std::uint32_t {
     convex_hull = 4,
     triangle_mesh = 5,
     compound = 6,
+    heightfield = 7,
 };
 
 class Writer final {
@@ -216,6 +219,34 @@ private:
     return length_squared(vector_cross(subtract(b, a), subtract(c, a)));
 }
 
+[[nodiscard]] bool valid_heightfield(
+    const rigid_body::HeightFieldShapeDesc& desc
+) noexcept {
+    if (desc.sample_count < 4U || desc.sample_count > max_heightfield_sample_count ||
+        !finite(desc.offset) ||
+        !std::isfinite(desc.sample_spacing_x) || desc.sample_spacing_x <= 0.0F ||
+        !std::isfinite(desc.sample_spacing_z) || desc.sample_spacing_z <= 0.0F ||
+        !std::isfinite(desc.vertical_scale) || desc.vertical_scale <= 0.0F) {
+        return false;
+    }
+    const std::size_t count = static_cast<std::size_t>(desc.sample_count);
+    if (count > std::numeric_limits<std::size_t>::max() / count ||
+        desc.samples.size() != count * count) {
+        return false;
+    }
+    bool has_surface = false;
+    for (const float sample : desc.samples) {
+        if (sample == rigid_body::heightfield_hole_sample) {
+            continue;
+        }
+        if (!std::isfinite(sample)) {
+            return false;
+        }
+        has_surface = true;
+    }
+    return has_surface;
+}
+
 [[nodiscard]] std::string validate_shape(
     const rigid_body::CollisionAssetShape& shape
 ) {
@@ -285,7 +316,9 @@ private:
                     }
                 }
             } else if constexpr (std::is_same_v<T, rigid_body::HeightFieldShapeDesc>) {
-                return "Heightfield terrain is not supported by VICECOLL version 1.";
+                if (!valid_heightfield(desc)) {
+                    return "Heightfield terrain data is invalid.";
+                }
             } else if constexpr (std::is_same_v<T, rigid_body::CompoundShapeDesc>) {
                 if (desc.children.empty() || desc.children.size() > max_compound_children) {
                     return "Compound child count is invalid.";
@@ -299,6 +332,18 @@ private:
             return {};
         },
         shape.desc
+    );
+}
+
+[[nodiscard]] bool contains_heightfield(
+    const std::span<const rigid_body::CollisionAssetShape> shapes
+) noexcept {
+    return std::any_of(
+        shapes.begin(),
+        shapes.end(),
+        [](const rigid_body::CollisionAssetShape& shape) {
+            return std::holds_alternative<rigid_body::HeightFieldShapeDesc>(shape.desc);
+        }
     );
 }
 
@@ -316,8 +361,10 @@ private:
                 return ShapeTag::convex_hull;
             } else if constexpr (std::is_same_v<T, rigid_body::TriangleMeshShapeDesc>) {
                 return ShapeTag::triangle_mesh;
-            } else {
+            } else if constexpr (std::is_same_v<T, rigid_body::CompoundShapeDesc>) {
                 return ShapeTag::compound;
+            } else {
+                return ShapeTag::heightfield;
             }
         },
         desc
@@ -356,6 +403,15 @@ void write_shape_payload(Writer& writer, const rigid_body::ShapeDesc& desc) {
                     writer.write_vec3(child.position);
                     writer.write_quat(child.orientation);
                 }
+            } else if constexpr (std::is_same_v<T, rigid_body::HeightFieldShapeDesc>) {
+                writer.write_u32(value.sample_count);
+                writer.write_vec3(value.offset);
+                writer.write_f32(value.sample_spacing_x);
+                writer.write_f32(value.sample_spacing_z);
+                writer.write_f32(value.vertical_scale);
+                for (const float sample : value.samples) {
+                    writer.write_f32(sample);
+                }
             }
         },
         desc
@@ -374,6 +430,26 @@ void write_shape_payload(Writer& writer, const rigid_body::ShapeDesc& desc) {
     return "Line " + std::to_string(line_number) + ": " + std::string{message};
 }
 
+[[nodiscard]] bool read_height_sample(
+    std::istringstream& stream,
+    float& output
+) {
+    std::string token;
+    if (!(stream >> token)) {
+        return false;
+    }
+    if (token == "hole") {
+        output = rigid_body::heightfield_hole_sample;
+        return true;
+    }
+    std::istringstream number{token};
+    if (!(number >> output)) {
+        return false;
+    }
+    std::string trailing;
+    return !(number >> trailing);
+}
+
 } // namespace
 
 ManifestParseResult parse_source_manifest(const std::string_view source) {
@@ -382,7 +458,7 @@ ManifestParseResult parse_source_manifest(const std::string_view source) {
     std::istringstream input{std::string{source}};
     std::string line;
     std::size_t line_number = 0;
-    bool header_seen = false;
+    std::uint32_t manifest_version = 0;
 
     while (std::getline(input, line)) {
         ++line_number;
@@ -396,17 +472,16 @@ ManifestParseResult parse_source_manifest(const std::string_view source) {
             continue;
         }
 
-        if (!header_seen) {
-            std::uint32_t version = 0;
-            if (keyword != "vice-collision-source" || !(stream >> version) ||
-                version != 1U || has_trailing_token(stream)) {
+        if (manifest_version == 0U) {
+            if (keyword != "vice-collision-source" || !(stream >> manifest_version) ||
+                (manifest_version != 1U && manifest_version != 2U) ||
+                has_trailing_token(stream)) {
                 result.diagnostics = line_error(
                     line_number,
-                    "expected 'vice-collision-source 1'."
+                    "expected 'vice-collision-source 1' or 'vice-collision-source 2'."
                 );
                 return result;
             }
-            header_seen = true;
             continue;
         }
 
@@ -500,6 +575,38 @@ ManifestParseResult parse_source_manifest(const std::string_view source) {
                 }
             }
             shape.desc = std::move(desc);
+        } else if (keyword == "heightfield") {
+            if (manifest_version < 2U) {
+                result.diagnostics = line_error(
+                    line_number,
+                    "heightfield requires vice-collision-source 2."
+                );
+                return result;
+            }
+            rigid_body::HeightFieldShapeDesc desc;
+            if (!(stream >> desc.sample_count >>
+                    desc.offset.x >> desc.offset.y >> desc.offset.z >>
+                    desc.sample_spacing_x >> desc.sample_spacing_z >> desc.vertical_scale) ||
+                desc.sample_count > max_heightfield_sample_count) {
+                result.diagnostics = line_error(line_number, "heightfield metadata is invalid.");
+                return result;
+            }
+            const std::size_t count = static_cast<std::size_t>(desc.sample_count);
+            if (count > std::numeric_limits<std::size_t>::max() / count) {
+                result.diagnostics = line_error(line_number, "heightfield sample count overflows.");
+                return result;
+            }
+            desc.samples.resize(count * count);
+            for (float& sample : desc.samples) {
+                if (!read_height_sample(stream, sample)) {
+                    result.diagnostics = line_error(
+                        line_number,
+                        "heightfield sample data is incomplete or invalid."
+                    );
+                    return result;
+                }
+            }
+            shape.desc = std::move(desc);
         } else {
             result.diagnostics = line_error(line_number, "unknown collision shape type.");
             return result;
@@ -512,7 +619,7 @@ ManifestParseResult parse_source_manifest(const std::string_view source) {
         shapes.push_back(std::move(shape));
     }
 
-    if (!header_seen) {
+    if (manifest_version == 0U) {
         result.diagnostics = "Collision source manifest is missing its version header.";
         return result;
     }
@@ -531,6 +638,10 @@ CookResult cook(const std::span<const rigid_body::CollisionAssetShape> shapes) {
         result.diagnostics = "Collision source exceeds the shape count limit.";
         return result;
     }
+
+    const std::uint32_t output_version = contains_heightfield(shapes)
+        ? rigid_body::collision_asset_format_version_v2
+        : rigid_body::collision_asset_format_version_v1;
 
     std::unordered_map<std::uint64_t, std::size_t> by_id;
     by_id.reserve(shapes.size());
@@ -618,7 +729,7 @@ CookResult cook(const std::span<const rigid_body::CollisionAssetShape> shapes) {
 
     Writer file;
     file.write_magic();
-    file.write_u32(rigid_body::collision_asset_format_version);
+    file.write_u32(output_version);
     file.write_u32(static_cast<std::uint32_t>(shapes.size()));
     file.write_u64(result.source_fingerprint);
     file.write_bytes(payload.bytes());
