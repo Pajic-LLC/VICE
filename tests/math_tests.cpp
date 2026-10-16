@@ -30,6 +30,27 @@ int main() {
     static_assert(composed(1, 3) == 2.0F);
     static_assert(composed(2, 3) == 3.0F);
 
+    const Mat4 quaternion_identity = rotation(Quat{});
+    assert(near(quaternion_identity(0, 0), 1.0F));
+    assert(near(quaternion_identity(1, 1), 1.0F));
+    assert(near(quaternion_identity(2, 2), 1.0F));
+
+    const float half_angle = 0.7853981634F;
+    const Mat4 quaternion_turn = rotation(Quat{
+        0.0F,
+        std::sin(half_angle),
+        0.0F,
+        std::cos(half_angle),
+    });
+    assert(near(quaternion_turn(0, 0), 0.0F));
+    assert(near(quaternion_turn(0, 2), 1.0F));
+    assert(near(quaternion_turn(2, 0), -1.0F));
+
+    const Mat4 body_pose = pose(Vec3{2.0F, 3.0F, -4.0F}, Quat{});
+    assert(near(body_pose(0, 3), 2.0F));
+    assert(near(body_pose(1, 3), 3.0F));
+    assert(near(body_pose(2, 3), -4.0F));
+
     const Mat4 view = look_at_rh(
         Vec3{0.0F, 0.0F, 3.0F},
         Vec3{0.0F, 0.0F, 0.0F},
@@ -51,8 +72,8 @@ int main() {
     assert(projection(2, 2) < 0.0F);
     assert(projection(3, 2) == -1.0F);
 
-    const Mat4 rotation = multiply(rotation_y(0.4F), rotation_x(-0.25F));
-    const Mat4 mvp = multiply(projection, multiply(view, rotation));
+    const Mat4 rotation_matrix = multiply(rotation_y(0.4F), rotation_x(-0.25F));
+    const Mat4 mvp = multiply(projection, multiply(view, rotation_matrix));
     assert(std::isfinite(mvp(0, 0)));
     assert(std::isfinite(mvp(3, 2)));
 
