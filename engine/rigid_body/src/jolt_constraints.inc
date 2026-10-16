@@ -4,17 +4,78 @@
 #include <Jolt/Physics/Constraints/HingeConstraint.h>
 #include <Jolt/Physics/Constraints/SliderConstraint.h>
 
+#include <algorithm>
 #include <array>
 #include <cfloat>
 #include <cmath>
 #include <cstdint>
+#include <unordered_map>
+#include <utility>
+#include <vector>
 
 namespace vice::rigid_body {
+
+struct Domain::ConstraintRuntimeState {
+    std::unordered_map<std::uint64_t, ConstraintBreakThresholds> break_thresholds;
+    std::vector<ConstraintBreakEvent> break_events;
+};
+
 namespace {
+
+struct NativeConstraintImpulse {
+    float linear = 0.0F;
+    float angular = 0.0F;
+    float limit = 0.0F;
+    float motor = 0.0F;
+};
 
 [[nodiscard]] bool valid_constraint_spring(const ConstraintSpring spring) noexcept {
     return std::isfinite(spring.frequency_hz) && spring.frequency_hz >= 0.0F &&
         std::isfinite(spring.damping_ratio) && spring.damping_ratio >= 0.0F;
+}
+
+[[nodiscard]] bool valid_break_thresholds(
+    const ConstraintBreakThresholds& thresholds
+) noexcept {
+    return (!thresholds.linear_impulse.has_value() ||
+            valid_positive(*thresholds.linear_impulse)) &&
+        (!thresholds.angular_impulse.has_value() ||
+            valid_positive(*thresholds.angular_impulse));
+}
+
+[[nodiscard]] bool motor_uses_position(const ConstraintMotorMode mode) noexcept {
+    return mode == ConstraintMotorMode::position ||
+        mode == ConstraintMotorMode::position_and_velocity;
+}
+
+[[nodiscard]] bool valid_hinge_motor(const HingeMotorDesc& motor) noexcept {
+    if (!std::isfinite(motor.target_angular_velocity) || !std::isfinite(motor.target_angle) ||
+        !valid_constraint_spring(motor.drive_spring) ||
+        !valid_nonnegative(motor.max_torque)) {
+        return false;
+    }
+    if (motor.mode != ConstraintMotorMode::off && !valid_positive(motor.max_torque)) {
+        return false;
+    }
+    if (motor_uses_position(motor.mode) && motor.drive_spring.frequency_hz <= 0.0F) {
+        return false;
+    }
+    return true;
+}
+
+[[nodiscard]] bool valid_slider_motor(const SliderMotorDesc& motor) noexcept {
+    if (!std::isfinite(motor.target_velocity) || !std::isfinite(motor.target_position) ||
+        !valid_constraint_spring(motor.drive_spring) ||
+        !valid_nonnegative(motor.max_force)) {
+        return false;
+    }
+    if (motor.mode != ConstraintMotorMode::off && !valid_positive(motor.max_force)) {
+        return false;
+    }
+    if (motor_uses_position(motor.mode) && motor.drive_spring.frequency_hz <= 0.0F) {
+        return false;
+    }
+    return true;
 }
 
 [[nodiscard]] JPH::SpringSettings jolt_spring(const ConstraintSpring spring) noexcept {
@@ -23,6 +84,34 @@ namespace {
         spring.frequency_hz,
         spring.damping_ratio,
     };
+}
+
+[[nodiscard]] JPH::EMotorState jolt_motor_mode(const ConstraintMotorMode mode) noexcept {
+    switch (mode) {
+    case ConstraintMotorMode::velocity:
+        return JPH::EMotorState::Velocity;
+    case ConstraintMotorMode::position:
+        return JPH::EMotorState::Position;
+    case ConstraintMotorMode::position_and_velocity:
+        return JPH::EMotorState::PositionAndVelocity;
+    case ConstraintMotorMode::off:
+    default:
+        return JPH::EMotorState::Off;
+    }
+}
+
+[[nodiscard]] ConstraintMotorMode vice_motor_mode(const JPH::EMotorState mode) noexcept {
+    switch (mode) {
+    case JPH::EMotorState::Velocity:
+        return ConstraintMotorMode::velocity;
+    case JPH::EMotorState::Position:
+        return ConstraintMotorMode::position;
+    case JPH::EMotorState::PositionAndVelocity:
+        return ConstraintMotorMode::position_and_velocity;
+    case JPH::EMotorState::Off:
+    default:
+        return ConstraintMotorMode::off;
+    }
 }
 
 [[nodiscard]] JPH::Vec3 normalized_jolt_vector(const math::Vec3 value) noexcept {
@@ -184,18 +273,106 @@ template <typename ImplType, typename SettingsType>
         two_body.GetBody2()->GetUserData() == participant.value;
 }
 
+void activate_constraint_bodies(Domain::Impl& impl, const JPH::Constraint& constraint) {
+    if (constraint.GetType() != JPH::EConstraintType::TwoBodyConstraint) {
+        return;
+    }
+    const auto& two_body = static_cast<const JPH::TwoBodyConstraint&>(constraint);
+    auto& body_interface = impl.physics_system_.GetBodyInterface();
+    const simulation::ParticipantId participants[]{
+        simulation::ParticipantId{two_body.GetBody1()->GetUserData()},
+        simulation::ParticipantId{two_body.GetBody2()->GetUserData()},
+    };
+    for (const auto participant : participants) {
+        if (const auto* body = impl.find(participant); body != nullptr &&
+            body->motion == MotionType::dynamic_body) {
+            body_interface.ActivateBody(body->body_id);
+        }
+    }
+}
+
+void configure_hinge_motor(JPH::HingeConstraint& constraint, const HingeMotorDesc& motor) {
+    auto& settings = constraint.GetMotorSettings();
+    settings.mSpringSettings = jolt_spring(motor.drive_spring);
+    settings.SetTorqueLimit(motor.max_torque);
+    constraint.SetTargetAngularVelocity(motor.target_angular_velocity);
+    constraint.SetTargetAngle(motor.target_angle);
+    constraint.SetMotorState(jolt_motor_mode(motor.mode));
+}
+
+void configure_slider_motor(JPH::SliderConstraint& constraint, const SliderMotorDesc& motor) {
+    auto& settings = constraint.GetMotorSettings();
+    settings.mSpringSettings = jolt_spring(motor.drive_spring);
+    settings.SetForceLimit(motor.max_force);
+    constraint.SetTargetVelocity(motor.target_velocity);
+    constraint.SetTargetPosition(motor.target_position);
+    constraint.SetMotorState(jolt_motor_mode(motor.mode));
+}
+
+[[nodiscard]] NativeConstraintImpulse constraint_impulse(
+    const JPH::Constraint& constraint
+) noexcept {
+    NativeConstraintImpulse result;
+    switch (constraint.GetSubType()) {
+    case JPH::EConstraintSubType::Fixed: {
+        const auto& fixed = static_cast<const JPH::FixedConstraint&>(constraint);
+        result.linear = fixed.GetTotalLambdaPosition().Length();
+        result.angular = fixed.GetTotalLambdaRotation().Length();
+        break;
+    }
+    case JPH::EConstraintSubType::Hinge: {
+        const auto& hinge = static_cast<const JPH::HingeConstraint&>(constraint);
+        const float rotation = hinge.GetTotalLambdaRotation().Length();
+        result.linear = hinge.GetTotalLambdaPosition().Length();
+        result.limit = std::abs(hinge.GetTotalLambdaRotationLimits());
+        result.motor = std::abs(hinge.GetTotalLambdaMotor());
+        result.angular = std::sqrt(
+            rotation * rotation + result.limit * result.limit + result.motor * result.motor
+        );
+        break;
+    }
+    case JPH::EConstraintSubType::Slider: {
+        const auto& slider = static_cast<const JPH::SliderConstraint&>(constraint);
+        const float position = slider.GetTotalLambdaPosition().Length();
+        result.limit = std::abs(slider.GetTotalLambdaPositionLimits());
+        result.motor = std::abs(slider.GetTotalLambdaMotor());
+        result.linear = std::sqrt(
+            position * position + result.limit * result.limit + result.motor * result.motor
+        );
+        result.angular = slider.GetTotalLambdaRotation().Length();
+        break;
+    }
+    case JPH::EConstraintSubType::Distance: {
+        const auto& distance = static_cast<const JPH::DistanceConstraint&>(constraint);
+        result.linear = std::abs(distance.GetTotalLambdaPosition());
+        break;
+    }
+    default:
+        break;
+    }
+    return result;
+}
+
 } // namespace
 
 bool Domain::create_constraint(const FixedConstraintDesc& desc) {
-    if (!valid_constraint_pair(*impl_, desc.id, desc.first, desc.second)) {
+    if (!valid_constraint_pair(*impl_, desc.id, desc.first, desc.second) ||
+        !valid_break_thresholds(desc.break_thresholds)) {
         return false;
+    }
+    if (!constraint_runtime_) {
+        constraint_runtime_ = std::make_shared<ConstraintRuntimeState>();
     }
 
     JPH::FixedConstraintSettings settings;
     settings.mSpace = JPH::EConstraintSpace::WorldSpace;
     settings.mAutoDetectPoint = true;
     settings.mEnabled = desc.enabled;
-    return add_constraint(*impl_, desc.id, desc.first, desc.second, settings);
+    if (!add_constraint(*impl_, desc.id, desc.first, desc.second, settings)) {
+        return false;
+    }
+    constraint_runtime_->break_thresholds[desc.id.value] = desc.break_thresholds;
+    return true;
 }
 
 bool Domain::create_constraint(const HingeConstraintDesc& desc) {
@@ -206,8 +383,13 @@ bool Domain::create_constraint(const HingeConstraintDesc& desc) {
         desc.max_angle < 0.0F || desc.max_angle > pi ||
         desc.min_angle > desc.max_angle ||
         !valid_constraint_spring(desc.limits_spring) ||
-        !valid_nonnegative(desc.max_friction_torque)) {
+        !valid_nonnegative(desc.max_friction_torque) ||
+        !valid_hinge_motor(desc.motor) ||
+        !valid_break_thresholds(desc.break_thresholds)) {
         return false;
+    }
+    if (!constraint_runtime_) {
+        constraint_runtime_ = std::make_shared<ConstraintRuntimeState>();
     }
 
     JPH::HingeConstraintSettings settings;
@@ -222,8 +404,19 @@ bool Domain::create_constraint(const HingeConstraintDesc& desc) {
     settings.mLimitsMax = desc.max_angle;
     settings.mLimitsSpringSettings = jolt_spring(desc.limits_spring);
     settings.mMaxFrictionTorque = desc.max_friction_torque;
+    settings.mMotorSettings.mSpringSettings = jolt_spring(desc.motor.drive_spring);
+    settings.mMotorSettings.SetTorqueLimit(desc.motor.max_torque);
     settings.mEnabled = desc.enabled;
-    return add_constraint(*impl_, desc.id, desc.first, desc.second, settings);
+    if (!add_constraint(*impl_, desc.id, desc.first, desc.second, settings)) {
+        return false;
+    }
+    auto* constraint = static_cast<JPH::HingeConstraint*>(find_constraint(*impl_, desc.id));
+    if (constraint == nullptr) {
+        return false;
+    }
+    configure_hinge_motor(*constraint, desc.motor);
+    constraint_runtime_->break_thresholds[desc.id.value] = desc.break_thresholds;
+    return true;
 }
 
 bool Domain::create_constraint(const SliderConstraintDesc& desc) {
@@ -238,8 +431,13 @@ bool Domain::create_constraint(const SliderConstraintDesc& desc) {
         !valid_constraint_spring(desc.limits_spring) ||
         (desc.limits_spring.frequency_hz > 0.0F &&
             !desc.min_position.has_value() && !desc.max_position.has_value()) ||
-        !valid_nonnegative(desc.max_friction_force)) {
+        !valid_nonnegative(desc.max_friction_force) ||
+        !valid_slider_motor(desc.motor) ||
+        !valid_break_thresholds(desc.break_thresholds)) {
         return false;
+    }
+    if (!constraint_runtime_) {
+        constraint_runtime_ = std::make_shared<ConstraintRuntimeState>();
     }
 
     JPH::SliderConstraintSettings settings;
@@ -252,8 +450,19 @@ bool Domain::create_constraint(const SliderConstraintDesc& desc) {
     settings.mLimitsMax = desc.max_position.value_or(FLT_MAX);
     settings.mLimitsSpringSettings = jolt_spring(desc.limits_spring);
     settings.mMaxFrictionForce = desc.max_friction_force;
+    settings.mMotorSettings.mSpringSettings = jolt_spring(desc.motor.drive_spring);
+    settings.mMotorSettings.SetForceLimit(desc.motor.max_force);
     settings.mEnabled = desc.enabled;
-    return add_constraint(*impl_, desc.id, desc.first, desc.second, settings);
+    if (!add_constraint(*impl_, desc.id, desc.first, desc.second, settings)) {
+        return false;
+    }
+    auto* constraint = static_cast<JPH::SliderConstraint*>(find_constraint(*impl_, desc.id));
+    if (constraint == nullptr) {
+        return false;
+    }
+    configure_slider_motor(*constraint, desc.motor);
+    constraint_runtime_->break_thresholds[desc.id.value] = desc.break_thresholds;
+    return true;
 }
 
 bool Domain::create_constraint(const DistanceConstraintDesc& desc) {
@@ -268,8 +477,12 @@ bool Domain::create_constraint(const DistanceConstraintDesc& desc) {
         (has_min_distance &&
             (!valid_nonnegative(*desc.min_distance) || !valid_nonnegative(*desc.max_distance) ||
                 *desc.min_distance > *desc.max_distance)) ||
-        !valid_constraint_spring(desc.limits_spring)) {
+        !valid_constraint_spring(desc.limits_spring) ||
+        !valid_break_thresholds(desc.break_thresholds)) {
         return false;
+    }
+    if (!constraint_runtime_) {
+        constraint_runtime_ = std::make_shared<ConstraintRuntimeState>();
     }
 
     const auto* first_entry = impl_->find(desc.first);
@@ -307,7 +520,11 @@ bool Domain::create_constraint(const DistanceConstraintDesc& desc) {
     }
     settings.mLimitsSpringSettings = jolt_spring(desc.limits_spring);
     settings.mEnabled = desc.enabled;
-    return add_constraint(*impl_, desc.id, desc.first, desc.second, settings);
+    if (!add_constraint(*impl_, desc.id, desc.first, desc.second, settings)) {
+        return false;
+    }
+    constraint_runtime_->break_thresholds[desc.id.value] = desc.break_thresholds;
+    return true;
 }
 
 bool Domain::destroy_constraint(const ConstraintId id) {
@@ -325,6 +542,9 @@ bool Domain::destroy_constraint(const ConstraintId id) {
     }
 
     impl_->physics_system_.RemoveConstraint(constraint);
+    if (constraint_runtime_) {
+        constraint_runtime_->break_thresholds.erase(id.value);
+    }
 
     auto& body_interface = impl_->physics_system_.GetBodyInterface();
     if (const auto* body = impl_->find(first); body != nullptr &&
@@ -344,21 +564,33 @@ bool Domain::set_constraint_enabled(const ConstraintId id, const bool enabled) {
         return false;
     }
     constraint->SetEnabled(enabled);
-
-    if (enabled && constraint->GetType() == JPH::EConstraintType::TwoBodyConstraint) {
-        const auto& two_body = static_cast<const JPH::TwoBodyConstraint&>(*constraint);
-        auto& body_interface = impl_->physics_system_.GetBodyInterface();
-        const simulation::ParticipantId participants[]{
-            simulation::ParticipantId{two_body.GetBody1()->GetUserData()},
-            simulation::ParticipantId{two_body.GetBody2()->GetUserData()},
-        };
-        for (const auto participant : participants) {
-            if (const auto* body = impl_->find(participant); body != nullptr &&
-                body->motion == MotionType::dynamic_body) {
-                body_interface.ActivateBody(body->body_id);
-            }
-        }
+    if (enabled) {
+        activate_constraint_bodies(*impl_, *constraint);
     }
+    return true;
+}
+
+bool Domain::set_hinge_motor(const ConstraintId id, const HingeMotorDesc& motor) {
+    auto* constraint = find_constraint(*impl_, id);
+    if (constraint == nullptr || constraint->GetSubType() != JPH::EConstraintSubType::Hinge ||
+        !valid_hinge_motor(motor)) {
+        return false;
+    }
+    auto& hinge = static_cast<JPH::HingeConstraint&>(*constraint);
+    configure_hinge_motor(hinge, motor);
+    activate_constraint_bodies(*impl_, hinge);
+    return true;
+}
+
+bool Domain::set_slider_motor(const ConstraintId id, const SliderMotorDesc& motor) {
+    auto* constraint = find_constraint(*impl_, id);
+    if (constraint == nullptr || constraint->GetSubType() != JPH::EConstraintSubType::Slider ||
+        !valid_slider_motor(motor)) {
+        return false;
+    }
+    auto& slider = static_cast<JPH::SliderConstraint&>(*constraint);
+    configure_slider_motor(slider, motor);
+    activate_constraint_bodies(*impl_, slider);
     return true;
 }
 
@@ -370,18 +602,95 @@ std::optional<ConstraintState> Domain::constraint_state(const ConstraintId id) c
     }
 
     const auto& two_body = static_cast<const JPH::TwoBodyConstraint&>(*constraint);
+    const NativeConstraintImpulse impulse = constraint_impulse(*constraint);
     ConstraintState state{
         .type = constraint_type(constraint->GetSubType()),
         .first = simulation::ParticipantId{two_body.GetBody1()->GetUserData()},
         .second = simulation::ParticipantId{two_body.GetBody2()->GetUserData()},
         .enabled = constraint->GetEnabled(),
+        .linear_impulse = impulse.linear,
+        .angular_impulse = impulse.angular,
+        .limit_impulse = impulse.limit,
+        .motor_impulse = impulse.motor,
     };
     if (constraint->GetSubType() == JPH::EConstraintSubType::Hinge) {
-        state.coordinate = static_cast<const JPH::HingeConstraint*>(constraint)->GetCurrentAngle();
+        const auto& hinge = static_cast<const JPH::HingeConstraint&>(*constraint);
+        state.coordinate = hinge.GetCurrentAngle();
+        state.motor_mode = vice_motor_mode(hinge.GetMotorState());
     } else if (constraint->GetSubType() == JPH::EConstraintSubType::Slider) {
-        state.coordinate = static_cast<const JPH::SliderConstraint*>(constraint)->GetCurrentPosition();
+        const auto& slider = static_cast<const JPH::SliderConstraint&>(*constraint);
+        state.coordinate = slider.GetCurrentPosition();
+        state.motor_mode = vice_motor_mode(slider.GetMotorState());
     }
     return state;
+}
+
+void Domain::step(
+    const simulation::StepContext& context,
+    simulation::InteractionEmitter& emitter
+) {
+    step_unchecked(context, emitter);
+
+    if (!constraint_runtime_) {
+        return;
+    }
+    constraint_runtime_->break_events.clear();
+
+    struct BreakCandidate {
+        ConstraintId id{};
+        ConstraintBreakEvent event{};
+    };
+    std::vector<BreakCandidate> candidates;
+
+    const auto constraints = impl_->physics_system_.GetConstraints();
+    for (const auto& constraint_ref : constraints) {
+        const auto* constraint = constraint_ref.GetPtr();
+        if (constraint == nullptr || !constraint->GetEnabled() ||
+            !supported_constraint(constraint->GetSubType()) ||
+            constraint->GetType() != JPH::EConstraintType::TwoBodyConstraint) {
+            continue;
+        }
+        const ConstraintId id{constraint->GetUserData()};
+        const auto threshold = constraint_runtime_->break_thresholds.find(id.value);
+        if (threshold == constraint_runtime_->break_thresholds.end()) {
+            continue;
+        }
+
+        const NativeConstraintImpulse impulse = constraint_impulse(*constraint);
+        const bool linear_break = threshold->second.linear_impulse.has_value() &&
+            impulse.linear > *threshold->second.linear_impulse;
+        const bool angular_break = threshold->second.angular_impulse.has_value() &&
+            impulse.angular > *threshold->second.angular_impulse;
+        if (!linear_break && !angular_break) {
+            continue;
+        }
+
+        const auto& two_body = static_cast<const JPH::TwoBodyConstraint&>(*constraint);
+        candidates.push_back(BreakCandidate{
+            .id = id,
+            .event = ConstraintBreakEvent{
+                .id = id,
+                .type = constraint_type(constraint->GetSubType()),
+                .first = simulation::ParticipantId{two_body.GetBody1()->GetUserData()},
+                .second = simulation::ParticipantId{two_body.GetBody2()->GetUserData()},
+                .linear_impulse = impulse.linear,
+                .angular_impulse = impulse.angular,
+            },
+        });
+    }
+
+    std::sort(
+        candidates.begin(),
+        candidates.end(),
+        [](const BreakCandidate& left, const BreakCandidate& right) {
+            return left.id.value < right.id.value;
+        }
+    );
+    for (const auto& candidate : candidates) {
+        if (destroy_constraint(candidate.id)) {
+            constraint_runtime_->break_events.push_back(candidate.event);
+        }
+    }
 }
 
 bool Domain::destroy_body(const simulation::ParticipantId participant) {
@@ -395,6 +704,13 @@ bool Domain::destroy_body(const simulation::ParticipantId participant) {
         }
     }
     return destroy_body_unchecked(participant);
+}
+
+std::span<const ConstraintBreakEvent> Domain::constraint_break_events() const noexcept {
+    if (!constraint_runtime_) {
+        return {};
+    }
+    return constraint_runtime_->break_events;
 }
 
 std::size_t Domain::constraint_count() const noexcept {
