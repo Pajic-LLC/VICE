@@ -70,7 +70,7 @@ Coordinator::Coordinator(const double fixed_delta_seconds) noexcept {
     (void)set_fixed_delta_seconds(fixed_delta_seconds);
 }
 
-bool Coordinator::register_domain(Domain& domain) noexcept {
+bool Coordinator::register_domain(Domain& domain) {
     const DomainId id = domain.id();
     if (!id || domain.name().empty() || contains_domain(id)) {
         return false;
