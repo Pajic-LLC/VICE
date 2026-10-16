@@ -14,6 +14,7 @@
 #include <vice/rigid_body/rigid_body.hpp>
 #include <vice/rigid_body/world_bridge.hpp>
 #include <vice/simulation/entity_bindings.hpp>
+#include <vice/world/snapshot_file.hpp>
 #include <vice/world/world.hpp>
 
 #include <algorithm>
@@ -45,6 +46,19 @@ struct LabInputState {
 
 static_assert(sizeof(LabVertex) == 24U);
 static_assert(sizeof(vice::math::Mat4) == 64U);
+
+constexpr std::string_view player_persistent_id_text =
+    "10000000-0000-4000-8000-000000000001";
+constexpr std::string_view cube_persistent_id_text =
+    "10000000-0000-4000-8000-000000000002";
+
+constexpr vice::world::RegionId region_a{1};
+constexpr vice::world::RegionId region_b{2};
+constexpr vice::simulation::DomainId rigid_domain_a_id{100};
+constexpr vice::simulation::DomainId rigid_domain_b_id{200};
+constexpr vice::simulation::ParticipantId terrain_participant{1};
+constexpr vice::simulation::ParticipantId cube_participant{2};
+constexpr vice::simulation::ParticipantId ramp_participant{3};
 
 static constexpr std::array<LabVertex, 8> cube_vertices{{
     {{-0.7F, -0.7F, -0.7F}, {0.16F, 0.68F, 1.00F}},
@@ -284,6 +298,116 @@ float4 vice_cube_fs(VertexOut input) : SV_Target0 {
     return device.create_texture(depth_desc);
 }
 
+[[nodiscard]] bool build_fallback_world(vice::world::World& world) {
+    const auto player_id = vice::world::PersistentId::parse(player_persistent_id_text);
+    const auto cube_id = vice::world::PersistentId::parse(cube_persistent_id_text);
+    if (!player_id.has_value() || !cube_id.has_value()) return false;
+
+    const vice::world::RegionBounds bounds{
+        .min = vice::world::LocalPosition{0.0F, -100.0F, -100.0F},
+        .max = vice::world::LocalPosition{8.0F, 100.0F, 100.0F},
+    };
+    if (!world.register_region(vice::world::RegionDesc{
+            .id = region_a,
+            .simulation_island = vice::world::SimulationIslandId{101},
+            .origin = vice::world::GlobalPosition{-8.0, 0.0, 0.0},
+            .streaming_cell = vice::world::StreamingCellId{0, 0, 0},
+            .fidelity = vice::world::RegionFidelity::full,
+            .bounds = bounds,
+        }) ||
+        !world.register_region(vice::world::RegionDesc{
+            .id = region_b,
+            .simulation_island = vice::world::SimulationIslandId{202},
+            .origin = vice::world::GlobalPosition{0.0, 0.0, 0.0},
+            .streaming_cell = vice::world::StreamingCellId{1, 0, 0},
+            .fidelity = vice::world::RegionFidelity::full,
+            .bounds = bounds,
+        })) {
+        return false;
+    }
+
+    const auto player = world.create_entity(*player_id);
+    const auto cube = world.create_entity(*cube_id);
+    return player.has_value() && cube.has_value() &&
+        world.set_spatial_state(*player, vice::world::SpatialState{
+            .global_position = vice::world::GlobalPosition{-4.0, 0.0, 0.0},
+            .region = region_a,
+        }) &&
+        world.set_spatial_state(*cube, vice::world::SpatialState{
+            .global_position = vice::world::GlobalPosition{-2.5, 2.2, -2.0},
+            .region = region_a,
+        });
+}
+
+[[nodiscard]] bool restore_lab_world(vice::world::World& world) {
+    const std::filesystem::path save_path{VICE_LAB_WORLD_SAVE};
+    std::error_code error;
+    const bool save_exists = std::filesystem::exists(save_path, error);
+    if (error) {
+        vice::core::log(
+            vice::core::LogLevel::error,
+            "VICE Lab could not inspect its World save: " + error.message()
+        );
+        return false;
+    }
+
+    if (save_exists) {
+        const auto loaded = vice::world::load_world_snapshot(save_path);
+        if (!loaded.snapshot.has_value() || !world.restore(*loaded.snapshot)) {
+            vice::core::log(
+                vice::core::LogLevel::error,
+                "VICE Lab World save load failed: " + loaded.diagnostics
+            );
+            return false;
+        }
+        vice::core::log(vice::core::LogLevel::info, "VICE Lab restored saved World state.");
+        return true;
+    }
+
+#if defined(VICE_LAB_COOKED_WORLD)
+    const auto loaded = vice::world::load_world_snapshot(VICE_LAB_COOKED_WORLD);
+    if (!loaded.snapshot.has_value() || !world.restore(*loaded.snapshot)) {
+        vice::core::log(
+            vice::core::LogLevel::error,
+            "VICE Lab authored World load failed: " + loaded.diagnostics
+        );
+        return false;
+    }
+    vice::core::log(vice::core::LogLevel::info, "VICE Lab restored the authored World asset.");
+    return true;
+#else
+    if (!build_fallback_world(world)) {
+        vice::core::log(
+            vice::core::LogLevel::error,
+            "VICE Lab could not construct the development World fallback."
+        );
+        return false;
+    }
+    vice::core::log(
+        vice::core::LogLevel::debug,
+        "VICE Lab cooked World is unavailable; using the development World fallback."
+    );
+    return true;
+#endif
+}
+
+[[nodiscard]] bool save_lab_world(const vice::world::World& world) {
+    std::string diagnostics;
+    if (!vice::world::save_world_snapshot(
+            std::filesystem::path{VICE_LAB_WORLD_SAVE},
+            world.snapshot(),
+            &diagnostics
+        )) {
+        vice::core::log(
+            vice::core::LogLevel::error,
+            "VICE Lab could not save World state: " + diagnostics
+        );
+        return false;
+    }
+    vice::core::log(vice::core::LogLevel::info, "VICE Lab saved authoritative World state.");
+    return true;
+}
+
 } // namespace
 
 int main() {
@@ -471,36 +595,32 @@ int main() {
         .array_element = 0,
     };
 
-    constexpr vice::world::RegionId region_a{1};
-    constexpr vice::world::RegionId region_b{2};
-    constexpr vice::simulation::DomainId rigid_domain_a_id{100};
-    constexpr vice::simulation::DomainId rigid_domain_b_id{200};
-    constexpr vice::simulation::ParticipantId terrain_participant{1};
-    constexpr vice::simulation::ParticipantId cube_participant{2};
-    constexpr vice::simulation::ParticipantId ramp_participant{3};
-
     vice::world::World world;
-    const vice::world::RegionBounds region_bounds{
-        .min = vice::world::LocalPosition{0.0F, -100.0F, -100.0F},
-        .max = vice::world::LocalPosition{8.0F, 100.0F, 100.0F},
-    };
-    if (!world.register_region(vice::world::RegionDesc{
-            .id = region_a,
-            .simulation_island = vice::world::SimulationIslandId{101},
-            .origin = vice::world::GlobalPosition{-8.0, 0.0, 0.0},
-            .streaming_cell = vice::world::StreamingCellId{0, 0, 0},
-            .fidelity = vice::world::RegionFidelity::full,
-            .bounds = region_bounds,
-        }) ||
-        !world.register_region(vice::world::RegionDesc{
-            .id = region_b,
-            .simulation_island = vice::world::SimulationIslandId{202},
-            .origin = vice::world::GlobalPosition{0.0, 0.0, 0.0},
-            .streaming_cell = vice::world::StreamingCellId{1, 0, 0},
-            .fidelity = vice::world::RegionFidelity::full,
-            .bounds = region_bounds,
-        })) {
-        log(LogLevel::error, "VICE Lab could not register World regions.");
+    if (!restore_lab_world(world)) return 1;
+
+    const auto player_persistent_id = vice::world::PersistentId::parse(player_persistent_id_text);
+    const auto cube_persistent_id = vice::world::PersistentId::parse(cube_persistent_id_text);
+    if (!player_persistent_id.has_value() || !cube_persistent_id.has_value()) {
+        log(LogLevel::error, "VICE Lab runtime role IDs are invalid.");
+        return 1;
+    }
+
+    const auto player_entity_record = world.find(*player_persistent_id);
+    const auto cube_entity_record = world.find(*cube_persistent_id);
+    const auto first_region = world.region(region_a);
+    const auto second_region = world.region(region_b);
+    if (!player_entity_record.has_value() || !cube_entity_record.has_value() ||
+        !first_region.has_value() || !second_region.has_value()) {
+        log(LogLevel::error, "VICE Lab restored World is missing required authored records.");
+        return 1;
+    }
+    const auto player_entity = *player_entity_record;
+    const auto cube_entity = *cube_entity_record;
+
+    const auto initial_player_spatial = world.spatial_state(player_entity);
+    const auto initial_cube_spatial = world.spatial_state(cube_entity);
+    if (!initial_player_spatial.has_value() || !initial_cube_spatial.has_value()) {
+        log(LogLevel::error, "VICE Lab restored roles are missing spatial state.");
         return 1;
     }
 
@@ -517,6 +637,13 @@ int main() {
         log(LogLevel::error, "VICE Lab could not initialize regional rigid simulation.");
         return 1;
     }
+
+    const auto domain_for_region = [&](const vice::world::RegionId region)
+        -> vice::rigid_body::Domain* {
+        if (region == region_a) return rigid_domain_a.get();
+        if (region == region_b) return rigid_domain_b.get();
+        return nullptr;
+    };
 
     bool authored_collision_ready = false;
 #if defined(VICE_LAB_COOKED_SCENE_COLLISION) && defined(VICE_LAB_COOKED_TERRAIN_COLLISION)
@@ -595,15 +722,6 @@ int main() {
         log(LogLevel::debug, "VICE Lab authored collision is unavailable; using development floors.");
     }
 
-    const auto cube_entity = world.create_entity();
-    if (!world.set_spatial_state(cube_entity, vice::world::SpatialState{
-            .global_position = vice::world::GlobalPosition{-2.5, 2.2, -2.0},
-            .region = region_a,
-        })) {
-        log(LogLevel::error, "VICE Lab could not place the simulated cube in World state.");
-        return 1;
-    }
-
     vice::rigid_body::BoxBodyDesc simulated_cube;
     simulated_cube.participant = cube_participant;
     simulated_cube.motion = vice::rigid_body::MotionType::dynamic_body;
@@ -612,18 +730,7 @@ int main() {
     simulated_cube.friction = 0.65F;
     simulated_cube.restitution = 0.15F;
     if (!world_bridge.create_box(world, simulation, bindings, cube_entity, simulated_cube)) {
-        log(LogLevel::error, "VICE Lab could not create the World-owned simulated cube.");
-        return 1;
-    }
-
-    const auto player_entity = world.create_entity();
-    const auto player_persistent_id = world.persistent_id(player_entity);
-    if (!player_persistent_id.has_value() ||
-        !world.set_spatial_state(player_entity, vice::world::SpatialState{
-            .global_position = vice::world::GlobalPosition{-4.0, 0.0, 0.0},
-            .region = region_a,
-        })) {
-        log(LogLevel::error, "VICE Lab could not create the World-owned player.");
+        log(LogLevel::error, "VICE Lab could not rebuild the simulated cube binding.");
         return 1;
     }
 
@@ -634,23 +741,16 @@ int main() {
     player.step_height = 0.4F;
     player.stick_to_floor_distance = 0.5F;
     if (!world_bridge.create_character(world, simulation, player_entity, player)) {
-        log(LogLevel::error, "VICE Lab could not create the World-owned character.");
+        log(LogLevel::error, "VICE Lab could not rebuild the character binding.");
         return 1;
     }
 
+    log(LogLevel::info, std::string{"VICE Lab player: "} + player_persistent_id->to_string());
     log(
         LogLevel::info,
-        std::string{"VICE Lab player: "} + player_persistent_id->to_string()
+        std::string{"VICE Lab region: "} + std::to_string(initial_player_spatial->region.value)
     );
-    log(LogLevel::info, "VICE Lab region: 1");
     log(LogLevel::info, "VICE Lab controls: W/A/S/D or arrows move, Space jumps, Escape quits.");
-
-    const auto domain_for_region = [&](const vice::world::RegionId region)
-        -> vice::rigid_body::Domain* {
-        if (region == region_a) return rigid_domain_a.get();
-        if (region == region_b) return rigid_domain_b.get();
-        return nullptr;
-    };
 
     constexpr float player_speed = 3.5F;
     constexpr float player_jump_speed = 5.5F;
@@ -658,7 +758,7 @@ int main() {
     FrameClock clock;
     LabInputState input;
     auto previous_ground_state = vice::rigid_body::CharacterGroundState::airborne;
-    auto previous_region = region_a;
+    auto previous_region = initial_player_spatial->region;
     bool ground_state_initialized = false;
     double simulation_accumulator = 0.0;
     bool running = true;
@@ -816,10 +916,13 @@ int main() {
             }
 
             auto* player_domain = domain_for_region(player_spatial->region);
+            auto* cube_domain = domain_for_region(cube_spatial->region);
             const auto player_state = player_domain != nullptr
                 ? player_domain->character_state(*player_character)
                 : std::nullopt;
-            const auto cube_state = rigid_domain_a->body_state(cube_participant);
+            const auto cube_state = cube_domain != nullptr
+                ? cube_domain->body_state(cube_participant)
+                : std::nullopt;
             if (!player_state.has_value() || !cube_state.has_value()) {
                 log(LogLevel::error, "VICE Lab lost a live simulated participant.");
                 running = false;
@@ -843,7 +946,11 @@ int main() {
                 static_cast<float>(cube_global.y),
                 static_cast<float>(cube_global.z),
             };
-            vice::math::Vec3 ramp_render_position{-8.0F, 0.0F, 0.0F};
+            vice::math::Vec3 ramp_render_position{
+                static_cast<float>(first_region->origin.x),
+                static_cast<float>(first_region->origin.y),
+                static_cast<float>(first_region->origin.z),
+            };
             if (!cooked_transform_binding) {
                 cube_render_position.x -= static_cast<float>(player_global.x);
                 cube_render_position.y -= static_cast<float>(player_global.y);
@@ -940,7 +1047,7 @@ int main() {
                 frame_commands->present(*swapchain);
 
             if (!recorded) {
-                log(LogLevel::error, "VICE Lab failed to record the authored playable frame.");
+                log(LogLevel::error, "VICE Lab failed to record the persisted playable frame.");
                 running = false;
             } else {
                 const auto frame_submission = render_device->submit(std::move(frame_commands));
@@ -956,6 +1063,26 @@ int main() {
 
     (void)render_device->wait_idle();
 
+    const bool player_synced = world_bridge.sync_character_to_world(
+        world,
+        simulation,
+        player_entity
+    );
+    const bool cube_synced = world_bridge.sync_body_to_world(
+        world,
+        simulation,
+        bindings,
+        cube_entity
+    );
+    if (player_synced && cube_synced) {
+        (void)save_lab_world(world);
+    } else {
+        log(
+            LogLevel::error,
+            "VICE Lab skipped World save because live simulation state could not be synchronized."
+        );
+    }
+
     if (const auto player_spatial = world.spatial_state(player_entity)) {
         if (auto* player_domain = domain_for_region(player_spatial->region)) {
             if (const auto player_character = world_bridge.character_id(world, simulation, player_entity)) {
@@ -964,8 +1091,12 @@ int main() {
         }
     }
 
-    (void)bindings.unbind(cube_entity, rigid_domain_a_id);
-    (void)rigid_domain_a->destroy_body(cube_participant);
+    if (const auto cube_spatial = world.spatial_state(cube_entity)) {
+        if (auto* cube_domain = domain_for_region(cube_spatial->region)) {
+            (void)bindings.unbind(cube_entity, cube_domain->id());
+            (void)cube_domain->destroy_body(cube_participant);
+        }
+    }
     (void)rigid_domain_a->destroy_body(ramp_participant);
     (void)rigid_domain_a->destroy_body(terrain_participant);
     (void)rigid_domain_b->destroy_body(terrain_participant);

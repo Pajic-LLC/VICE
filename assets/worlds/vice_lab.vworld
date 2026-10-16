@@ -1,0 +1,11 @@
+vice-world-source 1
+
+# Stable runtime roles used by VICE Lab.
+# player: 10000000-0000-4000-8000-000000000001
+# cube:   10000000-0000-4000-8000-000000000002
+
+region 1 101 -8 0 0 0 0 0 full bounds 0 -100 -100 8 100 100
+region 2 202 0 0 0 1 0 0 full bounds 0 -100 -100 8 100 100
+
+entity 10000000-0000-4000-8000-000000000001 spatial -4 0 0 1
+entity 10000000-0000-4000-8000-000000000002 spatial -2.5 2.2 -2 1

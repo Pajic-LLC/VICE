@@ -3,6 +3,7 @@ add_library(
   STATIC
     src/persistent_id.cpp
     src/primitives.cpp
+    src/snapshot_file.cpp
     src/world.cpp
 )
 
