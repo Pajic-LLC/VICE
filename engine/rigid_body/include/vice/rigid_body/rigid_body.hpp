@@ -3,6 +3,7 @@
 #include <vice/math/math.hpp>
 #include <vice/simulation/simulation.hpp>
 
+#include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <optional>
