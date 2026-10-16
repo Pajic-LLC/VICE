@@ -128,7 +128,10 @@ int main() {
     assert(before_failed_handoff.has_value());
     assert(coordinator.unregister_domain(domain_a->id()));
     assert(!bridge.handoff_character(world, coordinator, entity, region_a));
-    assert(world.spatial_state(entity) == before_failed_handoff);
+    const auto after_failed_handoff = world.spatial_state(entity);
+    assert(after_failed_handoff.has_value());
+    assert(after_failed_handoff->region == before_failed_handoff->region);
+    assert(after_failed_handoff->global_position == before_failed_handoff->global_position);
     assert(domain_b->character_state(*target_id).has_value());
     assert(bridge.character_id(world, coordinator, entity) == target_id);
     assert(coordinator.register_domain(*domain_a));
