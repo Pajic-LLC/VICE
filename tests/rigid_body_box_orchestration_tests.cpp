@@ -50,6 +50,13 @@ int main() {
     assert(domain_a != nullptr);
     assert(domain_b != nullptr);
 
+    const simulation::MaterialId material_id{50};
+    simulation::Material material;
+    assert(material.set_property("rigid_body", "friction", 0.33));
+    assert(material.set_property("rigid_body", "restitution", 0.07));
+    assert(domain_a->register_material(material_id, material));
+    assert(domain_b->register_material(material_id, material));
+
     simulation::Coordinator coordinator{1.0 / 120.0};
     assert(coordinator.register_domain(*domain_a));
 
@@ -69,14 +76,13 @@ int main() {
     const simulation::ParticipantId participant{77};
     rigid_body::BoxBodyDesc box;
     box.participant = participant;
+    box.material = material_id;
     box.motion = rigid_body::MotionType::dynamic_body;
     box.motion_quality = rigid_body::MotionQuality::continuous;
     box.half_extents = math::Vec3{0.5F, 0.5F, 0.5F};
     box.orientation = math::Quat{0.0F, 0.0F, 0.2588190451F, 0.9659258263F};
     box.linear_velocity = math::Vec3{4.0F, 0.0F, 0.0F};
     box.angular_velocity = math::Vec3{0.0F, 1.0F, 0.25F};
-    box.friction = 0.2F;
-    box.restitution = 0.1F;
     assert(bridge.create_box(world, coordinator, bindings, *entity, box));
     assert(bridge.box_count() == 1U);
 
@@ -146,8 +152,23 @@ int main() {
     assert(bindings.find(world, coordinator, *entity, domain_b->id()) == participant);
     assert(!bindings.find(world, coordinator, *entity, domain_a->id()).has_value());
 
+    const auto material_hit = domain_b->raycast(rigid_body::RaycastDesc{
+        .origin = target_state->position + math::Vec3{0.0F, 2.0F, 0.0F},
+        .direction = math::Vec3{0.0F, -1.0F, 0.0F},
+        .max_distance = 4.0F,
+    });
+    assert(material_hit.has_value());
+    assert(material_hit->participant == participant);
+    assert(material_hit->material == material_id);
+
     assert(bridge.activate_region(world, coordinator, region_b, *domain_b));
     assert(bridge.registered_region_count() == 2U);
 
+    assert(bindings.unbind(*entity, domain_b->id()));
+    assert(domain_b->destroy_body(participant));
+    assert(domain_a->unregister_material(material_id));
+    assert(domain_b->unregister_material(material_id));
+    assert(coordinator.unregister_domain(domain_a->id()));
+    assert(coordinator.unregister_domain(domain_b->id()));
     return 0;
 }
