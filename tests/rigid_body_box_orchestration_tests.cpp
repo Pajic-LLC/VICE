@@ -153,7 +153,11 @@ int main() {
     assert(!bindings.find(world, coordinator, *entity, domain_a->id()).has_value());
 
     const auto material_hit = domain_b->raycast(rigid_body::RaycastDesc{
-        .origin = target_state->position + math::Vec3{0.0F, 2.0F, 0.0F},
+        .origin = math::Vec3{
+            target_state->position.x,
+            target_state->position.y + 2.0F,
+            target_state->position.z,
+        },
         .direction = math::Vec3{0.0F, -1.0F, 0.0F},
         .max_distance = 4.0F,
     });
