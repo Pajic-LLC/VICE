@@ -5,6 +5,7 @@
 #include <atomic>
 #include <cassert>
 #include <cstddef>
+#include <cstdint>
 #include <string_view>
 
 int main() {
