@@ -284,6 +284,8 @@ private:
                         return "Triangle mesh contains a degenerate triangle.";
                     }
                 }
+            } else if constexpr (std::is_same_v<T, rigid_body::HeightFieldShapeDesc>) {
+                return "Heightfield terrain is not supported by VICECOLL version 1.";
             } else if constexpr (std::is_same_v<T, rigid_body::CompoundShapeDesc>) {
                 if (desc.children.empty() || desc.children.size() > max_compound_children) {
                     return "Compound child count is invalid.";
