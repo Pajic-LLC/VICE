@@ -5,7 +5,6 @@
 #include <algorithm>
 #include <array>
 #include <bit>
-#include <charconv>
 #include <cstddef>
 #include <cstdint>
 #include <iomanip>
@@ -174,11 +173,13 @@ void append_stable_id(
         value.reset();
         return true;
     }
+    std::istringstream stream{text};
     float parsed = 0.0F;
-    const auto* first = text.data();
-    const auto* last = first + text.size();
-    const auto conversion = std::from_chars(first, last, parsed);
-    if (conversion.ec != std::errc{} || conversion.ptr != last || !std::isfinite(parsed)) {
+    if (!(stream >> parsed) || !std::isfinite(parsed)) {
+        return false;
+    }
+    stream >> std::ws;
+    if (!stream.eof()) {
         return false;
     }
     value = parsed;
