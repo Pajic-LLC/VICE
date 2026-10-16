@@ -25,6 +25,7 @@ inline constexpr std::string_view material_property_owner = "rigid_body";
 inline constexpr std::string_view material_friction_property = "friction";
 inline constexpr std::string_view material_restitution_property = "restitution";
 inline constexpr float heightfield_hole_sample = std::numeric_limits<float>::infinity();
+inline constexpr float pi = 3.14159265358979323846F;
 
 struct ShapeId {
     std::uint64_t value = 0;
@@ -34,6 +35,16 @@ struct ShapeId {
     }
 
     constexpr auto operator<=>(const ShapeId&) const noexcept = default;
+};
+
+struct ConstraintId {
+    std::uint64_t value = 0;
+
+    [[nodiscard]] constexpr explicit operator bool() const noexcept {
+        return value != 0;
+    }
+
+    constexpr auto operator<=>(const ConstraintId&) const noexcept = default;
 };
 
 enum class MotionType : std::uint8_t {
@@ -52,6 +63,13 @@ enum class ContactKind : std::uint8_t {
     trigger,
 };
 
+enum class ConstraintType : std::uint8_t {
+    fixed,
+    hinge,
+    slider,
+    distance,
+};
+
 struct DomainConfig {
     std::uint32_t max_bodies = 4096;
     std::uint32_t max_body_pairs = 4096;
@@ -64,6 +82,65 @@ struct MaterialInteraction {
     std::optional<float> friction;
     std::optional<float> restitution;
     std::string label;
+};
+
+struct ConstraintSpring {
+    float frequency_hz = 0.0F;
+    float damping_ratio = 0.0F;
+};
+
+struct FixedConstraintDesc {
+    ConstraintId id{};
+    simulation::ParticipantId first{};
+    simulation::ParticipantId second{};
+    bool enabled = true;
+};
+
+struct HingeConstraintDesc {
+    ConstraintId id{};
+    simulation::ParticipantId first{};
+    simulation::ParticipantId second{};
+    math::Vec3 anchor{};
+    math::Vec3 axis{0.0F, 1.0F, 0.0F};
+    math::Vec3 normal{1.0F, 0.0F, 0.0F};
+    float min_angle = -pi;
+    float max_angle = pi;
+    ConstraintSpring limits_spring{};
+    float max_friction_torque = 0.0F;
+    bool enabled = true;
+};
+
+struct SliderConstraintDesc {
+    ConstraintId id{};
+    simulation::ParticipantId first{};
+    simulation::ParticipantId second{};
+    math::Vec3 anchor{};
+    math::Vec3 axis{1.0F, 0.0F, 0.0F};
+    std::optional<float> min_position;
+    std::optional<float> max_position;
+    ConstraintSpring limits_spring{};
+    float max_friction_force = 0.0F;
+    bool enabled = true;
+};
+
+struct DistanceConstraintDesc {
+    ConstraintId id{};
+    simulation::ParticipantId first{};
+    simulation::ParticipantId second{};
+    std::optional<math::Vec3> first_anchor;
+    std::optional<math::Vec3> second_anchor;
+    std::optional<float> min_distance;
+    std::optional<float> max_distance;
+    ConstraintSpring limits_spring{};
+    bool enabled = true;
+};
+
+struct ConstraintState {
+    ConstraintType type = ConstraintType::fixed;
+    simulation::ParticipantId first{};
+    simulation::ParticipantId second{};
+    bool enabled = false;
+    std::optional<float> coordinate;
 };
 
 struct BoxShapeDesc {
@@ -261,8 +338,19 @@ public:
     bool destroy_body(simulation::ParticipantId participant);
     bool set_body_active(simulation::ParticipantId participant, bool active);
 
+    bool create_constraint(const FixedConstraintDesc& desc);
+    bool create_constraint(const HingeConstraintDesc& desc);
+    bool create_constraint(const SliderConstraintDesc& desc);
+    bool create_constraint(const DistanceConstraintDesc& desc);
+    bool destroy_constraint(ConstraintId id);
+    bool set_constraint_enabled(ConstraintId id, bool enabled);
+
     [[nodiscard]] std::optional<BodyState> body_state(
         simulation::ParticipantId participant
+    ) const noexcept;
+
+    [[nodiscard]] std::optional<ConstraintState> constraint_state(
+        ConstraintId id
     ) const noexcept;
 
     [[nodiscard]] std::optional<QueryHit> raycast(
@@ -285,11 +373,13 @@ public:
     [[nodiscard]] std::size_t material_count() const noexcept;
     [[nodiscard]] std::size_t material_interaction_count() const noexcept;
     [[nodiscard]] std::size_t shape_count() const noexcept;
+    [[nodiscard]] std::size_t constraint_count() const noexcept;
 
 private:
     class Impl;
 
     explicit Domain(std::unique_ptr<Impl> impl) noexcept;
+    bool destroy_body_unchecked(simulation::ParticipantId participant);
 
     std::unique_ptr<Impl> impl_;
 };
