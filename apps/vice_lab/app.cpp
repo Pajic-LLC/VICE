@@ -320,7 +320,7 @@ float4 vice_cube_fs(VertexOut input) : SV_Target0 {
             .simulation_island = vice::world::SimulationIslandId{202},
             .origin = vice::world::GlobalPosition{0.0, 0.0, 0.0},
             .streaming_cell = vice::world::StreamingCellId{1, 0, 0},
-            .fidelity = vice::world::RegionFidelity::full,
+            .fidelity = vice::world::RegionFidelity::inactive,
             .bounds = bounds,
         })) {
         return false;
@@ -629,12 +629,8 @@ int main() {
     vice::simulation::Coordinator simulation{1.0 / 120.0};
     vice::simulation::EntityBindings bindings;
     vice::rigid_body::WorldBridge world_bridge;
-    if (!rigid_domain_a || !rigid_domain_b ||
-        !simulation.register_domain(*rigid_domain_a) ||
-        !simulation.register_domain(*rigid_domain_b) ||
-        !world_bridge.register_region(world, simulation, region_a, *rigid_domain_a) ||
-        !world_bridge.register_region(world, simulation, region_b, *rigid_domain_b)) {
-        log(LogLevel::error, "VICE Lab could not initialize regional rigid simulation.");
+    if (!rigid_domain_a || !rigid_domain_b) {
+        log(LogLevel::error, "VICE Lab could not create regional rigid simulation.");
         return 1;
     }
 
@@ -722,13 +718,61 @@ int main() {
         log(LogLevel::debug, "VICE Lab authored collision is unavailable; using development floors.");
     }
 
+    if (!world_bridge.activate_region(world, simulation, region_a, *rigid_domain_a)) {
+        log(LogLevel::error, "VICE Lab could not activate its primary region.");
+        return 1;
+    }
+
+    const bool region_b_needed_at_start =
+        second_region->fidelity != vice::world::RegionFidelity::inactive ||
+        initial_player_spatial->region == region_b ||
+        initial_cube_spatial->region == region_b;
+    if (region_b_needed_at_start &&
+        !world_bridge.activate_region(world, simulation, region_b, *rigid_domain_b)) {
+        log(LogLevel::error, "VICE Lab could not restore its active adjacent region.");
+        return 1;
+    }
+
+    const auto activate_requested_regions = [&]() -> bool {
+        for (const auto& request : world_bridge.region_activation_requests()) {
+            auto* target_domain = domain_for_region(request.target_region);
+            if (target_domain == nullptr ||
+                !world_bridge.activate_region(
+                    world,
+                    simulation,
+                    request.target_region,
+                    *target_domain
+                )) {
+                log(
+                    LogLevel::error,
+                    std::string{"VICE Lab could not activate requested region: "} +
+                        std::to_string(request.target_region.value)
+                );
+                return false;
+            }
+            log(
+                LogLevel::info,
+                std::string{"VICE Lab activated region: "} +
+                    std::to_string(request.target_region.value)
+            );
+        }
+        world_bridge.clear_region_activation_requests();
+        return true;
+    };
+
     vice::rigid_body::BoxBodyDesc simulated_cube;
     simulated_cube.participant = cube_participant;
     simulated_cube.motion = vice::rigid_body::MotionType::dynamic_body;
+    simulated_cube.motion_quality = vice::rigid_body::MotionQuality::continuous;
     simulated_cube.half_extents = vice::math::Vec3{0.7F, 0.7F, 0.7F};
     simulated_cube.orientation = vice::math::Quat{0.0F, 0.0F, 0.2588190451F, 0.9659258263F};
     simulated_cube.friction = 0.65F;
     simulated_cube.restitution = 0.15F;
+    if (second_region->fidelity == vice::world::RegionFidelity::inactive &&
+        initial_cube_spatial->region == region_a) {
+        simulated_cube.linear_velocity = vice::math::Vec3{5.0F, 0.0F, 0.0F};
+        simulated_cube.angular_velocity = vice::math::Vec3{0.0F, 1.0F, 0.25F};
+    }
     if (!world_bridge.create_box(world, simulation, bindings, cube_entity, simulated_cube)) {
         log(LogLevel::error, "VICE Lab could not rebuild the simulated cube binding.");
         return 1;
@@ -750,6 +794,9 @@ int main() {
         LogLevel::info,
         std::string{"VICE Lab region: "} + std::to_string(initial_player_spatial->region.value)
     );
+    if (!region_b_needed_at_start) {
+        log(LogLevel::info, "VICE Lab adjacent region 2 is inactive until requested.");
+    }
     log(LogLevel::info, "VICE Lab controls: W/A/S/D or arrows move, Space jumps, Escape quits.");
 
     constexpr float player_speed = 3.5F;
@@ -759,6 +806,7 @@ int main() {
     LabInputState input;
     auto previous_ground_state = vice::rigid_body::CharacterGroundState::airborne;
     auto previous_region = initial_player_spatial->region;
+    auto previous_cube_region = initial_cube_spatial->region;
     bool ground_state_initialized = false;
     double simulation_accumulator = 0.0;
     bool running = true;
@@ -839,8 +887,8 @@ int main() {
             }
 
             auto* player_domain = domain_for_region(player_spatial->region);
-            if (player_domain == nullptr) {
-                log(LogLevel::error, "VICE Lab player entered an unknown region.");
+            if (player_domain == nullptr || !simulation.registered(player_domain->id())) {
+                log(LogLevel::error, "VICE Lab player entered an unavailable region.");
                 running = false;
                 break;
             }
@@ -880,15 +928,25 @@ int main() {
                 running = false;
                 break;
             }
-            if (!world_bridge.sync_body_to_world(world, simulation, bindings, cube_entity)) {
-                log(LogLevel::error, "VICE Lab could not synchronize the rigid cube to World state.");
+
+            world_bridge.orchestrate_boxes(world, simulation, bindings);
+            if (world_bridge.box_region_events().empty() ||
+                world_bridge.box_region_events().front().action ==
+                    vice::rigid_body::BoxRegionAction::failed) {
+                log(LogLevel::error, "VICE Lab rigid region orchestration failed.");
+                running = false;
+                break;
+            }
+
+            if (!activate_requested_regions()) {
                 running = false;
                 break;
             }
 
             const auto updated_spatial = world.spatial_state(player_entity);
-            if (!updated_spatial.has_value()) {
-                log(LogLevel::error, "VICE Lab lost authoritative player spatial state.");
+            const auto updated_cube_spatial = world.spatial_state(cube_entity);
+            if (!updated_spatial.has_value() || !updated_cube_spatial.has_value()) {
+                log(LogLevel::error, "VICE Lab lost authoritative spatial state.");
                 running = false;
                 break;
             }
@@ -898,6 +956,14 @@ int main() {
                     LogLevel::info,
                     std::string{"VICE Lab player handed off to region: "} +
                         std::to_string(previous_region.value)
+                );
+            }
+            if (updated_cube_spatial->region != previous_cube_region) {
+                previous_cube_region = updated_cube_spatial->region;
+                log(
+                    LogLevel::info,
+                    std::string{"VICE Lab cube handed off to region: "} +
+                        std::to_string(previous_cube_region.value)
                 );
             }
 
