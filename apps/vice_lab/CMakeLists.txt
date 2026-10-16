@@ -1,4 +1,4 @@
-add_executable(vice_lab app.cpp)
+add_executable(vice_lab app.cpp lab_materials.cpp)
 
 target_link_libraries(
   vice_lab
@@ -126,6 +126,36 @@ if(VICE_BUILD_TOOLS)
         VICE_LAB_COOKED_TERRAIN_COLLISION="${_vice_lab_terrain_collision}"
     )
     message(STATUS "VICE Lab authored scene cooking enabled.")
+  endif()
+
+  if(TARGET vice_rigid_material_cooker)
+    set(_vice_lab_material_source "${PROJECT_SOURCE_DIR}/assets/materials/vice_lab.vrigmat")
+    set(_vice_lab_material_asset "${CMAKE_BINARY_DIR}/cooked/vice_lab.vrigmatc")
+
+    add_custom_command(
+      OUTPUT "${_vice_lab_material_asset}"
+      COMMAND ${CMAKE_COMMAND} -E make_directory "${CMAKE_BINARY_DIR}/cooked"
+      COMMAND
+        $<TARGET_FILE:vice_rigid_material_cooker>
+        --input "${_vice_lab_material_source}"
+        --output "${_vice_lab_material_asset}"
+      DEPENDS
+        vice_rigid_material_cooker
+        "${_vice_lab_material_source}"
+      VERBATIM
+    )
+
+    add_custom_target(
+      vice_lab_rigid_material_asset
+      DEPENDS "${_vice_lab_material_asset}"
+    )
+    add_dependencies(vice_lab vice_lab_rigid_material_asset)
+    target_compile_definitions(
+      vice_lab
+      PRIVATE
+        VICE_LAB_COOKED_RIGID_MATERIALS="${_vice_lab_material_asset}"
+    )
+    message(STATUS "VICE Lab cooked rigid materials enabled.")
   endif()
 
   if(TARGET vice_world_cooker)

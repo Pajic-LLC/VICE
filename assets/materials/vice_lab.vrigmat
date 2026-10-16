@@ -1,0 +1,12 @@
+vice-rigid-material-source 1
+
+# Stable simulation material identities used by the authored Lab World.
+material 20000000-0000-4000-8000-000000000001 10 "terrain_concrete"
+property 20000000-0000-4000-8000-000000000001 "rigid_body" "friction" real 0.82
+property 20000000-0000-4000-8000-000000000001 "rigid_body" "restitution" real 0.02
+
+material 20000000-0000-4000-8000-000000000002 20 "cube_alloy"
+property 20000000-0000-4000-8000-000000000002 "rigid_body" "friction" real 0.28
+property 20000000-0000-4000-8000-000000000002 "rigid_body" "restitution" real 0.10
+
+interaction 20000000-0000-4000-8000-000000000002 20000000-0000-4000-8000-000000000001 0.20 0.04 "cube_on_terrain"
