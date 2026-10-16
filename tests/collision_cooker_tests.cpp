@@ -83,6 +83,7 @@ int main() {
     assert(cooked.success);
     assert(!cooked.bytes.empty());
     assert(cooked.source_fingerprint != 0U);
+    assert(cooked.bytes[8] == std::byte{0x01});
 
     std::reverse(shapes.begin(), shapes.end());
     const auto recooked = tools::collision_cooker::cook(shapes);
@@ -93,7 +94,7 @@ int main() {
     const auto decoded = rigid_body::decode_collision_asset(cooked.bytes);
     assert(decoded.asset.has_value());
     assert(decoded.diagnostics.empty());
-    assert(decoded.asset->version == rigid_body::collision_asset_format_version);
+    assert(decoded.asset->version == rigid_body::collision_asset_format_version_v1);
     assert(decoded.asset->source_fingerprint == cooked.source_fingerprint);
     assert(decoded.asset->shapes.size() == 6U);
 
@@ -147,7 +148,7 @@ int main() {
     assert(!tampered_decode.diagnostics.empty());
 
     auto wrong_version = cooked.bytes;
-    wrong_version[8] = std::byte{0x02};
+    wrong_version[8] = std::byte{0x03};
     wrong_version[9] = std::byte{0x00};
     wrong_version[10] = std::byte{0x00};
     wrong_version[11] = std::byte{0x00};
@@ -165,9 +166,10 @@ int main() {
     assert(parsed.shapes->size() == 3U);
     const auto manifest_cooked = tools::collision_cooker::cook(*parsed.shapes);
     assert(manifest_cooked.success);
+    assert(manifest_cooked.bytes[8] == std::byte{0x01});
 
     const auto bad_header = tools::collision_cooker::parse_source_manifest(
-        "vice-collision-source 2\nbox 1 1 1 1\n"
+        "vice-collision-source 3\nbox 1 1 1 1\n"
     );
     assert(!bad_header.shapes.has_value());
 
