@@ -7,8 +7,10 @@
 #include <vice/math/math.hpp>
 #include <vice/platform/event.hpp>
 #include <vice/platform/services.hpp>
+#include <vice/render/mesh_asset.hpp>
 #include <vice/render/rhi.hpp>
 #include <vice/render/shader_asset.hpp>
+#include <vice/rigid_body/collision_asset.hpp>
 #include <vice/rigid_body/rigid_body.hpp>
 #include <vice/rigid_body/world_bridge.hpp>
 #include <vice/simulation/entity_bindings.hpp>
@@ -21,6 +23,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <memory>
+#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
@@ -30,10 +33,7 @@
 
 namespace {
 
-struct LabVertex {
-    float position[3];
-    float color[3];
-};
+using LabVertex = vice::render::MeshVertex;
 
 struct LabInputState {
     bool forward = false;
@@ -333,6 +333,22 @@ int main() {
         return 1;
     }
 
+    std::optional<vice::render::MeshAsset> scene_mesh;
+#if defined(VICE_LAB_COOKED_SCENE_MESH)
+    auto loaded_scene_mesh = vice::render::load_mesh_asset(VICE_LAB_COOKED_SCENE_MESH);
+    if (!loaded_scene_mesh.asset.has_value()) {
+        log(LogLevel::error, "VICE Lab authored mesh load failed: " + loaded_scene_mesh.diagnostics);
+        return 1;
+    }
+    scene_mesh = std::move(*loaded_scene_mesh.asset);
+    log(
+        LogLevel::info,
+        std::string{"VICE Lab loaded authored mesh: "} +
+            std::to_string(scene_mesh->vertices.size()) + " vertices, " +
+            std::to_string(scene_mesh->indices.size() / 3U) + " triangles"
+    );
+#endif
+
     vice::render::BufferDesc vertex_buffer_desc;
     vertex_buffer_desc.size = sizeof(cube_vertices);
     vertex_buffer_desc.usage = vice::render::BufferUsage::vertex;
@@ -368,6 +384,36 @@ int main() {
         return 1;
     }
 
+    std::unique_ptr<vice::render::Buffer> scene_vertex_buffer;
+    std::unique_ptr<vice::render::Buffer> scene_index_buffer;
+    std::unique_ptr<vice::render::Buffer> scene_instance_buffer;
+    if (scene_mesh.has_value()) {
+        vice::render::BufferDesc scene_vertex_desc;
+        scene_vertex_desc.size = scene_mesh->vertices.size() * sizeof(vice::render::MeshVertex);
+        scene_vertex_desc.usage = vice::render::BufferUsage::vertex;
+        scene_vertex_desc.memory = vice::render::MemoryLocation::cpu_to_gpu;
+        scene_vertex_desc.debug_name = "VICE Lab authored mesh vertices";
+
+        vice::render::BufferDesc scene_index_desc;
+        scene_index_desc.size = scene_mesh->indices.size() * sizeof(std::uint32_t);
+        scene_index_desc.usage = vice::render::BufferUsage::index;
+        scene_index_desc.memory = vice::render::MemoryLocation::cpu_to_gpu;
+        scene_index_desc.debug_name = "VICE Lab authored mesh indices";
+
+        vice::render::BufferDesc scene_instance_desc = instance_buffer_desc;
+        scene_instance_desc.debug_name = "VICE Lab authored mesh pose";
+
+        scene_vertex_buffer = render_device->create_buffer(scene_vertex_desc);
+        scene_index_buffer = render_device->create_buffer(scene_index_desc);
+        scene_instance_buffer = render_device->create_buffer(scene_instance_desc);
+        if (!scene_vertex_buffer || !scene_index_buffer || !scene_instance_buffer ||
+            !scene_vertex_buffer->write(0, std::as_bytes(std::span{scene_mesh->vertices})) ||
+            !scene_index_buffer->write(0, std::as_bytes(std::span{scene_mesh->indices}))) {
+            log(LogLevel::error, "VICE Lab could not upload authored mesh resources.");
+            return 1;
+        }
+    }
+
     const bool metal_backend = render_device->backend() == vice::render::Backend::metal;
     vice::render::ShaderModuleDesc vertex_desc;
     vertex_desc.stage = vice::render::ShaderStage::vertex;
@@ -376,12 +422,12 @@ int main() {
         : vice::render::ShaderSourceLanguage::hlsl;
     vertex_desc.source = metal_backend ? metal_cube_source : hlsl_cube_source;
     vertex_desc.entry_point = "vice_cube_vs";
-    vertex_desc.debug_name = "VICE Lab cube vertex";
+    vertex_desc.debug_name = "VICE Lab vertex";
 
     vice::render::ShaderModuleDesc fragment_desc = vertex_desc;
     fragment_desc.stage = vice::render::ShaderStage::fragment;
     fragment_desc.entry_point = "vice_cube_fs";
-    fragment_desc.debug_name = "VICE Lab cube fragment";
+    fragment_desc.debug_name = "VICE Lab fragment";
 
     const std::filesystem::path cooked_shader_root{VICE_LAB_COOKED_SHADER_ROOT};
     auto vertex_shader = load_lab_shader(
@@ -395,7 +441,7 @@ int main() {
         fragment_desc
     );
     if (!vertex_shader || !fragment_shader) {
-        log(LogLevel::error, "VICE Lab could not create cube shader modules.");
+        log(LogLevel::error, "VICE Lab could not create shader modules.");
         return 1;
     }
 
@@ -409,11 +455,11 @@ int main() {
     pipeline_desc.depth.write_enabled = true;
     pipeline_desc.depth.compare = vice::render::CompareOp::less;
     pipeline_desc.vertex_buffers = cube_vertex_layouts;
-    pipeline_desc.debug_name = "VICE Lab simulated cube";
+    pipeline_desc.debug_name = "VICE Lab scene pipeline";
 
-    auto cube_pipeline = render_device->create_graphics_pipeline(pipeline_desc);
-    if (!cube_pipeline) {
-        log(LogLevel::error, "VICE Lab could not create the cube pipeline.");
+    auto scene_pipeline = render_device->create_graphics_pipeline(pipeline_desc);
+    if (!scene_pipeline) {
+        log(LogLevel::error, "VICE Lab could not create the scene pipeline.");
         return 1;
     }
 
@@ -429,8 +475,9 @@ int main() {
     constexpr vice::world::RegionId region_b{2};
     constexpr vice::simulation::DomainId rigid_domain_a_id{100};
     constexpr vice::simulation::DomainId rigid_domain_b_id{200};
-    constexpr vice::simulation::ParticipantId floor_participant{1};
+    constexpr vice::simulation::ParticipantId terrain_participant{1};
     constexpr vice::simulation::ParticipantId cube_participant{2};
+    constexpr vice::simulation::ParticipantId ramp_participant{3};
 
     vice::world::World world;
     const vice::world::RegionBounds region_bounds{
@@ -471,16 +518,81 @@ int main() {
         return 1;
     }
 
-    vice::rigid_body::BoxBodyDesc floor_a;
-    floor_a.participant = floor_participant;
-    floor_a.motion = vice::rigid_body::MotionType::static_body;
-    floor_a.half_extents = vice::math::Vec3{4.0F, 0.25F, 20.0F};
-    floor_a.position = vice::math::Vec3{4.0F, -0.25F, 0.0F};
-    vice::rigid_body::BoxBodyDesc floor_b = floor_a;
-
-    if (!rigid_domain_a->create_box(floor_a) || !rigid_domain_b->create_box(floor_b)) {
-        log(LogLevel::error, "VICE Lab could not create regional floor collision.");
+    bool authored_collision_ready = false;
+#if defined(VICE_LAB_COOKED_SCENE_COLLISION) && defined(VICE_LAB_COOKED_TERRAIN_COLLISION)
+    auto terrain_collision = vice::rigid_body::load_collision_asset(
+        VICE_LAB_COOKED_TERRAIN_COLLISION
+    );
+    auto ramp_collision = vice::rigid_body::load_collision_asset(
+        VICE_LAB_COOKED_SCENE_COLLISION
+    );
+    if (!terrain_collision.asset.has_value() || terrain_collision.asset->shapes.empty()) {
+        log(
+            LogLevel::error,
+            "VICE Lab terrain collision load failed: " + terrain_collision.diagnostics
+        );
         return 1;
+    }
+    if (!ramp_collision.asset.has_value() || ramp_collision.asset->shapes.empty()) {
+        log(
+            LogLevel::error,
+            "VICE Lab authored collision load failed: " + ramp_collision.diagnostics
+        );
+        return 1;
+    }
+
+    std::string collision_diagnostics;
+    if (!vice::rigid_body::register_collision_asset(
+            *rigid_domain_a,
+            *terrain_collision.asset,
+            &collision_diagnostics
+        ) ||
+        !vice::rigid_body::register_collision_asset(
+            *rigid_domain_b,
+            *terrain_collision.asset,
+            &collision_diagnostics
+        ) ||
+        !vice::rigid_body::register_collision_asset(
+            *rigid_domain_a,
+            *ramp_collision.asset,
+            &collision_diagnostics
+        )) {
+        log(LogLevel::error, "VICE Lab collision registration failed: " + collision_diagnostics);
+        return 1;
+    }
+
+    vice::rigid_body::BodyDesc terrain_body;
+    terrain_body.participant = terrain_participant;
+    terrain_body.shape = terrain_collision.asset->shapes.front().id;
+    terrain_body.motion = vice::rigid_body::MotionType::static_body;
+
+    vice::rigid_body::BodyDesc ramp_body;
+    ramp_body.participant = ramp_participant;
+    ramp_body.shape = ramp_collision.asset->shapes.front().id;
+    ramp_body.motion = vice::rigid_body::MotionType::static_body;
+
+    if (!rigid_domain_a->create_body(terrain_body) ||
+        !rigid_domain_b->create_body(terrain_body) ||
+        !rigid_domain_a->create_body(ramp_body)) {
+        log(LogLevel::error, "VICE Lab could not create cooked scene collision bodies.");
+        return 1;
+    }
+    authored_collision_ready = true;
+    log(LogLevel::info, "VICE Lab loaded VICECOLL heightfield terrain and authored ramp collision.");
+#endif
+
+    if (!authored_collision_ready) {
+        vice::rigid_body::BoxBodyDesc floor_a;
+        floor_a.participant = terrain_participant;
+        floor_a.motion = vice::rigid_body::MotionType::static_body;
+        floor_a.half_extents = vice::math::Vec3{4.0F, 0.25F, 20.0F};
+        floor_a.position = vice::math::Vec3{4.0F, -0.25F, 0.0F};
+        vice::rigid_body::BoxBodyDesc floor_b = floor_a;
+        if (!rigid_domain_a->create_box(floor_a) || !rigid_domain_b->create_box(floor_b)) {
+            log(LogLevel::error, "VICE Lab could not create fallback regional floor collision.");
+            return 1;
+        }
+        log(LogLevel::debug, "VICE Lab authored collision is unavailable; using development floors.");
     }
 
     const auto cube_entity = world.create_entity();
@@ -535,12 +647,8 @@ int main() {
 
     const auto domain_for_region = [&](const vice::world::RegionId region)
         -> vice::rigid_body::Domain* {
-        if (region == region_a) {
-            return rigid_domain_a.get();
-        }
-        if (region == region_b) {
-            return rigid_domain_b.get();
-        }
+        if (region == region_a) return rigid_domain_a.get();
+        if (region == region_b) return rigid_domain_b.get();
         return nullptr;
     };
 
@@ -582,9 +690,7 @@ int main() {
                             depth_target = std::move(replacement_depth);
                         }
                     } else if constexpr (std::is_same_v<Payload, vice::platform::WindowFocusChanged>) {
-                        if (!payload.focused) {
-                            input = {};
-                        }
+                        if (!payload.focused) input = {};
                     } else if constexpr (std::is_same_v<Payload, vice::platform::KeyEvent>) {
                         if (payload.pressed && payload.key == vice::platform::Key::escape) {
                             running = false;
@@ -609,9 +715,7 @@ int main() {
                                 input.right = payload.pressed;
                                 break;
                             case vice::platform::Key::space:
-                                if (payload.pressed && !payload.repeat) {
-                                    input.jump_queued = true;
-                                }
+                                if (payload.pressed && !payload.repeat) input.jump_queued = true;
                                 break;
                             default:
                                 break;
@@ -734,22 +838,34 @@ int main() {
 
             const auto player_global = player_spatial->global_position;
             const auto cube_global = cube_spatial->global_position;
-            vice::math::Vec3 render_position{
+            vice::math::Vec3 cube_render_position{
                 static_cast<float>(cube_global.x),
                 static_cast<float>(cube_global.y),
                 static_cast<float>(cube_global.z),
             };
+            vice::math::Vec3 ramp_render_position{-8.0F, 0.0F, 0.0F};
             if (!cooked_transform_binding) {
-                render_position.x -= static_cast<float>(player_global.x);
-                render_position.y -= static_cast<float>(player_global.y);
-                render_position.z -= static_cast<float>(player_global.z);
+                cube_render_position.x -= static_cast<float>(player_global.x);
+                cube_render_position.y -= static_cast<float>(player_global.y);
+                cube_render_position.z -= static_cast<float>(player_global.z);
+                ramp_render_position.x -= static_cast<float>(player_global.x);
+                ramp_render_position.y -= static_cast<float>(player_global.y);
+                ramp_render_position.z -= static_cast<float>(player_global.z);
             }
 
-            const auto model = vice::math::pose(render_position, cube_state->orientation);
-            if (!instance_buffer->write(0, std::as_bytes(std::span{model.values}))) {
+            const auto cube_model = vice::math::pose(cube_render_position, cube_state->orientation);
+            if (!instance_buffer->write(0, std::as_bytes(std::span{cube_model.values}))) {
                 log(LogLevel::error, "VICE Lab could not upload the simulated cube pose.");
                 running = false;
                 continue;
+            }
+            if (scene_instance_buffer) {
+                const auto ramp_model = vice::math::pose(ramp_render_position, vice::math::Quat{});
+                if (!scene_instance_buffer->write(0, std::as_bytes(std::span{ramp_model.values}))) {
+                    log(LogLevel::error, "VICE Lab could not upload the authored mesh pose.");
+                    running = false;
+                    continue;
+                }
             }
 
             const float aspect = static_cast<float>(depth_target->width()) /
@@ -791,13 +907,7 @@ int main() {
 
             bool recorded = frame_commands &&
                 frame_commands->begin_render_pass(*swapchain, pass_desc) &&
-                frame_commands->set_graphics_pipeline(*cube_pipeline) &&
-                frame_commands->set_vertex_buffer(0, *vertex_buffer) &&
-                frame_commands->set_vertex_buffer(1, *instance_buffer) &&
-                frame_commands->set_index_buffer(
-                    *index_buffer,
-                    vice::render::IndexFormat::uint16
-                );
+                frame_commands->set_graphics_pipeline(*scene_pipeline);
             if (recorded && cooked_transform_binding) {
                 recorded = frame_commands->set_graphics_constant_buffer(
                     frame_binding,
@@ -806,13 +916,31 @@ int main() {
                     sizeof(vice::math::Mat4)
                 );
             }
+            if (recorded && scene_mesh.has_value()) {
+                recorded = scene_vertex_buffer && scene_index_buffer && scene_instance_buffer &&
+                    frame_commands->set_vertex_buffer(0, *scene_vertex_buffer) &&
+                    frame_commands->set_vertex_buffer(1, *scene_instance_buffer) &&
+                    frame_commands->set_index_buffer(
+                        *scene_index_buffer,
+                        vice::render::IndexFormat::uint32
+                    ) &&
+                    frame_commands->draw_indexed(
+                        static_cast<std::uint32_t>(scene_mesh->indices.size())
+                    );
+            }
             recorded = recorded &&
+                frame_commands->set_vertex_buffer(0, *vertex_buffer) &&
+                frame_commands->set_vertex_buffer(1, *instance_buffer) &&
+                frame_commands->set_index_buffer(
+                    *index_buffer,
+                    vice::render::IndexFormat::uint16
+                ) &&
                 frame_commands->draw_indexed(static_cast<std::uint32_t>(cube_indices.size())) &&
                 frame_commands->end_render_pass() &&
                 frame_commands->present(*swapchain);
 
             if (!recorded) {
-                log(LogLevel::error, "VICE Lab failed to record the playable frame.");
+                log(LogLevel::error, "VICE Lab failed to record the authored playable frame.");
                 running = false;
             } else {
                 const auto frame_submission = render_device->submit(std::move(frame_commands));
@@ -838,17 +966,21 @@ int main() {
 
     (void)bindings.unbind(cube_entity, rigid_domain_a_id);
     (void)rigid_domain_a->destroy_body(cube_participant);
-    (void)rigid_domain_a->destroy_body(floor_participant);
-    (void)rigid_domain_b->destroy_body(floor_participant);
+    (void)rigid_domain_a->destroy_body(ramp_participant);
+    (void)rigid_domain_a->destroy_body(terrain_participant);
+    (void)rigid_domain_b->destroy_body(terrain_participant);
     (void)world_bridge.unregister_region(region_a);
     (void)world_bridge.unregister_region(region_b);
     (void)simulation.unregister_domain(rigid_domain_a_id);
     (void)simulation.unregister_domain(rigid_domain_b_id);
 
-    cube_pipeline.reset();
+    scene_pipeline.reset();
     fragment_shader.reset();
     vertex_shader.reset();
     frame_buffer.reset();
+    scene_instance_buffer.reset();
+    scene_index_buffer.reset();
+    scene_vertex_buffer.reset();
     index_buffer.reset();
     instance_buffer.reset();
     vertex_buffer.reset();

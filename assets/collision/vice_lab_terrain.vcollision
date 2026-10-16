@@ -1,0 +1,3 @@
+vice-collision-source 2
+# id count offset-x offset-y offset-z spacing-x spacing-z vertical-scale samples
+heightfield 9001 5 0 0 -10 2 5 1 0 0.05 0.10 0.05 0 0.05 0.10 0.15 0.10 0.05 0 0 0 0 0 -0.05 0 0.05 0 -0.05 0 0 0 0 0

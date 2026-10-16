@@ -72,4 +72,58 @@ if(VICE_BUILD_TOOLS)
   elseif(APPLE)
     message(STATUS "VICE Lab cooked shaders disabled because DXC or Metal Shader Converter was not found. Source fallback remains enabled.")
   endif()
+
+  if(TARGET vice_mesh_cooker AND TARGET vice_collision_cooker)
+    set(_vice_lab_scene_source "${PROJECT_SOURCE_DIR}/assets/meshes/vice_lab_ramp.vmesh")
+    set(_vice_lab_terrain_source "${PROJECT_SOURCE_DIR}/assets/collision/vice_lab_terrain.vcollision")
+    set(_vice_lab_scene_mesh "${CMAKE_BINARY_DIR}/cooked/vice_lab_ramp.vmeshc")
+    set(_vice_lab_scene_collision "${CMAKE_BINARY_DIR}/cooked/vice_lab_ramp.vcollisionc")
+    set(_vice_lab_terrain_collision "${CMAKE_BINARY_DIR}/cooked/vice_lab_terrain.vcollisionc")
+
+    add_custom_command(
+      OUTPUT
+        "${_vice_lab_scene_mesh}"
+        "${_vice_lab_scene_collision}"
+      COMMAND ${CMAKE_COMMAND} -E make_directory "${CMAKE_BINARY_DIR}/cooked"
+      COMMAND
+        $<TARGET_FILE:vice_mesh_cooker>
+        --input "${_vice_lab_scene_source}"
+        --output "${_vice_lab_scene_mesh}"
+        --collision-output "${_vice_lab_scene_collision}"
+      DEPENDS
+        vice_mesh_cooker
+        "${_vice_lab_scene_source}"
+      VERBATIM
+    )
+
+    add_custom_command(
+      OUTPUT "${_vice_lab_terrain_collision}"
+      COMMAND ${CMAKE_COMMAND} -E make_directory "${CMAKE_BINARY_DIR}/cooked"
+      COMMAND
+        $<TARGET_FILE:vice_collision_cooker>
+        --input "${_vice_lab_terrain_source}"
+        --output "${_vice_lab_terrain_collision}"
+      DEPENDS
+        vice_collision_cooker
+        "${_vice_lab_terrain_source}"
+      VERBATIM
+    )
+
+    add_custom_target(
+      vice_lab_scene_assets
+      DEPENDS
+        "${_vice_lab_scene_mesh}"
+        "${_vice_lab_scene_collision}"
+        "${_vice_lab_terrain_collision}"
+    )
+    add_dependencies(vice_lab vice_lab_scene_assets)
+    target_compile_definitions(
+      vice_lab
+      PRIVATE
+        VICE_LAB_COOKED_SCENE_MESH="${_vice_lab_scene_mesh}"
+        VICE_LAB_COOKED_SCENE_COLLISION="${_vice_lab_scene_collision}"
+        VICE_LAB_COOKED_TERRAIN_COLLISION="${_vice_lab_terrain_collision}"
+    )
+    message(STATUS "VICE Lab authored scene cooking enabled.")
+  endif()
 endif()

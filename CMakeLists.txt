@@ -47,6 +47,7 @@ if(VICE_BUILD_TOOLS)
     add_subdirectory(tools/collision_cooker)
     add_subdirectory(tools/collision_import)
   endif()
+  add_subdirectory(tools/mesh_cooker)
 endif()
 
 if(VICE_BUILD_LAB)

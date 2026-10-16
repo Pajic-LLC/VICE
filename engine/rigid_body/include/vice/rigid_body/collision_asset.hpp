@@ -4,6 +4,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <filesystem>
 #include <optional>
 #include <span>
 #include <string>
@@ -34,6 +35,10 @@ struct CollisionAssetDecodeResult {
 
 [[nodiscard]] CollisionAssetDecodeResult decode_collision_asset(
     std::span<const std::byte> bytes
+);
+
+[[nodiscard]] CollisionAssetDecodeResult load_collision_asset(
+    const std::filesystem::path& path
 );
 
 [[nodiscard]] bool register_collision_asset(
