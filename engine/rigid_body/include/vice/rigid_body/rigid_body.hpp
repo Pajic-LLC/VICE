@@ -57,6 +57,7 @@ struct DomainConfig {
     std::uint32_t max_body_pairs = 4096;
     std::uint32_t max_contact_constraints = 2048;
     std::uint32_t temporary_allocator_bytes = 10U * 1024U * 1024U;
+    std::uint32_t worker_threads = 0;
 };
 
 struct MaterialInteraction {
@@ -207,6 +208,12 @@ struct QueryHit {
 
 class Domain final : public simulation::Domain {
 public:
+    [[nodiscard]] static std::unique_ptr<Domain> create(
+        simulation::DomainId id,
+        std::string name,
+        DomainConfig config = {}
+    );
+
     [[nodiscard]] static std::unique_ptr<Domain> create(
         simulation::DomainId id,
         std::string name,
