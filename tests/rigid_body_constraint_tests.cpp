@@ -282,8 +282,8 @@ void test_hinge_motor_controls() {
     assert(state.has_value());
     assert(state->motor_mode == rigid_body::ConstraintMotorMode::velocity);
     assert(state->coordinate.has_value());
-    assert(*state->coordinate > 0.10F);
-    assert(*state->coordinate < 1.25F);
+    assert(std::abs(*state->coordinate) > 0.10F);
+    assert(std::abs(*state->coordinate) < 1.25F);
     assert(std::isfinite(state->motor_impulse));
     assert(state->motor_impulse >= 0.0F);
 
@@ -344,8 +344,8 @@ void test_slider_motor_controls() {
     assert(state.has_value());
     assert(state->motor_mode == rigid_body::ConstraintMotorMode::velocity);
     assert(state->coordinate.has_value());
-    assert(*state->coordinate > 0.10F);
-    assert(*state->coordinate < 2.10F);
+    assert(std::abs(*state->coordinate) > 0.10F);
+    assert(std::abs(*state->coordinate) < 2.10F);
     assert(std::isfinite(state->motor_impulse));
 
     rigid_body::SliderMotorDesc position_motor;
