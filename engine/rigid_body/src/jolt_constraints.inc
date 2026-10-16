@@ -64,7 +64,7 @@ template <typename ImplType>
     const auto constraints = impl.physics_system_.GetConstraints();
     for (const auto& constraint : constraints) {
         if (constraint != nullptr && constraint->GetUserData() == id.value) {
-            return constraint.Get();
+            return constraint.GetPtr();
         }
     }
     return nullptr;
@@ -81,7 +81,7 @@ template <typename ImplType>
     const auto constraints = impl.physics_system_.GetConstraints();
     for (const auto& constraint : constraints) {
         if (constraint != nullptr && constraint->GetUserData() == id.value) {
-            return constraint.Get();
+            return constraint.GetPtr();
         }
     }
     return nullptr;
@@ -138,7 +138,7 @@ template <typename ImplType, typename SettingsType>
     if (constraint == nullptr) {
         return false;
     }
-    impl.physics_system_.AddConstraint(constraint.Get());
+    impl.physics_system_.AddConstraint(constraint.GetPtr());
     lock.ReleaseLocks();
 
     auto& body_interface = impl.physics_system_.GetBodyInterface();
@@ -324,7 +324,6 @@ bool Domain::destroy_constraint(const ConstraintId id) {
         second = simulation::ParticipantId{two_body.GetBody2()->GetUserData()};
     }
 
-    const auto keep_alive = impl_->physics_system_.GetConstraints();
     impl_->physics_system_.RemoveConstraint(constraint);
 
     auto& body_interface = impl_->physics_system_.GetBodyInterface();
