@@ -205,7 +205,7 @@ int main() {
 
     const auto convex_overlaps = domain->overlap_shape(rigid_body::ShapePose{
         .shape = convex_shape,
-        .position = math::Vec3{10.0F, 1.0F, 0.0F},
+        .position = math::Vec3{9.0F, 1.0F, 0.0F},
     });
     assert(!convex_overlaps.empty());
     assert(convex_overlaps.front().participant == compound_participant);
