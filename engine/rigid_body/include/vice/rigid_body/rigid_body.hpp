@@ -15,6 +15,10 @@
 #include <variant>
 #include <vector>
 
+namespace vice::jobs {
+class Scheduler;
+}
+
 namespace vice::rigid_body {
 
 inline constexpr std::string_view material_property_owner = "rigid_body";
@@ -53,7 +57,6 @@ struct DomainConfig {
     std::uint32_t max_body_pairs = 4096;
     std::uint32_t max_contact_constraints = 2048;
     std::uint32_t temporary_allocator_bytes = 10U * 1024U * 1024U;
-    std::uint32_t worker_threads = 0;
 };
 
 struct MaterialInteraction {
@@ -207,6 +210,7 @@ public:
     [[nodiscard]] static std::unique_ptr<Domain> create(
         simulation::DomainId id,
         std::string name,
+        jobs::Scheduler& scheduler,
         DomainConfig config = {}
     );
 
