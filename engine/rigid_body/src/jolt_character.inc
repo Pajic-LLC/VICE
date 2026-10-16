@@ -191,6 +191,18 @@ bool Domain::destroy_character(const CharacterId id) {
     return character_runtime_->characters.size() != before;
 }
 
+bool Domain::set_character_velocity(const CharacterId id, const math::Vec3 velocity) {
+    if (!character_runtime_ || !finite(velocity)) {
+        return false;
+    }
+    auto* entry = find_character(*character_runtime_, id);
+    if (entry == nullptr) {
+        return false;
+    }
+    entry->character->SetLinearVelocity(jolt_vector(velocity));
+    return true;
+}
+
 bool Domain::set_character_horizontal_velocity(
     const CharacterId id,
     const math::Vec3 velocity
@@ -253,6 +265,8 @@ std::optional<CharacterState> Domain::character_state(const CharacterId id) cons
     CharacterState state{
         .position = vec3(entry->character->GetPosition()),
         .velocity = vec3(entry->character->GetLinearVelocity()),
+        .horizontal_velocity = entry->horizontal_velocity,
+        .pending_jump_speed = entry->pending_jump_speed,
         .ground_state = character_ground_state(entry->character->GetGroundState()),
         .ground_normal = vec3(entry->character->GetGroundNormal()),
         .ground_velocity = vec3(entry->character->GetGroundVelocity()),

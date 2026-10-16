@@ -286,6 +286,8 @@ struct CharacterDesc {
 struct CharacterState {
     math::Vec3 position{};
     math::Vec3 velocity{};
+    math::Vec3 horizontal_velocity{};
+    std::optional<float> pending_jump_speed;
     CharacterGroundState ground_state = CharacterGroundState::airborne;
     math::Vec3 ground_normal{};
     math::Vec3 ground_velocity{};
@@ -446,6 +448,7 @@ public:
 
     bool create_character(const CharacterDesc& desc);
     bool destroy_character(CharacterId id);
+    bool set_character_velocity(CharacterId id, math::Vec3 velocity);
     bool set_character_horizontal_velocity(CharacterId id, math::Vec3 velocity);
     bool request_character_jump(CharacterId id, float speed);
     bool set_character_position(CharacterId id, math::Vec3 position);
