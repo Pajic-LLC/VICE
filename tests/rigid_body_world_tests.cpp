@@ -92,13 +92,13 @@ int main() {
         coordinator.step();
     }
 
-    assert(domain_a->set_body_active(participant, false));
     const auto live_source = domain_a->body_state(participant);
     assert(live_source.has_value());
-    assert(!live_source->active);
+    assert(live_source->active);
     assert(live_source->position.x > 12.0F);
+    assert(live_source->linear_velocity.x > 1.0F);
+    assert(std::abs(live_source->angular_velocity.y) > 0.1F);
     assert(std::isfinite(live_source->orientation.x));
-    assert(std::isfinite(live_source->angular_velocity.y));
 
     const auto blocker = world.create_entity();
     assert(bindings.bind(world, coordinator, blocker, domain_b->id(), participant));
@@ -145,9 +145,8 @@ int main() {
     assert(near(transferred->position.y, live_source->position.y));
     assert(near(transferred->linear_velocity.x, live_source->linear_velocity.x));
     assert(near(transferred->angular_velocity.y, live_source->angular_velocity.y));
-    assert(!transferred->active);
+    assert(transferred->active);
 
-    assert(domain_b->set_body_active(participant, true));
     for (int step = 0; step < 12; ++step) {
         coordinator.step();
     }
@@ -168,8 +167,28 @@ int main() {
         static_cast<double>(after_target_steps->position.y)
     ));
 
-    assert(bindings.unbind(entity, domain_b->id()));
-    assert(domain_b->destroy_body(participant));
+    assert(domain_b->set_body_active(participant, false));
+    const auto inactive_source = domain_b->body_state(participant);
+    assert(inactive_source.has_value());
+    assert(!inactive_source->active);
+
+    assert(bridge.handoff_box(world, coordinator, bindings, entity, region_a));
+    assert(world.alive(entity));
+    assert(world.persistent_id(entity) == persistent_id);
+    assert(world.spatial_state(entity)->region == region_a);
+    assert(domain_b->body_count() == 0U);
+    assert(domain_a->body_count() == 1U);
+    assert(!bindings.find(world, coordinator, entity, domain_b->id()).has_value());
+    assert(bindings.find(world, coordinator, entity, domain_a->id()) == participant);
+
+    const auto transferred_back = domain_a->body_state(participant);
+    assert(transferred_back.has_value());
+    assert(!transferred_back->active);
+    assert(near(transferred_back->linear_velocity.x, inactive_source->linear_velocity.x));
+    assert(near(transferred_back->angular_velocity.y, inactive_source->angular_velocity.y));
+
+    assert(bindings.unbind(entity, domain_a->id()));
+    assert(domain_a->destroy_body(participant));
     assert(coordinator.unregister_domain(domain_a->id()));
     assert(coordinator.unregister_domain(domain_b->id()));
 
