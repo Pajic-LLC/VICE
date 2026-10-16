@@ -72,6 +72,12 @@ target_compile_features(vice_simulation_tests PRIVATE cxx_std_23)
 vice_enable_warnings(vice_simulation_tests)
 add_test(NAME vice_simulation_tests COMMAND vice_simulation_tests)
 
+add_executable(vice_entity_binding_tests entity_binding_tests.cpp)
+target_link_libraries(vice_entity_binding_tests PRIVATE VICE::SimulationWorld)
+target_compile_features(vice_entity_binding_tests PRIVATE cxx_std_23)
+vice_enable_warnings(vice_entity_binding_tests)
+add_test(NAME vice_entity_binding_tests COMMAND vice_entity_binding_tests)
+
 if(VICE_BUILD_TOOLS)
   add_executable(vice_shader_cooker_tests shader_cooker_tests.cpp)
   target_link_libraries(vice_shader_cooker_tests PRIVATE VICE::ShaderCooker)

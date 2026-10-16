@@ -23,6 +23,16 @@ struct DomainId {
     constexpr auto operator<=>(const DomainId&) const noexcept = default;
 };
 
+struct ParticipantId {
+    std::uint64_t value = 0;
+
+    [[nodiscard]] constexpr explicit operator bool() const noexcept {
+        return value != 0;
+    }
+
+    constexpr auto operator<=>(const ParticipantId&) const noexcept = default;
+};
+
 enum class Fidelity : std::uint8_t {
     off,
     reduced,
@@ -111,6 +121,10 @@ public:
 
     bool register_domain(Domain& domain);
     bool unregister_domain(DomainId id) noexcept;
+
+    [[nodiscard]] bool registered(const DomainId id) const noexcept {
+        return contains_domain(id);
+    }
 
     bool set_fixed_delta_seconds(double seconds) noexcept;
     [[nodiscard]] double fixed_delta_seconds() const noexcept {
