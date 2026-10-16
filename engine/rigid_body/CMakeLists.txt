@@ -60,6 +60,11 @@ target_link_libraries(
     Jolt
 )
 target_compile_features(vice_rigid_body PUBLIC cxx_std_23)
+if(MSVC)
+  target_compile_options(vice_rigid_body PRIVATE /GR-)
+else()
+  target_compile_options(vice_rigid_body PRIVATE -fno-rtti)
+endif()
 vice_enable_warnings(vice_rigid_body)
 
 add_library(
