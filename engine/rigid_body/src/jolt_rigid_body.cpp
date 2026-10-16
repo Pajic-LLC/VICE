@@ -232,6 +232,7 @@ std::unique_ptr<Domain> Domain::create(
     if (!id || name.empty() || !valid_config(config)) {
         return nullptr;
     }
+    (void)runtime();
     return std::unique_ptr<Domain>{new Domain{
         std::make_unique<Impl>(id, std::move(name), config)
     }};
