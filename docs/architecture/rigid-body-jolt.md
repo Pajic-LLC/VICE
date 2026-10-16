@@ -11,7 +11,7 @@ Public VICE rigid-body headers expose:
 - `ParticipantId`
 - shared `MaterialId`
 - rigid `ShapeId`
-- box, sphere, and capsule shape descriptions
+- box, sphere, capsule, convex hull, indexed triangle mesh, and compound shape descriptions
 - static or dynamic motion
 - local position and orientation
 - linear and angular velocity
@@ -25,7 +25,7 @@ Public VICE rigid-body headers expose:
 
 Orientation uses `vice::math::Quat`. Solver state, contact data, and query results are converted to VICE types before they leave the backend.
 
-No Jolt type, body ID, shape pointer, allocator, job system, contact manifold, collector, or physics system appears in the public API.
+No Jolt type, body ID, shape pointer, allocator, job system, contact manifold, collector, mesh tree, sub-shape ID, or physics system appears in the public API.
 
 `ParticipantId` maps to a native Jolt `BodyID` only inside the backend implementation. `ShapeId` maps to a native Jolt shape only inside one rigid domain.
 
@@ -79,15 +79,17 @@ See `docs/architecture/rigid-body-contacts.md` for the event and material contra
 
 ## Shapes and queries
 
-Rigid domains can register immutable box, sphere, and capsule shape resources through VICE-owned `ShapeId` values. Multiple bodies can share one registered shape.
+Rigid domains can register immutable box, sphere, capsule, convex hull, indexed triangle mesh, and compound shape resources through VICE-owned `ShapeId` values. Multiple bodies can share one registered shape.
 
-A registered shape cannot be removed while a live body references it. The older `create_box` entry point remains available as a compatibility path and does not require a public shape registration.
+A registered shape cannot be removed while a live body references it. A child shape also cannot be removed while a registered compound references it. The older `create_box` entry point remains available as a compatibility path and does not require a public shape registration.
 
-The first spatial query set is closest-hit raycast, all-hit shape overlap, and closest-hit shape sweep. Filters can include or exclude static bodies, dynamic bodies, triggers, and one participant.
+Convex shapes can be used by static and dynamic bodies and as moving overlap or sweep probes. Triangle meshes are environment geometry and are static-only. A compound inherits static-only behavior when any child requires it.
+
+The spatial query set is closest-hit raycast, all-hit shape overlap, and closest-hit shape sweep. Filters can include or exclude static bodies, dynamic bodies, triggers, and one participant.
 
 VICE defines public query ordering independently from native collector order. Equal ray or sweep fractions resolve by participant ID. Overlaps are reduced to one hit per participant and sorted by participant ID.
 
-See `docs/architecture/rigid-body-shapes-queries.md` for the shape and query contract.
+See `docs/architecture/rigid-body-shapes-queries.md` for the base shape and query contract and `docs/architecture/rigid-body-game-geometry.md` for authored geometry rules.
 
 ## Fixed stepping
 
@@ -115,11 +117,12 @@ Jolt supports replacing this with an engine job-system implementation. A later p
 
 ## Current scope
 
-The rigid-body foundation supports static and dynamic boxes, reusable box, sphere, and capsule shape resources, general bodies created from registered shapes, body destruction, position and orientation reads, linear and angular velocity reads, active-state control, fixed-step simulation, shared material mapping, material-pair response overrides, collision events, trigger events, raycasts, shape overlaps, shape sweeps, world binding, a solver-driven rendering proof, World position synchronization, and box handoff between local rigid simulation islands.
+The rigid-body foundation supports static and dynamic primitive and convex bodies, reusable box, sphere, capsule, convex hull, triangle mesh, and compound shape resources, static authored level meshes, general bodies created from registered shapes, body destruction, position and orientation reads, linear and angular velocity reads, active-state control, fixed-step simulation, shared material mapping, material-pair response overrides, collision events, trigger events, raycasts, shape overlaps, shape sweeps, world binding, a solver-driven rendering proof, World position synchronization, and box handoff between local rigid simulation islands.
 
 It does not yet define:
 
-- mesh, convex-hull, height-field, or compound shape assets
+- heightfield terrain shapes
+- offline collision asset cooking
 - constraints
 - continuous collision policy
 - exact post-solve impulse reporting

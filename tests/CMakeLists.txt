@@ -103,6 +103,12 @@ if(VICE_ENABLE_JOLT_RIGID_BODY)
   vice_enable_warnings(vice_rigid_body_query_tests)
   add_test(NAME vice_rigid_body_query_tests COMMAND vice_rigid_body_query_tests)
 
+  add_executable(vice_rigid_body_geometry_tests rigid_body_geometry_tests.cpp)
+  target_link_libraries(vice_rigid_body_geometry_tests PRIVATE VICE::RigidBody)
+  target_compile_features(vice_rigid_body_geometry_tests PRIVATE cxx_std_23)
+  vice_enable_warnings(vice_rigid_body_geometry_tests)
+  add_test(NAME vice_rigid_body_geometry_tests COMMAND vice_rigid_body_geometry_tests)
+
   add_executable(vice_rigid_body_world_tests rigid_body_world_tests.cpp)
   target_link_libraries(vice_rigid_body_world_tests PRIVATE VICE::RigidBodyWorld)
   target_compile_features(vice_rigid_body_world_tests PRIVATE cxx_std_23)
