@@ -1,3 +1,4 @@
+#include <Jolt/Jolt.h>
 #include <Jolt/Core/JobSystemThreadPool.h>
 
 #include "jolt_job_system.hpp"
