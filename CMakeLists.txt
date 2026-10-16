@@ -45,6 +45,7 @@ if(VICE_BUILD_TOOLS)
   add_subdirectory(tools/shader_cooker)
   if(VICE_ENABLE_JOLT_RIGID_BODY)
     add_subdirectory(tools/collision_cooker)
+    add_subdirectory(tools/collision_import)
   endif()
 endif()
 
