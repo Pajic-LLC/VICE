@@ -150,5 +150,11 @@ if(VICE_BUILD_TOOLS)
       NAME vice_collision_cooker_heightfield_guard_tests
       COMMAND vice_collision_cooker_heightfield_guard_tests
     )
+
+    add_executable(vice_collision_import_tests collision_import_tests.cpp)
+    target_link_libraries(vice_collision_import_tests PRIVATE VICE::CollisionImport)
+    target_compile_features(vice_collision_import_tests PRIVATE cxx_std_23)
+    vice_enable_warnings(vice_collision_import_tests)
+    add_test(NAME vice_collision_import_tests COMMAND vice_collision_import_tests)
   endif()
 endif()
