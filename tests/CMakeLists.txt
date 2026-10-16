@@ -78,6 +78,20 @@ target_compile_features(vice_entity_binding_tests PRIVATE cxx_std_23)
 vice_enable_warnings(vice_entity_binding_tests)
 add_test(NAME vice_entity_binding_tests COMMAND vice_entity_binding_tests)
 
+if(VICE_ENABLE_JOLT_RIGID_BODY)
+  add_executable(vice_rigid_body_tests rigid_body_tests.cpp)
+  target_link_libraries(
+    vice_rigid_body_tests
+    PRIVATE
+      VICE::RigidBody
+      VICE::SimulationWorld
+      VICE::World
+  )
+  target_compile_features(vice_rigid_body_tests PRIVATE cxx_std_23)
+  vice_enable_warnings(vice_rigid_body_tests)
+  add_test(NAME vice_rigid_body_tests COMMAND vice_rigid_body_tests)
+endif()
+
 if(VICE_BUILD_TOOLS)
   add_executable(vice_shader_cooker_tests shader_cooker_tests.cpp)
   target_link_libraries(vice_shader_cooker_tests PRIVATE VICE::ShaderCooker)

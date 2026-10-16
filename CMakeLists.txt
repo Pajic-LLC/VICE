@@ -10,6 +10,7 @@ project(
 option(VICE_BUILD_TESTS "Build VICE tests" ON)
 option(VICE_BUILD_LAB "Build the VICE Lab executable" ON)
 option(VICE_BUILD_TOOLS "Build VICE developer tools" ON)
+option(VICE_ENABLE_JOLT_RIGID_BODY "Build the Jolt rigid body backend" ON)
 
 set(VICE_DXC_EXECUTABLE "" CACHE FILEPATH "Path to the DXC executable used for shader cooking")
 set(
@@ -33,6 +34,11 @@ add_subdirectory(engine/jobs)
 add_subdirectory(engine/platform)
 add_subdirectory(engine/world)
 add_subdirectory(engine/simulation)
+
+if(VICE_ENABLE_JOLT_RIGID_BODY)
+  add_subdirectory(engine/rigid_body)
+endif()
+
 add_subdirectory(engine/render)
 
 if(VICE_BUILD_TOOLS)
