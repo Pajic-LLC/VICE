@@ -5,10 +5,35 @@
 #include <vice/world/world.hpp>
 
 #include <cstddef>
+#include <cstdint>
 #include <optional>
+#include <span>
 #include <vector>
 
 namespace vice::rigid_body {
+
+enum class CharacterRegionAction : std::uint8_t {
+    stayed,
+    handed_off,
+    activation_requested,
+    no_target,
+    failed,
+};
+
+struct CharacterRegionEvent {
+    world::PersistentId owner{};
+    world::RegionId source_region{};
+    std::optional<world::RegionId> target_region;
+    CharacterRegionAction action = CharacterRegionAction::stayed;
+};
+
+struct RegionActivationRequest {
+    world::PersistentId owner{};
+    world::RegionId source_region{};
+    world::RegionId target_region{};
+    world::SimulationIslandId target_island{};
+    world::StreamingCellId target_cell{};
+};
 
 class WorldBridge {
 public:
@@ -70,6 +95,23 @@ public:
         world::RegionId target_region
     );
 
+    void orchestrate_characters(
+        world::World& world,
+        const simulation::Coordinator& coordinator
+    );
+
+    [[nodiscard]] std::span<const CharacterRegionEvent> character_region_events() const noexcept {
+        return character_region_events_;
+    }
+
+    [[nodiscard]] std::span<const RegionActivationRequest> region_activation_requests() const noexcept {
+        return region_activation_requests_;
+    }
+
+    void clear_region_activation_requests() noexcept {
+        region_activation_requests_.clear();
+    }
+
     [[nodiscard]] std::size_t registered_region_count() const noexcept {
         return regions_.size();
     }
@@ -110,9 +152,18 @@ private:
         CharacterId preferred
     ) noexcept;
 
+    void remove_activation_requests(world::PersistentId owner) noexcept;
+    void request_region_activation(
+        world::PersistentId owner,
+        world::RegionId source_region,
+        const world::RegionDesc& target
+    );
+
     std::vector<RegionDomain> regions_;
     std::vector<BoxRecord> boxes_;
     std::vector<CharacterRecord> characters_;
+    std::vector<CharacterRegionEvent> character_region_events_;
+    std::vector<RegionActivationRequest> region_activation_requests_;
 };
 
 } // namespace vice::rigid_body
