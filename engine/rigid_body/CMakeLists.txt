@@ -34,6 +34,7 @@ FetchContent_MakeAvailable(JoltPhysics)
 add_library(
   vice_rigid_body
   STATIC
+    src/collision_asset.cpp
     src/jolt_rigid_body.cpp
 )
 
