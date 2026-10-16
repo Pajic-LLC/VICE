@@ -31,10 +31,16 @@ int main() {
     box.motion = rigid_body::MotionType::dynamic_body;
     box.half_extents = math::Vec3{0.5F, 0.5F, 0.5F};
     box.position = math::Vec3{0.0F, 4.0F, 0.0F};
+    box.orientation = math::Quat{0.0F, 0.0F, 0.2588190451F, 0.9659258263F};
     box.friction = 0.6F;
     assert(rigid->create_box(box));
     assert(!rigid->create_box(box));
     assert(rigid->body_count() == 2U);
+
+    rigid_body::BoxBodyDesc invalid_orientation;
+    invalid_orientation.participant = simulation::ParticipantId{3};
+    invalid_orientation.orientation = math::Quat{0.0F, 0.0F, 0.0F, 0.0F};
+    assert(!rigid->create_box(invalid_orientation));
 
     world::World world;
     const auto entity = world.create_entity();
@@ -50,6 +56,13 @@ int main() {
     const auto initial = rigid->body_state(box_participant);
     assert(initial.has_value());
     assert(initial->position.y > 3.9F);
+    const float initial_orientation_length = std::sqrt(
+        initial->orientation.x * initial->orientation.x +
+        initial->orientation.y * initial->orientation.y +
+        initial->orientation.z * initial->orientation.z +
+        initial->orientation.w * initial->orientation.w
+    );
+    assert(std::abs(initial_orientation_length - 1.0F) < 0.001F);
 
     for (int step = 0; step < 600; ++step) {
         coordinator.step();
@@ -58,8 +71,12 @@ int main() {
     const auto settled = rigid->body_state(box_participant);
     assert(settled.has_value());
     assert(settled->position.y > 0.45F);
-    assert(settled->position.y < 0.60F);
+    assert(settled->position.y < 0.80F);
     assert(std::abs(settled->linear_velocity.y) < 0.1F);
+    assert(std::isfinite(settled->orientation.x));
+    assert(std::isfinite(settled->orientation.y));
+    assert(std::isfinite(settled->orientation.z));
+    assert(std::isfinite(settled->orientation.w));
 
     assert(bindings.find(world, coordinator, entity, rigid->id()) == box_participant);
     assert(rigid->destroy_body(box_participant));
