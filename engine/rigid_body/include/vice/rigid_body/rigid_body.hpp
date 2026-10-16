@@ -3,6 +3,7 @@
 #include <vice/math/math.hpp>
 #include <vice/simulation/simulation.hpp>
 
+#include <compare>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -10,12 +11,24 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <variant>
+#include <vector>
 
 namespace vice::rigid_body {
 
 inline constexpr std::string_view material_property_owner = "rigid_body";
 inline constexpr std::string_view material_friction_property = "friction";
 inline constexpr std::string_view material_restitution_property = "restitution";
+
+struct ShapeId {
+    std::uint64_t value = 0;
+
+    [[nodiscard]] constexpr explicit operator bool() const noexcept {
+        return value != 0;
+    }
+
+    constexpr auto operator<=>(const ShapeId&) const noexcept = default;
+};
 
 enum class MotionType : std::uint8_t {
     static_body,
@@ -45,6 +58,35 @@ struct MaterialInteraction {
     std::optional<float> friction;
     std::optional<float> restitution;
     std::string label;
+};
+
+struct BoxShapeDesc {
+    math::Vec3 half_extents{0.5F, 0.5F, 0.5F};
+};
+
+struct SphereShapeDesc {
+    float radius = 0.5F;
+};
+
+struct CapsuleShapeDesc {
+    float half_height = 0.5F;
+    float radius = 0.25F;
+};
+
+using ShapeDesc = std::variant<BoxShapeDesc, SphereShapeDesc, CapsuleShapeDesc>;
+
+struct BodyDesc {
+    simulation::ParticipantId participant{};
+    simulation::MaterialId material{};
+    ShapeId shape{};
+    MotionType motion = MotionType::dynamic_body;
+    math::Vec3 position{};
+    math::Quat orientation{};
+    math::Vec3 linear_velocity{};
+    math::Vec3 angular_velocity{};
+    float friction = 0.5F;
+    float restitution = 0.0F;
+    bool trigger = false;
 };
 
 struct BoxBodyDesc {
@@ -84,6 +126,42 @@ struct ContactEvent {
     float combined_friction = 0.0F;
     float combined_restitution = 0.0F;
     std::string material_interaction;
+};
+
+struct QueryFilter {
+    bool include_static = true;
+    bool include_dynamic = true;
+    bool include_triggers = true;
+    std::optional<simulation::ParticipantId> exclude_participant;
+};
+
+struct RaycastDesc {
+    math::Vec3 origin{};
+    math::Vec3 direction{0.0F, -1.0F, 0.0F};
+    float max_distance = 1.0F;
+};
+
+struct ShapePose {
+    ShapeId shape{};
+    math::Vec3 position{};
+    math::Quat orientation{};
+};
+
+struct SweepDesc {
+    ShapePose pose{};
+    math::Vec3 direction{0.0F, -1.0F, 0.0F};
+    float max_distance = 1.0F;
+};
+
+struct QueryHit {
+    simulation::ParticipantId participant{};
+    simulation::MaterialId material{};
+    bool trigger = false;
+    math::Vec3 point{};
+    math::Vec3 normal{};
+    float distance = 0.0F;
+    float fraction = 0.0F;
+    float penetration_depth = 0.0F;
 };
 
 class Domain final : public simulation::Domain {
@@ -126,6 +204,10 @@ public:
         simulation::MaterialId second
     );
 
+    bool register_shape(ShapeId id, const ShapeDesc& desc);
+    bool unregister_shape(ShapeId id);
+
+    bool create_body(const BodyDesc& desc);
     bool create_box(const BoxBodyDesc& desc);
     bool destroy_body(simulation::ParticipantId participant);
     bool set_body_active(simulation::ParticipantId participant, bool active);
@@ -134,10 +216,26 @@ public:
         simulation::ParticipantId participant
     ) const noexcept;
 
+    [[nodiscard]] std::optional<QueryHit> raycast(
+        const RaycastDesc& desc,
+        const QueryFilter& filter = {}
+    ) const;
+
+    [[nodiscard]] std::vector<QueryHit> overlap_shape(
+        const ShapePose& pose,
+        const QueryFilter& filter = {}
+    ) const;
+
+    [[nodiscard]] std::optional<QueryHit> sweep_shape(
+        const SweepDesc& desc,
+        const QueryFilter& filter = {}
+    ) const;
+
     [[nodiscard]] std::span<const ContactEvent> contact_events() const noexcept;
     [[nodiscard]] std::size_t body_count() const noexcept;
     [[nodiscard]] std::size_t material_count() const noexcept;
     [[nodiscard]] std::size_t material_interaction_count() const noexcept;
+    [[nodiscard]] std::size_t shape_count() const noexcept;
 
 private:
     class Impl;
