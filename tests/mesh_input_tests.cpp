@@ -43,6 +43,45 @@ int main() {
     static constexpr std::array layouts{interleaved};
     static_assert(is_valid(layouts));
 
+    static constexpr std::array instance_matrix_attributes{
+        VertexAttributeDesc{
+            .semantic = "TEXCOORD",
+            .semantic_index = 0,
+            .shader_location = 2,
+            .format = VertexFormat::float32x4,
+            .offset = 0,
+        },
+        VertexAttributeDesc{
+            .semantic = "TEXCOORD",
+            .semantic_index = 1,
+            .shader_location = 3,
+            .format = VertexFormat::float32x4,
+            .offset = 16,
+        },
+        VertexAttributeDesc{
+            .semantic = "TEXCOORD",
+            .semantic_index = 2,
+            .shader_location = 4,
+            .format = VertexFormat::float32x4,
+            .offset = 32,
+        },
+        VertexAttributeDesc{
+            .semantic = "TEXCOORD",
+            .semantic_index = 3,
+            .shader_location = 5,
+            .format = VertexFormat::float32x4,
+            .offset = 48,
+        },
+    };
+    static constexpr VertexBufferLayoutDesc instance_matrix{
+        .stride = 64,
+        .step_mode = VertexStepMode::per_instance,
+        .step_rate = 1,
+        .attributes = instance_matrix_attributes,
+    };
+    static constexpr std::array simulated_cube_layouts{interleaved, instance_matrix};
+    static_assert(is_valid(simulated_cube_layouts));
+
     static constexpr std::array duplicate_locations{
         VertexAttributeDesc{
             .semantic = "POSITION",
