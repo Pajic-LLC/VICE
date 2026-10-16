@@ -18,6 +18,7 @@ target_compile_definitions(
   vice_lab
   PRIVATE
     VICE_LAB_COOKED_SHADER_ROOT="${CMAKE_BINARY_DIR}/cooked"
+    VICE_LAB_WORLD_SAVE="${CMAKE_BINARY_DIR}/saves/vice_lab_save.vworldc"
 )
 vice_enable_warnings(vice_lab)
 
@@ -125,5 +126,35 @@ if(VICE_BUILD_TOOLS)
         VICE_LAB_COOKED_TERRAIN_COLLISION="${_vice_lab_terrain_collision}"
     )
     message(STATUS "VICE Lab authored scene cooking enabled.")
+  endif()
+
+  if(TARGET vice_world_cooker)
+    set(_vice_lab_world_source "${PROJECT_SOURCE_DIR}/assets/worlds/vice_lab.vworld")
+    set(_vice_lab_world_asset "${CMAKE_BINARY_DIR}/cooked/vice_lab_world.vworldc")
+
+    add_custom_command(
+      OUTPUT "${_vice_lab_world_asset}"
+      COMMAND ${CMAKE_COMMAND} -E make_directory "${CMAKE_BINARY_DIR}/cooked"
+      COMMAND
+        $<TARGET_FILE:vice_world_cooker>
+        --input "${_vice_lab_world_source}"
+        --output "${_vice_lab_world_asset}"
+      DEPENDS
+        vice_world_cooker
+        "${_vice_lab_world_source}"
+      VERBATIM
+    )
+
+    add_custom_target(
+      vice_lab_world_asset
+      DEPENDS "${_vice_lab_world_asset}"
+    )
+    add_dependencies(vice_lab vice_lab_world_asset)
+    target_compile_definitions(
+      vice_lab
+      PRIVATE
+        VICE_LAB_COOKED_WORLD="${_vice_lab_world_asset}"
+    )
+    message(STATUS "VICE Lab cooked World asset enabled.")
   endif()
 endif()
