@@ -109,7 +109,7 @@ public:
     Coordinator() = default;
     explicit Coordinator(double fixed_delta_seconds) noexcept;
 
-    bool register_domain(Domain& domain) noexcept;
+    bool register_domain(Domain& domain);
     bool unregister_domain(DomainId id) noexcept;
 
     bool set_fixed_delta_seconds(double seconds) noexcept;
