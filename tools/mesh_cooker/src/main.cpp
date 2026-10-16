@@ -5,6 +5,7 @@
 #include <vice/tools/collision_import.hpp>
 #endif
 
+#include <array>
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
