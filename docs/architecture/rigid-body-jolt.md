@@ -10,8 +10,9 @@ Public VICE rigid-body headers expose:
 
 - `ParticipantId`
 - shared `MaterialId`
+- rigid `ShapeId`
+- box, sphere, and capsule shape descriptions
 - static or dynamic motion
-- box half extents
 - local position and orientation
 - linear and angular velocity
 - friction and restitution
@@ -20,12 +21,13 @@ Public VICE rigid-body headers expose:
 - explicit active-state control
 - VICE-owned contact and trigger events
 - VICE-owned material-pair interaction rules
+- VICE-owned raycast, overlap, and sweep results
 
-Orientation uses `vice::math::Quat`. Solver state and contact data are converted to VICE types before they leave the backend.
+Orientation uses `vice::math::Quat`. Solver state, contact data, and query results are converted to VICE types before they leave the backend.
 
-No Jolt type, body ID, shape type, allocator, job system, contact manifold, or physics system appears in the public API.
+No Jolt type, body ID, shape pointer, allocator, job system, contact manifold, collector, or physics system appears in the public API.
 
-`ParticipantId` maps to a native Jolt `BodyID` only inside the backend implementation.
+`ParticipantId` maps to a native Jolt `BodyID` only inside the backend implementation. `ShapeId` maps to a native Jolt shape only inside one rigid domain.
 
 ## World ownership
 
@@ -43,7 +45,7 @@ Jolt uses single-precision positions for each local rigid simulation domain.
 
 VICE World stores authoritative global positions in double precision. A registered rigid region provides the local coordinate frame for one rigid simulation island. `VICE::RigidBodyWorld` converts between global World positions and local Jolt positions during creation, synchronization, and island handoff.
 
-Contact points reported by a rigid domain are local to that domain. Systems that need authoritative global positions can combine the event with the World region that owns the participant.
+Contact points and spatial query results reported by a rigid domain are local to that domain. Systems that need authoritative global positions combine the result with the World region that owns the simulation island.
 
 Rendering remains camera-relative and does not consume large global float coordinates.
 
@@ -75,13 +77,25 @@ Impact strength is reported as an estimated normal impulse from Jolt's pre-solve
 
 See `docs/architecture/rigid-body-contacts.md` for the event and material contract.
 
+## Shapes and queries
+
+Rigid domains can register immutable box, sphere, and capsule shape resources through VICE-owned `ShapeId` values. Multiple bodies can share one registered shape.
+
+A registered shape cannot be removed while a live body references it. The older `create_box` entry point remains available as a compatibility path and does not require a public shape registration.
+
+The first spatial query set is closest-hit raycast, all-hit shape overlap, and closest-hit shape sweep. Filters can include or exclude static bodies, dynamic bodies, triggers, and one participant.
+
+VICE defines public query ordering independently from native collector order. Equal ray or sweep fractions resolve by participant ID. Overlaps are reduced to one hit per participant and sorted by participant ID.
+
+See `docs/architecture/rigid-body-shapes-queries.md` for the shape and query contract.
+
 ## Fixed stepping
 
 The backend implements the existing `simulation::Domain` interface and consumes the coordinator fixed timestep.
 
 VICE Lab steps the rigid domain at 120 Hz with a frame-time accumulator. Rendering samples the latest completed solver state.
 
-Jolt cross-platform deterministic build mode is enabled for the pinned backend. This is a starting policy, not a promise that every future physics query has deterministic ordering. VICE defines public contact event ordering independently from Jolt worker callback order.
+Jolt cross-platform deterministic build mode is enabled for the pinned backend. This is a starting policy, not a promise that every future physics operation has deterministic ordering. VICE defines public contact and query ordering independently from Jolt callback or collector order.
 
 ## Rendering proof
 
@@ -101,15 +115,15 @@ Jolt supports replacing this with an engine job-system implementation. A later p
 
 ## Current scope
 
-The rigid-body foundation supports static and dynamic boxes, body destruction, position and orientation reads, linear and angular velocity reads, active-state control, fixed-step simulation, shared material mapping, material-pair response overrides, collision events, trigger events, world binding, a solver-driven rendering proof, World position synchronization, and box handoff between local rigid simulation islands.
+The rigid-body foundation supports static and dynamic boxes, reusable box, sphere, and capsule shape resources, general bodies created from registered shapes, body destruction, position and orientation reads, linear and angular velocity reads, active-state control, fixed-step simulation, shared material mapping, material-pair response overrides, collision events, trigger events, raycasts, shape overlaps, shape sweeps, world binding, a solver-driven rendering proof, World position synchronization, and box handoff between local rigid simulation islands.
 
 It does not yet define:
 
-- general shape assets
+- mesh, convex-hull, height-field, or compound shape assets
 - constraints
-- queries and casts
 - continuous collision policy
 - exact post-solve impulse reporting
 - solver serialization
+- general registered-shape transfer between large-world islands
 - constraint transfer between islands
 - contact-cache or warm-start transfer between islands
