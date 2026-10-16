@@ -36,7 +36,8 @@ add_library(
   STATIC
     src/collision_asset.cpp
     src/jolt_job_system.cpp
-    src/jolt_rigid_body.cpp
+    src/jolt_rigid_body_jobs.cpp
+    src/scheduler_domain.cpp
 )
 
 add_library(VICE::RigidBody ALIAS vice_rigid_body)
