@@ -170,6 +170,7 @@ class Domain::Impl final {
 public:
     struct BodyEntry {
         simulation::ParticipantId participant{};
+        MotionType motion = MotionType::dynamic_body;
         JPH::BodyID body_id{};
     };
 
@@ -298,7 +299,8 @@ bool Domain::create_box(const BoxBodyDesc& desc) {
     const float orientation_length_squared = length_squared(desc.orientation);
     if (!desc.participant || impl_->find(desc.participant) != nullptr ||
         !finite(desc.half_extents) || !finite(desc.position) || !finite(desc.orientation) ||
-        !finite(desc.linear_velocity) || orientation_length_squared <= 0.000001F ||
+        !finite(desc.linear_velocity) || !finite(desc.angular_velocity) ||
+        orientation_length_squared <= 0.000001F ||
         desc.half_extents.x <= 0.0F || desc.half_extents.y <= 0.0F ||
         desc.half_extents.z <= 0.0F || !std::isfinite(desc.friction) ||
         !std::isfinite(desc.restitution) || desc.friction < 0.0F ||
@@ -332,6 +334,11 @@ bool Domain::create_box(const BoxBodyDesc& desc) {
             desc.linear_velocity.y,
             desc.linear_velocity.z
         };
+        body_settings.mAngularVelocity = JPH::Vec3{
+            desc.angular_velocity.x,
+            desc.angular_velocity.y,
+            desc.angular_velocity.z
+        };
     }
 
     auto& body_interface = impl_->physics_system_.GetBodyInterface();
@@ -346,6 +353,7 @@ bool Domain::create_box(const BoxBodyDesc& desc) {
     try {
         impl_->bodies_.push_back(Impl::BodyEntry{
             .participant = desc.participant,
+            .motion = desc.motion,
             .body_id = body_id,
         });
     } catch (...) {
@@ -375,6 +383,28 @@ bool Domain::destroy_body(const simulation::ParticipantId participant) {
     return true;
 }
 
+bool Domain::set_body_active(
+    const simulation::ParticipantId participant,
+    const bool active
+) {
+    auto* body = impl_->find(participant);
+    if (body == nullptr) {
+        return false;
+    }
+
+    if (body->motion == MotionType::static_body) {
+        return !active;
+    }
+
+    auto& body_interface = impl_->physics_system_.GetBodyInterface();
+    if (active) {
+        body_interface.ActivateBody(body->body_id);
+    } else {
+        body_interface.DeactivateBody(body->body_id);
+    }
+    return true;
+}
+
 std::optional<BodyState> Domain::body_state(
     const simulation::ParticipantId participant
 ) const noexcept {
@@ -387,6 +417,7 @@ std::optional<BodyState> Domain::body_state(
     const JPH::RVec3 position = body_interface.GetCenterOfMassPosition(body->body_id);
     const JPH::Quat orientation = body_interface.GetRotation(body->body_id);
     const JPH::Vec3 velocity = body_interface.GetLinearVelocity(body->body_id);
+    const JPH::Vec3 angular_velocity = body_interface.GetAngularVelocity(body->body_id);
     return BodyState{
         .position = math::Vec3{
             static_cast<float>(position.GetX()),
@@ -403,6 +434,11 @@ std::optional<BodyState> Domain::body_state(
             velocity.GetX(),
             velocity.GetY(),
             velocity.GetZ(),
+        },
+        .angular_velocity = math::Vec3{
+            angular_velocity.GetX(),
+            angular_velocity.GetY(),
+            angular_velocity.GetZ(),
         },
         .active = body_interface.IsActive(body->body_id),
     };

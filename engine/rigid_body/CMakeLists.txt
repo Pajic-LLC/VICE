@@ -57,3 +57,27 @@ target_link_libraries(
 )
 target_compile_features(vice_rigid_body PUBLIC cxx_std_23)
 vice_enable_warnings(vice_rigid_body)
+
+add_library(
+  vice_rigid_body_world
+  STATIC
+    src/world_bridge.cpp
+)
+
+add_library(VICE::RigidBodyWorld ALIAS vice_rigid_body_world)
+
+target_include_directories(
+  vice_rigid_body_world
+  PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+)
+
+target_link_libraries(
+  vice_rigid_body_world
+  PUBLIC
+    VICE::RigidBody
+    VICE::SimulationWorld
+    VICE::World
+)
+target_compile_features(vice_rigid_body_world PUBLIC cxx_std_23)
+vice_enable_warnings(vice_rigid_body_world)
