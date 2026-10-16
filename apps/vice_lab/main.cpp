@@ -35,6 +35,14 @@ struct LabVertex {
     float color[3];
 };
 
+struct LabInputState {
+    bool forward = false;
+    bool backward = false;
+    bool left = false;
+    bool right = false;
+    bool jump_queued = false;
+};
+
 static_assert(sizeof(LabVertex) == 24U);
 static_assert(sizeof(vice::math::Mat4) == 64U);
 
@@ -201,6 +209,22 @@ float4 vice_cube_fs(VertexOut input) : SV_Target0 {
     return float4(input.color, 1.0);
 }
 )";
+
+[[nodiscard]] std::string_view character_ground_state_name(
+    const vice::rigid_body::CharacterGroundState state
+) noexcept {
+    switch (state) {
+        case vice::rigid_body::CharacterGroundState::grounded:
+            return "grounded";
+        case vice::rigid_body::CharacterGroundState::steep_ground:
+            return "steep_ground";
+        case vice::rigid_body::CharacterGroundState::unsupported:
+            return "unsupported";
+        case vice::rigid_body::CharacterGroundState::airborne:
+            return "airborne";
+    }
+    return "unknown";
+}
 
 [[nodiscard]] std::unique_ptr<vice::render::ShaderModule> load_lab_shader(
     vice::render::Device& device,
@@ -535,6 +559,7 @@ int main() {
     constexpr vice::simulation::DomainId rigid_domain_id{100};
     constexpr vice::simulation::ParticipantId floor_participant{1};
     constexpr vice::simulation::ParticipantId cube_participant{2};
+    constexpr vice::rigid_body::CharacterId player_character{1};
 
     auto rigid_domain = vice::rigid_body::Domain::create(rigid_domain_id, "lab.rigid", jobs);
     vice::simulation::Coordinator simulation{1.0 / 120.0};
@@ -559,16 +584,31 @@ int main() {
     simulated_cube.friction = 0.65F;
     simulated_cube.restitution = 0.15F;
 
+    vice::rigid_body::CharacterDesc player;
+    player.id = player_character;
+    player.position = vice::math::Vec3{0.0F, 0.0F, 5.5F};
+    player.height = 1.8F;
+    player.radius = 0.3F;
+    player.step_height = 0.4F;
+    player.stick_to_floor_distance = 0.5F;
+
     if (!rigid_domain->create_box(floor) ||
         !rigid_domain->create_box(simulated_cube) ||
+        !rigid_domain->create_character(player) ||
         !bindings.bind(world, simulation, entity, rigid_domain_id, cube_participant)) {
-        log(LogLevel::error, "VICE Lab could not create the simulated world entity.");
+        log(LogLevel::error, "VICE Lab could not create the playable simulated world.");
         return 1;
     }
     log(LogLevel::info, "VICE Lab world entity is bound to a Jolt-backed rigid participant.");
+    log(LogLevel::info, "VICE Lab controls: W/A/S/D or arrows move, Space jumps, Escape quits.");
 
+    constexpr float player_speed = 3.5F;
+    constexpr float player_jump_speed = 5.5F;
     constexpr vice::render::Color clear_color{0.018F, 0.022F, 0.030F, 1.0F};
     FrameClock clock;
+    LabInputState input;
+    auto previous_ground_state = vice::rigid_body::CharacterGroundState::airborne;
+    bool ground_state_initialized = false;
     double simulation_accumulator = 0.0;
     bool running = true;
     while (running) {
@@ -597,9 +637,40 @@ int main() {
                             }
                             depth_target = std::move(replacement_depth);
                         }
+                    } else if constexpr (std::is_same_v<Payload, vice::platform::WindowFocusChanged>) {
+                        if (!payload.focused) {
+                            input = {};
+                        }
                     } else if constexpr (std::is_same_v<Payload, vice::platform::KeyEvent>) {
                         if (payload.pressed && payload.key == vice::platform::Key::escape) {
                             running = false;
+                            return;
+                        }
+
+                        switch (payload.key) {
+                            case vice::platform::Key::w:
+                            case vice::platform::Key::up:
+                                input.forward = payload.pressed;
+                                break;
+                            case vice::platform::Key::s:
+                            case vice::platform::Key::down:
+                                input.backward = payload.pressed;
+                                break;
+                            case vice::platform::Key::a:
+                            case vice::platform::Key::left:
+                                input.left = payload.pressed;
+                                break;
+                            case vice::platform::Key::d:
+                            case vice::platform::Key::right:
+                                input.right = payload.pressed;
+                                break;
+                            case vice::platform::Key::space:
+                                if (payload.pressed && !payload.repeat) {
+                                    input.jump_queued = true;
+                                }
+                                break;
+                            default:
+                                break;
                         }
                     }
                 },
@@ -610,20 +681,63 @@ int main() {
         (void)jobs.pump_main(64);
         clock.tick();
         simulation_accumulator += std::min(clock.delta_seconds(), 0.25);
-        while (simulation_accumulator >= simulation.fixed_delta_seconds()) {
+        while (running && simulation_accumulator >= simulation.fixed_delta_seconds()) {
+            float move_x = (input.right ? 1.0F : 0.0F) - (input.left ? 1.0F : 0.0F);
+            float move_z = (input.backward ? 1.0F : 0.0F) - (input.forward ? 1.0F : 0.0F);
+            if (move_x != 0.0F && move_z != 0.0F) {
+                constexpr float diagonal_scale = 0.7071067812F;
+                move_x *= diagonal_scale;
+                move_z *= diagonal_scale;
+            }
+
+            if (!rigid_domain->set_character_horizontal_velocity(
+                    player_character,
+                    vice::math::Vec3{move_x * player_speed, 0.0F, move_z * player_speed}
+                )) {
+                log(LogLevel::error, "VICE Lab could not update player movement.");
+                running = false;
+                break;
+            }
+
+            if (input.jump_queued) {
+                if (!rigid_domain->request_character_jump(player_character, player_jump_speed)) {
+                    log(LogLevel::error, "VICE Lab could not queue the player jump.");
+                    running = false;
+                    break;
+                }
+                input.jump_queued = false;
+            }
+
             simulation.step();
             simulation_accumulator -= simulation.fixed_delta_seconds();
         }
 
         if (running) {
             const auto body_state = rigid_domain->body_state(cube_participant);
-            if (!body_state) {
-                log(LogLevel::error, "VICE Lab lost the simulated cube participant.");
+            const auto player_state = rigid_domain->character_state(player_character);
+            if (!body_state || !player_state) {
+                log(LogLevel::error, "VICE Lab lost a live simulated participant.");
                 running = false;
                 continue;
             }
 
-            const auto model = vice::math::pose(body_state->position, body_state->orientation);
+            if (!ground_state_initialized || player_state->ground_state != previous_ground_state) {
+                previous_ground_state = player_state->ground_state;
+                ground_state_initialized = true;
+                log(
+                    LogLevel::debug,
+                    std::string{"VICE Lab player ground state: "} +
+                        std::string{character_ground_state_name(player_state->ground_state)}
+                );
+            }
+
+            auto render_position = body_state->position;
+            if (!cooked_transform_binding) {
+                render_position.x -= player_state->position.x;
+                render_position.y -= player_state->position.y;
+                render_position.z -= player_state->position.z;
+            }
+            const auto model = vice::math::pose(render_position, body_state->orientation);
             if (!instance_buffer->write(0, std::as_bytes(std::span{model.values}))) {
                 log(LogLevel::error, "VICE Lab could not upload the simulated cube pose.");
                 running = false;
@@ -632,9 +746,19 @@ int main() {
 
             const float aspect = static_cast<float>(depth_target->width()) /
                 static_cast<float>(std::max<std::uint32_t>(1U, depth_target->height()));
+            const auto camera_target = vice::math::Vec3{
+                player_state->position.x,
+                player_state->position.y + 1.0F,
+                player_state->position.z,
+            };
+            const auto camera_position = vice::math::Vec3{
+                player_state->position.x,
+                player_state->position.y + 3.2F,
+                player_state->position.z + 6.5F,
+            };
             const auto view = vice::math::look_at_rh(
-                vice::math::Vec3{0.0F, 0.0F, 5.0F},
-                vice::math::Vec3{0.0F, 0.0F, 0.0F},
+                camera_position,
+                camera_target,
                 vice::math::Vec3{0.0F, 1.0F, 0.0F}
             );
             const auto projection = vice::math::perspective_rh_zo(
@@ -680,12 +804,12 @@ int main() {
                 frame_commands->present(*swapchain);
 
             if (!recorded) {
-                log(LogLevel::error, "VICE Lab failed to record the simulated cube frame.");
+                log(LogLevel::error, "VICE Lab failed to record the playable frame.");
                 running = false;
             } else {
                 const auto frame_submission = render_device->submit(std::move(frame_commands));
                 if (frame_submission == vice::render::invalid_submission) {
-                    log(LogLevel::error, "VICE Lab cube submission failed.");
+                    log(LogLevel::error, "VICE Lab frame submission failed.");
                     running = false;
                 }
             }
@@ -696,6 +820,7 @@ int main() {
 
     (void)render_device->wait_idle();
     (void)bindings.unbind(entity, rigid_domain_id);
+    (void)rigid_domain->destroy_character(player_character);
     (void)rigid_domain->destroy_body(cube_participant);
     (void)rigid_domain->destroy_body(floor_participant);
     (void)simulation.unregister_domain(rigid_domain_id);
