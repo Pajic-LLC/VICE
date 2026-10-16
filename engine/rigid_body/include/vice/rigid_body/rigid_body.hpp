@@ -73,7 +73,33 @@ struct CapsuleShapeDesc {
     float radius = 0.25F;
 };
 
-using ShapeDesc = std::variant<BoxShapeDesc, SphereShapeDesc, CapsuleShapeDesc>;
+struct ConvexHullShapeDesc {
+    std::vector<math::Vec3> points;
+};
+
+struct TriangleMeshShapeDesc {
+    std::vector<math::Vec3> vertices;
+    std::vector<std::uint32_t> indices;
+};
+
+struct CompoundShapeChild {
+    ShapeId shape{};
+    math::Vec3 position{};
+    math::Quat orientation{};
+};
+
+struct CompoundShapeDesc {
+    std::vector<CompoundShapeChild> children;
+};
+
+using ShapeDesc = std::variant<
+    BoxShapeDesc,
+    SphereShapeDesc,
+    CapsuleShapeDesc,
+    ConvexHullShapeDesc,
+    TriangleMeshShapeDesc,
+    CompoundShapeDesc
+>;
 
 struct BodyDesc {
     simulation::ParticipantId participant{};
