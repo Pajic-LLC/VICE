@@ -1,0 +1,19 @@
+VICE Proprietary Source License
+
+Copyright (c) 2026 Pajic LLC. All rights reserved.
+
+VICE is proprietary software owned by Pajic LLC.
+
+The source code in this repository is made publicly visible for development, review, and build infrastructure purposes. Public access to the repository does not grant an open-source license or permission to use the software.
+
+Except where a separate written agreement with Pajic LLC says otherwise, you may not copy, modify, merge, publish, distribute, sublicense, sell, commercially use, or create derivative works from VICE or any substantial part of it.
+
+You may view the source code and clone the repository for personal evaluation and security review only. You may not redistribute the source code or compiled builds.
+
+Third-party software used by VICE remains subject to its own license terms. Those third-party terms apply only to the third-party software and do not grant rights to VICE itself.
+
+No patent, trademark, trade secret, or other intellectual property rights are granted by this license except the limited right to view and evaluate the source described above.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, AND NON-INFRINGEMENT. TO THE MAXIMUM EXTENT PERMITTED BY LAW, PAJIC LLC IS NOT LIABLE FOR ANY CLAIM, DAMAGES, OR OTHER LIABILITY ARISING FROM ACCESS TO OR USE OF THE SOFTWARE.
+
+For commercial licensing or other permissions, obtain written authorization from Pajic LLC.

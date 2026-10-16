@@ -1,6 +1,8 @@
 # VICE
 
-VICE is Pajic Studios' game engine project.
+VICE is Pajic Studios' proprietary game engine project, developed by Pajic LLC.
+
+The source is temporarily public during early foundation development so the project can use public continuous integration and be inspected as it takes shape. Public visibility does not make VICE open source. See `LICENSE` for the terms that apply to this repository.
 
 The goal is broad on purpose: developers should be able to build any kind of game without inheriting one genre, one simulation model, or one visual style from the engine.
 

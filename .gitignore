@@ -17,6 +17,21 @@ CTestTestfile.cmake
 *.xcodeproj
 .vs/
 
+# Local configuration and secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+*.cer
+*.crt
+*.mobileprovision
+*.provisionprofile
+credentials.json
+secrets.json
+
 # macOS
 .DS_Store
 

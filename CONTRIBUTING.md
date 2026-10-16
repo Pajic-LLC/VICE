@@ -1,6 +1,10 @@
 # Contributing to VICE
 
-VICE is early in development. Changes should preserve the engine's ability to support different genres, simulation styles, and hardware classes.
+VICE is early in development. The repository may be publicly visible during this phase, but VICE remains proprietary software owned by Pajic LLC.
+
+External code contributions are not being accepted yet. Do not open pull requests containing code unless Pajic LLC has explicitly invited the contribution.
+
+Architecture discussion, bug reports, and reproducible technical findings are welcome through issues where appropriate. Do not post credentials, private keys, confidential material, or security-sensitive details in a public issue.
 
 ## Before writing code
 
