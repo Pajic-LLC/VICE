@@ -123,7 +123,8 @@ std::span<const Relation> World::relations() const noexcept {
 }
 
 bool World::register_region(const RegionDesc region) {
-    if (!region.id.valid() || !region.simulation_island.valid() || !finite(region.origin)) {
+    if (!region.id.valid() || !region.simulation_island.valid() || !finite(region.origin) ||
+        (region.bounds.has_value() && !valid(*region.bounds))) {
         return false;
     }
     return regions_.emplace(region.id, region).second;
@@ -161,6 +162,23 @@ std::optional<RegionDesc> World::region(const RegionId region_id) const noexcept
         return std::nullopt;
     }
     return found->second;
+}
+
+std::optional<RegionId> World::region_containing(const GlobalPosition position) const noexcept {
+    if (!finite(position)) {
+        return std::nullopt;
+    }
+
+    std::optional<RegionId> selected;
+    for (const auto& entry : regions_) {
+        if (!contains(entry.second, position)) {
+            continue;
+        }
+        if (!selected.has_value() || entry.first.value < selected->value) {
+            selected = entry.first;
+        }
+    }
+    return selected;
 }
 
 bool World::set_spatial_state(const EntityId entity, const SpatialState state) {
