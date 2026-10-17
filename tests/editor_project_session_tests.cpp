@@ -37,6 +37,15 @@ void require(const bool condition, const std::string_view message) {
     return root;
 }
 
+[[nodiscard]] std::string read_text(const std::filesystem::path& path) {
+    std::ifstream input{path, std::ios::binary};
+    require(static_cast<bool>(input), "text file open");
+    std::ostringstream output;
+    output << input.rdbuf();
+    require(input.eof() || !input.fail(), "text file read");
+    return output.str();
+}
+
 void test_project_creation(const std::filesystem::path& root) {
     using namespace vice;
 
@@ -71,12 +80,9 @@ void test_project_creation(const std::filesystem::path& root) {
     );
 
     const auto starter_world = parent / "Starter Game" / "assets" / "worlds" / "main.vworld";
-    std::ifstream world_input{starter_world, std::ios::binary};
-    require(static_cast<bool>(world_input), "created starter World exists");
-    std::ostringstream world_text;
-    world_text << world_input.rdbuf();
-    require(world_text.str().find("vice-world-source 1") != std::string::npos, "starter World header");
-    require(world_text.str().find("region 1 1") != std::string::npos, "starter World region");
+    const std::string world_text = read_text(starter_world);
+    require(world_text.find("vice-world-source 1") != std::string::npos, "starter World header");
+    require(world_text.find("region 1 1") != std::string::npos, "starter World region");
 
     std::string diagnostics;
     const auto session = editor::ProjectSession::open(
@@ -88,6 +94,30 @@ void test_project_creation(const std::filesystem::path& root) {
     require(session.has_value(), "created project session opens");
     require(diagnostics.empty(), "created project session diagnostics");
     require(session->manifest().id == *stable_id, "created session identity");
+
+    const std::string manifest_before_recent = read_text(created.manifest_path);
+    const auto recent_file = root / "global-editor-state" / "recent_projects.txt";
+    editor::RecentProjects recent{recent_file};
+    require(recent.load(&diagnostics), "empty recent-project state load");
+    require(recent.entries().empty(), "empty recent-project state");
+    require(recent.remember(created.manifest_path, &diagnostics), "remember recent project");
+    require(diagnostics.empty(), "remember recent project diagnostics");
+    require(recent.entries().size() == 1U, "recent project count");
+    require(recent.entries()[0].project_id == *stable_id, "recent project id");
+    require(recent.entries()[0].name == "Starter Game", "recent project name");
+
+    editor::RecentProjects reloaded_recent{recent_file};
+    require(reloaded_recent.load(&diagnostics), "reload recent-project state");
+    require(reloaded_recent.entries().size() == 1U, "reloaded recent project count");
+    require(
+        reloaded_recent.entries()[0].manifest_path ==
+            std::filesystem::absolute(created.manifest_path).lexically_normal(),
+        "reloaded recent project path"
+    );
+    require(
+        read_text(created.manifest_path) == manifest_before_recent,
+        "recent-project state does not mutate authored manifest"
+    );
 
     editor::ProjectCreateRequest invalid;
     invalid.name = "Broken/Game";
@@ -185,6 +215,7 @@ void test_world_document(const std::filesystem::path& root) {
     require(!document.dirty(), "new document clean");
     require(!document.has_path(), "new document has no path");
 
+    world::World* const stable_world = &document.world();
     const world::RegionId region{7};
     require(document.world().register_region(world::RegionDesc{
         .id = region,
@@ -226,6 +257,7 @@ void test_world_document(const std::filesystem::path& root) {
     );
 
     require(document.open(first_path, editor::DirtyReplacePolicy::discard, &diagnostics), "explicit discard open");
+    require(&document.world() == stable_world, "World object stable after open");
     require(!document.dirty(), "opened document clean");
     const auto restored_entity = document.world().find(persistent_id);
     require(restored_entity.has_value(), "restored entity identity");
@@ -236,6 +268,7 @@ void test_world_document(const std::filesystem::path& root) {
     document.mark_dirty();
     require(!document.new_empty(editor::DirtyReplacePolicy::reject, &diagnostics), "dirty new rejected");
     require(document.new_empty(editor::DirtyReplacePolicy::discard, &diagnostics), "dirty new explicit discard");
+    require(&document.world() == stable_world, "World object stable after new document");
     require(!document.dirty(), "new empty document clean");
     require(!document.has_path(), "new empty document clears path");
     require(document.world().entity_count() == 0U, "new empty World");
