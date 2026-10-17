@@ -91,6 +91,7 @@ void test_inspector_projection() {
     assert(spatial_inspector->spatial_state.has_value());
     assert(spatial_inspector->authored_transform == std::optional{authored});
     assert(spatial_inspector->resource_references.size() == 1U);
+    assert(spatial_inspector->resource_references.front().role == vice::world::ResourceRole::render_mesh);
     assert(spatial_inspector->resource_references.front().resource == mesh_id);
     assert(spatial_inspector->region.has_value());
     assert(spatial_inspector->region->id == region_id);
@@ -218,59 +219,70 @@ void test_mesh_instance_history() {
         .streaming_cell = {},
         .fidelity = world::RegionFidelity::full,
         .bounds = world::RegionBounds{
-            .min = {-10.0F, -10.0F, -10.0F},
-            .max = {10.0F, 10.0F, 10.0F},
+            .min = {-100.0F, -100.0F, -100.0F},
+            .max = {100.0F, 100.0F, 100.0F},
         },
     };
     assert(world.register_region(region));
+    const world::ResourceId mesh_resource{fixed_id(88)};
 
-    const world::ResourceId mesh_resource{fixed_id(70)};
-    editor::TransformHistory history;
+    editor::CommandHistory history;
     history.mark_saved();
-    std::string diagnostics;
-    const auto created_id = editor::create_mesh_instance(
+    const auto persistent_id = editor::create_mesh_instance(
         world,
         history,
         mesh_resource,
-        world::GlobalPosition{1.0, 2.0, 3.0},
-        &diagnostics
+        world::GlobalPosition{4.0, 2.0, -6.0}
     );
-    assert(created_id.has_value());
-    assert(diagnostics.empty());
-    assert(world.resource_count() == 1U);
-    const auto created_entity = world.find(*created_id);
-    assert(created_entity.has_value());
-    assert(world.resource_reference(*created_entity, world::ResourceRole::render_mesh) ==
-        std::optional{mesh_resource});
+    assert(persistent_id.has_value());
+    assert(world.find(*persistent_id).has_value());
+    assert(world.find_resource(mesh_resource).has_value());
+    assert(history.size() == 1U);
+    assert(history.applied_count() == 1U);
     assert(history.undo_label() == "Add Mesh Instance");
 
-    const auto before_move = editor::capture_entity_transform(world, *created_id);
-    assert(before_move.has_value());
-    auto moved = *before_move;
-    moved.spatial_state.global_position.x = 4.0;
-    assert(editor::apply_entity_transform(world, *created_id, moved));
-    assert(history.record(editor::TransformHistory::Entry{
-        .persistent_id = *created_id,
-        .before = *before_move,
+    const auto created = world.find(*persistent_id);
+    assert(created.has_value());
+    const auto refs = world.resource_references(*created);
+    assert(refs.size() == 1U);
+    assert(refs.front().role == world::ResourceRole::render_mesh);
+    assert(refs.front().resource == mesh_resource);
+
+    const auto initial = editor::capture_entity_transform(world, *persistent_id);
+    assert(initial.has_value());
+    auto moved = *initial;
+    moved.spatial_state.global_position.x = 8.0;
+    assert(editor::apply_entity_transform(world, *persistent_id, moved));
+    assert(history.record(editor::CommandHistory::TransformEntry{
+        .persistent_id = *persistent_id,
+        .before = *initial,
         .after = moved,
         .label = "Move Entity",
     }));
+    assert(history.size() == 2U);
+    assert(history.undo_label() == "Move Entity");
 
     assert(history.undo(world));
-    assert(editor::capture_entity_transform(world, *created_id) == before_move);
+    assert(editor::capture_entity_transform(world, *persistent_id) == initial);
+    assert(history.undo_label() == "Add Mesh Instance");
     assert(history.undo(world));
-    assert(!world.find(*created_id).has_value());
+    assert(!world.find(*persistent_id).has_value());
     assert(!world.find_resource(mesh_resource).has_value());
+    assert(!history.can_undo());
+    assert(history.redo_label() == "Add Mesh Instance");
 
     assert(history.redo(world));
-    const auto recreated = world.find(*created_id);
+    const auto recreated = world.find(*persistent_id);
     assert(recreated.has_value());
-    assert(world.resource_reference(*recreated, world::ResourceRole::render_mesh) ==
-        std::optional{mesh_resource});
-    assert(editor::capture_entity_transform(world, *created_id) == before_move);
+    assert(world.persistent_id(*recreated) == persistent_id);
+    assert(world.resource_references(*recreated).size() == 1U);
+    assert(world.resource_references(*recreated).front().resource == mesh_resource);
+    assert(editor::capture_entity_transform(world, *persistent_id) == initial);
+    assert(history.redo_label() == "Move Entity");
 
     assert(history.redo(world));
-    assert(editor::capture_entity_transform(world, *created_id) == std::optional{moved});
+    assert(editor::capture_entity_transform(world, *persistent_id) == std::optional{moved});
+    assert(!history.can_redo());
 }
 
 void test_console_history() {
