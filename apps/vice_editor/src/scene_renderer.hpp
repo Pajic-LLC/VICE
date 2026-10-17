@@ -29,14 +29,17 @@ public:
     void handle_event(
         const platform::Event& event,
         const SceneViewport& viewport,
-        const world::World& world,
-        SelectionModel& selection
+        world::World& world,
+        SelectionModel& selection,
+        TransformHistory& history,
+        TransformTool tool
     );
     void update(float delta_seconds, const SceneViewport& viewport);
 
     [[nodiscard]] bool render(
         const world::World& world,
         const SelectionModel& selection,
+        TransformTool tool,
         render::CommandList& commands,
         const SceneViewport& viewport,
         platform::WindowMetrics metrics
