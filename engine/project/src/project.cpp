@@ -254,4 +254,24 @@ std::filesystem::path resolve_startup_world(
     return (assets / manifest.startup_world).lexically_normal();
 }
 
+std::filesystem::path resolve_cooked_root(
+    const std::filesystem::path& cooked_cache_base,
+    const Manifest& manifest
+) {
+    if (cooked_cache_base.empty() || !manifest.id) return {};
+    return (cooked_cache_base / manifest.id.to_string()).lexically_normal();
+}
+
+std::filesystem::path resolve_cooked_startup_world(
+    const std::filesystem::path& cooked_cache_base,
+    const Manifest& manifest
+) {
+    if (!valid_relative_path(manifest.startup_world)) return {};
+    const auto cooked_root = resolve_cooked_root(cooked_cache_base, manifest);
+    if (cooked_root.empty()) return {};
+    auto cooked_startup = manifest.startup_world;
+    cooked_startup.replace_extension(".vworldc");
+    return (cooked_root / cooked_startup).lexically_normal();
+}
+
 } // namespace vice::project
