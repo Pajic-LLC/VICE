@@ -59,6 +59,25 @@ namespace {
     return contents.str();
 }
 
+[[nodiscard]] std::optional<MeshBounds> mesh_bounds(const render::MeshAsset& asset) noexcept {
+    if (asset.vertices.empty()) return std::nullopt;
+
+    const auto& first = asset.vertices.front().position;
+    MeshBounds bounds{
+        .minimum = {first[0], first[1], first[2]},
+        .maximum = {first[0], first[1], first[2]},
+    };
+    for (const auto& vertex : asset.vertices) {
+        bounds.minimum.x = std::min(bounds.minimum.x, vertex.position[0]);
+        bounds.minimum.y = std::min(bounds.minimum.y, vertex.position[1]);
+        bounds.minimum.z = std::min(bounds.minimum.z, vertex.position[2]);
+        bounds.maximum.x = std::max(bounds.maximum.x, vertex.position[0]);
+        bounds.maximum.y = std::max(bounds.maximum.y, vertex.position[1]);
+        bounds.maximum.z = std::max(bounds.maximum.z, vertex.position[2]);
+    }
+    return bounds;
+}
+
 void inspect_cooked_asset(AssetRecord& record) {
     record.cooked_available = !record.cooked_path.empty() && std::filesystem::is_regular_file(record.cooked_path);
     if (!record.cooked_available) {
@@ -86,6 +105,7 @@ void inspect_cooked_asset(AssetRecord& record) {
         if (loaded.asset.has_value()) {
             record.format_version = loaded.asset->version;
             record.source_fingerprint = loaded.asset->source_fingerprint;
+            record.mesh_bounds = mesh_bounds(*loaded.asset);
             record.summary = std::to_string(loaded.asset->vertices.size()) + " vertices, " +
                 std::to_string(loaded.asset->indices.size() / 3U) + " triangles";
             if (render::valid(loaded.asset->stable_id)) {

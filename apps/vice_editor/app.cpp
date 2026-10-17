@@ -184,14 +184,6 @@ constexpr std::string_view cube_id_text = "10000000-0000-4000-8000-000000000002"
 #endif
 }
 
-[[nodiscard]] std::filesystem::path editor_mesh_path() {
-#if defined(VICE_EDITOR_COOKED_SCENE_MESH)
-    return std::filesystem::path{VICE_EDITOR_COOKED_SCENE_MESH};
-#else
-    return {};
-#endif
-}
-
 [[nodiscard]] bool route_event_to_scene(
     const vice::platform::Event& event,
     const vice::editor::SceneViewport& viewport
@@ -290,7 +282,7 @@ int main() {
     vice::editor::detail::ResourceMeshRenderer resource_mesh_renderer;
     if (!ui.valid() ||
         !ui_renderer.initialize(*render_device, swapchain->color_format()) ||
-        !scene_renderer.initialize(*render_device, swapchain->color_format(), editor_mesh_path()) ||
+        !scene_renderer.initialize(*render_device, swapchain->color_format(), {}) ||
         !resource_mesh_renderer.initialize(*render_device, swapchain->color_format())) {
         log(LogLevel::error, "VICE Editor could not initialize its visual workspace.");
         return 1;
@@ -315,6 +307,7 @@ int main() {
         while (platform_services->poll_event(event)) {
             ui.handle_event(event);
             if (route_event_to_scene(event, active_viewport)) {
+                const auto selection_before_event = selection.selected();
                 scene_renderer.handle_event(
                     event,
                     active_viewport,
@@ -323,7 +316,14 @@ int main() {
                     history,
                     ui.transform_tool()
                 );
-                resource_mesh_renderer.handle_event(event, active_viewport);
+                resource_mesh_renderer.handle_event(
+                    event,
+                    active_viewport,
+                    world,
+                    selection,
+                    assets,
+                    selection_before_event
+                );
             }
 
             std::visit(
@@ -374,6 +374,7 @@ int main() {
         }
         ui.draw(world, selection, history, console, status);
         resource_browser.draw(assets);
+        resource_browser.draw_inspector_resources(world, selection, assets);
         ui.end_frame();
         active_viewport = ui.scene_viewport();
 
