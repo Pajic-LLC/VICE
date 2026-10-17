@@ -5,9 +5,27 @@
 #include <filesystem>
 #include <memory>
 #include <optional>
+#include <span>
 #include <string>
 
 namespace vice::editor {
+
+enum class ReplacementKind {
+    new_world,
+    open_world,
+    switch_project,
+};
+
+enum class DirtyResolution {
+    save,
+    discard,
+};
+
+struct ConfirmedReplacement {
+    ReplacementKind kind = ReplacementKind::new_world;
+    DirtyResolution resolution = DirtyResolution::discard;
+    std::filesystem::path path;
+};
 
 struct ProjectWorkflowStatus {
     bool project_loaded = false;
@@ -19,6 +37,7 @@ struct ProjectWorkflowStatus {
     bool world_has_path = false;
     std::filesystem::path world_path;
     std::filesystem::path development_project;
+    std::span<const RecentProjectEntry> recent_projects;
     std::string diagnostics;
 };
 
@@ -41,6 +60,7 @@ public:
     [[nodiscard]] std::optional<std::filesystem::path> consume_open_world_request();
     [[nodiscard]] bool consume_save_world_request() noexcept;
     [[nodiscard]] std::optional<std::filesystem::path> consume_save_world_as_request();
+    [[nodiscard]] std::optional<ConfirmedReplacement> consume_confirmed_replacement();
 
 private:
     struct State;
