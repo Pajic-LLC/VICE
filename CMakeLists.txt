@@ -10,6 +10,7 @@ project(
 option(VICE_BUILD_TESTS "Build VICE tests" ON)
 option(VICE_BUILD_LAB "Build the VICE Lab executable" ON)
 option(VICE_BUILD_EDITOR "Build the VICE editor targets" ON)
+option(VICE_BUILD_PLAYER "Build the VICE project runtime bootstrap" ON)
 option(VICE_BUILD_TOOLS "Build VICE developer tools" ON)
 option(VICE_ENABLE_JOLT_RIGID_BODY "Build the Jolt rigid body backend" ON)
 
@@ -60,6 +61,10 @@ endif()
 
 if(VICE_BUILD_EDITOR)
   add_subdirectory(apps/vice_editor)
+endif()
+
+if(VICE_BUILD_PLAYER)
+  add_subdirectory(apps/vice_player)
 endif()
 
 if(VICE_BUILD_TESTS)
