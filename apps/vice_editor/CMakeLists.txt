@@ -235,6 +235,14 @@ target_compile_definitions(
     VICE_EDITOR_DEFAULT_PROJECT="${PROJECT_SOURCE_DIR}/vice.viceproj"
     VICE_EDITOR_ASSET_CACHE_ROOT="${CMAKE_BINARY_DIR}/editor_assets"
 )
+if(TARGET vice_player)
+  add_dependencies(vice_editor vice_player)
+  target_compile_definitions(
+    vice_editor
+    PRIVATE
+      VICE_EDITOR_PLAYER_EXECUTABLE="$<TARGET_FILE:vice_player>"
+  )
+endif()
 vice_enable_warnings(vice_editor)
 
 if(VICE_BUILD_TOOLS)
