@@ -5,6 +5,7 @@
 #include <fstream>
 #include <iomanip>
 #include <sstream>
+#include <system_error>
 
 namespace vice::project {
 namespace {
@@ -37,6 +38,30 @@ namespace {
 
 [[nodiscard]] std::string portable_path(const std::filesystem::path& path) {
     return path.generic_string();
+}
+
+[[nodiscard]] bool write_text_file(
+    const std::filesystem::path& path,
+    const std::string& text,
+    std::string& diagnostics
+) {
+    std::ofstream output{path, std::ios::binary | std::ios::trunc};
+    if (!output) {
+        diagnostics = "Could not open project manifest for writing: " + path.generic_string();
+        return false;
+    }
+    output << text;
+    output.flush();
+    if (!output) {
+        diagnostics = "Could not write project manifest: " + path.generic_string();
+        return false;
+    }
+    output.close();
+    if (!output) {
+        diagnostics = "Could not finish writing project manifest: " + path.generic_string();
+        return false;
+    }
+    return true;
 }
 
 } // namespace
@@ -105,6 +130,7 @@ bool validate(const Manifest& manifest, std::string* const diagnostics) {
     }
     if (!manifest.id) return fail("Project manifest has no stable project ID.");
     if (manifest.name.empty()) return fail("Project manifest has no display name.");
+    if (manifest.game_name.empty()) return fail("Project manifest has no game display name.");
     if (!valid_relative_path(manifest.asset_root)) {
         return fail("Project asset root must be a portable relative path without traversal.");
     }
@@ -126,6 +152,7 @@ LoadResult parse_manifest(const std::string_view text) {
     bool header_seen = false;
     bool id_seen = false;
     bool name_seen = false;
+    bool game_name_seen = false;
     bool assets_seen = false;
     bool startup_seen = false;
     Manifest manifest;
@@ -171,6 +198,11 @@ LoadResult parse_manifest(const std::string_view text) {
             if (name_seen) return fail("duplicate `name` field.");
             if (!read_quoted_value(stream, manifest.name)) return fail("project name must be quoted.");
             name_seen = true;
+        } else if (key == "game_name") {
+            if (game_name_seen) return fail("duplicate `game_name` field.");
+            if (!read_quoted_value(stream, manifest.game_name)) return fail("game display name must be quoted.");
+            if (manifest.game_name.empty()) return fail("game display name must not be empty.");
+            game_name_seen = true;
         } else if (key == "assets") {
             if (assets_seen) return fail("duplicate `assets` field.");
             std::string value;
@@ -202,6 +234,7 @@ LoadResult parse_manifest(const std::string_view text) {
         result.diagnostics = "Project manifest is missing one or more required fields.";
         return result;
     }
+    if (!game_name_seen) manifest.game_name = manifest.name;
     if (!validate(manifest, &result.diagnostics)) return result;
     result.manifest = std::move(manifest);
     return result;
@@ -224,16 +257,103 @@ LoadResult load_manifest(const std::filesystem::path& path) {
 }
 
 std::string serialize_manifest(const Manifest& manifest) {
+    Manifest normalized = manifest;
+    if (normalized.game_name.empty() && !normalized.name.empty()) normalized.game_name = normalized.name;
+
     std::string diagnostics;
-    if (!validate(manifest, &diagnostics)) return {};
+    if (!validate(normalized, &diagnostics)) return {};
 
     std::ostringstream output;
-    output << "vice-project " << manifest.version << '\n';
-    output << "id " << manifest.id.to_string() << '\n';
-    output << "name " << std::quoted(manifest.name) << '\n';
-    output << "assets " << std::quoted(portable_path(manifest.asset_root)) << '\n';
-    output << "startup_world " << std::quoted(portable_path(manifest.startup_world)) << '\n';
+    output << "vice-project " << normalized.version << '\n';
+    output << "id " << normalized.id.to_string() << '\n';
+    output << "name " << std::quoted(normalized.name) << '\n';
+    output << "game_name " << std::quoted(normalized.game_name) << '\n';
+    output << "assets " << std::quoted(portable_path(normalized.asset_root)) << '\n';
+    output << "startup_world " << std::quoted(portable_path(normalized.startup_world)) << '\n';
     return output.str();
+}
+
+bool save_manifest(
+    const std::filesystem::path& path,
+    const Manifest& manifest,
+    std::string* const diagnostics
+) {
+    const auto fail = [&](std::string message) {
+        if (diagnostics != nullptr) *diagnostics = std::move(message);
+        return false;
+    };
+
+    if (path.empty()) return fail("Project manifest save path is empty.");
+    std::string validation;
+    if (!validate(manifest, &validation)) return fail(validation);
+    const std::string text = serialize_manifest(manifest);
+    if (text.empty()) return fail("Project manifest could not be serialized.");
+
+    std::error_code error;
+    const auto parent = path.parent_path();
+    if (!parent.empty() && !std::filesystem::is_directory(parent, error)) {
+        if (error) return fail("Could not inspect project manifest directory: " + error.message());
+        return fail("Project manifest directory does not exist: " + parent.generic_string());
+    }
+
+    auto temporary = path;
+    temporary += ".tmp";
+    auto backup = path;
+    backup += ".bak";
+    std::filesystem::remove(temporary, error);
+    error.clear();
+    std::filesystem::remove(backup, error);
+    error.clear();
+
+    std::string write_diagnostics;
+    if (!write_text_file(temporary, text, write_diagnostics)) {
+        std::filesystem::remove(temporary, error);
+        return fail(std::move(write_diagnostics));
+    }
+
+    const bool had_original = std::filesystem::exists(path, error);
+    if (error) {
+        const std::string inspect_error = error.message();
+        error.clear();
+        std::filesystem::remove(temporary, error);
+        return fail("Could not inspect existing project manifest: " + inspect_error);
+    }
+
+    if (had_original) {
+        std::filesystem::rename(path, backup, error);
+        if (error) {
+            const std::string stage_error = error.message();
+            error.clear();
+            std::filesystem::remove(temporary, error);
+            return fail("Could not stage existing project manifest for replacement: " + stage_error);
+        }
+    }
+
+    std::filesystem::rename(temporary, path, error);
+    if (error) {
+        const std::string rename_error = error.message();
+        if (had_original) {
+            std::error_code rollback_error;
+            std::filesystem::rename(backup, path, rollback_error);
+            if (rollback_error) {
+                return fail(
+                    "Could not replace project manifest: " + rename_error +
+                    ". Rollback also failed: " + rollback_error.message()
+                );
+            }
+        }
+        error.clear();
+        std::filesystem::remove(temporary, error);
+        return fail("Could not replace project manifest: " + rename_error);
+    }
+
+    if (had_original) {
+        error.clear();
+        std::filesystem::remove(backup, error);
+    }
+
+    if (diagnostics != nullptr) diagnostics->clear();
+    return true;
 }
 
 std::filesystem::path resolve_asset_root(

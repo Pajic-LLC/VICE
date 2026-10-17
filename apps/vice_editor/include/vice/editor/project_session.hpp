@@ -7,6 +7,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <utility>
 
 namespace vice::editor {
 
@@ -40,6 +41,34 @@ public:
     [[nodiscard]] const std::filesystem::path& layout_path() const noexcept { return layout_path_; }
     [[nodiscard]] const std::filesystem::path& working_world_path() const noexcept {
         return working_world_path_;
+    }
+
+    bool apply_manifest(project::Manifest manifest, std::string* diagnostics = nullptr) {
+        const auto fail = [&](const std::string& message) {
+            if (diagnostics != nullptr) *diagnostics = message;
+            return false;
+        };
+
+        std::string validation;
+        if (!project::validate(manifest, &validation)) return fail(validation);
+        if (manifest.id != manifest_.id) {
+            return fail("Project settings cannot change the stable Project ID.");
+        }
+        if (manifest.asset_root != manifest_.asset_root) {
+            return fail("Project settings cannot change the asset root in this editor version.");
+        }
+
+        const auto startup_source = project::resolve_startup_world(manifest_path_, manifest);
+        if (startup_source.empty()) return fail("Project startup World could not be resolved.");
+        auto cooked_relative = manifest.startup_world;
+        cooked_relative.replace_extension(".vworldc");
+        const auto cooked_startup = (cooked_root_ / cooked_relative).lexically_normal();
+
+        manifest_ = std::move(manifest);
+        startup_world_source_ = startup_source;
+        cooked_startup_world_ = cooked_startup;
+        if (diagnostics != nullptr) diagnostics->clear();
+        return true;
     }
 
 private:

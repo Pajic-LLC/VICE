@@ -25,6 +25,15 @@ if(TARGET vice_editor_state)
   target_compile_features(vice_editor_project_session_tests PRIVATE cxx_std_23)
   vice_enable_warnings(vice_editor_project_session_tests)
   add_test(NAME vice_editor_project_session_tests COMMAND vice_editor_project_session_tests)
+
+  add_executable(
+    vice_editor_project_settings_tests
+    ../editor_project_settings_tests.cpp
+  )
+  target_link_libraries(vice_editor_project_settings_tests PRIVATE VICE::EditorState)
+  target_compile_features(vice_editor_project_settings_tests PRIVATE cxx_std_23)
+  vice_enable_warnings(vice_editor_project_settings_tests)
+  add_test(NAME vice_editor_project_settings_tests COMMAND vice_editor_project_settings_tests)
 endif()
 
 if(TARGET vice_editor_project_build)

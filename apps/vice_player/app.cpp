@@ -83,6 +83,7 @@ int main(const int argc, char** argv) {
 
     std::cout
         << "VICE Player\n"
+        << "Game: " << project.game_name << '\n'
         << "Project: " << project.name << '\n'
         << "Project ID: " << project.id.to_string() << '\n'
         << "Startup World: " << startup_world.generic_string() << '\n'
