@@ -3,6 +3,7 @@
 #import <Foundation/Foundation.h>
 
 #include <string>
+#include <utility>
 
 namespace vice::platform {
 namespace {
