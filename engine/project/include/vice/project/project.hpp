@@ -25,6 +25,7 @@ struct ProjectId {
 
     constexpr bool operator==(const ProjectId&) const noexcept = default;
 
+    [[nodiscard]] static ProjectId generate();
     [[nodiscard]] static std::optional<ProjectId> parse(std::string_view text) noexcept;
     [[nodiscard]] std::string to_string() const;
 };
