@@ -31,6 +31,10 @@ namespace {
     return !text.empty() && text != "." && text != "..";
 }
 
+[[nodiscard]] bool portable_drive_prefix(const std::string_view text) noexcept {
+    return text.size() >= 2U && std::isalpha(static_cast<unsigned char>(text[0])) != 0 && text[1] == ':';
+}
+
 [[nodiscard]] std::string portable_path(const std::filesystem::path& path) {
     return path.generic_string();
 }
@@ -80,7 +84,7 @@ std::string ProjectId::to_string() const {
 
 bool valid_relative_path(const std::filesystem::path& path) noexcept {
     const std::string portable = path.generic_string();
-    if (path.empty() || portable.find('\\') != std::string::npos ||
+    if (path.empty() || portable.find('\\') != std::string::npos || portable_drive_prefix(portable) ||
         path.is_absolute() || path.has_root_name() || path.has_root_directory()) {
         return false;
     }
@@ -106,6 +110,9 @@ bool validate(const Manifest& manifest, std::string* const diagnostics) {
     }
     if (!valid_relative_path(manifest.startup_world)) {
         return fail("Project startup World must be a portable relative path without traversal.");
+    }
+    if (manifest.startup_world.extension() != ".vworld") {
+        return fail("Project startup World must reference an authored .vworld asset.");
     }
     if (diagnostics != nullptr) diagnostics->clear();
     return true;
