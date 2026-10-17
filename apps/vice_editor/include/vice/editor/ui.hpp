@@ -58,7 +58,10 @@ public:
 
     void request_reset_layout() noexcept;
     [[nodiscard]] bool consume_quit_request() noexcept;
+    [[nodiscard]] bool consume_new_world_request() noexcept;
+    [[nodiscard]] bool consume_open_world_request() noexcept;
     [[nodiscard]] bool consume_save_request() noexcept;
+    [[nodiscard]] bool consume_save_as_request() noexcept;
     [[nodiscard]] bool consume_undo_request() noexcept;
     [[nodiscard]] bool consume_redo_request() noexcept;
 
