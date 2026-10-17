@@ -11,6 +11,7 @@ FetchContent_MakeAvailable(DearImGui)
 add_library(
   vice_editor_state
   STATIC
+    src/project_session.cpp
     src/state.cpp
 )
 
@@ -26,6 +27,7 @@ target_link_libraries(
   vice_editor_state
   PUBLIC
     VICE::Core
+    VICE::Project
     VICE::World
 )
 target_compile_features(vice_editor_state PUBLIC cxx_std_23)
