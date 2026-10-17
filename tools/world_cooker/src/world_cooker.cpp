@@ -157,6 +157,26 @@ ParseResult parse_source_manifest(const std::string_view source) {
                 fail("entity mode must be `none` or `spatial`.");
                 return result;
             }
+
+            std::string transform_mode;
+            if (values >> transform_mode) {
+                if (transform_mode != "transform") {
+                    fail("entity trailing data must begin with `transform`.");
+                    return result;
+                }
+                if (!entity.spatial_state.has_value()) {
+                    fail("authored transform requires a spatial entity.");
+                    return result;
+                }
+                world::AuthoredTransform transform;
+                if (!(values >> transform.rotation.x >> transform.rotation.y >>
+                        transform.rotation.z >> transform.rotation.w >>
+                        transform.scale.x >> transform.scale.y >> transform.scale.z)) {
+                    fail("entity authored transform is incomplete.");
+                    return result;
+                }
+                entity.authored_transform = transform;
+            }
             parsed.entities.push_back(entity);
         } else if (keyword == "relation") {
             std::string subject_text;
