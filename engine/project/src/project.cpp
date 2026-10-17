@@ -1,12 +1,10 @@
 #include <vice/project/project.hpp>
 
 #include <algorithm>
-#include <charconv>
 #include <cctype>
 #include <fstream>
 #include <iomanip>
 #include <sstream>
-#include <system_error>
 
 namespace vice::project {
 namespace {
@@ -81,7 +79,9 @@ std::string ProjectId::to_string() const {
 }
 
 bool valid_relative_path(const std::filesystem::path& path) noexcept {
-    if (path.empty() || path.is_absolute() || path.has_root_name() || path.has_root_directory()) {
+    const std::string portable = path.generic_string();
+    if (path.empty() || portable.find('\\') != std::string::npos ||
+        path.is_absolute() || path.has_root_name() || path.has_root_directory()) {
         return false;
     }
     for (const auto& component : path) {
