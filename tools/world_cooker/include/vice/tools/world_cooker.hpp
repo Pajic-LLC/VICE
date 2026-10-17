@@ -14,5 +14,9 @@ struct ParseResult {
 };
 
 [[nodiscard]] ParseResult parse_source_manifest(std::string_view source);
+[[nodiscard]] std::string serialize_source_manifest(
+    const world::WorldSnapshot& snapshot,
+    std::string* diagnostics = nullptr
+);
 
 } // namespace vice::tools::world_cooker

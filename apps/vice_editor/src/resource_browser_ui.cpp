@@ -296,14 +296,17 @@ struct ProjectWorkflowUi::State {
     std::array<char, 512> save_world_path{};
     bool open_new_project = false;
     bool open_project = false;
+    bool open_project_settings = false;
     bool open_world = false;
     bool save_world_as = false;
     bool open_unsaved_prompt = false;
+    std::filesystem::path startup_world_selection;
     std::optional<ReplacementKind> pending_replacement;
     std::filesystem::path pending_path;
     std::optional<ProjectCreateRequest> new_project_request;
     std::optional<std::filesystem::path> open_project_request;
     bool open_development_project_request = false;
+    std::optional<std::filesystem::path> startup_world_request;
     bool build_project_request = false;
     bool run_project_request = false;
     bool new_world_request = false;
@@ -392,7 +395,7 @@ void ProjectWorkflowUi::draw(const ProjectWorkflowStatus& status) {
         draw_error_text(status.diagnostics);
         ImGui::End();
     } else {
-        ImGui::SetNextWindowSize(ImVec2{360.0F, 230.0F}, ImGuiCond_FirstUseEver);
+        ImGui::SetNextWindowSize(ImVec2{360.0F, 260.0F}, ImGuiCond_FirstUseEver);
         if (ImGui::Begin("Project###VICE.ProjectWorkflow")) {
             ImGui::TextUnformatted(status.project_name.c_str());
             ImGui::TextDisabled("%s", status.project_manifest.generic_string().c_str());
@@ -416,6 +419,11 @@ void ProjectWorkflowUi::draw(const ProjectWorkflowStatus& status) {
             if (ImGui::Button("Save As")) {
                 if (status.world_has_path) copy_path(state_->save_world_path, status.world_path);
                 state_->save_world_as = true;
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("Project Settings")) {
+                state_->startup_world_selection = status.startup_world;
+                state_->open_project_settings = true;
             }
 
             ImGui::Separator();
@@ -444,6 +452,43 @@ void ProjectWorkflowUi::draw(const ProjectWorkflowStatus& status) {
             request.name = state_->project_name.data();
             request.parent_directory = std::filesystem::path{state_->project_parent.data()};
             state_->new_project_request = std::move(request);
+            ImGui::CloseCurrentPopup();
+        }
+        if (!ready) ImGui::EndDisabled();
+        ImGui::SameLine();
+        if (ImGui::Button("Cancel", ImVec2{110.0F, 0.0F})) ImGui::CloseCurrentPopup();
+        ImGui::EndPopup();
+    }
+
+    if (state_->open_project_settings) ImGui::OpenPopup("Project Settings###VICE.ProjectSettings");
+    state_->open_project_settings = false;
+    if (ImGui::BeginPopupModal("Project Settings###VICE.ProjectSettings", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+        ImGui::TextUnformatted("Project Settings");
+        ImGui::Separator();
+        ImGui::TextDisabled("Project");
+        ImGui::SameLine();
+        ImGui::TextUnformatted(status.project_name.c_str());
+        ImGui::TextDisabled("Startup World");
+        ImGui::SetNextItemWidth(430.0F);
+        const std::string preview = state_->startup_world_selection.empty()
+            ? std::string{"Select a World"}
+            : state_->startup_world_selection.generic_string();
+        if (ImGui::BeginCombo("##StartupWorld", preview.c_str())) {
+            for (const auto& world_path : status.authored_worlds) {
+                const bool selected = world_path == state_->startup_world_selection;
+                const std::string label = world_path.generic_string();
+                if (ImGui::Selectable(label.c_str(), selected)) {
+                    state_->startup_world_selection = world_path;
+                }
+                if (selected) ImGui::SetItemDefaultFocus();
+            }
+            ImGui::EndCombo();
+        }
+        ImGui::Dummy(ImVec2{0.0F, 6.0F});
+        const bool ready = !state_->startup_world_selection.empty();
+        if (!ready) ImGui::BeginDisabled();
+        if (ImGui::Button("Save", ImVec2{110.0F, 0.0F})) {
+            state_->startup_world_request = state_->startup_world_selection;
             ImGui::CloseCurrentPopup();
         }
         if (!ready) ImGui::EndDisabled();
@@ -484,7 +529,7 @@ void ProjectWorkflowUi::draw(const ProjectWorkflowStatus& status) {
         ImGui::SetNextItemWidth(520.0F);
         ImGui::InputTextWithHint(
             "##OpenWorldPath",
-            "Path to .vworldc",
+            "Path to authored .vworld",
             state_->open_world_path.data(),
             state_->open_world_path.size()
         );
@@ -508,7 +553,7 @@ void ProjectWorkflowUi::draw(const ProjectWorkflowStatus& status) {
         ImGui::SetNextItemWidth(520.0F);
         ImGui::InputTextWithHint(
             "##SaveWorldPath",
-            "Path ending in .vworldc",
+            "Path ending in .vworld",
             state_->save_world_path.data(),
             state_->save_world_path.size()
         );
@@ -580,6 +625,13 @@ bool ProjectWorkflowUi::consume_open_development_project_request() noexcept {
     if (state_ == nullptr) return false;
     const bool request = state_->open_development_project_request;
     state_->open_development_project_request = false;
+    return request;
+}
+
+std::optional<std::filesystem::path> ProjectWorkflowUi::consume_startup_world_request() {
+    if (state_ == nullptr) return std::nullopt;
+    auto request = std::move(state_->startup_world_request);
+    state_->startup_world_request.reset();
     return request;
 }
 

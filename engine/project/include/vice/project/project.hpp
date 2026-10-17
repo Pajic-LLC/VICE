@@ -49,6 +49,11 @@ struct LoadResult {
 [[nodiscard]] LoadResult parse_manifest(std::string_view text);
 [[nodiscard]] LoadResult load_manifest(const std::filesystem::path& path);
 [[nodiscard]] std::string serialize_manifest(const Manifest& manifest);
+[[nodiscard]] bool save_manifest(
+    const std::filesystem::path& path,
+    const Manifest& manifest,
+    std::string* diagnostics = nullptr
+);
 
 [[nodiscard]] std::filesystem::path resolve_asset_root(
     const std::filesystem::path& manifest_path,

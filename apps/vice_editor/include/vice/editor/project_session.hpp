@@ -42,6 +42,11 @@ public:
         return working_world_path_;
     }
 
+    bool set_startup_world(
+        const std::filesystem::path& asset_relative_world,
+        std::string* diagnostics = nullptr
+    );
+
 private:
     project::Manifest manifest_;
     std::filesystem::path manifest_path_;
@@ -69,6 +74,7 @@ public:
     [[nodiscard]] const std::filesystem::path& path() const noexcept { return path_; }
     [[nodiscard]] bool dirty() const noexcept { return dirty_; }
     [[nodiscard]] bool has_path() const noexcept { return !path_.empty(); }
+    [[nodiscard]] bool authored() const noexcept { return path_.extension() == ".vworld"; }
 
     void mark_dirty() noexcept { dirty_ = true; }
     void mark_clean() noexcept { dirty_ = false; }
@@ -85,8 +91,16 @@ public:
         std::string* diagnostics = nullptr
     );
 
+    bool open_authored(
+        const std::filesystem::path& path,
+        DirtyReplacePolicy policy = DirtyReplacePolicy::reject,
+        std::string* diagnostics = nullptr
+    );
+
     bool save(std::string* diagnostics = nullptr);
     bool save_as(const std::filesystem::path& path, std::string* diagnostics = nullptr);
+    bool save_authored(std::string* diagnostics = nullptr);
+    bool save_authored_as(const std::filesystem::path& path, std::string* diagnostics = nullptr);
 
 private:
     [[nodiscard]] bool replacement_allowed(
