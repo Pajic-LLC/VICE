@@ -13,6 +13,7 @@ target_sources(
     src/mesh_asset.cpp
     src/pipeline_layout.cpp
     src/shader_asset.cpp
+    src/telemetry.cpp
 )
 target_link_libraries(vice_render PUBLIC VICE::Core VICE::Platform)
 target_compile_features(vice_render PUBLIC cxx_std_23)
