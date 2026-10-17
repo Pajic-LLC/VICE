@@ -1,6 +1,7 @@
 #pragma once
 
 #include <vice/editor/asset_index.hpp>
+#include <vice/editor/state.hpp>
 #include <vice/jobs/jobs.hpp>
 #include <vice/rigid_body/debug.hpp>
 #include <vice/rigid_body/world_bridge.hpp>
@@ -96,5 +97,16 @@ private:
     struct State;
     std::unique_ptr<State> state_;
 };
+
+inline void reset_document_runtime(
+    SelectionModel& selection,
+    TransformHistory& history,
+    PreviewRuntime& preview
+) noexcept {
+    selection.clear();
+    history.clear();
+    history.mark_saved();
+    preview.stop();
+}
 
 } // namespace vice::editor
