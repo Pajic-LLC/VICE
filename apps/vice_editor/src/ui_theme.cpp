@@ -94,6 +94,11 @@ void apply_editor_theme(const float scale_factor) {
     colors[ImGuiCol_NavWindowingHighlight] = {0.72F, 0.84F, 0.95F, 0.70F};
     colors[ImGuiCol_NavWindowingDimBg] = {0.08F, 0.09F, 0.11F, 0.78F};
     colors[ImGuiCol_ModalWindowDimBg] = {0.02F, 0.025F, 0.035F, 0.82F};
+
+    auto& io = ImGui::GetIO();
+    if (!io.Fonts->IsBuilt()) {
+        io.Fonts->Build();
+    }
 }
 
 } // namespace vice::editor::detail
