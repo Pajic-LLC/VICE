@@ -238,7 +238,7 @@ bool WorldDocument::new_empty(
     std::string* const diagnostics
 ) {
     if (!replacement_allowed(policy, diagnostics)) return false;
-    world_ = std::make_unique<world::World>();
+    *world_ = world::World{};
     path_.clear();
     dirty_ = false;
     if (diagnostics != nullptr) diagnostics->clear();
@@ -267,15 +267,15 @@ bool WorldDocument::open(
         );
     }
 
-    auto replacement = std::make_unique<world::World>();
-    if (!replacement->restore(*loaded.snapshot)) {
+    world::World replacement;
+    if (!replacement.restore(*loaded.snapshot)) {
         return fail(
             diagnostics,
             "Could not restore World document `" + resolved_path.generic_string() + "`."
         );
     }
 
-    world_ = std::move(replacement);
+    *world_ = std::move(replacement);
     path_ = resolved_path;
     dirty_ = false;
     if (diagnostics != nullptr) diagnostics->clear();
