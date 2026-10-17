@@ -43,6 +43,11 @@ public:
     [[nodiscard]] std::optional<ResourceId> resource_id(ResourceHandle resource) const noexcept;
     [[nodiscard]] std::optional<ResourceHandle> find_resource(ResourceId resource_id) const noexcept;
 
+    bool set_resource_reference(EntityId entity, ResourceReference reference);
+    bool clear_resource_reference(EntityId entity, ResourceRole role);
+    [[nodiscard]] std::optional<ResourceId> resource_reference(EntityId entity, ResourceRole role) const noexcept;
+    [[nodiscard]] std::span<const ResourceReference> resource_references(EntityId entity) const noexcept;
+
     bool add_relation(Relation relation);
     bool remove_relation(const Relation& relation);
     [[nodiscard]] std::span<const Relation> relations() const noexcept;
@@ -75,6 +80,7 @@ private:
         PersistentId persistent_id;
         std::optional<SpatialState> spatial_state;
         std::optional<AuthoredTransform> authored_transform;
+        std::vector<ResourceReference> resource_references;
         std::uint32_t generation = 1;
         bool alive = false;
     };
