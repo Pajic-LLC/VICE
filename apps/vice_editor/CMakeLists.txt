@@ -75,6 +75,7 @@ set_target_properties(vice_editor_imgui PROPERTIES FOLDER "Third Party")
 add_library(
   vice_editor_ui
   STATIC
+    src/resource_browser_ui.cpp
     src/ui.cpp
     src/ui_renderer.cpp
     src/ui_theme.cpp
