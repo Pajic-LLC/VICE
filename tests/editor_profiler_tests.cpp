@@ -7,6 +7,7 @@
 
 #include <cassert>
 #include <future>
+#include <memory>
 #include <stdexcept>
 #include <string>
 
@@ -56,13 +57,13 @@ void test_scheduler_stats() {
     assert(stats.outstanding_tasks == 0U);
     assert(stats.total_submitted == 0U);
 
-    std::promise<void> started_promise;
-    auto started = started_promise.get_future();
-    std::promise<void> release_promise;
-    auto release = release_promise.get_future().share();
+    auto started_promise = std::make_shared<std::promise<void>>();
+    auto started = started_promise->get_future();
+    auto release_promise = std::make_shared<std::promise<void>>();
+    auto release = release_promise->get_future().share();
     auto running = scheduler.schedule(jobs::TaskDesc{
-        .function = [started_promise = std::move(started_promise), release]() mutable {
-            started_promise.set_value();
+        .function = [started_promise, release] {
+            started_promise->set_value();
             release.wait();
         },
         .name = "telemetry-running",
@@ -75,7 +76,7 @@ void test_scheduler_stats() {
     assert(stats.outstanding_tasks == 1U);
     assert(stats.total_submitted == 1U);
 
-    release_promise.set_value();
+    release_promise->set_value();
     assert(scheduler.wait(running) == jobs::Status::succeeded);
 
     auto failing = scheduler.schedule(jobs::TaskDesc{
