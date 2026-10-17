@@ -7,6 +7,8 @@
 #include <vice/core/time.hpp>
 #include <vice/core/version.hpp>
 #include <vice/editor/asset_index.hpp>
+#include <vice/editor/profiler.hpp>
+#include <vice/editor/profiler_ui.hpp>
 #include <vice/editor/resource_browser_ui.hpp>
 #include <vice/editor/state.hpp>
 #include <vice/editor/ui.hpp>
@@ -15,6 +17,7 @@
 #include <vice/platform/event.hpp>
 #include <vice/platform/services.hpp>
 #include <vice/render/rhi.hpp>
+#include <vice/render/telemetry.hpp>
 #include <vice/world/persistent_id.hpp>
 #include <vice/world/snapshot_file.hpp>
 #include <vice/world/world.hpp>
@@ -237,8 +240,8 @@ int main() {
         return 1;
     }
 
-    auto render_device = vice::render::Device::create();
-    if (!render_device) {
+    auto render_device = vice::render::instrument_device(vice::render::Device::create());
+    if (!render_device || !render_device->valid()) {
         log(LogLevel::error, "VICE Editor could not create a render device.");
         return 1;
     }
@@ -276,6 +279,8 @@ int main() {
     }
 
     vice::editor::EditorUi ui{layout_path};
+    vice::editor::ProfilerUi profiler_ui;
+    vice::editor::ProfilerHistory profiler_history{180U};
     vice::editor::ResourceBrowserUi resource_browser;
     vice::editor::UiRhiRenderer ui_renderer;
     vice::editor::detail::SceneRenderer scene_renderer;
@@ -366,6 +371,15 @@ int main() {
             continue;
         }
 
+        profiler_history.push_frame(delta_seconds);
+        const auto profiler_snapshot = vice::editor::sample_profiler(
+            delta_seconds,
+            jobs,
+            nullptr,
+            *render_device,
+            world
+        );
+
         scene_renderer.update(delta_seconds, active_viewport);
         resource_mesh_renderer.update(delta_seconds, active_viewport);
         if (!ui.begin_frame(metrics, delta_seconds)) {
@@ -375,6 +389,7 @@ int main() {
         ui.draw(world, selection, history, console, status);
         resource_browser.draw(assets);
         resource_browser.draw_inspector_resources(world, selection, assets);
+        profiler_ui.draw(profiler_snapshot, profiler_history);
         ui.end_frame();
         active_viewport = ui.scene_viewport();
 

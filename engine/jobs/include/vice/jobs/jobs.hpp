@@ -35,6 +35,17 @@ struct SchedulerConfig {
     std::uint32_t worker_count = 0;
 };
 
+struct SchedulerStats {
+    std::uint32_t worker_count = 0;
+    std::size_t outstanding_tasks = 0;
+    std::size_t queued_worker_tasks = 0;
+    std::size_t queued_main_thread_tasks = 0;
+    std::size_t running_tasks = 0;
+    std::uint64_t total_submitted = 0;
+    std::uint64_t total_completed = 0;
+    std::uint64_t total_failed = 0;
+};
+
 struct TaskDesc {
     std::function<void()> function;
     Priority priority = Priority::normal;
@@ -105,6 +116,7 @@ public:
 
     [[nodiscard]] std::uint32_t worker_count() const noexcept;
     [[nodiscard]] std::thread::id main_thread_id() const noexcept;
+    [[nodiscard]] SchedulerStats stats() const noexcept;
 
 private:
     struct Impl;

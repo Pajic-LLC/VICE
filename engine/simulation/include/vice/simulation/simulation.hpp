@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <compare>
 #include <cstddef>
 #include <cstdint>
@@ -124,6 +125,17 @@ struct DomainDebugSnapshot {
     std::uint64_t emitted_interactions = 0;
 };
 
+struct CoordinatorStats {
+    double fixed_delta_seconds = 1.0 / 60.0;
+    std::uint64_t step_index = 0;
+    std::size_t registered_domains = 0;
+    std::size_t full_domains = 0;
+    std::size_t reduced_domains = 0;
+    std::size_t off_domains = 0;
+    double last_step_wall_seconds = 0.0;
+    double recent_step_average_seconds = 0.0;
+};
+
 class Coordinator {
 public:
     Coordinator() = default;
@@ -148,6 +160,7 @@ public:
     void step();
 
     [[nodiscard]] std::vector<DomainDebugSnapshot> debug_snapshots() const;
+    [[nodiscard]] CoordinatorStats stats() const noexcept;
 
 private:
     struct DomainEntry {
@@ -159,10 +172,16 @@ private:
 
     [[nodiscard]] bool contains_domain(DomainId id) const noexcept;
 
+    static constexpr std::size_t timing_history_capacity = 120U;
+
     double fixed_delta_seconds_ = 1.0 / 60.0;
     std::uint64_t step_index_ = 0;
     std::vector<DomainEntry> domains_;
     std::vector<InteractionEvent> pending_interactions_;
+    std::array<double, timing_history_capacity> recent_step_wall_seconds_{};
+    std::size_t recent_step_cursor_ = 0;
+    std::size_t recent_step_count_ = 0;
+    double last_step_wall_seconds_ = 0.0;
 };
 
 } // namespace vice::simulation
