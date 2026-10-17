@@ -105,24 +105,6 @@ struct ConsoleHistory::State {
     std::uint64_t next_sequence = 1;
 };
 
-namespace {
-
-void push_console_entry(ConsoleHistory::State& state, const core::LogRecord& record) {
-    std::scoped_lock lock{state.mutex};
-    if (state.entries.size() == state.capacity) {
-        state.entries.pop_front();
-    }
-    state.entries.push_back(ConsoleEntry{
-        .sequence = state.next_sequence++,
-        .level = record.level,
-        .message = record.message,
-        .source_file = record.source.file_name(),
-        .source_line = static_cast<std::uint32_t>(record.source.line()),
-    });
-}
-
-} // namespace
-
 ConsoleHistory::ConsoleHistory(const std::size_t capacity)
     : state_{std::make_shared<State>()} {
     state_->capacity = std::max<std::size_t>(1, capacity);
@@ -140,7 +122,17 @@ bool ConsoleHistory::attach() {
     const std::weak_ptr<State> weak_state{state_};
     observer_id_ = core::add_log_observer([weak_state](const core::LogRecord& record) {
         if (const auto state = weak_state.lock()) {
-            push_console_entry(*state, record);
+            std::scoped_lock lock{state->mutex};
+            if (state->entries.size() == state->capacity) {
+                state->entries.pop_front();
+            }
+            state->entries.push_back(ConsoleEntry{
+                .sequence = state->next_sequence++,
+                .level = record.level,
+                .message = record.message,
+                .source_file = record.source.file_name(),
+                .source_line = static_cast<std::uint32_t>(record.source.line()),
+            });
         }
     });
     return observer_id_ != core::invalid_log_observer_id;
@@ -159,7 +151,17 @@ bool ConsoleHistory::attached() const noexcept {
 }
 
 void ConsoleHistory::push(const core::LogRecord& record) {
-    push_console_entry(*state_, record);
+    std::scoped_lock lock{state_->mutex};
+    if (state_->entries.size() == state_->capacity) {
+        state_->entries.pop_front();
+    }
+    state_->entries.push_back(ConsoleEntry{
+        .sequence = state_->next_sequence++,
+        .level = record.level,
+        .message = record.message,
+        .source_file = record.source.file_name(),
+        .source_line = static_cast<std::uint32_t>(record.source.line()),
+    });
 }
 
 void ConsoleHistory::clear() {
