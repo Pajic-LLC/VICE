@@ -10,7 +10,13 @@ target_include_directories(
   PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
 )
-target_link_libraries(vice_mesh_cooker_lib PUBLIC VICE::Render)
+target_link_libraries(
+  vice_mesh_cooker_lib
+  PUBLIC
+    VICE::Render
+  PRIVATE
+    VICE::World
+)
 target_compile_features(vice_mesh_cooker_lib PUBLIC cxx_std_23)
 vice_enable_warnings(vice_mesh_cooker_lib)
 
