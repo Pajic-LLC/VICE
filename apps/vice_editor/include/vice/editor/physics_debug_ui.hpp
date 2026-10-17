@@ -27,6 +27,8 @@ public:
     void draw(const PreviewSnapshot& preview, bool authored_world_dirty);
     void draw_inspector_live(const PreviewSnapshot& preview, const SelectionModel& selection);
 
+    void request_play() noexcept;
+
     [[nodiscard]] PhysicsDebugLayers layers() const noexcept;
     [[nodiscard]] bool consume_start_request() noexcept;
     [[nodiscard]] bool consume_reset_request() noexcept;

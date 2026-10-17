@@ -28,5 +28,12 @@ int main() {
     require(!ui.consume_stop_request(), "no phantom Stop request");
     require(!ui.consume_step_request(), "no phantom Step request");
     require(!ui.consume_play_pause_request(), "no phantom playback request");
+
+    ui.request_play();
+    require(ui.consume_start_request(), "Play requests a fresh runtime session");
+    require(ui.consume_play_pause_request(), "Play requests immediate running playback");
+    require(!ui.consume_start_request(), "Play start request is consumed once");
+    require(!ui.consume_play_pause_request(), "Play playback request is consumed once");
+
     return 0;
 }

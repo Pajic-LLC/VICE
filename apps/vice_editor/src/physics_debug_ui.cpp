@@ -102,7 +102,7 @@ void PhysicsDebugUi::draw(const PreviewSnapshot& preview, const bool authored_wo
     }
 
     const bool active = preview.playback != PreviewPlayback::stopped;
-    ImGui::TextDisabled("LIVE PREVIEW");
+    ImGui::TextDisabled("PLAY IN EDITOR");
     ImGui::SameLine();
     const ImVec4 status_color = preview.playback == PreviewPlayback::running
         ? ImVec4{0.32F, 0.82F, 0.56F, 1.0F}
@@ -110,10 +110,10 @@ void PhysicsDebugUi::draw(const PreviewSnapshot& preview, const bool authored_wo
     ImGui::TextColored(status_color, "%s", playback_name(preview.playback));
 
     if (!active) {
-        if (ImGui::Button("Start Preview", ImVec2{-1.0F, 34.0F})) state_->start_requested = true;
+        if (ImGui::Button("Play", ImVec2{-1.0F, 34.0F})) request_play();
     } else {
         if (ImGui::Button(
-                preview.playback == PreviewPlayback::running ? "Pause" : "Play",
+                preview.playback == PreviewPlayback::running ? "Pause" : "Resume",
                 ImVec2{82.0F, 30.0F}
             )) {
             state_->play_pause_requested = true;
@@ -127,7 +127,7 @@ void PhysicsDebugUi::draw(const PreviewSnapshot& preview, const bool authored_wo
         if (authored_world_dirty) {
             ImGui::TextColored(
                 ImVec4{0.94F, 0.70F, 0.28F, 1.0F},
-                "Authored World changed since preview reset"
+                "Authored World changed since play session started"
             );
         }
         ImGui::TextDisabled(
@@ -223,7 +223,7 @@ void PhysicsDebugUi::draw_inspector_live(
     if (inspector_window == nullptr || !inspector_window->Active) return;
 
     const bool visible = ImGui::Begin(inspector_window_name);
-    if (visible && ImGui::CollapsingHeader("Live Preview", ImGuiTreeNodeFlags_DefaultOpen)) {
+    if (visible && ImGui::CollapsingHeader("Play In Editor", ImGuiTreeNodeFlags_DefaultOpen)) {
         ImGui::TextDisabled("Read only");
         if (ImGui::BeginTable(
                 "##LivePreview",
@@ -265,6 +265,12 @@ void PhysicsDebugUi::draw_inspector_live(
         }
     }
     ImGui::End();
+}
+
+void PhysicsDebugUi::request_play() noexcept {
+    if (state_ == nullptr) return;
+    state_->start_requested = true;
+    state_->play_pause_requested = true;
 }
 
 PhysicsDebugLayers PhysicsDebugUi::layers() const noexcept {
