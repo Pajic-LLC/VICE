@@ -880,6 +880,46 @@ public:
         return true;
     }
 
+    bool set_viewport(const Viewport& viewport) override {
+        if (!render_pass_active_ || !is_valid(viewport)) {
+            return false;
+        }
+        const D3D12_VIEWPORT native{
+            viewport.x,
+            viewport.y,
+            viewport.width,
+            viewport.height,
+            viewport.min_depth,
+            viewport.max_depth,
+        };
+        command_list_->RSSetViewports(1, &native);
+        return true;
+    }
+
+    bool set_scissor_rect(const ScissorRect& scissor) override {
+        if (!render_pass_active_ || !is_valid(scissor)) {
+            return false;
+        }
+        const std::int64_t right =
+            static_cast<std::int64_t>(scissor.x) + static_cast<std::int64_t>(scissor.width);
+        const std::int64_t bottom =
+            static_cast<std::int64_t>(scissor.y) + static_cast<std::int64_t>(scissor.height);
+        if (right > std::numeric_limits<LONG>::max() ||
+            right < std::numeric_limits<LONG>::min() ||
+            bottom > std::numeric_limits<LONG>::max() ||
+            bottom < std::numeric_limits<LONG>::min()) {
+            return false;
+        }
+        const D3D12_RECT native{
+            static_cast<LONG>(scissor.x),
+            static_cast<LONG>(scissor.y),
+            static_cast<LONG>(right),
+            static_cast<LONG>(bottom),
+        };
+        command_list_->RSSetScissorRects(1, &native);
+        return true;
+    }
+
     bool set_graphics_pipeline(GraphicsPipeline& pipeline) override {
         if (!render_pass_active_) {
             return false;
@@ -2079,7 +2119,11 @@ public:
 
         std::vector<std::byte> compiled(bytecode->GetBufferSize());
         std::memcpy(compiled.data(), bytecode->GetBufferPointer(), compiled.size());
-        return std::make_unique<D3D12ShaderModule>(desc.stage, std::move(compiled));
+        return std::make_unique<D3D12ShaderModule>(
+            desc.stage,
+            std::move(compiled),
+            std::vector<ShaderResourceBindingDesc>{desc.resources.begin(), desc.resources.end()}
+        );
     }
 
     [[nodiscard]] std::unique_ptr<ShaderModule> create_shader_module(
@@ -2192,14 +2236,15 @@ public:
             }
         }
 
+        const bool alpha_blend = desc.blend == BlendMode::alpha;
         D3D12_RENDER_TARGET_BLEND_DESC blend{};
-        blend.BlendEnable = FALSE;
+        blend.BlendEnable = alpha_blend ? TRUE : FALSE;
         blend.LogicOpEnable = FALSE;
-        blend.SrcBlend = D3D12_BLEND_ONE;
-        blend.DestBlend = D3D12_BLEND_ZERO;
+        blend.SrcBlend = alpha_blend ? D3D12_BLEND_SRC_ALPHA : D3D12_BLEND_ONE;
+        blend.DestBlend = alpha_blend ? D3D12_BLEND_INV_SRC_ALPHA : D3D12_BLEND_ZERO;
         blend.BlendOp = D3D12_BLEND_OP_ADD;
         blend.SrcBlendAlpha = D3D12_BLEND_ONE;
-        blend.DestBlendAlpha = D3D12_BLEND_ZERO;
+        blend.DestBlendAlpha = alpha_blend ? D3D12_BLEND_INV_SRC_ALPHA : D3D12_BLEND_ZERO;
         blend.BlendOpAlpha = D3D12_BLEND_OP_ADD;
         blend.LogicOp = D3D12_LOGIC_OP_NOOP;
         blend.RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;

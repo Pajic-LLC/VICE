@@ -350,6 +350,7 @@ struct ShaderModuleDesc {
     ShaderStage stage = ShaderStage::vertex;
     ShaderSourceLanguage language = ShaderSourceLanguage::hlsl;
     std::string_view source;
+    std::span<const ShaderResourceBindingDesc> resources;
     std::string_view entry_point = "main";
     std::string_view debug_name;
 };
@@ -365,7 +366,15 @@ struct ShaderBinaryDesc {
 };
 
 [[nodiscard]] constexpr bool is_valid(const ShaderModuleDesc& desc) noexcept {
-    return !desc.source.empty() && !desc.entry_point.empty();
+    if (desc.source.empty() || desc.entry_point.empty()) {
+        return false;
+    }
+    for (const auto& resource : desc.resources) {
+        if (!is_valid(resource)) {
+            return false;
+        }
+    }
+    return true;
 }
 
 [[nodiscard]] constexpr bool is_valid(const ShaderBinaryDesc& desc) noexcept {
@@ -400,6 +409,11 @@ enum class FrontFace : std::uint8_t {
     clockwise,
 };
 
+enum class BlendMode : std::uint8_t {
+    opaque,
+    alpha,
+};
+
 enum class CompareOp : std::uint8_t {
     never,
     less,
@@ -425,6 +439,32 @@ struct DepthStateDesc {
     return desc.format == TextureFormat::depth32_float;
 }
 
+struct Viewport {
+    float x = 0.0F;
+    float y = 0.0F;
+    float width = 1.0F;
+    float height = 1.0F;
+    float min_depth = 0.0F;
+    float max_depth = 1.0F;
+};
+
+struct ScissorRect {
+    std::int32_t x = 0;
+    std::int32_t y = 0;
+    std::uint32_t width = 1;
+    std::uint32_t height = 1;
+};
+
+[[nodiscard]] constexpr bool is_valid(const Viewport& viewport) noexcept {
+    return viewport.width > 0.0F && viewport.height > 0.0F &&
+        viewport.min_depth >= 0.0F && viewport.max_depth <= 1.0F &&
+        viewport.min_depth <= viewport.max_depth;
+}
+
+[[nodiscard]] constexpr bool is_valid(const ScissorRect& scissor) noexcept {
+    return scissor.width > 0U && scissor.height > 0U;
+}
+
 class ShaderModule;
 class Texture;
 
@@ -435,6 +475,7 @@ struct GraphicsPipelineDesc {
     PrimitiveTopology topology = PrimitiveTopology::triangle_list;
     CullMode cull_mode = CullMode::back;
     FrontFace front_face = FrontFace::counter_clockwise;
+    BlendMode blend = BlendMode::opaque;
     DepthStateDesc depth{};
     std::span<const VertexBufferLayoutDesc> vertex_buffers;
     std::string_view debug_name;
@@ -525,6 +566,8 @@ public:
     ) = 0;
 
     virtual bool begin_render_pass(Swapchain& swapchain, const RenderPassDesc& desc) = 0;
+    virtual bool set_viewport(const Viewport& viewport) = 0;
+    virtual bool set_scissor_rect(const ScissorRect& scissor) = 0;
     virtual bool set_graphics_pipeline(GraphicsPipeline& pipeline) = 0;
     virtual bool set_vertex_buffer(
         std::uint32_t slot,
