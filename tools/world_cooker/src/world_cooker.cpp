@@ -2,12 +2,17 @@
 
 #include <vice/world/world.hpp>
 
+#include <algorithm>
 #include <cstdint>
 #include <iomanip>
+#include <limits>
 #include <optional>
 #include <sstream>
 #include <string>
 #include <string_view>
+#include <tuple>
+#include <utility>
+#include <vector>
 
 namespace vice::tools::world_cooker {
 namespace {
@@ -34,11 +39,27 @@ namespace {
     return std::nullopt;
 }
 
+[[nodiscard]] const char* fidelity_name(const world::RegionFidelity fidelity) noexcept {
+    switch (fidelity) {
+    case world::RegionFidelity::inactive: return "inactive";
+    case world::RegionFidelity::reduced: return "reduced";
+    case world::RegionFidelity::full: return "full";
+    }
+    return "full";
+}
+
 [[nodiscard]] std::optional<world::ResourceRole> parse_resource_role(
     const std::string_view text
 ) noexcept {
     if (text == "render_mesh") return world::ResourceRole::render_mesh;
     return std::nullopt;
+}
+
+[[nodiscard]] const char* resource_role_name(const world::ResourceRole role) noexcept {
+    switch (role) {
+    case world::ResourceRole::render_mesh: return "render_mesh";
+    }
+    return "render_mesh";
 }
 
 } // namespace
@@ -251,6 +272,100 @@ ParseResult parse_source_manifest(const std::string_view source) {
     }
     result.snapshot = canonical.snapshot();
     return result;
+}
+
+std::string serialize_source_manifest(
+    const world::WorldSnapshot& snapshot,
+    std::string* const diagnostics
+) {
+    world::World canonical;
+    if (!canonical.restore(snapshot)) {
+        if (diagnostics != nullptr) *diagnostics = "World snapshot violates World validation rules.";
+        return {};
+    }
+
+    auto value = canonical.snapshot();
+    std::ranges::sort(value.component_types, {}, [](const world::ComponentTypeDesc& type) {
+        return type.id.value.to_string();
+    });
+    std::ranges::sort(value.resources, {}, [](const world::ResourceId& resource) {
+        return resource.value.to_string();
+    });
+    std::ranges::sort(value.regions, {}, [](const world::RegionDesc& region) {
+        return region.id.value;
+    });
+    std::ranges::sort(value.entities, {}, [](const world::SnapshotEntity& entity) {
+        return entity.persistent_id.to_string();
+    });
+    std::ranges::sort(value.relations, {}, [](const world::SnapshotRelation& relation) {
+        return std::tuple{
+            relation.subject.to_string(),
+            relation.kind.to_string(),
+            relation.object.to_string(),
+        };
+    });
+    for (auto& entity : value.entities) {
+        std::ranges::sort(entity.resource_references, {}, [](const world::ResourceReference& reference) {
+            return std::tuple{static_cast<int>(reference.role), reference.resource.value.to_string()};
+        });
+    }
+
+    std::ostringstream output;
+    output << std::setprecision(std::numeric_limits<double>::max_digits10);
+    output << "vice-world-source 1\n\n";
+
+    for (const auto& type : value.component_types) {
+        output << "component " << type.id.value.to_string() << ' ' << type.version << ' '
+            << std::quoted(type.name) << '\n';
+    }
+    for (const auto& resource : value.resources) {
+        output << "resource " << resource.value.to_string() << '\n';
+    }
+    for (const auto& region : value.regions) {
+        output << "region " << region.id.value << ' ' << region.simulation_island.value << ' '
+            << region.origin.x << ' ' << region.origin.y << ' ' << region.origin.z << ' '
+            << region.streaming_cell.x << ' ' << region.streaming_cell.y << ' ' << region.streaming_cell.z << ' '
+            << fidelity_name(region.fidelity) << ' ';
+        if (region.bounds.has_value()) {
+            output << "bounds "
+                << region.bounds->min.x << ' ' << region.bounds->min.y << ' ' << region.bounds->min.z << ' '
+                << region.bounds->max.x << ' ' << region.bounds->max.y << ' ' << region.bounds->max.z;
+        } else {
+            output << "none";
+        }
+        output << '\n';
+    }
+    for (const auto& entity : value.entities) {
+        output << "entity " << entity.persistent_id.to_string() << ' ';
+        if (entity.spatial_state.has_value()) {
+            output << "spatial "
+                << entity.spatial_state->global_position.x << ' '
+                << entity.spatial_state->global_position.y << ' '
+                << entity.spatial_state->global_position.z << ' '
+                << entity.spatial_state->region.value;
+        } else {
+            output << "none";
+        }
+        if (entity.authored_transform.has_value()) {
+            const auto& transform = *entity.authored_transform;
+            output << " transform "
+                << transform.rotation.x << ' ' << transform.rotation.y << ' '
+                << transform.rotation.z << ' ' << transform.rotation.w << ' '
+                << transform.scale.x << ' ' << transform.scale.y << ' ' << transform.scale.z;
+        }
+        for (const auto& reference : entity.resource_references) {
+            output << " resource " << resource_role_name(reference.role) << ' '
+                << reference.resource.value.to_string();
+        }
+        output << '\n';
+    }
+    for (const auto& relation : value.relations) {
+        output << "relation " << relation.subject.to_string() << ' '
+            << relation.kind.to_string() << ' ' << relation.object.to_string() << '\n';
+    }
+
+    if (diagnostics != nullptr) diagnostics->clear();
+    return output.str();
 }
 
 } // namespace vice::tools::world_cooker
