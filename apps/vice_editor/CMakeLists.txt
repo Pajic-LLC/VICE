@@ -130,6 +130,7 @@ set_target_properties(vice_editor_imgui PROPERTIES FOLDER "Third Party")
 add_library(
   vice_editor_ui
   STATIC
+    src/physics_debug_ui.cpp
     src/profiler_ui.cpp
     src/resource_browser_ui.cpp
     src/ui.cpp
@@ -151,6 +152,7 @@ target_link_libraries(
   vice_editor_ui
   PUBLIC
     VICE::EditorAssetIndex
+    VICE::EditorPreview
     VICE::EditorProfiler
     VICE::EditorState
     VICE::Platform
