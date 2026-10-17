@@ -162,6 +162,7 @@ add_library(
   STATIC
     src/physics_debug_ui.cpp
     src/profiler_ui.cpp
+    src/project_settings_ui.cpp
     src/resource_browser_ui.cpp
     src/ui.cpp
     src/ui_renderer.cpp
