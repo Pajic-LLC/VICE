@@ -19,7 +19,7 @@ int main() {
     using namespace vice;
 
     world::World world;
-    assert((world.register_region(world::RegionDesc{
+    const world::RegionDesc region{
         .id = world::RegionId{1},
         .simulation_island = world::SimulationIslandId{101},
         .origin = {},
@@ -29,15 +29,17 @@ int main() {
             .min = {-100.0F, -100.0F, -100.0F},
             .max = {100.0F, 100.0F, 100.0F},
         },
-    }));
+    };
+    assert(world.register_region(region));
 
     const auto persistent_id = fixed_id(77);
     const auto entity = world.create_entity(persistent_id);
     assert(entity.has_value());
-    assert((world.set_spatial_state(*entity, world::SpatialState{
+    const world::SpatialState initial_spatial{
         .global_position = {2.0, 1.0, -3.0},
         .region = world::RegionId{1},
-    })));
+    };
+    assert(world.set_spatial_state(*entity, initial_spatial));
 
     editor::TransformHistory history;
     history.mark_saved();
@@ -51,12 +53,13 @@ int main() {
         .scale = {1.25F, 2.0F, 0.75F},
     };
     assert(editor::apply_entity_transform(world, persistent_id, after));
-    assert((history.record(editor::TransformHistory::Entry{
+    const editor::TransformHistory::Entry edit{
         .persistent_id = persistent_id,
         .before = *before,
         .after = after,
         .label = "Author Entity",
-    })));
+    };
+    assert(history.record(edit));
     assert(history.dirty());
 
     const auto path = std::filesystem::temp_directory_path() / "vice_editor_authoring_test.vworldc";
