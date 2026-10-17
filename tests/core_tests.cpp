@@ -29,18 +29,36 @@ void test_platform() {
 void test_logging() {
     using namespace vice::core;
 
-    std::vector<LogRecord> records;
+    std::vector<LogRecord> primary_records;
+    std::vector<LogRecord> observed_records;
     set_min_log_level(LogLevel::warning);
-    set_log_sink([&records](const LogRecord& record) {
-        records.push_back(record);
+    set_log_sink([&primary_records](const LogRecord& record) {
+        primary_records.push_back(record);
     });
+
+    const auto observer_id = add_log_observer([&observed_records](const LogRecord& record) {
+        observed_records.push_back(record);
+    });
+    assert(observer_id != invalid_log_observer_id);
 
     log(LogLevel::info, "ignored");
     log(LogLevel::error, "captured");
 
-    assert(records.size() == 1);
-    assert(records.front().level == LogLevel::error);
-    assert(records.front().message == "captured");
+    assert(primary_records.size() == 1);
+    assert(primary_records.front().level == LogLevel::error);
+    assert(primary_records.front().message == "captured");
+    assert(observed_records.size() == 1);
+    assert(observed_records.front().message == "captured");
+
+    assert(remove_log_observer(observer_id));
+    assert(!remove_log_observer(observer_id));
+    log(LogLevel::fatal, "primary only");
+
+    assert(primary_records.size() == 2);
+    assert(primary_records.back().message == "primary only");
+    assert(observed_records.size() == 1);
+    assert(add_log_observer({}) == invalid_log_observer_id);
+    assert(!remove_log_observer(invalid_log_observer_id));
 
     reset_log_sink();
     set_min_log_level(LogLevel::debug);
