@@ -166,6 +166,7 @@ vice_enable_warnings(vice_editor_ui)
 add_executable(
   vice_editor
   app.cpp
+  src/physics_debug_renderer.cpp
   src/resource_mesh_renderer.cpp
   src/scene_renderer.cpp
 )
