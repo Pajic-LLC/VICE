@@ -146,6 +146,22 @@ constexpr std::string_view cube_id_text = "10000000-0000-4000-8000-000000000002"
 #endif
 }
 
+[[nodiscard]] bool route_event_to_scene(
+    const vice::platform::Event& event,
+    const vice::editor::SceneViewport& viewport
+) {
+    return std::visit(
+        [&](const auto& payload) {
+            using Payload = std::decay_t<decltype(payload)>;
+            if constexpr (std::is_same_v<Payload, vice::platform::MouseButtonEvent>) {
+                return !payload.pressed || viewport.hovered;
+            }
+            return true;
+        },
+        event.payload
+    );
+}
+
 } // namespace
 
 int main() {
@@ -248,7 +264,9 @@ int main() {
         vice::platform::Event event{vice::platform::QuitRequested{}};
         while (platform_services->poll_event(event)) {
             ui.handle_event(event);
-            scene_renderer.handle_event(event, active_viewport, world, selection);
+            if (route_event_to_scene(event, active_viewport)) {
+                scene_renderer.handle_event(event, active_viewport, world, selection);
+            }
 
             std::visit(
                 [&](const auto& payload) {
