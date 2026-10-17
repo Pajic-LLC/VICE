@@ -60,6 +60,8 @@ void test_inspector_projection() {
     const auto spatial_id = fixed_id(1);
     const auto plain_id = fixed_id(2);
     const auto kind_id = fixed_id(3);
+    const auto mesh_id = vice::world::ResourceId{fixed_id(4)};
+    assert(world.create_resource(mesh_id).has_value());
     const auto spatial = world.create_entity(spatial_id);
     const auto plain = world.create_entity(plain_id);
     assert(spatial.has_value());
@@ -73,6 +75,10 @@ void test_inspector_projection() {
         .scale = {2.0F, 1.5F, 0.75F},
     };
     assert(world.set_authored_transform(*spatial, authored));
+    assert(world.set_resource_reference(*spatial, vice::world::ResourceReference{
+        .role = vice::world::ResourceRole::render_mesh,
+        .resource = mesh_id,
+    }));
     assert(world.add_relation(vice::world::Relation{
         .subject = *spatial,
         .kind = kind_id,
@@ -84,6 +90,8 @@ void test_inspector_projection() {
     assert(spatial_inspector->entity == spatial);
     assert(spatial_inspector->spatial_state.has_value());
     assert(spatial_inspector->authored_transform == std::optional{authored});
+    assert(spatial_inspector->resource_references.size() == 1U);
+    assert(spatial_inspector->resource_references.front().resource == mesh_id);
     assert(spatial_inspector->region.has_value());
     assert(spatial_inspector->region->id == region_id);
     assert(spatial_inspector->simulation_island == vice::world::SimulationIslandId{70});
@@ -94,6 +102,7 @@ void test_inspector_projection() {
     assert(plain_inspector.has_value());
     assert(!plain_inspector->spatial_state.has_value());
     assert(!plain_inspector->authored_transform.has_value());
+    assert(plain_inspector->resource_references.empty());
     assert(!plain_inspector->region.has_value());
     assert(!plain_inspector->simulation_island.has_value());
     assert(!plain_inspector->streaming_cell.has_value());
@@ -198,6 +207,72 @@ void test_transform_history() {
     assert(editor::capture_entity_transform(world, persistent_id) == std::optional{moved});
 }
 
+void test_mesh_instance_history() {
+    using namespace vice;
+
+    world::World world;
+    const world::RegionDesc region{
+        .id = world::RegionId{1},
+        .simulation_island = world::SimulationIslandId{1},
+        .origin = {},
+        .streaming_cell = {},
+        .fidelity = world::RegionFidelity::full,
+        .bounds = world::RegionBounds{
+            .min = {-10.0F, -10.0F, -10.0F},
+            .max = {10.0F, 10.0F, 10.0F},
+        },
+    };
+    assert(world.register_region(region));
+
+    const world::ResourceId mesh_resource{fixed_id(70)};
+    editor::TransformHistory history;
+    history.mark_saved();
+    std::string diagnostics;
+    const auto created_id = editor::create_mesh_instance(
+        world,
+        history,
+        mesh_resource,
+        world::GlobalPosition{1.0, 2.0, 3.0},
+        &diagnostics
+    );
+    assert(created_id.has_value());
+    assert(diagnostics.empty());
+    assert(world.resource_count() == 1U);
+    const auto created_entity = world.find(*created_id);
+    assert(created_entity.has_value());
+    assert(world.resource_reference(*created_entity, world::ResourceRole::render_mesh) ==
+        std::optional{mesh_resource});
+    assert(history.undo_label() == "Add Mesh Instance");
+
+    const auto before_move = editor::capture_entity_transform(world, *created_id);
+    assert(before_move.has_value());
+    auto moved = *before_move;
+    moved.spatial_state.global_position.x = 4.0;
+    assert(editor::apply_entity_transform(world, *created_id, moved));
+    assert(history.record(editor::TransformHistory::Entry{
+        .persistent_id = *created_id,
+        .before = *before_move,
+        .after = moved,
+        .label = "Move Entity",
+    }));
+
+    assert(history.undo(world));
+    assert(editor::capture_entity_transform(world, *created_id) == before_move);
+    assert(history.undo(world));
+    assert(!world.find(*created_id).has_value());
+    assert(!world.find_resource(mesh_resource).has_value());
+
+    assert(history.redo(world));
+    const auto recreated = world.find(*created_id);
+    assert(recreated.has_value());
+    assert(world.resource_reference(*recreated, world::ResourceRole::render_mesh) ==
+        std::optional{mesh_resource});
+    assert(editor::capture_entity_transform(world, *created_id) == before_move);
+
+    assert(history.redo(world));
+    assert(editor::capture_entity_transform(world, *created_id) == std::optional{moved});
+}
+
 void test_console_history() {
     using namespace vice::core;
 
@@ -269,6 +344,7 @@ int main() {
     test_hierarchy_is_deterministic();
     test_inspector_projection();
     test_transform_history();
+    test_mesh_instance_history();
     test_console_history();
     test_editor_state_does_not_mutate_world_snapshot();
     return 0;
