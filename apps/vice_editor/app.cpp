@@ -30,7 +30,6 @@
 #include <vice/world/world.hpp>
 
 #include <algorithm>
-#include <array>
 #include <chrono>
 #include <filesystem>
 #include <memory>
@@ -828,8 +827,8 @@ int main(const int argc, char** argv) {
 
             vice::render::RenderPassDesc pass;
             pass.clear_color = show_start_surface
-                ? std::array<float, 4>{0.018F, 0.022F, 0.030F, 1.0F}
-                : std::array<float, 4>{0.020F, 0.024F, 0.032F, 1.0F};
+                ? vice::render::Color{0.018F, 0.022F, 0.030F, 1.0F}
+                : vice::render::Color{0.020F, 0.024F, 0.032F, 1.0F};
             pass.depth_attachment = depth_target.get();
             pass.clear_depth = 1.0F;
             pass.clear_color_attachment = true;
