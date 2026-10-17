@@ -13,6 +13,7 @@ namespace vice::world {
 struct SnapshotEntity {
     PersistentId persistent_id{};
     std::optional<SpatialState> spatial_state;
+    std::optional<AuthoredTransform> authored_transform;
 };
 
 struct SnapshotRelation {

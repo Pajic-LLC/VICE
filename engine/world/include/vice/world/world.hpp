@@ -58,7 +58,11 @@ public:
     bool set_local_position(EntityId entity, LocalPosition position);
     bool handoff_spatial(EntityId entity, RegionId target_region);
 
+    bool set_authored_transform(EntityId entity, AuthoredTransform transform);
+    bool clear_authored_transform(EntityId entity);
+
     [[nodiscard]] std::optional<SpatialState> spatial_state(EntityId entity) const noexcept;
+    [[nodiscard]] std::optional<AuthoredTransform> authored_transform(EntityId entity) const noexcept;
     [[nodiscard]] std::optional<LocalPosition> local_position(EntityId entity) const noexcept;
     [[nodiscard]] std::optional<SimulationIslandId> simulation_island(EntityId entity) const noexcept;
     [[nodiscard]] std::optional<StreamingCellId> streaming_cell(EntityId entity) const noexcept;
@@ -70,6 +74,7 @@ private:
     struct Slot {
         PersistentId persistent_id;
         std::optional<SpatialState> spatial_state;
+        std::optional<AuthoredTransform> authored_transform;
         std::uint32_t generation = 1;
         bool alive = false;
     };

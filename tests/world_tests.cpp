@@ -50,6 +50,7 @@ void test_entity_lifetime_and_stale_handles() {
     assert(second.generation != first.generation);
     assert(world.alive(second));
     assert(!world.spatial_state(second).has_value());
+    assert(!world.authored_transform(second).has_value());
 }
 
 void test_persistent_identity_restore() {
@@ -239,6 +240,52 @@ void test_small_world_uses_same_spatial_api() {
     assert(world.remove_region(region.id));
 }
 
+void test_authored_transform_state() {
+    using namespace vice::world;
+
+    World world;
+    const RegionDesc region{
+        .id = RegionId{1},
+        .simulation_island = SimulationIslandId{1},
+        .origin = GlobalPosition{},
+        .streaming_cell = StreamingCellId{},
+        .fidelity = RegionFidelity::full,
+    };
+    assert(world.register_region(region));
+
+    const auto entity = world.create_entity();
+    const AuthoredTransform quarter_turn{
+        .rotation = {0.0F, 0.0F, 0.70710678F, 0.70710678F},
+        .scale = {1.5F, 2.0F, 0.75F},
+    };
+    assert(!world.set_authored_transform(entity, quarter_turn));
+
+    assert(world.set_spatial_state(entity, SpatialState{
+        .global_position = {1.0, 2.0, 3.0},
+        .region = region.id,
+    }));
+    assert(!world.set_authored_transform(entity, AuthoredTransform{
+        .rotation = {0.0F, 0.0F, 0.0F, 2.0F},
+    }));
+    assert(!world.set_authored_transform(entity, AuthoredTransform{
+        .scale = {1.0F, -1.0F, 1.0F},
+    }));
+
+    assert(world.set_authored_transform(entity, quarter_turn));
+    assert(world.authored_transform(entity) == std::optional{quarter_turn});
+
+    assert(world.handoff_spatial(entity, region.id));
+    assert(world.authored_transform(entity) == std::optional{quarter_turn});
+
+    assert(world.clear_authored_transform(entity));
+    assert(!world.authored_transform(entity).has_value());
+    assert(!world.clear_authored_transform(entity));
+
+    assert(world.set_authored_transform(entity, quarter_turn));
+    assert(world.clear_spatial_state(entity));
+    assert(!world.authored_transform(entity).has_value());
+}
+
 } // namespace
 
 int main() {
@@ -249,5 +296,6 @@ int main() {
     test_large_world_coordinate_conversion();
     test_region_registration_and_island_handoff();
     test_small_world_uses_same_spatial_api();
+    test_authored_transform_state();
     return 0;
 }

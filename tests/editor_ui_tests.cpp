@@ -36,6 +36,8 @@ void test_workspace_frame() {
 
     editor::SelectionModel selection;
     selection.select(persistent);
+    editor::TransformHistory history;
+    history.mark_saved();
     editor::ConsoleHistory console{16};
     console.push(core::LogRecord{core::LogLevel::info, "Editor UI test", {}});
 
@@ -55,6 +57,7 @@ void test_workspace_frame() {
     ui.draw(
         world,
         selection,
+        history,
         console,
         editor::UiStatus{
             .world_name = "Editor Test World",
@@ -68,7 +71,12 @@ void test_workspace_frame() {
     assert(scene.drawable());
     assert(scene.framebuffer_scale == 2.0F);
     assert(selection.selected() == persistent);
+    assert(!history.dirty());
+    assert(ui.transform_tool() == editor::TransformTool::move);
     assert(!ui.consume_quit_request());
+    assert(!ui.consume_save_request());
+    assert(!ui.consume_undo_request());
+    assert(!ui.consume_redo_request());
 }
 
 } // namespace

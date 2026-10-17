@@ -107,6 +107,7 @@ target_compile_definitions(
   vice_editor
   PRIVATE
     VICE_EDITOR_LAYOUT_FILE="${CMAKE_BINARY_DIR}/editor/vice_editor.ini"
+    VICE_EDITOR_SAVE_FILE="${CMAKE_BINARY_DIR}/editor/vice_editor_world.vworldc"
 )
 vice_enable_warnings(vice_editor)
 

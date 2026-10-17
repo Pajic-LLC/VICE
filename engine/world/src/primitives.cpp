@@ -188,6 +188,7 @@ WorldSnapshot World::snapshot() const {
         output.entities.push_back(SnapshotEntity{
             .persistent_id = slot.persistent_id,
             .spatial_state = slot.spatial_state,
+            .authored_transform = slot.authored_transform,
         });
     }
     std::sort(
@@ -243,7 +244,7 @@ bool World::restore(const WorldSnapshot& snapshot_data) {
         }
     }
 
-    for (const auto region_desc : snapshot_data.regions) {
+    for (const auto& region_desc : snapshot_data.regions) {
         if (!restored.register_region(region_desc)) {
             return false;
         }
@@ -256,6 +257,10 @@ bool World::restore(const WorldSnapshot& snapshot_data) {
         }
         if (entity_record.spatial_state.has_value() &&
             !restored.set_spatial_state(*entity, *entity_record.spatial_state)) {
+            return false;
+        }
+        if (entity_record.authored_transform.has_value() &&
+            !restored.set_authored_transform(*entity, *entity_record.authored_transform)) {
             return false;
         }
     }

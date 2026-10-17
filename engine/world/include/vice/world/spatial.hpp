@@ -27,6 +27,30 @@ struct LocalPosition {
     friend bool operator==(const LocalPosition&, const LocalPosition&) = default;
 };
 
+struct AuthoredRotation {
+    float x = 0.0F;
+    float y = 0.0F;
+    float z = 0.0F;
+    float w = 1.0F;
+
+    friend bool operator==(const AuthoredRotation&, const AuthoredRotation&) = default;
+};
+
+struct AuthoredScale {
+    float x = 1.0F;
+    float y = 1.0F;
+    float z = 1.0F;
+
+    friend bool operator==(const AuthoredScale&, const AuthoredScale&) = default;
+};
+
+struct AuthoredTransform {
+    AuthoredRotation rotation{};
+    AuthoredScale scale{};
+
+    friend bool operator==(const AuthoredTransform&, const AuthoredTransform&) = default;
+};
+
 struct RegionId {
     std::uint64_t value = 0;
 
@@ -86,6 +110,8 @@ struct RegionDesc {
 struct SpatialState {
     GlobalPosition global_position{};
     RegionId region{};
+
+    friend bool operator==(const SpatialState&, const SpatialState&) = default;
 };
 
 struct SpatialReference {
@@ -99,6 +125,33 @@ struct SpatialReference {
 
 [[nodiscard]] inline bool finite(const LocalPosition value) noexcept {
     return std::isfinite(value.x) && std::isfinite(value.y) && std::isfinite(value.z);
+}
+
+[[nodiscard]] inline bool finite(const AuthoredRotation value) noexcept {
+    return std::isfinite(value.x) && std::isfinite(value.y) &&
+        std::isfinite(value.z) && std::isfinite(value.w);
+}
+
+[[nodiscard]] inline bool finite(const AuthoredScale value) noexcept {
+    return std::isfinite(value.x) && std::isfinite(value.y) && std::isfinite(value.z);
+}
+
+[[nodiscard]] inline bool valid(const AuthoredRotation rotation) noexcept {
+    if (!finite(rotation)) {
+        return false;
+    }
+    const float length_squared =
+        rotation.x * rotation.x + rotation.y * rotation.y +
+        rotation.z * rotation.z + rotation.w * rotation.w;
+    return std::abs(length_squared - 1.0F) <= 0.001F;
+}
+
+[[nodiscard]] inline bool valid(const AuthoredScale scale) noexcept {
+    return finite(scale) && scale.x > 0.0F && scale.y > 0.0F && scale.z > 0.0F;
+}
+
+[[nodiscard]] inline bool valid(const AuthoredTransform& transform) noexcept {
+    return valid(transform.rotation) && valid(transform.scale);
 }
 
 [[nodiscard]] inline bool valid(const RegionBounds& bounds) noexcept {

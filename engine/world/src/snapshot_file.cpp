@@ -244,6 +244,16 @@ WorldSnapshotEncodeResult encode_world_snapshot(const WorldSnapshot& snapshot_da
             append_f64(payload, entity.spatial_state->global_position.z);
             append_u64(payload, entity.spatial_state->region.value);
         }
+        append_u8(payload, entity.authored_transform.has_value() ? 1U : 0U);
+        if (entity.authored_transform.has_value()) {
+            append_f32(payload, entity.authored_transform->rotation.x);
+            append_f32(payload, entity.authored_transform->rotation.y);
+            append_f32(payload, entity.authored_transform->rotation.z);
+            append_f32(payload, entity.authored_transform->rotation.w);
+            append_f32(payload, entity.authored_transform->scale.x);
+            append_f32(payload, entity.authored_transform->scale.y);
+            append_f32(payload, entity.authored_transform->scale.z);
+        }
     }
     for (const auto& relation : snapshot.relations) {
         append_id(payload, relation.subject);
@@ -293,7 +303,8 @@ WorldSnapshotDecodeResult decode_world_snapshot(const std::span<const std::byte>
         result.diagnostics = "World snapshot header is incomplete.";
         return result;
     }
-    if (version != world_snapshot_file_format_version) {
+    if (version < world_snapshot_file_min_supported_version ||
+        version > world_snapshot_file_format_version) {
         result.diagnostics = "World snapshot file version is not supported.";
         return result;
     }
@@ -390,6 +401,32 @@ WorldSnapshotDecodeResult decode_world_snapshot(const std::span<const std::byte>
                 return result;
             }
             entity.spatial_state = spatial;
+        }
+
+        if (version >= 2U) {
+            std::uint8_t has_authored_transform = 0;
+            if (!reader.read_u8(has_authored_transform)) {
+                result.diagnostics = "World snapshot ended inside entity authored transform metadata.";
+                return result;
+            }
+            if (has_authored_transform > 1U) {
+                result.diagnostics = "World snapshot contains invalid entity authored transform metadata.";
+                return result;
+            }
+            if (has_authored_transform != 0U) {
+                AuthoredTransform transform;
+                if (!reader.read_f32(transform.rotation.x) ||
+                    !reader.read_f32(transform.rotation.y) ||
+                    !reader.read_f32(transform.rotation.z) ||
+                    !reader.read_f32(transform.rotation.w) ||
+                    !reader.read_f32(transform.scale.x) ||
+                    !reader.read_f32(transform.scale.y) ||
+                    !reader.read_f32(transform.scale.z)) {
+                    result.diagnostics = "World snapshot ended inside entity authored transform.";
+                    return result;
+                }
+                entity.authored_transform = transform;
+            }
         }
         snapshot.entities.push_back(entity);
     }

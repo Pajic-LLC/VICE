@@ -33,6 +33,7 @@ EntityId World::allocate(const PersistentId persistent_id) {
     auto& slot = slots_[index];
     slot.persistent_id = persistent_id;
     slot.spatial_state.reset();
+    slot.authored_transform.reset();
     slot.alive = true;
 
     const EntityId entity{index, slot.generation};
@@ -50,6 +51,7 @@ bool World::destroy_entity(const EntityId entity) {
     persistent_lookup_.erase(slot.persistent_id);
     slot.persistent_id = PersistentId{};
     slot.spatial_state.reset();
+    slot.authored_transform.reset();
     slot.alive = false;
 
     ++slot.generation;
@@ -196,6 +198,7 @@ bool World::clear_spatial_state(const EntityId entity) {
         return false;
     }
     slots_[entity.index].spatial_state.reset();
+    slots_[entity.index].authored_transform.reset();
     return true;
 }
 
@@ -237,11 +240,34 @@ bool World::handoff_spatial(const EntityId entity, const RegionId target_region)
     return true;
 }
 
+bool World::set_authored_transform(const EntityId entity, const AuthoredTransform transform) {
+    if (!alive(entity) || !slots_[entity.index].spatial_state.has_value() || !valid(transform)) {
+        return false;
+    }
+    slots_[entity.index].authored_transform = transform;
+    return true;
+}
+
+bool World::clear_authored_transform(const EntityId entity) {
+    if (!alive(entity) || !slots_[entity.index].authored_transform.has_value()) {
+        return false;
+    }
+    slots_[entity.index].authored_transform.reset();
+    return true;
+}
+
 std::optional<SpatialState> World::spatial_state(const EntityId entity) const noexcept {
     if (!alive(entity)) {
         return std::nullopt;
     }
     return slots_[entity.index].spatial_state;
+}
+
+std::optional<AuthoredTransform> World::authored_transform(const EntityId entity) const noexcept {
+    if (!alive(entity)) {
+        return std::nullopt;
+    }
+    return slots_[entity.index].authored_transform;
 }
 
 std::optional<LocalPosition> World::local_position(const EntityId entity) const noexcept {
