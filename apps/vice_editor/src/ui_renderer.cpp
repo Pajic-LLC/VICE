@@ -474,7 +474,7 @@ bool UiRhiRenderer::render(
             .width = static_cast<float>(framebuffer_width),
             .height = static_cast<float>(framebuffer_height),
         }) ||
-        !commands.set_scissor(render::ScissorRect{
+        !commands.set_scissor_rect(render::ScissorRect{
             .x = 0,
             .y = 0,
             .width = framebuffer_width,
@@ -535,7 +535,7 @@ bool UiRhiRenderer::render(
             const auto top = static_cast<std::int32_t>(std::floor(clip_min_y));
             const auto right = static_cast<std::uint32_t>(std::ceil(clip_max_x));
             const auto bottom = static_cast<std::uint32_t>(std::ceil(clip_max_y));
-            if (!commands.set_scissor(render::ScissorRect{
+            if (!commands.set_scissor_rect(render::ScissorRect{
                     .x = left,
                     .y = top,
                     .width = right - static_cast<std::uint32_t>(left),
