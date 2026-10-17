@@ -70,8 +70,9 @@ void inspector_property(const char* name, const std::string& value) {
     std::error_code error;
     if (!root.empty()) {
         const auto relative = std::filesystem::relative(path, root, error);
-        if (!error && !relative.empty() && relative.native().find("..") != 0U) {
-            return relative.generic_string();
+        if (!error && !relative.empty()) {
+            const std::string relative_text = relative.generic_string();
+            if (!relative_text.starts_with("..")) return relative_text;
         }
     }
     return path.generic_string();
