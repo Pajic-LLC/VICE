@@ -37,6 +37,7 @@ add_library(
   vice_editor_project_workflow
   STATIC
     src/project_workflow.cpp
+    src/recent_projects.cpp
 )
 
 add_library(VICE::EditorProjectWorkflow ALIAS vice_editor_project_workflow)
@@ -162,6 +163,7 @@ add_library(
   STATIC
     src/physics_debug_ui.cpp
     src/profiler_ui.cpp
+    src/project_launcher_ui.cpp
     src/resource_browser_ui.cpp
     src/ui.cpp
     src/ui_renderer.cpp
