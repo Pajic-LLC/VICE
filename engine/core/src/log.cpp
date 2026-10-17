@@ -1,8 +1,10 @@
 #include <vice/core/log.hpp>
 
+#include <algorithm>
 #include <iostream>
 #include <mutex>
 #include <utility>
+#include <vector>
 
 namespace vice::core {
 namespace {
@@ -18,9 +20,16 @@ void default_log_sink(const LogRecord& record) {
     stream << '\n';
 }
 
+struct ObserverEntry {
+    LogObserverId id = invalid_log_observer_id;
+    LogSink sink;
+};
+
 struct LoggerState {
     std::mutex mutex;
     LogSink sink = default_log_sink;
+    std::vector<ObserverEntry> observers;
+    LogObserverId next_observer_id = 1;
 #ifdef NDEBUG
     LogLevel minimum = LogLevel::info;
 #else
@@ -64,6 +73,36 @@ void reset_log_sink() {
     set_log_sink(default_log_sink);
 }
 
+LogObserverId add_log_observer(LogSink observer) {
+    if (!observer) {
+        return invalid_log_observer_id;
+    }
+
+    auto& state = logger_state();
+    std::scoped_lock lock{state.mutex};
+
+    const auto observer_id = state.next_observer_id++;
+    if (state.next_observer_id == invalid_log_observer_id) {
+        state.next_observer_id = 1;
+    }
+    state.observers.push_back(ObserverEntry{observer_id, std::move(observer)});
+    return observer_id;
+}
+
+bool remove_log_observer(const LogObserverId observer_id) {
+    if (observer_id == invalid_log_observer_id) {
+        return false;
+    }
+
+    auto& state = logger_state();
+    std::scoped_lock lock{state.mutex};
+    const auto previous_size = state.observers.size();
+    std::erase_if(state.observers, [observer_id](const ObserverEntry& entry) {
+        return entry.id == observer_id;
+    });
+    return state.observers.size() != previous_size;
+}
+
 void set_min_log_level(const LogLevel level) noexcept {
     auto& state = logger_state();
     std::scoped_lock lock{state.mutex};
@@ -78,6 +117,7 @@ LogLevel min_log_level() noexcept {
 
 void log(const LogLevel level, const std::string_view message, const std::source_location source) {
     LogSink sink;
+    std::vector<LogSink> observers;
 
     {
         auto& state = logger_state();
@@ -88,9 +128,17 @@ void log(const LogLevel level, const std::string_view message, const std::source
         }
 
         sink = state.sink;
+        observers.reserve(state.observers.size());
+        for (const auto& observer : state.observers) {
+            observers.push_back(observer.sink);
+        }
     }
 
-    sink(LogRecord{level, std::string{message}, source});
+    const LogRecord record{level, std::string{message}, source};
+    sink(record);
+    for (const auto& observer : observers) {
+        observer(record);
+    }
 }
 
 } // namespace vice::core
