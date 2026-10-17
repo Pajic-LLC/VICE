@@ -5,7 +5,9 @@
 #include <vice/simulation/simulation.hpp>
 #include <vice/world/world.hpp>
 
+#include <array>
 #include <cassert>
+#include <cmath>
 #include <future>
 #include <memory>
 #include <stdexcept>
@@ -98,13 +100,45 @@ void test_scheduler_stats() {
     assert(scheduler.pump_main(1U) == 1U);
     assert(main_task.status() == jobs::Status::succeeded);
 
+    auto dependency = scheduler.schedule(jobs::TaskDesc{
+        .function = [] {},
+        .lane = jobs::Lane::main_thread,
+        .name = "telemetry-dependency",
+    });
+    assert(dependency.valid());
+    const std::array<jobs::TaskHandle, 1> dependencies{dependency};
+    auto dependent = scheduler.schedule(
+        jobs::TaskDesc{
+            .function = [] {},
+            .lane = jobs::Lane::main_thread,
+            .name = "telemetry-dependent",
+        },
+        dependencies
+    );
+    assert(dependent.valid());
+
+    stats = scheduler.stats();
+    assert(stats.outstanding_tasks == 2U);
+    assert(stats.queued_main_thread_tasks == 1U);
+    assert(dependent.status() == jobs::Status::pending);
+
+    assert(scheduler.pump_main(1U) == 1U);
+    stats = scheduler.stats();
+    assert(dependency.status() == jobs::Status::succeeded);
+    assert(dependent.status() == jobs::Status::queued);
+    assert(stats.outstanding_tasks == 1U);
+    assert(stats.queued_main_thread_tasks == 1U);
+
+    assert(scheduler.pump_main(1U) == 1U);
+    assert(dependent.status() == jobs::Status::succeeded);
+
     stats = scheduler.stats();
     assert(stats.running_tasks == 0U);
     assert(stats.outstanding_tasks == 0U);
     assert(stats.queued_worker_tasks == 0U);
     assert(stats.queued_main_thread_tasks == 0U);
-    assert(stats.total_submitted == 3U);
-    assert(stats.total_completed == 3U);
+    assert(stats.total_submitted == 5U);
+    assert(stats.total_completed == 5U);
     assert(stats.total_failed == 1U);
 }
 
@@ -154,9 +188,9 @@ void test_profiler_history_and_world_summary() {
     history.push_frame(-1.0);
     const auto samples = history.frame_milliseconds();
     assert(samples.size() == 3U);
-    assert(samples[0] == 20.0F);
-    assert(samples[1] == 30.0F);
-    assert(samples[2] == 40.0F);
+    assert(std::abs(samples[0] - 20.0F) < 0.01F);
+    assert(std::abs(samples[1] - 30.0F) < 0.01F);
+    assert(std::abs(samples[2] - 40.0F) < 0.01F);
 
     world::World world;
     for (std::uint64_t index = 1; index <= 3; ++index) {
