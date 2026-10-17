@@ -1,4 +1,5 @@
 #include <vice/editor/project_session.hpp>
+#include <vice/editor/project_workflow.hpp>
 
 #include <vice/world/persistent_id.hpp>
 
@@ -6,6 +7,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <sstream>
 #include <string>
 #include <string_view>
 
@@ -33,6 +35,66 @@ void require(const bool condition, const std::string_view message) {
     std::filesystem::create_directories(root / "project" / "assets" / "worlds", error);
     require(!error, "temporary project directories");
     return root;
+}
+
+void test_project_creation(const std::filesystem::path& root) {
+    using namespace vice;
+
+    const auto parent = root / "created";
+    std::error_code error;
+    std::filesystem::create_directories(parent, error);
+    require(!error, "project creation parent");
+
+    const auto stable_id = project::ProjectId::parse("41000000-0000-4000-8000-000000000126");
+    require(stable_id.has_value(), "project creation fixed id");
+
+    editor::ProjectCreateRequest request;
+    request.name = "Starter Game";
+    request.parent_directory = parent;
+    request.project_id = *stable_id;
+    const auto created = editor::create_project(request);
+    require(static_cast<bool>(created), "project creation succeeds");
+    require(created.project_id == *stable_id, "project creation stable id");
+    require(
+        created.manifest_path == (parent / "Starter Game" / "vice.viceproj").lexically_normal(),
+        "project creation manifest path"
+    );
+
+    const auto loaded = project::load_manifest(created.manifest_path);
+    require(loaded.manifest.has_value(), "created manifest reload");
+    require(loaded.manifest->id == *stable_id, "created manifest id");
+    require(loaded.manifest->name == "Starter Game", "created manifest name");
+    require(loaded.manifest->asset_root == std::filesystem::path{"assets"}, "created asset root");
+    require(
+        loaded.manifest->startup_world == std::filesystem::path{"worlds/main.vworld"},
+        "created startup World path"
+    );
+
+    const auto starter_world = parent / "Starter Game" / "assets" / "worlds" / "main.vworld";
+    std::ifstream world_input{starter_world, std::ios::binary};
+    require(static_cast<bool>(world_input), "created starter World exists");
+    std::ostringstream world_text;
+    world_text << world_input.rdbuf();
+    require(world_text.str().find("vice-world-source 1") != std::string::npos, "starter World header");
+    require(world_text.str().find("region 1 1") != std::string::npos, "starter World region");
+
+    std::string diagnostics;
+    const auto session = editor::ProjectSession::open(
+        created.manifest_path,
+        root / "created-cache",
+        root / "created-state",
+        &diagnostics
+    );
+    require(session.has_value(), "created project session opens");
+    require(diagnostics.empty(), "created project session diagnostics");
+    require(session->manifest().id == *stable_id, "created session identity");
+
+    editor::ProjectCreateRequest invalid;
+    invalid.name = "Broken/Game";
+    invalid.parent_directory = parent;
+    const auto rejected = editor::create_project(invalid);
+    require(!static_cast<bool>(rejected), "invalid project creation rejected");
+    require(!std::filesystem::exists(parent / "Broken"), "failed project creation leaves no destination");
 }
 
 void test_project_session(const std::filesystem::path& root) {
@@ -191,6 +253,7 @@ void test_world_document(const std::filesystem::path& root) {
 
 int main() {
     const auto root = make_temp_root();
+    test_project_creation(root);
     test_project_session(root);
     test_world_document(root);
 
