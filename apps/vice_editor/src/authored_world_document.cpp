@@ -4,8 +4,11 @@
 
 #include <filesystem>
 #include <fstream>
+#include <optional>
 #include <sstream>
 #include <string>
+#include <system_error>
+#include <utility>
 
 namespace vice::editor {
 namespace {
