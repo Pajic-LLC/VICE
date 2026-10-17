@@ -36,9 +36,7 @@ constexpr std::string_view cube_id_text = "10000000-0000-4000-8000-000000000002"
     vice::render::Device& device,
     const vice::platform::WindowMetrics metrics
 ) {
-    if (metrics.drawable_width == 0U || metrics.drawable_height == 0U) {
-        return nullptr;
-    }
+    if (metrics.drawable_width == 0U || metrics.drawable_height == 0U) return nullptr;
     vice::render::TextureDesc desc;
     desc.dimension = vice::render::TextureDimension::d2;
     desc.width = metrics.drawable_width;
@@ -76,20 +74,14 @@ constexpr std::string_view cube_id_text = "10000000-0000-4000-8000-000000000002"
         .max = {8.0F, 32.0F, 32.0F},
     };
 
-    if (!world.register_region(region_a) || !world.register_region(region_b)) {
-        return false;
-    }
+    if (!world.register_region(region_a) || !world.register_region(region_b)) return false;
 
     const auto player_id = vice::world::PersistentId::parse(player_id_text);
     const auto cube_id = vice::world::PersistentId::parse(cube_id_text);
-    if (!player_id.has_value() || !cube_id.has_value()) {
-        return false;
-    }
+    if (!player_id.has_value() || !cube_id.has_value()) return false;
     const auto player = world.create_entity(*player_id);
     const auto cube = world.create_entity(*cube_id);
-    if (!player.has_value() || !cube.has_value()) {
-        return false;
-    }
+    if (!player.has_value() || !cube.has_value()) return false;
     return world.set_spatial_state(
         *player,
         vice::world::SpatialState{
@@ -105,7 +97,42 @@ constexpr std::string_view cube_id_text = "10000000-0000-4000-8000-000000000002"
     );
 }
 
-[[nodiscard]] bool load_editor_world(vice::world::World& world) {
+[[nodiscard]] std::filesystem::path editor_save_path() {
+#if defined(VICE_EDITOR_SAVE_FILE)
+    return std::filesystem::path{VICE_EDITOR_SAVE_FILE};
+#else
+    return {};
+#endif
+}
+
+[[nodiscard]] bool load_editor_world(
+    vice::world::World& world,
+    const std::filesystem::path& save_path
+) {
+    if (!save_path.empty()) {
+        std::error_code error;
+        const bool save_exists = std::filesystem::exists(save_path, error);
+        if (error) {
+            vice::core::log(
+                vice::core::LogLevel::error,
+                "VICE Editor could not inspect its saved World: " + error.message()
+            );
+            return false;
+        }
+        if (save_exists) {
+            const auto loaded = vice::world::load_world_snapshot(save_path);
+            if (!loaded.snapshot.has_value() || !world.restore(*loaded.snapshot)) {
+                vice::core::log(
+                    vice::core::LogLevel::error,
+                    "VICE Editor saved World is invalid: " + loaded.diagnostics
+                );
+                return false;
+            }
+            vice::core::log(vice::core::LogLevel::info, "VICE Editor restored the saved World.");
+            return true;
+        }
+    }
+
 #if defined(VICE_EDITOR_COOKED_WORLD)
     const auto loaded = vice::world::load_world_snapshot(VICE_EDITOR_COOKED_WORLD);
     if (!loaded.snapshot.has_value() || !world.restore(*loaded.snapshot)) {
@@ -211,16 +238,17 @@ int main() {
         return 1;
     }
 
+    const std::filesystem::path save_path = editor_save_path();
     vice::world::World world;
-    if (!load_editor_world(world)) {
-        return 1;
-    }
+    if (!load_editor_world(world, save_path)) return 1;
 
     vice::editor::SelectionModel selection;
     if (const auto cube_id = vice::world::PersistentId::parse(cube_id_text); cube_id.has_value() &&
         world.find(*cube_id).has_value()) {
         selection.select(*cube_id);
     }
+    vice::editor::TransformHistory history;
+    history.mark_saved();
 
     const std::filesystem::path layout_path = editor_layout_path();
     if (!layout_path.empty()) {
@@ -236,11 +264,7 @@ int main() {
     vice::editor::detail::SceneRenderer scene_renderer;
     if (!ui.valid() ||
         !ui_renderer.initialize(*render_device, swapchain->color_format()) ||
-        !scene_renderer.initialize(
-            *render_device,
-            swapchain->color_format(),
-            editor_mesh_path()
-        )) {
+        !scene_renderer.initialize(*render_device, swapchain->color_format(), editor_mesh_path())) {
         log(LogLevel::error, "VICE Editor could not initialize its visual workspace.");
         return 1;
     }
@@ -252,8 +276,7 @@ int main() {
 
     log(
         LogLevel::info,
-        "VICE Editor ready: " + std::to_string(world.entity_count()) + " World entities, " +
-            status.render_backend
+        "VICE Editor ready: " + std::to_string(world.entity_count()) + " World entities, " + status.render_backend
     );
 
     vice::core::FrameClock clock;
@@ -265,7 +288,14 @@ int main() {
         while (platform_services->poll_event(event)) {
             ui.handle_event(event);
             if (route_event_to_scene(event, active_viewport)) {
-                scene_renderer.handle_event(event, active_viewport, world, selection);
+                scene_renderer.handle_event(
+                    event,
+                    active_viewport,
+                    world,
+                    selection,
+                    history,
+                    ui.transform_tool()
+                );
             }
 
             std::visit(
@@ -277,9 +307,7 @@ int main() {
                     ) {
                         running = false;
                     } else if constexpr (std::is_same_v<Payload, vice::platform::WindowMetricsChanged>) {
-                        if (payload.metrics.drawable_width == 0U || payload.metrics.drawable_height == 0U) {
-                            return;
-                        }
+                        if (payload.metrics.drawable_width == 0U || payload.metrics.drawable_height == 0U) return;
                         if (!render_device->wait_idle() || !swapchain->resize(payload.metrics)) {
                             log(LogLevel::error, "VICE Editor could not resize the swapchain.");
                             running = false;
@@ -298,9 +326,7 @@ int main() {
             );
         }
 
-        if (!running || ui.consume_quit_request()) {
-            break;
-        }
+        if (!running || ui.consume_quit_request()) break;
 
         (void)jobs.pump_main(64);
         clock.tick();
@@ -317,9 +343,29 @@ int main() {
             log(LogLevel::error, "VICE Editor could not begin a UI frame.");
             break;
         }
-        ui.draw(world, selection, console, status);
+        ui.draw(world, selection, history, console, status);
         ui.end_frame();
         active_viewport = ui.scene_viewport();
+
+        if (ui.consume_undo_request() && history.can_undo() && !history.undo(world)) {
+            log(LogLevel::error, "VICE Editor could not undo the last transform edit.");
+        }
+        if (ui.consume_redo_request() && history.can_redo() && !history.redo(world)) {
+            log(LogLevel::error, "VICE Editor could not redo the next transform edit.");
+        }
+        if (ui.consume_save_request()) {
+            if (save_path.empty()) {
+                log(LogLevel::error, "VICE Editor has no configured World save path.");
+            } else {
+                std::string diagnostics;
+                if (vice::world::save_world_snapshot(save_path, world.snapshot(), &diagnostics)) {
+                    history.mark_saved();
+                    log(LogLevel::info, "VICE Editor saved the World.");
+                } else {
+                    log(LogLevel::error, "VICE Editor could not save the World: " + diagnostics);
+                }
+            }
+        }
 
         auto commands = render_device->create_command_list();
         if (!commands) {
@@ -336,7 +382,14 @@ int main() {
 
         if (!commands->begin_render_pass(*swapchain, pass) ||
             (active_viewport.drawable() &&
-                !scene_renderer.render(world, selection, *commands, active_viewport, metrics)) ||
+                !scene_renderer.render(
+                    world,
+                    selection,
+                    ui.transform_tool(),
+                    *commands,
+                    active_viewport,
+                    metrics
+                )) ||
             !ui_renderer.render(*render_device, *commands, metrics) ||
             !commands->end_render_pass() ||
             !commands->present(*swapchain) ||
