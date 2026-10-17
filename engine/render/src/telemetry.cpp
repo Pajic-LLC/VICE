@@ -26,7 +26,7 @@ DeviceStats InstrumentedDevice::stats() const noexcept {
 }
 
 Backend InstrumentedDevice::backend() const noexcept {
-    return device_ != nullptr ? device_->backend() : Backend::unknown;
+    return device_->backend();
 }
 
 DeviceCapabilities InstrumentedDevice::capabilities() const noexcept {
