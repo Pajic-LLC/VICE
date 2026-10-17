@@ -128,7 +128,7 @@ relation 10000000-0000-4000-8000-000000000001 40000000-0000-4000-8000-0000000000
     assert(parsed.snapshot->regions[1].bounds.has_value());
     assert(!parsed.snapshot->entities[0].authored_transform.has_value());
     assert(parsed.snapshot->entities[1].authored_transform.has_value());
-    assert(parsed.snapshot->entities[1].authored_transform->scale == world::AuthoredScale{1.5F, 2.0F, 0.75F});
+    assert((parsed.snapshot->entities[1].authored_transform->scale == world::AuthoredScale{1.5F, 2.0F, 0.75F}));
 
     const auto encoded = world::encode_world_snapshot(*parsed.snapshot);
     assert(encoded);
@@ -168,7 +168,7 @@ relation 10000000-0000-4000-8000-000000000001 40000000-0000-4000-8000-0000000000
     assert(restored.persistent_id(*cube) == cube_id);
     assert(!restored.authored_transform(*player).has_value());
     assert(restored.authored_transform(*cube).has_value());
-    assert(restored.authored_transform(*cube)->scale == world::AuthoredScale{1.5F, 2.0F, 0.75F});
+    assert((restored.authored_transform(*cube)->scale == world::AuthoredScale{1.5F, 2.0F, 0.75F}));
 
     const auto round_trip = world::encode_world_snapshot(restored.snapshot());
     assert(round_trip);
