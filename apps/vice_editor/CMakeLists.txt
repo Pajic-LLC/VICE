@@ -58,6 +58,31 @@ target_compile_features(vice_editor_asset_index PUBLIC cxx_std_23)
 vice_enable_warnings(vice_editor_asset_index)
 
 add_library(
+  vice_editor_profiler
+  STATIC
+    src/profiler.cpp
+)
+
+add_library(VICE::EditorProfiler ALIAS vice_editor_profiler)
+
+target_include_directories(
+  vice_editor_profiler
+  PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+)
+
+target_link_libraries(
+  vice_editor_profiler
+  PUBLIC
+    VICE::Jobs
+    VICE::Render
+    VICE::Simulation
+    VICE::World
+)
+target_compile_features(vice_editor_profiler PUBLIC cxx_std_23)
+vice_enable_warnings(vice_editor_profiler)
+
+add_library(
   vice_editor_imgui
   STATIC
     "${dearimgui_SOURCE_DIR}/imgui.cpp"
@@ -77,6 +102,7 @@ set_target_properties(vice_editor_imgui PROPERTIES FOLDER "Third Party")
 add_library(
   vice_editor_ui
   STATIC
+    src/profiler_ui.cpp
     src/resource_browser_ui.cpp
     src/ui.cpp
     src/ui_renderer.cpp
@@ -97,6 +123,7 @@ target_link_libraries(
   vice_editor_ui
   PUBLIC
     VICE::EditorAssetIndex
+    VICE::EditorProfiler
     VICE::EditorState
     VICE::Platform
     VICE::Render
@@ -129,6 +156,7 @@ target_link_libraries(
     VICE::Render
     VICE::World
     VICE::EditorAssetIndex
+    VICE::EditorProfiler
     VICE::EditorState
     VICE::EditorUi
 )
