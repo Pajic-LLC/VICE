@@ -184,6 +184,7 @@ target_link_libraries(
     VICE::Math
     VICE::Jobs
     VICE::Platform
+    VICE::Project
     VICE::Render
     VICE::World
     VICE::EditorAssetIndex
@@ -197,8 +198,9 @@ target_compile_definitions(
   vice_editor
   PRIVATE
     VICE_EDITOR_LAYOUT_FILE="${CMAKE_BINARY_DIR}/editor/vice_editor.ini"
-    VICE_EDITOR_SAVE_FILE="${CMAKE_BINARY_DIR}/editor/vice_editor_world.vworldc"
-    VICE_EDITOR_ASSET_SOURCE_ROOT="${PROJECT_SOURCE_DIR}/assets"
+    VICE_EDITOR_LEGACY_SAVE_FILE="${CMAKE_BINARY_DIR}/editor/vice_editor_world.vworldc"
+    VICE_EDITOR_STATE_ROOT="${CMAKE_BINARY_DIR}/editor/projects"
+    VICE_EDITOR_DEFAULT_PROJECT="${PROJECT_SOURCE_DIR}/vice.viceproj"
     VICE_EDITOR_ASSET_COOKED_ROOT="${CMAKE_BINARY_DIR}/editor_assets"
 )
 vice_enable_warnings(vice_editor)
@@ -219,9 +221,6 @@ if(VICE_BUILD_TOOLS)
         VERBATIM
       )
       list(APPEND _vice_editor_asset_outputs "${_output}")
-      if(_name STREQUAL "vice_lab")
-        set(_vice_editor_world_asset "${_output}")
-      endif()
     endforeach()
   endif()
 
@@ -276,13 +275,5 @@ if(VICE_BUILD_TOOLS)
   if(_vice_editor_asset_outputs)
     add_custom_target(vice_editor_asset_cache DEPENDS ${_vice_editor_asset_outputs})
     add_dependencies(vice_editor vice_editor_asset_cache)
-  endif()
-
-  if(DEFINED _vice_editor_world_asset)
-    target_compile_definitions(
-      vice_editor
-      PRIVATE
-        VICE_EDITOR_COOKED_WORLD="${_vice_editor_world_asset}"
-    )
   endif()
 endif()
