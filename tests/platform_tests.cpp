@@ -1,5 +1,6 @@
 #include <vice/platform/event.hpp>
 #include <vice/platform/native_window.hpp>
+#include <vice/platform/process.hpp>
 #include <vice/platform/window.hpp>
 
 #include <cassert>
@@ -32,6 +33,10 @@ int main() {
     assert(handle.system == NativeWindowSystem::unknown);
     assert(handle.window == nullptr);
     assert(handle.view == nullptr);
+
+    const auto invalid_process = launch_process(ProcessLaunchRequest{});
+    assert(!invalid_process);
+    assert(!invalid_process.diagnostics.empty());
 
     return 0;
 }

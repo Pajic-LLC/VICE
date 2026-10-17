@@ -56,6 +56,8 @@ public:
     [[nodiscard]] std::optional<ProjectCreateRequest> consume_new_project_request();
     [[nodiscard]] std::optional<std::filesystem::path> consume_open_project_request();
     [[nodiscard]] bool consume_open_development_project_request() noexcept;
+    [[nodiscard]] bool consume_build_project_request() noexcept;
+    [[nodiscard]] bool consume_run_project_request() noexcept;
     [[nodiscard]] bool consume_new_world_request() noexcept;
     [[nodiscard]] std::optional<std::filesystem::path> consume_open_world_request();
     [[nodiscard]] bool consume_save_world_request() noexcept;

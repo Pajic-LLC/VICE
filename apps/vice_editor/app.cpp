@@ -12,6 +12,7 @@
 #include <vice/editor/preview_runtime.hpp>
 #include <vice/editor/profiler.hpp>
 #include <vice/editor/profiler_ui.hpp>
+#include <vice/editor/project_build.hpp>
 #include <vice/editor/project_session.hpp>
 #include <vice/editor/project_workflow.hpp>
 #include <vice/editor/project_workflow_ui.hpp>
@@ -151,6 +152,14 @@ constexpr std::string_view cube_id_text = "10000000-0000-4000-8000-000000000002"
 [[nodiscard]] std::filesystem::path editor_legacy_save_path() {
 #if defined(VICE_EDITOR_LEGACY_SAVE_FILE)
     return std::filesystem::path{VICE_EDITOR_LEGACY_SAVE_FILE};
+#else
+    return {};
+#endif
+}
+
+[[nodiscard]] std::filesystem::path editor_player_executable() {
+#if defined(VICE_EDITOR_PLAYER_EXECUTABLE)
+    return std::filesystem::path{VICE_EDITOR_PLAYER_EXECUTABLE};
 #else
     return {};
 #endif
@@ -700,6 +709,44 @@ int main(const int argc, char** argv) {
 
             ui.end_frame();
             active_viewport = show_start_surface ? vice::editor::SceneViewport{} : ui.scene_viewport();
+
+            if (!show_start_surface && project_workflow_ui.consume_build_project_request()) {
+                const auto result = vice::editor::build_project(*project_session);
+                if (result) {
+                    workflow_diagnostics.clear();
+                    if (!assets.refresh(asset_source_root, cooked_asset_root)) {
+                        log(LogLevel::warning, "VICE Editor asset index: " + assets.diagnostics());
+                    }
+                    log(
+                        LogLevel::info,
+                        "VICE Editor built project " + project.name + " · " +
+                            result.cooked_startup_world.generic_string()
+                    );
+                } else {
+                    workflow_diagnostics = result.diagnostics;
+                    log(LogLevel::error, "VICE Editor could not build the project: " + result.diagnostics);
+                }
+            }
+
+            if (!show_start_surface && project_workflow_ui.consume_run_project_request()) {
+                const auto player_executable = editor_player_executable();
+                if (player_executable.empty()) {
+                    workflow_diagnostics = "VICE Player is not available in this editor build.";
+                    log(LogLevel::error, workflow_diagnostics);
+                } else {
+                    const auto result = vice::editor::run_project(*project_session, player_executable);
+                    if (result) {
+                        workflow_diagnostics.clear();
+                        if (!assets.refresh(asset_source_root, cooked_asset_root)) {
+                            log(LogLevel::warning, "VICE Editor asset index: " + assets.diagnostics());
+                        }
+                        log(LogLevel::info, "VICE Editor launched project " + project.name + ".");
+                    } else {
+                        workflow_diagnostics = result.diagnostics;
+                        log(LogLevel::error, "VICE Editor could not run the project: " + result.diagnostics);
+                    }
+                }
+            }
 
             if (project_workflow_ui.consume_open_development_project_request()) {
                 show_start_surface = false;
