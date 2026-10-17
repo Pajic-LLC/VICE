@@ -3,13 +3,18 @@
 
 #include <vice/world/snapshot_file.hpp>
 
+#include <algorithm>
 #include <fstream>
+#include <iomanip>
 #include <random>
+#include <sstream>
 #include <system_error>
 #include <utility>
 
 namespace vice::editor {
 namespace {
+
+constexpr std::size_t max_recent_projects = 8U;
 
 [[nodiscard]] std::filesystem::path absolute_normalized(
     const std::filesystem::path& path,
@@ -59,7 +64,102 @@ namespace {
     return true;
 }
 
+[[nodiscard]] std::optional<RecentProjectEntry> recent_entry(
+    const std::filesystem::path& manifest_path
+) {
+    std::error_code error;
+    const auto resolved = absolute_normalized(manifest_path, error);
+    if (error) return std::nullopt;
+    const auto loaded = project::load_manifest(resolved);
+    if (!loaded.manifest.has_value()) return std::nullopt;
+    return RecentProjectEntry{
+        .project_id = loaded.manifest->id,
+        .name = loaded.manifest->name,
+        .manifest_path = resolved,
+    };
+}
+
 } // namespace
+
+RecentProjects::RecentProjects(std::filesystem::path state_file)
+    : state_file_{std::move(state_file)} {}
+
+bool RecentProjects::load(std::string* const diagnostics) {
+    entries_.clear();
+    if (state_file_.empty()) {
+        if (diagnostics != nullptr) diagnostics->clear();
+        return true;
+    }
+
+    std::error_code error;
+    const bool exists = std::filesystem::exists(state_file_, error);
+    if (error) return fail(diagnostics, "Could not inspect recent-project state: " + error.message());
+    if (!exists) {
+        if (diagnostics != nullptr) diagnostics->clear();
+        return true;
+    }
+
+    std::ifstream input{state_file_, std::ios::binary};
+    if (!input) return fail(diagnostics, "Could not open recent-project state.");
+
+    std::string line;
+    while (entries_.size() < max_recent_projects && std::getline(input, line)) {
+        std::istringstream stream{line};
+        std::string path_text;
+        if (!(stream >> std::quoted(path_text))) continue;
+        stream >> std::ws;
+        if (!stream.eof()) continue;
+        const auto entry = recent_entry(std::filesystem::path{path_text});
+        if (!entry.has_value()) continue;
+        const bool duplicate = std::any_of(
+            entries_.begin(), entries_.end(),
+            [&](const RecentProjectEntry& existing) {
+                return existing.project_id == entry->project_id ||
+                    existing.manifest_path == entry->manifest_path;
+            }
+        );
+        if (!duplicate) entries_.push_back(*entry);
+    }
+    if (!input.eof() && input.fail()) {
+        return fail(diagnostics, "Could not read recent-project state.");
+    }
+    if (diagnostics != nullptr) diagnostics->clear();
+    return true;
+}
+
+bool RecentProjects::persist(std::string* const diagnostics) {
+    if (state_file_.empty()) return fail(diagnostics, "Recent-project state path is empty.");
+    std::error_code error;
+    const auto parent = state_file_.parent_path();
+    if (!parent.empty()) {
+        std::filesystem::create_directories(parent, error);
+        if (error) return fail(diagnostics, "Could not create recent-project state directory: " + error.message());
+    }
+
+    std::ofstream output{state_file_, std::ios::binary | std::ios::trunc};
+    if (!output) return fail(diagnostics, "Could not write recent-project state.");
+    for (const auto& entry : entries_) {
+        output << std::quoted(entry.manifest_path.generic_string()) << '\n';
+    }
+    if (!output) return fail(diagnostics, "Could not finish writing recent-project state.");
+    if (diagnostics != nullptr) diagnostics->clear();
+    return true;
+}
+
+bool RecentProjects::remember(
+    const std::filesystem::path& manifest_path,
+    std::string* const diagnostics
+) {
+    const auto entry = recent_entry(manifest_path);
+    if (!entry.has_value()) return fail(diagnostics, "Recent project is not a valid VICE project manifest.");
+
+    std::erase_if(entries_, [&](const RecentProjectEntry& existing) {
+        return existing.project_id == entry->project_id || existing.manifest_path == entry->manifest_path;
+    });
+    entries_.insert(entries_.begin(), *entry);
+    if (entries_.size() > max_recent_projects) entries_.resize(max_recent_projects);
+    return persist(diagnostics);
+}
 
 project::ProjectId generate_project_id() {
     std::random_device random;
