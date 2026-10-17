@@ -25,6 +25,7 @@ constexpr const char* inspector_window_name = "Inspector###VICE.Inspector";
 constexpr const char* console_window_name = "Console###VICE.Console";
 constexpr const char* host_window_name = "###VICE.EditorHost";
 constexpr const char* dockspace_name = "VICE.EditorDockspace";
+constexpr float pi = 3.14159265358979323846F;
 
 [[nodiscard]] ImGuiKey imgui_key(const platform::Key key) noexcept {
     using platform::Key;
@@ -152,23 +153,69 @@ void property_row(const char* label, const std::string& value) {
     ImGui::TextUnformatted(value.c_str());
 }
 
-[[nodiscard]] std::string format_position(const world::GlobalPosition position) {
-    char text[128]{};
-    std::snprintf(
-        text,
-        sizeof(text),
-        "%.3f, %.3f, %.3f",
-        position.x,
-        position.y,
-        position.z
-    );
-    return text;
-}
-
 [[nodiscard]] std::string format_cell(const world::StreamingCellId cell) {
     std::ostringstream stream;
     stream << cell.x << ", " << cell.y << ", " << cell.z;
     return stream.str();
+}
+
+[[nodiscard]] world::AuthoredTransform authored_or_identity(
+    const std::optional<world::AuthoredTransform>& transform
+) noexcept {
+    return transform.value_or(world::AuthoredTransform{});
+}
+
+[[nodiscard]] std::array<float, 3> quaternion_to_euler_degrees(
+    const world::AuthoredRotation rotation
+) noexcept {
+    const float sin_roll = 2.0F * (rotation.w * rotation.x + rotation.y * rotation.z);
+    const float cos_roll = 1.0F - 2.0F * (rotation.x * rotation.x + rotation.y * rotation.y);
+    const float roll = std::atan2(sin_roll, cos_roll);
+
+    const float sin_pitch = 2.0F * (rotation.w * rotation.y - rotation.z * rotation.x);
+    const float pitch = std::abs(sin_pitch) >= 1.0F
+        ? std::copysign(pi * 0.5F, sin_pitch)
+        : std::asin(sin_pitch);
+
+    const float sin_yaw = 2.0F * (rotation.w * rotation.z + rotation.x * rotation.y);
+    const float cos_yaw = 1.0F - 2.0F * (rotation.y * rotation.y + rotation.z * rotation.z);
+    const float yaw = std::atan2(sin_yaw, cos_yaw);
+
+    constexpr float radians_to_degrees = 180.0F / pi;
+    return {roll * radians_to_degrees, pitch * radians_to_degrees, yaw * radians_to_degrees};
+}
+
+[[nodiscard]] world::AuthoredRotation euler_degrees_to_quaternion(
+    const std::array<float, 3>& degrees
+) noexcept {
+    constexpr float degrees_to_radians = pi / 180.0F;
+    const float half_x = degrees[0] * degrees_to_radians * 0.5F;
+    const float half_y = degrees[1] * degrees_to_radians * 0.5F;
+    const float half_z = degrees[2] * degrees_to_radians * 0.5F;
+    const float sx = std::sin(half_x);
+    const float cx = std::cos(half_x);
+    const float sy = std::sin(half_y);
+    const float cy = std::cos(half_y);
+    const float sz = std::sin(half_z);
+    const float cz = std::cos(half_z);
+
+    world::AuthoredRotation result{
+        .x = sx * cy * cz - cx * sy * sz,
+        .y = cx * sy * cz + sx * cy * sz,
+        .z = cx * cy * sz - sx * sy * cz,
+        .w = cx * cy * cz + sx * sy * sz,
+    };
+    const float length = std::sqrt(
+        result.x * result.x + result.y * result.y +
+        result.z * result.z + result.w * result.w
+    );
+    if (length > 0.0F) {
+        result.x /= length;
+        result.y /= length;
+        result.z /= length;
+        result.w /= length;
+    }
+    return result;
 }
 
 [[nodiscard]] ImVec4 level_color(const core::LogLevel level) noexcept {
@@ -199,6 +246,27 @@ void filter_button(
     if (selected) {
         ImGui::PopStyleColor(2);
     }
+}
+
+[[nodiscard]] bool tool_button(
+    const char* label,
+    const TransformTool value,
+    TransformTool& current
+) {
+    const bool selected = current == value;
+    if (selected) {
+        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4{0.16F, 0.43F, 0.65F, 1.00F});
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4{0.20F, 0.51F, 0.76F, 1.00F});
+        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4{0.96F, 0.98F, 1.00F, 1.00F});
+    }
+    const bool clicked = ImGui::SmallButton(label);
+    if (selected) {
+        ImGui::PopStyleColor(3);
+    }
+    if (clicked) {
+        current = value;
+    }
+    return clicked;
 }
 
 void build_default_dock_layout(const ImGuiID dockspace_id, const ImVec2 dock_size) {
@@ -232,13 +300,20 @@ struct EditorUi::State {
     bool frame_active = false;
     bool reset_layout = false;
     bool quit_requested = false;
+    bool save_requested = false;
+    bool undo_requested = false;
+    bool redo_requested = false;
     bool show_hierarchy = true;
     bool show_scene = true;
     bool show_inspector = true;
     bool show_console = true;
+    TransformTool transform_tool = TransformTool::move;
     std::array<char, 128> hierarchy_filter{};
     core::LogLevel console_minimum = core::LogLevel::trace;
     std::uint64_t last_console_sequence = 0;
+    std::optional<world::PersistentId> inspector_edit_id;
+    std::optional<EntityTransformState> inspector_edit_before;
+    std::string inspector_edit_label;
 };
 
 EditorUi::EditorUi(std::filesystem::path layout_path)
@@ -288,7 +363,7 @@ void EditorUi::handle_event(const platform::Event& event) {
     auto& io = ImGui::GetIO();
 
     std::visit(
-        [&io](const auto& payload) {
+        [&](const auto& payload) {
             using Payload = std::decay_t<decltype(payload)>;
             if constexpr (std::is_same_v<Payload, platform::WindowFocusChanged>) {
                 io.AddFocusEvent(payload.focused);
@@ -302,6 +377,23 @@ void EditorUi::handle_event(const platform::Event& event) {
                         static_cast<int>(payload.native_code),
                         static_cast<int>(payload.native_code)
                     );
+                }
+
+                if (payload.pressed && !payload.repeat) {
+                    const bool command =
+                        platform::has_modifier(payload.modifiers, platform::Modifier::control) ||
+                        platform::has_modifier(payload.modifiers, platform::Modifier::super);
+                    const bool shift = platform::has_modifier(payload.modifiers, platform::Modifier::shift);
+                    if (command && payload.key == platform::Key::s) {
+                        state_->save_requested = true;
+                    } else if (command && payload.key == platform::Key::z && !io.WantTextInput) {
+                        if (shift) state_->redo_requested = true;
+                        else state_->undo_requested = true;
+                    } else if (!command && !shift && !io.WantTextInput && state_->scene_viewport.focused) {
+                        if (payload.key == platform::Key::w) state_->transform_tool = TransformTool::move;
+                        if (payload.key == platform::Key::e) state_->transform_tool = TransformTool::rotate;
+                        if (payload.key == platform::Key::r) state_->transform_tool = TransformTool::scale;
+                    }
                 }
             } else if constexpr (std::is_same_v<Payload, platform::TextInputEvent>) {
                 if (payload.codepoint != U'\0') {
@@ -359,8 +451,9 @@ bool EditorUi::begin_frame(const platform::WindowMetrics metrics, const float de
 }
 
 void EditorUi::draw(
-    const world::World& world,
+    world::World& world,
     SelectionModel& selection,
+    TransformHistory& history,
     ConsoleHistory& console,
     const UiStatus& status
 ) {
@@ -397,8 +490,25 @@ void EditorUi::draw(
         ImGui::Separator();
 
         if (ImGui::BeginMenu("File")) {
+            if (ImGui::MenuItem("Save", "Cmd/Ctrl+S", false, status.world_loaded)) {
+                state_->save_requested = true;
+            }
+            ImGui::Separator();
             if (ImGui::MenuItem("Quit")) {
                 state_->quit_requested = true;
+            }
+            ImGui::EndMenu();
+        }
+        if (ImGui::BeginMenu("Edit")) {
+            std::string undo_text = "Undo";
+            if (!history.undo_label().empty()) undo_text += " " + history.undo_label();
+            std::string redo_text = "Redo";
+            if (!history.redo_label().empty()) redo_text += " " + history.redo_label();
+            if (ImGui::MenuItem(undo_text.c_str(), "Cmd/Ctrl+Z", false, history.can_undo())) {
+                state_->undo_requested = true;
+            }
+            if (ImGui::MenuItem(redo_text.c_str(), "Cmd/Ctrl+Shift+Z", false, history.can_redo())) {
+                state_->redo_requested = true;
             }
             ImGui::EndMenu();
         }
@@ -418,13 +528,18 @@ void EditorUi::draw(
             ImGui::EndMenu();
         }
 
-        const std::string world_label = status.world_loaded ? status.world_name : "No World loaded";
+        std::string world_label = status.world_loaded ? status.world_name : "No World loaded";
+        if (history.dirty()) world_label += "  •";
         const float label_width = ImGui::CalcTextSize(world_label.c_str()).x;
         const float right_edge = ImGui::GetWindowWidth() - ImGui::GetStyle().WindowPadding.x;
         if (right_edge - label_width > ImGui::GetCursorPosX() + 20.0F) {
             ImGui::SetCursorPosX(right_edge - label_width);
         }
-        ImGui::TextDisabled("%s", world_label.c_str());
+        if (history.dirty()) {
+            ImGui::TextColored(ImVec4{0.96F, 0.72F, 0.30F, 1.0F}, "%s", world_label.c_str());
+        } else {
+            ImGui::TextDisabled("%s", world_label.c_str());
+        }
         ImGui::EndMenuBar();
     }
 
@@ -456,6 +571,10 @@ void EditorUi::draw(
     ImGui::TextDisabled("%s", status.world_loaded ? status.world_name.c_str() : "No World loaded");
     ImGui::SameLine();
     ImGui::TextDisabled("  ·  %s  ·  %zu entities", status.render_backend.c_str(), world.entity_count());
+    if (history.dirty()) {
+        ImGui::SameLine();
+        ImGui::TextColored(ImVec4{0.96F, 0.72F, 0.30F, 1.0F}, "  ·  Unsaved");
+    }
     ImGui::End();
 
     if (state_->show_hierarchy) {
@@ -539,6 +658,12 @@ void EditorUi::draw(
             ImGui::TextDisabled("·");
             ImGui::SameLine();
             ImGui::TextDisabled("Shaded");
+            ImGui::SameLine(0.0F, 16.0F * state_->style_scale);
+            tool_button("Move", TransformTool::move, state_->transform_tool);
+            ImGui::SameLine(0.0F, 4.0F * state_->style_scale);
+            tool_button("Rotate", TransformTool::rotate, state_->transform_tool);
+            ImGui::SameLine(0.0F, 4.0F * state_->style_scale);
+            tool_button("Scale", TransformTool::scale, state_->transform_tool);
 
             const float controls_width =
                 ImGui::CalcTextSize("Controls").x + ImGui::GetStyle().FramePadding.x * 2.0F;
@@ -555,11 +680,15 @@ void EditorUi::draw(
                     2,
                     ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_NoSavedSettings
                 )) {
+                    property_row("Select", "Left click");
+                    property_row("Move tool", "W");
+                    property_row("Rotate tool", "E");
+                    property_row("Scale tool", "R");
                     property_row("Orbit", "Right drag");
                     property_row("Pan", "Middle drag");
                     property_row("Zoom", "Scroll");
-                    property_row("Move", "W A S D");
-                    property_row("Elevate", "Q / E");
+                    property_row("Fly", "Shift + W A S D");
+                    property_row("Elevate", "Shift + Q / E");
                     property_row("Frame", "F");
                     ImGui::EndTable();
                 }
@@ -639,20 +768,114 @@ void EditorUi::draw(
                 ImGui::Text("Entity  %s", short_id(inspector->persistent_id).c_str());
                 ImGui::Separator();
 
-                if (ImGui::CollapsingHeader("Position", ImGuiTreeNodeFlags_DefaultOpen)) {
-                    if (ImGui::BeginTable(
-                        "##InspectorPosition",
-                        2,
-                        ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_NoSavedSettings
-                    )) {
-                        if (inspector->spatial_state.has_value()) {
-                            property_row("World", format_position(inspector->spatial_state->global_position));
-                            property_row("Region", std::to_string(inspector->spatial_state->region.value));
-                        } else {
-                            property_row("World", "Not spatial");
+                if (inspector->spatial_state.has_value() &&
+                    ImGui::CollapsingHeader("Transform", ImGuiTreeNodeFlags_DefaultOpen)) {
+                    const auto begin_transaction = [&](const char* label) {
+                        if (ImGui::IsItemActivated()) {
+                            state_->inspector_edit_id = inspector->persistent_id;
+                            state_->inspector_edit_before = capture_entity_transform(world, inspector->persistent_id);
+                            state_->inspector_edit_label = label;
                         }
-                        ImGui::EndTable();
+                    };
+                    const auto finish_transaction = [&]() {
+                        if (!ImGui::IsItemDeactivatedAfterEdit() ||
+                            !state_->inspector_edit_id.has_value() ||
+                            !state_->inspector_edit_before.has_value() ||
+                            *state_->inspector_edit_id != inspector->persistent_id) {
+                            return;
+                        }
+                        const auto after = capture_entity_transform(world, inspector->persistent_id);
+                        if (after.has_value()) {
+                            history.record(TransformHistory::Entry{
+                                .persistent_id = inspector->persistent_id,
+                                .before = *state_->inspector_edit_before,
+                                .after = *after,
+                                .label = state_->inspector_edit_label,
+                            });
+                        }
+                        state_->inspector_edit_id.reset();
+                        state_->inspector_edit_before.reset();
+                        state_->inspector_edit_label.clear();
+                    };
+
+                    auto current = capture_entity_transform(world, inspector->persistent_id);
+                    if (current.has_value()) {
+                        double position[3]{
+                            current->spatial_state.global_position.x,
+                            current->spatial_state.global_position.y,
+                            current->spatial_state.global_position.z,
+                        };
+                        const bool position_changed = ImGui::DragScalarN(
+                            "Position",
+                            ImGuiDataType_Double,
+                            position,
+                            3,
+                            0.05F,
+                            nullptr,
+                            nullptr,
+                            "%.3f"
+                        );
+                        begin_transaction("Move Entity");
+                        if (position_changed) {
+                            current->spatial_state.global_position = {position[0], position[1], position[2]};
+                            if (const auto region = world.region_containing(current->spatial_state.global_position)) {
+                                current->spatial_state.region = *region;
+                            }
+                            if (!apply_entity_transform(world, inspector->persistent_id, *current)) {
+                                core::log(core::LogLevel::error, "VICE Editor could not apply Inspector position edit.");
+                            }
+                        }
+                        finish_transaction();
+
+                        current = capture_entity_transform(world, inspector->persistent_id);
+                        auto authored = authored_or_identity(current->authored_transform);
+                        auto rotation = quaternion_to_euler_degrees(authored.rotation);
+                        const bool rotation_changed = ImGui::DragFloat3(
+                            "Rotation",
+                            rotation.data(),
+                            0.25F,
+                            0.0F,
+                            0.0F,
+                            "%.1f°"
+                        );
+                        begin_transaction("Rotate Entity");
+                        if (rotation_changed) {
+                            authored.rotation = euler_degrees_to_quaternion(rotation);
+                            current->authored_transform = authored;
+                            if (!apply_entity_transform(world, inspector->persistent_id, *current)) {
+                                core::log(core::LogLevel::error, "VICE Editor could not apply Inspector rotation edit.");
+                            }
+                        }
+                        finish_transaction();
+
+                        current = capture_entity_transform(world, inspector->persistent_id);
+                        authored = authored_or_identity(current->authored_transform);
+                        float scale[3]{authored.scale.x, authored.scale.y, authored.scale.z};
+                        const float minimum_scale = 0.01F;
+                        const bool scale_changed = ImGui::DragFloat3(
+                            "Scale",
+                            scale,
+                            0.01F,
+                            minimum_scale,
+                            1000.0F,
+                            "%.3f",
+                            ImGuiSliderFlags_AlwaysClamp
+                        );
+                        begin_transaction("Scale Entity");
+                        if (scale_changed) {
+                            authored.scale = {scale[0], scale[1], scale[2]};
+                            current->authored_transform = authored;
+                            if (!apply_entity_transform(world, inspector->persistent_id, *current)) {
+                                core::log(core::LogLevel::error, "VICE Editor could not apply Inspector scale edit.");
+                            }
+                        }
+                        finish_transaction();
                     }
+
+                    ImGui::Spacing();
+                    ImGui::TextDisabled("Region %llu", static_cast<unsigned long long>(inspector->spatial_state->region.value));
+                } else if (!inspector->spatial_state.has_value()) {
+                    ImGui::TextDisabled("This entity has no spatial transform.");
                 }
 
                 if (ImGui::CollapsingHeader("Runtime", ImGuiTreeNodeFlags_DefaultOpen)) {
@@ -661,6 +884,12 @@ void EditorUi::draw(
                         2,
                         ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_NoSavedSettings
                     )) {
+                        property_row(
+                            "Region",
+                            inspector->spatial_state.has_value()
+                                ? std::to_string(inspector->spatial_state->region.value)
+                                : "None"
+                        );
                         property_row(
                             "Simulation island",
                             inspector->simulation_island.has_value()
@@ -766,6 +995,10 @@ SceneViewport EditorUi::scene_viewport() const noexcept {
     return valid() ? state_->scene_viewport : SceneViewport{};
 }
 
+TransformTool EditorUi::transform_tool() const noexcept {
+    return valid() ? state_->transform_tool : TransformTool::move;
+}
+
 void EditorUi::request_reset_layout() noexcept {
     if (state_ != nullptr) {
         state_->reset_layout = true;
@@ -778,6 +1011,33 @@ bool EditorUi::consume_quit_request() noexcept {
     }
     const bool requested = state_->quit_requested;
     state_->quit_requested = false;
+    return requested;
+}
+
+bool EditorUi::consume_save_request() noexcept {
+    if (state_ == nullptr) {
+        return false;
+    }
+    const bool requested = state_->save_requested;
+    state_->save_requested = false;
+    return requested;
+}
+
+bool EditorUi::consume_undo_request() noexcept {
+    if (state_ == nullptr) {
+        return false;
+    }
+    const bool requested = state_->undo_requested;
+    state_->undo_requested = false;
+    return requested;
+}
+
+bool EditorUi::consume_redo_request() noexcept {
+    if (state_ == nullptr) {
+        return false;
+    }
+    const bool requested = state_->redo_requested;
+    state_->redo_requested = false;
     return requested;
 }
 
