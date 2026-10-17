@@ -115,9 +115,9 @@ constexpr std::string_view cube_id_text = "10000000-0000-4000-8000-000000000002"
 #endif
 }
 
-[[nodiscard]] std::filesystem::path editor_asset_cooked_root() {
-#if defined(VICE_EDITOR_ASSET_COOKED_ROOT)
-    return std::filesystem::path{VICE_EDITOR_ASSET_COOKED_ROOT};
+[[nodiscard]] std::filesystem::path editor_asset_cache_root() {
+#if defined(VICE_EDITOR_ASSET_CACHE_ROOT)
+    return std::filesystem::path{VICE_EDITOR_ASSET_CACHE_ROOT};
 #else
     return {};
 #endif
@@ -153,12 +153,18 @@ constexpr std::string_view cube_id_text = "10000000-0000-4000-8000-000000000002"
     return root / project.id.to_string() / "world.vworldc";
 }
 
+[[nodiscard]] std::filesystem::path project_cooked_root(const vice::project::Manifest& project) {
+    const auto root = editor_asset_cache_root();
+    if (root.empty() || !project.id) return {};
+    return root / project.id.to_string();
+}
+
 [[nodiscard]] std::filesystem::path project_cooked_startup_world(
     const vice::project::Manifest& project
 ) {
     auto relative = project.startup_world;
     relative.replace_extension(".vworldc");
-    const auto cooked_root = editor_asset_cooked_root();
+    const auto cooked_root = project_cooked_root(project);
     return cooked_root.empty() ? std::filesystem::path{} : (cooked_root / relative).lexically_normal();
 }
 
@@ -313,7 +319,8 @@ int main(const int argc, char** argv) {
     const vice::project::Manifest project = *loaded_project.manifest;
     const std::filesystem::path asset_source_root = vice::project::resolve_asset_root(project_path, project);
     const std::filesystem::path startup_world_source = vice::project::resolve_startup_world(project_path, project);
-    if (asset_source_root.empty() || startup_world_source.empty()) {
+    const std::filesystem::path cooked_asset_root = project_cooked_root(project);
+    if (asset_source_root.empty() || startup_world_source.empty() || cooked_asset_root.empty()) {
         log(LogLevel::error, "VICE Editor could not resolve the project asset paths.");
         return 1;
     }
@@ -381,7 +388,7 @@ int main(const int argc, char** argv) {
     }
 
     vice::editor::AssetIndex assets;
-    if (!assets.refresh(asset_source_root, editor_asset_cooked_root())) {
+    if (!assets.refresh(asset_source_root, cooked_asset_root)) {
         log(LogLevel::warning, "VICE Editor asset index: " + assets.diagnostics());
     }
 
