@@ -257,16 +257,19 @@ LoadResult load_manifest(const std::filesystem::path& path) {
 }
 
 std::string serialize_manifest(const Manifest& manifest) {
+    Manifest normalized = manifest;
+    if (normalized.game_name.empty() && !normalized.name.empty()) normalized.game_name = normalized.name;
+
     std::string diagnostics;
-    if (!validate(manifest, &diagnostics)) return {};
+    if (!validate(normalized, &diagnostics)) return {};
 
     std::ostringstream output;
-    output << "vice-project " << manifest.version << '\n';
-    output << "id " << manifest.id.to_string() << '\n';
-    output << "name " << std::quoted(manifest.name) << '\n';
-    output << "game_name " << std::quoted(manifest.game_name) << '\n';
-    output << "assets " << std::quoted(portable_path(manifest.asset_root)) << '\n';
-    output << "startup_world " << std::quoted(portable_path(manifest.startup_world)) << '\n';
+    output << "vice-project " << normalized.version << '\n';
+    output << "id " << normalized.id.to_string() << '\n';
+    output << "name " << std::quoted(normalized.name) << '\n';
+    output << "game_name " << std::quoted(normalized.game_name) << '\n';
+    output << "assets " << std::quoted(portable_path(normalized.asset_root)) << '\n';
+    output << "startup_world " << std::quoted(portable_path(normalized.startup_world)) << '\n';
     return output.str();
 }
 
@@ -310,15 +313,19 @@ bool save_manifest(
 
     const bool had_original = std::filesystem::exists(path, error);
     if (error) {
+        const std::string inspect_error = error.message();
+        error.clear();
         std::filesystem::remove(temporary, error);
-        return fail("Could not inspect existing project manifest: " + error.message());
+        return fail("Could not inspect existing project manifest: " + inspect_error);
     }
 
     if (had_original) {
         std::filesystem::rename(path, backup, error);
         if (error) {
+            const std::string stage_error = error.message();
+            error.clear();
             std::filesystem::remove(temporary, error);
-            return fail("Could not stage existing project manifest for replacement: " + error.message());
+            return fail("Could not stage existing project manifest for replacement: " + stage_error);
         }
     }
 
@@ -335,13 +342,14 @@ bool save_manifest(
                 );
             }
         }
+        error.clear();
         std::filesystem::remove(temporary, error);
         return fail("Could not replace project manifest: " + rename_error);
     }
 
     if (had_original) {
+        error.clear();
         std::filesystem::remove(backup, error);
-        if (error) return fail("Project manifest was saved, but the backup could not be removed: " + error.message());
     }
 
     if (diagnostics != nullptr) diagnostics->clear();
