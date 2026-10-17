@@ -462,7 +462,7 @@ bool ResourceMeshRenderer::render(
             .min_depth = 0.0F,
             .max_depth = 1.0F,
         }) ||
-        !commands.set_scissor(render::ScissorRect{
+        !commands.set_scissor_rect(render::ScissorRect{
             .x = static_cast<std::int32_t>(std::floor(viewport_x)),
             .y = static_cast<std::int32_t>(std::floor(viewport_y)),
             .width = static_cast<std::uint32_t>(std::max(1.0F, std::ceil(viewport_width))),
