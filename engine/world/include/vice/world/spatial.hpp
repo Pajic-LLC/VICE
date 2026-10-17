@@ -110,6 +110,8 @@ struct RegionDesc {
 struct SpatialState {
     GlobalPosition global_position{};
     RegionId region{};
+
+    friend bool operator==(const SpatialState&, const SpatialState&) = default;
 };
 
 struct SpatialReference {
