@@ -136,6 +136,31 @@ int main() {
         "moved startup resolution"
     );
 
+    const std::filesystem::path cooked_cache = std::filesystem::path{"cache"} / "projects";
+    const std::string project_key = "40000000-0000-4000-8000-000000000001";
+    require(
+        resolve_cooked_root(cooked_cache, *parsed.manifest).generic_string() ==
+            "cache/projects/" + project_key,
+        "project-scoped cooked root"
+    );
+    require(
+        resolve_cooked_startup_world(cooked_cache, *parsed.manifest).generic_string() ==
+            "cache/projects/" + project_key + "/worlds/vice_lab.vworldc",
+        "cooked startup World"
+    );
+    require(
+        resolve_cooked_root(cooked_cache, *parsed.manifest) ==
+            resolve_cooked_root(cooked_cache, *reparsed.manifest),
+        "project move keeps cooked identity"
+    );
+    Manifest no_id = *parsed.manifest;
+    no_id.id = {};
+    require(resolve_cooked_root(cooked_cache, no_id).empty(), "missing project ID rejects cooked root");
+    require(
+        resolve_cooked_startup_world({}, *parsed.manifest).empty(),
+        "empty cooked cache rejects startup path"
+    );
+
     std::error_code temp_error;
     const auto temp_root = std::filesystem::temp_directory_path(temp_error);
     require(!temp_error, "temporary directory resolution");
