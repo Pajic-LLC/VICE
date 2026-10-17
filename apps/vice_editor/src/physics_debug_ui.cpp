@@ -23,6 +23,15 @@ constexpr const char* inspector_window_name = "Inspector###VICE.Inspector";
     return "Stopped";
 }
 
+[[nodiscard]] const char* fidelity_name(const world::RegionFidelity fidelity) noexcept {
+    switch (fidelity) {
+    case world::RegionFidelity::full: return "Full";
+    case world::RegionFidelity::reduced: return "Reduced";
+    case world::RegionFidelity::inactive: return "Inactive";
+    }
+    return "Unknown";
+}
+
 [[nodiscard]] const char* ground_state_name(const rigid_body::CharacterGroundState state) noexcept {
     switch (state) {
     case rigid_body::CharacterGroundState::grounded: return "Grounded";
@@ -59,13 +68,13 @@ void property(const char* label, const std::string& value) {
     return buffer;
 }
 
-void layer_button(const char* label, bool& value) {
+void layer_button(const char* label, bool& value, const float width) {
     if (value) {
         ImGui::PushStyleColor(ImGuiCol_Button, ImVec4{0.12F, 0.39F, 0.61F, 1.00F});
         ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4{0.16F, 0.48F, 0.72F, 1.00F});
         ImGui::PushStyleColor(ImGuiCol_Text, ImVec4{0.96F, 0.98F, 1.00F, 1.00F});
     }
-    if (ImGui::Button(label, ImVec2{0.0F, 30.0F})) value = !value;
+    if (ImGui::Button(label, ImVec2{width, 30.0F})) value = !value;
     if (value) ImGui::PopStyleColor(3);
 }
 
@@ -135,14 +144,12 @@ void PhysicsDebugUi::draw(const PreviewSnapshot& preview, const bool authored_wo
 
     const float available = ImGui::GetContentRegionAvail().x;
     const float gap = ImGui::GetStyle().ItemSpacing.x;
-    const float button_width = (available - gap * 2.0F) / 3.0F;
-    ImGui::PushItemWidth(button_width);
-    layer_button("Physics", state_->layers.physics);
+    const float button_width = std::max(1.0F, (available - gap * 2.0F) / 3.0F);
+    layer_button("Physics", state_->layers.physics, button_width);
     ImGui::SameLine();
-    layer_button("Regions", state_->layers.regions);
+    layer_button("Regions", state_->layers.regions, button_width);
     ImGui::SameLine();
-    layer_button("Contacts", state_->layers.contacts);
-    ImGui::PopItemWidth();
+    layer_button("Contacts", state_->layers.contacts, button_width);
 
     if (ImGui::CollapsingHeader("Advanced")) {
         ImGui::Checkbox("Velocity vectors", &state_->layers.velocities);
@@ -164,7 +171,32 @@ void PhysicsDebugUi::draw(const PreviewSnapshot& preview, const bool authored_wo
             case world::RegionFidelity::inactive: ++inactive; break;
             }
         }
-        ImGui::Text("%zu full   %zu reduced   %zu inactive", full, reduced, inactive);
+        ImGui::TextDisabled("%zu full  ·  %zu reduced  ·  %zu inactive", full, reduced, inactive);
+
+        if (ImGui::BeginTable(
+                "##DebugRegions",
+                3,
+                ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_NoSavedSettings | ImGuiTableFlags_RowBg
+            )) {
+            ImGui::TableSetupColumn("Region", ImGuiTableColumnFlags_WidthFixed, 68.0F);
+            ImGui::TableSetupColumn("Fidelity", ImGuiTableColumnFlags_WidthStretch, 0.8F);
+            ImGui::TableSetupColumn("Streaming cell", ImGuiTableColumnFlags_WidthStretch, 1.2F);
+            for (const auto& region : preview.regions) {
+                ImGui::TableNextRow();
+                ImGui::TableSetColumnIndex(0);
+                ImGui::Text("%llu", static_cast<unsigned long long>(region.region.id.value));
+                ImGui::TableSetColumnIndex(1);
+                ImGui::TextUnformatted(fidelity_name(region.region.fidelity));
+                ImGui::TableSetColumnIndex(2);
+                ImGui::Text(
+                    "%d, %d, %d",
+                    region.region.streaming_cell.x,
+                    region.region.streaming_cell.y,
+                    region.region.streaming_cell.z
+                );
+            }
+            ImGui::EndTable();
+        }
     }
 
     ImGui::End();
