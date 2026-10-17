@@ -308,6 +308,12 @@ int main(const int argc, char** argv) {
     bool show_start_surface = argc < 2;
     bool newly_created_project = false;
 
+    vice::editor::RecentProjects recent_projects{editor_state_root() / "recent_projects.txt"};
+    std::string recent_diagnostics;
+    if (!recent_projects.load(&recent_diagnostics)) {
+        log(LogLevel::warning, "VICE Editor recent projects: " + recent_diagnostics);
+    }
+
     for (;;) {
         vice::editor::ConsoleHistory console{2000};
         if (!console.attach()) {
@@ -365,6 +371,12 @@ int main(const int argc, char** argv) {
                 "VICE Editor could not create the project state directory: " + state_directory_error.message()
             );
             return 1;
+        }
+
+        if (!show_start_surface && !using_development_project) {
+            if (!recent_projects.remember(project_path, &recent_diagnostics)) {
+                log(LogLevel::warning, "VICE Editor recent projects: " + recent_diagnostics);
+            }
         }
 
         log(LogLevel::info, "Project: " + project.name + " · " + project_path.generic_string());
@@ -511,6 +523,61 @@ int main(const int argc, char** argv) {
             return true;
         };
 
+        const auto switch_project = [&](const std::filesystem::path& path) {
+            std::string diagnostics;
+            const auto candidate = vice::editor::ProjectSession::open(
+                path,
+                editor_asset_cache_root(),
+                editor_state_root(),
+                &diagnostics
+            );
+            if (!candidate.has_value()) {
+                workflow_diagnostics = diagnostics;
+                return false;
+            }
+            next_project_path = candidate->manifest_path();
+            next_project_is_new = false;
+            running = false;
+            workflow_diagnostics.clear();
+            return true;
+        };
+
+        const auto replace_with_new_world = [&](const vice::editor::DirtyReplacePolicy policy) {
+            vice::world::World replacement;
+            if (!build_new_project_world(replacement)) {
+                workflow_diagnostics = "Could not create a new World region.";
+                return false;
+            }
+            std::string diagnostics;
+            if (!document.new_empty(policy, &diagnostics) || !document.world().restore(replacement.snapshot())) {
+                workflow_diagnostics = diagnostics.empty() ? "Could not create the new World." : diagnostics;
+                return false;
+            }
+            reset_document_state();
+            document_intrinsic_dirty = true;
+            sync_document_dirty();
+            workflow_diagnostics.clear();
+            log(LogLevel::info, "VICE Editor created a new World document.");
+            return true;
+        };
+
+        const auto replace_with_open_world = [&](
+            const std::filesystem::path& path,
+            const vice::editor::DirtyReplacePolicy policy
+        ) {
+            std::string diagnostics;
+            if (!document.open(path, policy, &diagnostics)) {
+                workflow_diagnostics = diagnostics;
+                return false;
+            }
+            reset_document_state();
+            document_intrinsic_dirty = false;
+            document.mark_clean();
+            workflow_diagnostics.clear();
+            log(LogLevel::info, "VICE Editor opened World document " + document.path().generic_string() + ".");
+            return true;
+        };
+
         while (running) {
             vice::platform::Event event{vice::platform::QuitRequested{}};
             while (platform_services->poll_event(event)) {
@@ -620,6 +687,7 @@ int main(const int argc, char** argv) {
             sync_document_dirty();
             vice::editor::ProjectWorkflowStatus workflow_status;
             workflow_status.project_loaded = !show_start_surface;
+            workflow_status.show_start_surface = show_start_surface;
             workflow_status.project_name = project.name;
             workflow_status.project_manifest = project_path;
             workflow_status.world_name = world_display_name(document, *project_session);
@@ -627,6 +695,7 @@ int main(const int argc, char** argv) {
             workflow_status.world_has_path = document.has_path();
             workflow_status.world_path = document.path();
             workflow_status.development_project = editor_default_project_path();
+            workflow_status.recent_projects = recent_projects.entries();
             workflow_status.diagnostics = workflow_diagnostics;
             project_workflow_ui.draw(workflow_status);
 
@@ -654,22 +723,9 @@ int main(const int argc, char** argv) {
                 open_request.has_value()) {
                 sync_document_dirty();
                 if (document.dirty()) {
-                    workflow_diagnostics = "Save or discard the current World before switching projects.";
+                    workflow_diagnostics = "Resolve unsaved World changes before switching projects.";
                 } else {
-                    std::string diagnostics;
-                    const auto candidate = vice::editor::ProjectSession::open(
-                        *open_request,
-                        editor_asset_cache_root(),
-                        editor_state_root(),
-                        &diagnostics
-                    );
-                    if (!candidate.has_value()) {
-                        workflow_diagnostics = diagnostics;
-                    } else {
-                        next_project_path = candidate->manifest_path();
-                        next_project_is_new = false;
-                        running = false;
-                    }
+                    (void)switch_project(*open_request);
                 }
             }
 
@@ -708,32 +764,31 @@ int main(const int argc, char** argv) {
                 }
 
                 if (project_workflow_ui.consume_new_world_request()) {
-                    std::string diagnostics;
-                    if (document.new_empty(vice::editor::DirtyReplacePolicy::reject, &diagnostics)) {
-                        if (!build_new_project_world(document.world())) {
-                            workflow_diagnostics = "Could not create a new World region.";
-                        } else {
-                            reset_document_state();
-                            document_intrinsic_dirty = true;
-                            sync_document_dirty();
-                            workflow_diagnostics.clear();
-                            log(LogLevel::info, "VICE Editor created a new World document.");
-                        }
-                    } else {
-                        workflow_diagnostics = diagnostics;
-                    }
+                    (void)replace_with_new_world(vice::editor::DirtyReplacePolicy::reject);
                 }
 
                 if (const auto open_world = project_workflow_ui.consume_open_world_request(); open_world.has_value()) {
-                    std::string diagnostics;
-                    if (document.open(*open_world, vice::editor::DirtyReplacePolicy::reject, &diagnostics)) {
-                        reset_document_state();
-                        document_intrinsic_dirty = false;
-                        document.mark_clean();
-                        workflow_diagnostics.clear();
-                        log(LogLevel::info, "VICE Editor opened World document " + document.path().generic_string() + ".");
-                    } else {
-                        workflow_diagnostics = diagnostics;
+                    (void)replace_with_open_world(*open_world, vice::editor::DirtyReplacePolicy::reject);
+                }
+
+                if (const auto confirmed = project_workflow_ui.consume_confirmed_replacement(); confirmed.has_value()) {
+                    const bool save_ok = confirmed->resolution == vice::editor::DirtyResolution::discard ||
+                        save_current_world(std::nullopt);
+                    if (save_ok) {
+                        switch (confirmed->kind) {
+                        case vice::editor::ReplacementKind::new_world:
+                            (void)replace_with_new_world(vice::editor::DirtyReplacePolicy::discard);
+                            break;
+                        case vice::editor::ReplacementKind::open_world:
+                            (void)replace_with_open_world(
+                                confirmed->path,
+                                vice::editor::DirtyReplacePolicy::discard
+                            );
+                            break;
+                        case vice::editor::ReplacementKind::switch_project:
+                            (void)switch_project(confirmed->path);
+                            break;
+                        }
                     }
                 }
 
