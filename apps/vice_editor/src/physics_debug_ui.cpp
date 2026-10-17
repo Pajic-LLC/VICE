@@ -3,8 +3,10 @@
 #include <imgui.h>
 #include <imgui_internal.h>
 
+#include <algorithm>
 #include <cstdio>
 #include <string>
+#include <utility>
 
 namespace vice::editor {
 namespace {
