@@ -30,6 +30,7 @@
 #include <vice/world/world.hpp>
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <filesystem>
 #include <memory>
@@ -226,7 +227,10 @@ constexpr std::string_view cube_id_text = "10000000-0000-4000-8000-000000000002"
 
     if (allow_new_project_fallback) {
         if (!build_new_project_world(world)) {
-            vice::core::log(LogLevel::error, "VICE Editor could not create the starter project World.");
+            vice::core::log(
+                vice::core::LogLevel::error,
+                "VICE Editor could not create the starter project World."
+            );
             return false;
         }
         vice::core::log(vice::core::LogLevel::info, "VICE Editor created the starter project World.");
@@ -412,6 +416,7 @@ int main(const int argc, char** argv) {
             return 1;
         }
         document.mark_clean();
+        bool document_intrinsic_dirty = false;
 
         vice::editor::SelectionModel selection;
         if (using_development_project) {
@@ -482,6 +487,10 @@ int main(const int argc, char** argv) {
             preview_history_cursor = 0U;
         };
 
+        const auto sync_document_dirty = [&]() {
+            document.set_dirty(document_intrinsic_dirty || history.dirty());
+        };
+
         const auto save_current_world = [&](const std::optional<std::filesystem::path>& explicit_path) {
             std::string diagnostics;
             const bool saved = explicit_path.has_value()
@@ -495,6 +504,7 @@ int main(const int argc, char** argv) {
                 return false;
             }
             history.mark_saved();
+            document_intrinsic_dirty = false;
             document.mark_clean();
             workflow_diagnostics.clear();
             log(LogLevel::info, "VICE Editor saved the World for project " + project.name + ".");
@@ -607,12 +617,13 @@ int main(const int argc, char** argv) {
                 physics_debug_ui.draw_inspector_live(preview_snapshot, selection);
             }
 
+            sync_document_dirty();
             vice::editor::ProjectWorkflowStatus workflow_status;
             workflow_status.project_loaded = !show_start_surface;
             workflow_status.project_name = project.name;
             workflow_status.project_manifest = project_path;
             workflow_status.world_name = world_display_name(document, *project_session);
-            workflow_status.world_dirty = history.dirty();
+            workflow_status.world_dirty = document.dirty();
             workflow_status.world_has_path = document.has_path();
             workflow_status.world_path = document.path();
             workflow_status.development_project = editor_default_project_path();
@@ -641,7 +652,8 @@ int main(const int argc, char** argv) {
 
             if (const auto open_request = project_workflow_ui.consume_open_project_request();
                 open_request.has_value()) {
-                if (history.dirty()) {
+                sync_document_dirty();
+                if (document.dirty()) {
                     workflow_diagnostics = "Save or discard the current World before switching projects.";
                 } else {
                     std::string diagnostics;
@@ -686,7 +698,7 @@ int main(const int argc, char** argv) {
                 if (ui.consume_redo_request() && history.can_redo() && !history.redo(world)) {
                     log(LogLevel::error, "VICE Editor could not redo the next authoring command.");
                 }
-                document.set_dirty(history.dirty());
+                sync_document_dirty();
 
                 if (ui.consume_save_request() || project_workflow_ui.consume_save_world_request()) {
                     (void)save_current_world(std::nullopt);
@@ -702,6 +714,8 @@ int main(const int argc, char** argv) {
                             workflow_diagnostics = "Could not create a new World region.";
                         } else {
                             reset_document_state();
+                            document_intrinsic_dirty = true;
+                            sync_document_dirty();
                             workflow_diagnostics.clear();
                             log(LogLevel::info, "VICE Editor created a new World document.");
                         }
@@ -714,6 +728,8 @@ int main(const int argc, char** argv) {
                     std::string diagnostics;
                     if (document.open(*open_world, vice::editor::DirtyReplacePolicy::reject, &diagnostics)) {
                         reset_document_state();
+                        document_intrinsic_dirty = false;
+                        document.mark_clean();
                         workflow_diagnostics.clear();
                         log(LogLevel::info, "VICE Editor opened World document " + document.path().generic_string() + ".");
                     } else {
