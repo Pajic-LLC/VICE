@@ -90,7 +90,6 @@ void ResourceBrowserUi::draw(AssetIndex& assets) {
     if (ImGui::BeginCombo("##ResourceKind", preview)) {
         if (ImGui::Selectable("All", state_->kind_filter < 0)) state_->kind_filter = -1;
         for (int index = 0; index < 6; ++index) {
-            const auto kind = static_cast<AssetKind>(index);
             if (ImGui::Selectable(kind_names[static_cast<std::size_t>(index + 1)], state_->kind_filter == index)) {
                 state_->kind_filter = index;
             }
