@@ -191,6 +191,15 @@ void log_error(const char* prefix, NSError* error) {
     return face == FrontFace::counter_clockwise ? MTLWindingCounterClockwise : MTLWindingClockwise;
 }
 
+[[nodiscard]] ShaderStageMask stage_mask(const ShaderStage stage) noexcept {
+    switch (stage) {
+    case ShaderStage::vertex: return ShaderStageMask::vertex;
+    case ShaderStage::fragment: return ShaderStageMask::fragment;
+    case ShaderStage::compute: return ShaderStageMask::compute;
+    }
+    return ShaderStageMask::none;
+}
+
 [[nodiscard]] bool same_binding(
     const ShaderBindingKey& left,
     const ShaderBindingKey& right
@@ -684,6 +693,44 @@ public:
         return render_encoder_ != nil;
     }
 
+    bool set_viewport(const Viewport& viewport) override {
+        if (render_encoder_ == nil || !is_valid(viewport)) {
+            return false;
+        }
+        const MTLViewport native{
+            static_cast<double>(viewport.x),
+            static_cast<double>(viewport.y),
+            static_cast<double>(viewport.width),
+            static_cast<double>(viewport.height),
+            static_cast<double>(viewport.min_depth),
+            static_cast<double>(viewport.max_depth),
+        };
+        [render_encoder_ setViewport:native];
+        return true;
+    }
+
+    bool set_scissor_rect(const ScissorRect& scissor) override {
+        if (render_encoder_ == nil || !is_valid(scissor) || scissor.x < 0 || scissor.y < 0) {
+            return false;
+        }
+        const std::uint64_t right =
+            static_cast<std::uint64_t>(scissor.x) + static_cast<std::uint64_t>(scissor.width);
+        const std::uint64_t bottom =
+            static_cast<std::uint64_t>(scissor.y) + static_cast<std::uint64_t>(scissor.height);
+        if (right > std::numeric_limits<NSUInteger>::max() ||
+            bottom > std::numeric_limits<NSUInteger>::max()) {
+            return false;
+        }
+        const MTLScissorRect native{
+            static_cast<NSUInteger>(scissor.x),
+            static_cast<NSUInteger>(scissor.y),
+            static_cast<NSUInteger>(scissor.width),
+            static_cast<NSUInteger>(scissor.height),
+        };
+        [render_encoder_ setScissorRect:native];
+        return true;
+    }
+
     bool set_graphics_pipeline(GraphicsPipeline& pipeline) override {
         if (render_encoder_ == nil) {
             return false;
@@ -1117,8 +1164,125 @@ private:
                 return false;
             }
         }
-        return encode_stage_argument_buffer(ShaderStage::vertex) &&
-            encode_stage_argument_buffer(ShaderStage::fragment);
+        return bind_stage_resources(ShaderStage::vertex) &&
+            bind_stage_resources(ShaderStage::fragment);
+    }
+
+    [[nodiscard]] bool bind_stage_resources(const ShaderStage stage) {
+        if (active_pipeline_ == nullptr || render_encoder_ == nil) {
+            return false;
+        }
+        if (!active_pipeline_->locations(stage).empty()) {
+            return encode_stage_argument_buffer(stage);
+        }
+        return bind_stage_direct(stage);
+    }
+
+    [[nodiscard]] bool bind_stage_direct(const ShaderStage stage) {
+        if (active_pipeline_ == nullptr || render_encoder_ == nil) {
+            return false;
+        }
+        const ShaderStageMask mask = stage_mask(stage);
+        for (const auto& logical : active_pipeline_->layout().resources) {
+            if (!has_stage(logical.stages, mask)) {
+                continue;
+            }
+            if (logical.unbounded || logical.space != 0U) {
+                core::log(
+                    core::LogLevel::error,
+                    "Metal development source shaders require bounded resources in register space 0."
+                );
+                return false;
+            }
+            for (std::uint32_t element = 0; element < logical.count; ++element) {
+                const std::uint64_t native_index =
+                    static_cast<std::uint64_t>(logical.binding) + element;
+                if (native_index >= 31U) {
+                    return false;
+                }
+                const ShaderBindingKey key{
+                    .register_class = logical.register_class,
+                    .binding = logical.binding,
+                    .space = logical.space,
+                    .array_element = element,
+                };
+                const MetalBoundResource* bound = bound_resource(key);
+                if (bound == nullptr || !bind_direct_resource(stage, static_cast<NSUInteger>(native_index), *bound)) {
+                    return false;
+                }
+            }
+        }
+        return true;
+    }
+
+    [[nodiscard]] bool bind_direct_resource(
+        const ShaderStage stage,
+        const NSUInteger index,
+        const MetalBoundResource& bound
+    ) {
+        const MTLRenderStages render_stage = stage == ShaderStage::vertex
+            ? MTLRenderStageVertex
+            : MTLRenderStageFragment;
+
+        switch (bound.kind) {
+        case MetalBoundKind::constant_buffer:
+        case MetalBoundKind::read_buffer:
+        case MetalBoundKind::write_buffer: {
+            if (bound.buffer == nullptr || bound.buffer->native() == nil ||
+                bound.offset > static_cast<std::uint64_t>(std::numeric_limits<NSUInteger>::max())) {
+                return false;
+            }
+            if (stage == ShaderStage::vertex) {
+                if (index >= metal_shader_converter_vertex_buffer_base) {
+                    core::log(
+                        core::LogLevel::error,
+                        "Metal source shader buffer binding collides with the VICE vertex-buffer namespace."
+                    );
+                    return false;
+                }
+                [render_encoder_ setVertexBuffer:bound.buffer->native()
+                                          offset:static_cast<NSUInteger>(bound.offset)
+                                         atIndex:index];
+            } else {
+                [render_encoder_ setFragmentBuffer:bound.buffer->native()
+                                            offset:static_cast<NSUInteger>(bound.offset)
+                                           atIndex:index];
+            }
+            const MTLResourceUsage usage = bound.kind == MetalBoundKind::write_buffer
+                ? static_cast<MTLResourceUsage>(MTLResourceUsageRead | MTLResourceUsageWrite)
+                : MTLResourceUsageRead;
+            [render_encoder_ useResource:bound.buffer->native() usage:usage stages:render_stage];
+            return true;
+        }
+        case MetalBoundKind::texture:
+        case MetalBoundKind::storage_texture: {
+            if (bound.texture == nullptr || bound.texture->native() == nil) {
+                return false;
+            }
+            if (stage == ShaderStage::vertex) {
+                [render_encoder_ setVertexTexture:bound.texture->native() atIndex:index];
+            } else {
+                [render_encoder_ setFragmentTexture:bound.texture->native() atIndex:index];
+            }
+            const MTLResourceUsage usage = bound.kind == MetalBoundKind::storage_texture
+                ? static_cast<MTLResourceUsage>(MTLResourceUsageRead | MTLResourceUsageWrite)
+                : MTLResourceUsageRead;
+            [render_encoder_ useResource:bound.texture->native() usage:usage stages:render_stage];
+            return true;
+        }
+        case MetalBoundKind::sampler:
+            if (bound.sampler == nullptr || bound.sampler->native() == nil) {
+                return false;
+            }
+            if (stage == ShaderStage::vertex) {
+                [render_encoder_ setVertexSamplerState:bound.sampler->native() atIndex:index];
+            } else {
+                [render_encoder_ setFragmentSamplerState:bound.sampler->native() atIndex:index];
+            }
+            [retained_samplers_ addObject:bound.sampler->native()];
+            return true;
+        }
+        return false;
     }
 
     [[nodiscard]] bool encode_stage_argument_buffer(const ShaderStage stage) {
@@ -1423,7 +1587,12 @@ public:
         if (NSString* label = make_label(desc.debug_name)) {
             function.label = label;
         }
-        return std::make_unique<MetalShaderModule>(desc.stage, library, function);
+        return std::make_unique<MetalShaderModule>(
+            desc.stage,
+            library,
+            function,
+            std::vector<ShaderResourceBindingDesc>{desc.resources.begin(), desc.resources.end()}
+        );
     }
 
     [[nodiscard]] std::unique_ptr<ShaderModule> create_shader_module(
@@ -1568,7 +1737,17 @@ public:
         native_desc.vertexFunction = vertex->function();
         native_desc.fragmentFunction = fragment->function();
         native_desc.vertexDescriptor = vertex_descriptor;
-        native_desc.colorAttachments[0].pixelFormat = pixel_format(desc.color_format);
+        auto* color_attachment = native_desc.colorAttachments[0];
+        color_attachment.pixelFormat = pixel_format(desc.color_format);
+        if (desc.blend == BlendMode::alpha) {
+            color_attachment.blendingEnabled = YES;
+            color_attachment.sourceRGBBlendFactor = MTLBlendFactorSourceAlpha;
+            color_attachment.destinationRGBBlendFactor = MTLBlendFactorOneMinusSourceAlpha;
+            color_attachment.rgbBlendOperation = MTLBlendOperationAdd;
+            color_attachment.sourceAlphaBlendFactor = MTLBlendFactorOne;
+            color_attachment.destinationAlphaBlendFactor = MTLBlendFactorOneMinusSourceAlpha;
+            color_attachment.alphaBlendOperation = MTLBlendOperationAdd;
+        }
         native_desc.depthAttachmentPixelFormat = pixel_format(desc.depth.format);
         if (NSString* label = make_label(desc.debug_name)) {
             native_desc.label = label;
