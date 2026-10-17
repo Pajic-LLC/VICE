@@ -201,23 +201,34 @@ target_compile_definitions(
     VICE_EDITOR_LEGACY_SAVE_FILE="${CMAKE_BINARY_DIR}/editor/vice_editor_world.vworldc"
     VICE_EDITOR_STATE_ROOT="${CMAKE_BINARY_DIR}/editor/projects"
     VICE_EDITOR_DEFAULT_PROJECT="${PROJECT_SOURCE_DIR}/vice.viceproj"
-    VICE_EDITOR_ASSET_COOKED_ROOT="${CMAKE_BINARY_DIR}/editor_assets"
+    VICE_EDITOR_ASSET_CACHE_ROOT="${CMAKE_BINARY_DIR}/editor_assets"
 )
 vice_enable_warnings(vice_editor)
 
 if(VICE_BUILD_TOOLS)
+  set(_vice_editor_default_project_file "${PROJECT_SOURCE_DIR}/vice.viceproj")
+  file(STRINGS "${_vice_editor_default_project_file}" _vice_editor_project_id_line REGEX "^id [0-9A-Fa-f-]+$")
+  file(STRINGS "${_vice_editor_default_project_file}" _vice_editor_asset_root_line REGEX "^assets \"[^\"]+\"$")
+  if(NOT _vice_editor_project_id_line OR NOT _vice_editor_asset_root_line)
+    message(FATAL_ERROR "VICE default project manifest is missing its id or assets field")
+  endif()
+  string(REGEX REPLACE "^id +" "" _vice_editor_default_project_id "${_vice_editor_project_id_line}")
+  string(REGEX REPLACE "^assets \"([^\"]+)\"$" "\\1" _vice_editor_default_asset_relative "${_vice_editor_asset_root_line}")
+  set(_vice_editor_default_asset_source_root "${PROJECT_SOURCE_DIR}/${_vice_editor_default_asset_relative}")
+  set(_vice_editor_default_cooked_root "${CMAKE_BINARY_DIR}/editor_assets/${_vice_editor_default_project_id}")
+
   set(_vice_editor_asset_outputs)
 
   if(TARGET vice_world_cooker)
-    file(GLOB CONFIGURE_DEPENDS _vice_editor_world_sources "${PROJECT_SOURCE_DIR}/assets/worlds/*.vworld")
+    file(GLOB CONFIGURE_DEPENDS _vice_editor_world_sources "${_vice_editor_default_asset_source_root}/worlds/*.vworld")
     foreach(_source IN LISTS _vice_editor_world_sources)
       get_filename_component(_name "${_source}" NAME_WE)
-      set(_output "${CMAKE_BINARY_DIR}/editor_assets/worlds/${_name}.vworldc")
+      set(_output "${_vice_editor_default_cooked_root}/worlds/${_name}.vworldc")
       add_custom_command(
         OUTPUT "${_output}"
-        COMMAND ${CMAKE_COMMAND} -E make_directory "${CMAKE_BINARY_DIR}/editor_assets/worlds"
+        COMMAND ${CMAKE_COMMAND} -E make_directory "${_vice_editor_default_cooked_root}/worlds"
         COMMAND $<TARGET_FILE:vice_world_cooker> --input "${_source}" --output "${_output}"
-        DEPENDS vice_world_cooker "${_source}"
+        DEPENDS vice_world_cooker "${_source}" "${_vice_editor_default_project_file}"
         VERBATIM
       )
       list(APPEND _vice_editor_asset_outputs "${_output}")
@@ -225,15 +236,15 @@ if(VICE_BUILD_TOOLS)
   endif()
 
   if(TARGET vice_mesh_cooker)
-    file(GLOB CONFIGURE_DEPENDS _vice_editor_mesh_sources "${PROJECT_SOURCE_DIR}/assets/meshes/*.vmesh")
+    file(GLOB CONFIGURE_DEPENDS _vice_editor_mesh_sources "${_vice_editor_default_asset_source_root}/meshes/*.vmesh")
     foreach(_source IN LISTS _vice_editor_mesh_sources)
       get_filename_component(_name "${_source}" NAME_WE)
-      set(_output "${CMAKE_BINARY_DIR}/editor_assets/meshes/${_name}.vmeshc")
+      set(_output "${_vice_editor_default_cooked_root}/meshes/${_name}.vmeshc")
       add_custom_command(
         OUTPUT "${_output}"
-        COMMAND ${CMAKE_COMMAND} -E make_directory "${CMAKE_BINARY_DIR}/editor_assets/meshes"
+        COMMAND ${CMAKE_COMMAND} -E make_directory "${_vice_editor_default_cooked_root}/meshes"
         COMMAND $<TARGET_FILE:vice_mesh_cooker> --input "${_source}" --output "${_output}"
-        DEPENDS vice_mesh_cooker "${_source}"
+        DEPENDS vice_mesh_cooker "${_source}" "${_vice_editor_default_project_file}"
         VERBATIM
       )
       list(APPEND _vice_editor_asset_outputs "${_output}")
@@ -241,15 +252,15 @@ if(VICE_BUILD_TOOLS)
   endif()
 
   if(TARGET vice_collision_cooker)
-    file(GLOB CONFIGURE_DEPENDS _vice_editor_collision_sources "${PROJECT_SOURCE_DIR}/assets/collision/*.vcollision")
+    file(GLOB CONFIGURE_DEPENDS _vice_editor_collision_sources "${_vice_editor_default_asset_source_root}/collision/*.vcollision")
     foreach(_source IN LISTS _vice_editor_collision_sources)
       get_filename_component(_name "${_source}" NAME_WE)
-      set(_output "${CMAKE_BINARY_DIR}/editor_assets/collision/${_name}.vcollisionc")
+      set(_output "${_vice_editor_default_cooked_root}/collision/${_name}.vcollisionc")
       add_custom_command(
         OUTPUT "${_output}"
-        COMMAND ${CMAKE_COMMAND} -E make_directory "${CMAKE_BINARY_DIR}/editor_assets/collision"
+        COMMAND ${CMAKE_COMMAND} -E make_directory "${_vice_editor_default_cooked_root}/collision"
         COMMAND $<TARGET_FILE:vice_collision_cooker> --input "${_source}" --output "${_output}"
-        DEPENDS vice_collision_cooker "${_source}"
+        DEPENDS vice_collision_cooker "${_source}" "${_vice_editor_default_project_file}"
         VERBATIM
       )
       list(APPEND _vice_editor_asset_outputs "${_output}")
@@ -257,15 +268,15 @@ if(VICE_BUILD_TOOLS)
   endif()
 
   if(TARGET vice_rigid_material_cooker)
-    file(GLOB CONFIGURE_DEPENDS _vice_editor_material_sources "${PROJECT_SOURCE_DIR}/assets/materials/*.vrigmat")
+    file(GLOB CONFIGURE_DEPENDS _vice_editor_material_sources "${_vice_editor_default_asset_source_root}/materials/*.vrigmat")
     foreach(_source IN LISTS _vice_editor_material_sources)
       get_filename_component(_name "${_source}" NAME_WE)
-      set(_output "${CMAKE_BINARY_DIR}/editor_assets/materials/${_name}.vrigmatc")
+      set(_output "${_vice_editor_default_cooked_root}/materials/${_name}.vrigmatc")
       add_custom_command(
         OUTPUT "${_output}"
-        COMMAND ${CMAKE_COMMAND} -E make_directory "${CMAKE_BINARY_DIR}/editor_assets/materials"
+        COMMAND ${CMAKE_COMMAND} -E make_directory "${_vice_editor_default_cooked_root}/materials"
         COMMAND $<TARGET_FILE:vice_rigid_material_cooker> --input "${_source}" --output "${_output}"
-        DEPENDS vice_rigid_material_cooker "${_source}"
+        DEPENDS vice_rigid_material_cooker "${_source}" "${_vice_editor_default_project_file}"
         VERBATIM
       )
       list(APPEND _vice_editor_asset_outputs "${_output}")
