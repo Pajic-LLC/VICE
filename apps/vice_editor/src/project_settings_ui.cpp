@@ -6,6 +6,7 @@
 #include <array>
 #include <cstring>
 #include <string>
+#include <utility>
 
 namespace vice::editor {
 namespace {
