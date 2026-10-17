@@ -32,6 +32,20 @@ if(TARGET vice_editor_asset_index AND TARGET vice_mesh_cooker_lib)
   target_compile_features(vice_editor_asset_index_tests PRIVATE cxx_std_23)
   vice_enable_warnings(vice_editor_asset_index_tests)
   add_test(NAME vice_editor_asset_index_tests COMMAND vice_editor_asset_index_tests)
+
+  add_executable(
+    vice_editor_mesh_picking_tests
+    ../editor_mesh_picking_tests.cpp
+  )
+  target_link_libraries(
+    vice_editor_mesh_picking_tests
+    PRIVATE
+      VICE::EditorAssetIndex
+      VICE::MeshCooker
+  )
+  target_compile_features(vice_editor_mesh_picking_tests PRIVATE cxx_std_23)
+  vice_enable_warnings(vice_editor_mesh_picking_tests)
+  add_test(NAME vice_editor_mesh_picking_tests COMMAND vice_editor_mesh_picking_tests)
 endif()
 
 if(TARGET vice_editor_ui)
