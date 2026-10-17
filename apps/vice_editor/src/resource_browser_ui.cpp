@@ -298,6 +298,9 @@ struct ProjectWorkflowUi::State {
     bool open_project = false;
     bool open_world = false;
     bool save_world_as = false;
+    bool open_unsaved_prompt = false;
+    std::optional<ReplacementKind> pending_replacement;
+    std::filesystem::path pending_path;
     std::optional<ProjectCreateRequest> new_project_request;
     std::optional<std::filesystem::path> open_project_request;
     bool open_development_project_request = false;
@@ -305,6 +308,7 @@ struct ProjectWorkflowUi::State {
     std::optional<std::filesystem::path> open_world_request;
     bool save_world_request = false;
     std::optional<std::filesystem::path> save_world_as_request;
+    std::optional<ConfirmedReplacement> confirmed_replacement;
 };
 
 ProjectWorkflowUi::ProjectWorkflowUi() : state_{std::make_unique<State>()} {}
@@ -315,9 +319,21 @@ ProjectWorkflowUi& ProjectWorkflowUi::operator=(ProjectWorkflowUi&&) noexcept = 
 void ProjectWorkflowUi::draw(const ProjectWorkflowStatus& status) {
     if (state_ == nullptr) return;
 
+    const auto queue_replacement = [&](const ReplacementKind kind, std::filesystem::path path = {}) {
+        if (!status.world_dirty) {
+            if (kind == ReplacementKind::new_world) state_->new_world_request = true;
+            else if (kind == ReplacementKind::open_world) state_->open_world_request = std::move(path);
+            else state_->open_project_request = std::move(path);
+            return;
+        }
+        state_->pending_replacement = kind;
+        state_->pending_path = std::move(path);
+        state_->open_unsaved_prompt = true;
+    };
+
     if (!status.project_loaded) {
         const ImGuiViewport* viewport = ImGui::GetMainViewport();
-        const ImVec2 size{680.0F, 410.0F};
+        const ImVec2 size{680.0F, 470.0F};
         ImGui::SetNextWindowPos(
             ImVec2{viewport->WorkPos.x + viewport->WorkSize.x * 0.5F, viewport->WorkPos.y + viewport->WorkSize.y * 0.5F},
             ImGuiCond_Always,
@@ -327,7 +343,7 @@ void ProjectWorkflowUi::draw(const ProjectWorkflowStatus& status) {
         const ImGuiWindowFlags flags = ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize |
             ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoTitleBar;
         ImGui::Begin("###VICE.ProjectStart", nullptr, flags);
-        ImGui::Dummy(ImVec2{0.0F, 36.0F});
+        ImGui::Dummy(ImVec2{0.0F, 30.0F});
         const float center_x = ImGui::GetWindowWidth() * 0.5F;
         const char* title = "VICE";
         const ImVec2 title_size = ImGui::CalcTextSize(title);
@@ -337,7 +353,7 @@ void ProjectWorkflowUi::draw(const ProjectWorkflowStatus& status) {
         const ImVec2 subtitle_size = ImGui::CalcTextSize(subtitle);
         ImGui::SetCursorPosX(center_x - subtitle_size.x * 0.5F);
         ImGui::TextDisabled("%s", subtitle);
-        ImGui::Dummy(ImVec2{0.0F, 34.0F});
+        ImGui::Dummy(ImVec2{0.0F, 28.0F});
 
         const float button_width = 240.0F;
         ImGui::SetCursorPosX(center_x - button_width - 8.0F);
@@ -345,14 +361,32 @@ void ProjectWorkflowUi::draw(const ProjectWorkflowStatus& status) {
         ImGui::SameLine(0.0F, 16.0F);
         if (ImGui::Button("Open Project", ImVec2{button_width, 48.0F})) state_->open_project = true;
 
+        if (!status.recent_projects.empty()) {
+            ImGui::Dummy(ImVec2{0.0F, 24.0F});
+            ImGui::TextDisabled("Recent");
+            const std::size_t visible_count = std::min<std::size_t>(status.recent_projects.size(), 4U);
+            for (std::size_t index = 0; index < visible_count; ++index) {
+                const auto& recent = status.recent_projects[index];
+                ImGui::PushID(static_cast<int>(index));
+                const std::string label = recent.name + "##RecentProject";
+                if (ImGui::Selectable(label.c_str(), false, ImGuiSelectableFlags_None, ImVec2{0.0F, 28.0F})) {
+                    state_->open_project_request = recent.manifest_path;
+                }
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip("%s", recent.manifest_path.generic_string().c_str());
+                }
+                ImGui::PopID();
+            }
+        }
+
         if (!status.development_project.empty()) {
-            ImGui::Dummy(ImVec2{0.0F, 26.0F});
+            ImGui::Dummy(ImVec2{0.0F, 18.0F});
             const char* dev_label = "Open VICE Lab development project";
             const ImVec2 dev_size = ImGui::CalcTextSize(dev_label);
             ImGui::SetCursorPosX(center_x - (dev_size.x + 28.0F) * 0.5F);
             if (ImGui::SmallButton(dev_label)) state_->open_development_project_request = true;
         }
-        ImGui::Dummy(ImVec2{0.0F, 26.0F});
+        ImGui::Dummy(ImVec2{0.0F, 14.0F});
         draw_error_text(status.diagnostics);
         ImGui::End();
     } else {
@@ -369,23 +403,17 @@ void ProjectWorkflowUi::draw(const ProjectWorkflowStatus& status) {
                 ImGui::TextColored(ImVec4{0.96F, 0.70F, 0.28F, 1.0F}, "Unsaved");
             }
 
-            const bool replacement_allowed = !status.world_dirty;
-            if (!replacement_allowed) ImGui::BeginDisabled();
-            if (ImGui::Button("New World")) state_->new_world_request = true;
+            if (ImGui::Button("New World")) queue_replacement(ReplacementKind::new_world);
             ImGui::SameLine();
             if (ImGui::Button("Open World")) state_->open_world = true;
             ImGui::SameLine();
             if (ImGui::Button("Switch Project")) state_->open_project = true;
-            if (!replacement_allowed) ImGui::EndDisabled();
 
             if (ImGui::Button("Save")) state_->save_world_request = true;
             ImGui::SameLine();
             if (ImGui::Button("Save As")) {
                 if (status.world_has_path) copy_path(state_->save_world_path, status.world_path);
                 state_->save_world_as = true;
-            }
-            if (status.world_dirty) {
-                ImGui::TextDisabled("Save or discard the current World before replacing it.");
             }
             draw_error_text(status.diagnostics);
         }
@@ -430,7 +458,10 @@ void ProjectWorkflowUi::draw(const ProjectWorkflowStatus& status) {
             state_->open_project_path.size()
         );
         if (ImGui::Button("Open", ImVec2{110.0F, 0.0F}) && state_->open_project_path[0] != '\0') {
-            state_->open_project_request = std::filesystem::path{state_->open_project_path.data()};
+            queue_replacement(
+                ReplacementKind::switch_project,
+                std::filesystem::path{state_->open_project_path.data()}
+            );
             ImGui::CloseCurrentPopup();
         }
         ImGui::SameLine();
@@ -451,7 +482,10 @@ void ProjectWorkflowUi::draw(const ProjectWorkflowStatus& status) {
             state_->open_world_path.size()
         );
         if (ImGui::Button("Open", ImVec2{110.0F, 0.0F}) && state_->open_world_path[0] != '\0') {
-            state_->open_world_request = std::filesystem::path{state_->open_world_path.data()};
+            queue_replacement(
+                ReplacementKind::open_world,
+                std::filesystem::path{state_->open_world_path.data()}
+            );
             ImGui::CloseCurrentPopup();
         }
         ImGui::SameLine();
@@ -477,6 +511,46 @@ void ProjectWorkflowUi::draw(const ProjectWorkflowStatus& status) {
         }
         ImGui::SameLine();
         if (ImGui::Button("Cancel", ImVec2{110.0F, 0.0F})) ImGui::CloseCurrentPopup();
+        ImGui::EndPopup();
+    }
+
+    if (state_->open_unsaved_prompt) ImGui::OpenPopup("Unsaved Changes###VICE.UnsavedChanges");
+    state_->open_unsaved_prompt = false;
+    if (ImGui::BeginPopupModal("Unsaved Changes###VICE.UnsavedChanges", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+        ImGui::TextUnformatted(status.world_name.c_str());
+        ImGui::TextDisabled("Save changes before continuing?");
+        ImGui::Dummy(ImVec2{0.0F, 6.0F});
+        if (ImGui::Button("Save", ImVec2{110.0F, 0.0F})) {
+            if (state_->pending_replacement.has_value()) {
+                state_->confirmed_replacement = ConfirmedReplacement{
+                    .kind = *state_->pending_replacement,
+                    .resolution = DirtyResolution::save,
+                    .path = state_->pending_path,
+                };
+            }
+            state_->pending_replacement.reset();
+            state_->pending_path.clear();
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Discard", ImVec2{110.0F, 0.0F})) {
+            if (state_->pending_replacement.has_value()) {
+                state_->confirmed_replacement = ConfirmedReplacement{
+                    .kind = *state_->pending_replacement,
+                    .resolution = DirtyResolution::discard,
+                    .path = state_->pending_path,
+                };
+            }
+            state_->pending_replacement.reset();
+            state_->pending_path.clear();
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Cancel", ImVec2{110.0F, 0.0F})) {
+            state_->pending_replacement.reset();
+            state_->pending_path.clear();
+            ImGui::CloseCurrentPopup();
+        }
         ImGui::EndPopup();
     }
 }
@@ -527,6 +601,13 @@ std::optional<std::filesystem::path> ProjectWorkflowUi::consume_save_world_as_re
     if (state_ == nullptr) return std::nullopt;
     auto request = std::move(state_->save_world_as_request);
     state_->save_world_as_request.reset();
+    return request;
+}
+
+std::optional<ConfirmedReplacement> ProjectWorkflowUi::consume_confirmed_replacement() {
+    if (state_ == nullptr) return std::nullopt;
+    auto request = std::move(state_->confirmed_replacement);
+    state_->confirmed_replacement.reset();
     return request;
 }
 
