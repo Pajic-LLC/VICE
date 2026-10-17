@@ -28,8 +28,6 @@ enum class AssetKind : std::uint8_t {
 struct MeshBounds {
     math::Vec3 minimum{};
     math::Vec3 maximum{};
-
-    friend bool operator==(const MeshBounds&, const MeshBounds&) = default;
 };
 
 struct AssetRecord {
