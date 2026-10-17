@@ -4,6 +4,7 @@
 #include <vice/world/persistent_id.hpp>
 #include <vice/world/world.hpp>
 
+#include <algorithm>
 #include <cstdlib>
 #include <iostream>
 #include <string_view>
@@ -101,6 +102,22 @@ int main() {
     require(snapshot.bodies.size() == 1U, "snapshot cube body");
     require(snapshot.characters.size() == 1U, "snapshot character");
     require(snapshot.bodies.front().owner == *cube_id, "body stable owner");
+
+    const auto first_region = std::find_if(
+        snapshot.regions.begin(), snapshot.regions.end(),
+        [](const editor::PreviewRegionSnapshot& region) {
+            return region.region.id == world::RegionId{1};
+        }
+    );
+    require(first_region != snapshot.regions.end(), "first preview region");
+    require(first_region->global_minimum.has_value(), "first region global minimum");
+    require(first_region->global_maximum.has_value(), "first region global maximum");
+    require(first_region->global_minimum->x == -8.0, "region minimum applies origin x");
+    require(first_region->global_minimum->y == -8.0, "region minimum y");
+    require(first_region->global_minimum->z == -8.0, "region minimum z");
+    require(first_region->global_maximum->x == 0.0, "region maximum applies origin x");
+    require(first_region->global_maximum->y == 8.0, "region maximum y");
+    require(first_region->global_maximum->z == 8.0, "region maximum z");
 
     preview.play();
     require(preview.playback() == editor::PreviewPlayback::running, "play state");
