@@ -35,6 +35,7 @@ add_library(
   vice_editor_asset_index
   STATIC
     src/asset_index.cpp
+    src/mesh_picking.cpp
 )
 
 add_library(VICE::EditorAssetIndex ALIAS vice_editor_asset_index)
@@ -48,6 +49,7 @@ target_include_directories(
 target_link_libraries(
   vice_editor_asset_index
   PUBLIC
+    VICE::Math
     VICE::Render
     VICE::RigidBody
     VICE::World
@@ -176,9 +178,6 @@ if(VICE_BUILD_TOOLS)
         VERBATIM
       )
       list(APPEND _vice_editor_asset_outputs "${_output}")
-      if(_name STREQUAL "vice_lab_ramp")
-        set(_vice_editor_mesh_asset "${_output}")
-      endif()
     endforeach()
   endif()
 
@@ -224,14 +223,6 @@ if(VICE_BUILD_TOOLS)
       vice_editor
       PRIVATE
         VICE_EDITOR_COOKED_WORLD="${_vice_editor_world_asset}"
-    )
-  endif()
-
-  if(DEFINED _vice_editor_mesh_asset)
-    target_compile_definitions(
-      vice_editor
-      PRIVATE
-        VICE_EDITOR_COOKED_SCENE_MESH="${_vice_editor_mesh_asset}"
     )
   endif()
 endif()
