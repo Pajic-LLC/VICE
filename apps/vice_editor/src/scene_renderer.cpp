@@ -563,7 +563,7 @@ bool SceneRenderer::render(
             .width = viewport_width,
             .height = viewport_height,
         }) ||
-        !commands.set_scissor(render::ScissorRect{
+        !commands.set_scissor_rect(render::ScissorRect{
             .x = scissor_x,
             .y = scissor_y,
             .width = scissor_width,
