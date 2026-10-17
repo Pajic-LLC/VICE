@@ -19,6 +19,7 @@
 #include <vice/jobs/jobs.hpp>
 #include <vice/platform/event.hpp>
 #include <vice/platform/services.hpp>
+#include <vice/project/project.hpp>
 #include <vice/render/rhi.hpp>
 #include <vice/render/telemetry.hpp>
 #include <vice/world/persistent_id.hpp>
@@ -106,79 +107,35 @@ constexpr std::string_view cube_id_text = "10000000-0000-4000-8000-000000000002"
     );
 }
 
-[[nodiscard]] std::filesystem::path editor_save_path() {
-#if defined(VICE_EDITOR_SAVE_FILE)
-    return std::filesystem::path{VICE_EDITOR_SAVE_FILE};
+[[nodiscard]] std::filesystem::path editor_default_project_path() {
+#if defined(VICE_EDITOR_DEFAULT_PROJECT)
+    return std::filesystem::path{VICE_EDITOR_DEFAULT_PROJECT};
 #else
     return {};
 #endif
 }
 
-[[nodiscard]] std::filesystem::path editor_asset_source_root() {
-#if defined(VICE_EDITOR_ASSET_SOURCE_ROOT)
-    return std::filesystem::path{VICE_EDITOR_ASSET_SOURCE_ROOT};
+[[nodiscard]] std::filesystem::path editor_asset_cache_root() {
+#if defined(VICE_EDITOR_ASSET_CACHE_ROOT)
+    return std::filesystem::path{VICE_EDITOR_ASSET_CACHE_ROOT};
 #else
     return {};
 #endif
 }
 
-[[nodiscard]] std::filesystem::path editor_asset_cooked_root() {
-#if defined(VICE_EDITOR_ASSET_COOKED_ROOT)
-    return std::filesystem::path{VICE_EDITOR_ASSET_COOKED_ROOT};
+[[nodiscard]] std::filesystem::path editor_state_root() {
+#if defined(VICE_EDITOR_STATE_ROOT)
+    return std::filesystem::path{VICE_EDITOR_STATE_ROOT};
 #else
     return {};
 #endif
 }
 
-[[nodiscard]] bool load_editor_world(
-    vice::world::World& world,
-    const std::filesystem::path& save_path
-) {
-    if (!save_path.empty()) {
-        std::error_code error;
-        const bool save_exists = std::filesystem::exists(save_path, error);
-        if (error) {
-            vice::core::log(
-                vice::core::LogLevel::error,
-                "VICE Editor could not inspect its saved World: " + error.message()
-            );
-            return false;
-        }
-        if (save_exists) {
-            const auto loaded = vice::world::load_world_snapshot(save_path);
-            if (!loaded.snapshot.has_value() || !world.restore(*loaded.snapshot)) {
-                vice::core::log(
-                    vice::core::LogLevel::error,
-                    "VICE Editor saved World is invalid: " + loaded.diagnostics
-                );
-                return false;
-            }
-            vice::core::log(vice::core::LogLevel::info, "VICE Editor restored the saved World.");
-            return true;
-        }
-    }
-
-#if defined(VICE_EDITOR_COOKED_WORLD)
-    const auto loaded = vice::world::load_world_snapshot(VICE_EDITOR_COOKED_WORLD);
-    if (!loaded.snapshot.has_value() || !world.restore(*loaded.snapshot)) {
-        vice::core::log(
-            vice::core::LogLevel::error,
-            "VICE Editor could not load the authored World: " + loaded.diagnostics
-        );
-        return false;
-    }
-    vice::core::log(vice::core::LogLevel::info, "VICE Editor loaded the authored VICE Lab World.");
-    return true;
+[[nodiscard]] std::filesystem::path editor_legacy_save_path() {
+#if defined(VICE_EDITOR_LEGACY_SAVE_FILE)
+    return std::filesystem::path{VICE_EDITOR_LEGACY_SAVE_FILE};
 #else
-    if (!build_fallback_world(world)) {
-        vice::core::log(vice::core::LogLevel::error, "VICE Editor could not create its fallback World.");
-        return false;
-    }
-    vice::core::log(
-        vice::core::LogLevel::warning,
-        "VICE Editor is using the development World fallback because cooked tools are disabled."
-    );
-    return true;
+    return {};
 #endif
 }
 
@@ -188,6 +145,113 @@ constexpr std::string_view cube_id_text = "10000000-0000-4000-8000-000000000002"
 #else
     return {};
 #endif
+}
+
+[[nodiscard]] std::filesystem::path project_save_path(const vice::project::Manifest& project) {
+    const auto root = editor_state_root();
+    if (root.empty() || !project.id) return {};
+    return root / project.id.to_string() / "world.vworldc";
+}
+
+[[nodiscard]] std::filesystem::path project_cooked_root(const vice::project::Manifest& project) {
+    const auto root = editor_asset_cache_root();
+    if (root.empty() || !project.id) return {};
+    return root / project.id.to_string();
+}
+
+[[nodiscard]] std::filesystem::path project_cooked_startup_world(
+    const vice::project::Manifest& project
+) {
+    auto relative = project.startup_world;
+    relative.replace_extension(".vworldc");
+    const auto cooked_root = project_cooked_root(project);
+    return cooked_root.empty() ? std::filesystem::path{} : (cooked_root / relative).lexically_normal();
+}
+
+[[nodiscard]] bool restore_world_from_file(
+    vice::world::World& world,
+    const std::filesystem::path& path,
+    const std::string_view label
+) {
+    const auto loaded = vice::world::load_world_snapshot(path);
+    if (!loaded.snapshot.has_value() || !world.restore(*loaded.snapshot)) {
+        vice::core::log(
+            vice::core::LogLevel::error,
+            "VICE Editor could not load " + std::string{label} + ": " + loaded.diagnostics
+        );
+        return false;
+    }
+    return true;
+}
+
+[[nodiscard]] bool load_editor_world(
+    vice::world::World& world,
+    const std::filesystem::path& save_path,
+    const std::filesystem::path& legacy_save_path,
+    const std::filesystem::path& cooked_startup_world,
+    const bool allow_development_fallback
+) {
+    const auto try_saved_world = [&](const std::filesystem::path& path, const bool legacy) -> std::optional<bool> {
+        if (path.empty()) return std::nullopt;
+        std::error_code error;
+        const bool exists = std::filesystem::exists(path, error);
+        if (error) {
+            vice::core::log(
+                vice::core::LogLevel::error,
+                "VICE Editor could not inspect its saved World: " + error.message()
+            );
+            return false;
+        }
+        if (!exists) return std::nullopt;
+        if (!restore_world_from_file(world, path, legacy ? "the legacy saved World" : "the saved World")) {
+            return false;
+        }
+        vice::core::log(
+            vice::core::LogLevel::info,
+            legacy
+                ? "VICE Editor restored the legacy saved World. The next save will scope it to this project."
+                : "VICE Editor restored the project World."
+        );
+        return true;
+    };
+
+    if (const auto saved = try_saved_world(save_path, false); saved.has_value()) return *saved;
+    if (const auto legacy = try_saved_world(legacy_save_path, true); legacy.has_value()) return *legacy;
+
+    if (!cooked_startup_world.empty()) {
+        std::error_code error;
+        const bool exists = std::filesystem::exists(cooked_startup_world, error);
+        if (error) {
+            vice::core::log(
+                vice::core::LogLevel::error,
+                "VICE Editor could not inspect the cooked startup World: " + error.message()
+            );
+            return false;
+        }
+        if (exists) {
+            if (!restore_world_from_file(world, cooked_startup_world, "the project startup World")) return false;
+            vice::core::log(vice::core::LogLevel::info, "VICE Editor loaded the project startup World.");
+            return true;
+        }
+    }
+
+    if (allow_development_fallback) {
+        if (!build_fallback_world(world)) {
+            vice::core::log(vice::core::LogLevel::error, "VICE Editor could not create its fallback World.");
+            return false;
+        }
+        vice::core::log(
+            vice::core::LogLevel::warning,
+            "VICE Editor is using the development World fallback because the startup World is not cooked."
+        );
+        return true;
+    }
+
+    vice::core::log(
+        vice::core::LogLevel::error,
+        "VICE Editor could not open the project because its startup World is not available in the cooked asset cache."
+    );
+    return false;
 }
 
 [[nodiscard]] bool route_event_to_scene(
@@ -208,7 +272,7 @@ constexpr std::string_view cube_id_text = "10000000-0000-4000-8000-000000000002"
 
 } // namespace
 
-int main() {
+int main(const int argc, char** argv) {
     using vice::core::LogLevel;
     using vice::core::log;
 
@@ -226,6 +290,74 @@ int main() {
     log(LogLevel::info, std::string{"VICE Editor · VICE "} + std::string{vice::core::version_string()});
     log(LogLevel::info, std::string{"Platform: "} + std::string{vice::core::platform_name(platform)});
 
+    if (argc > 2) {
+        log(LogLevel::error, "VICE Editor accepts at most one project manifest path.");
+        return 1;
+    }
+
+    const bool using_default_project = argc < 2;
+    std::filesystem::path project_path = using_default_project
+        ? editor_default_project_path()
+        : std::filesystem::path{argv[1]};
+    if (project_path.empty()) {
+        log(LogLevel::error, "VICE Editor has no project manifest to open.");
+        return 1;
+    }
+
+    std::error_code project_path_error;
+    project_path = std::filesystem::absolute(project_path, project_path_error).lexically_normal();
+    if (project_path_error) {
+        log(LogLevel::error, "VICE Editor could not resolve the project path: " + project_path_error.message());
+        return 1;
+    }
+
+    const auto loaded_project = vice::project::load_manifest(project_path);
+    if (!loaded_project.manifest.has_value()) {
+        log(LogLevel::error, "VICE Editor could not open the project: " + loaded_project.diagnostics);
+        return 1;
+    }
+    const vice::project::Manifest project = *loaded_project.manifest;
+    const std::filesystem::path asset_source_root = vice::project::resolve_asset_root(project_path, project);
+    const std::filesystem::path startup_world_source = vice::project::resolve_startup_world(project_path, project);
+    const std::filesystem::path cooked_asset_root = project_cooked_root(project);
+    if (asset_source_root.empty() || startup_world_source.empty() || cooked_asset_root.empty()) {
+        log(LogLevel::error, "VICE Editor could not resolve the project asset paths.");
+        return 1;
+    }
+
+    std::error_code asset_error;
+    if (!std::filesystem::is_directory(asset_source_root, asset_error) || asset_error) {
+        log(
+            LogLevel::error,
+            asset_error
+                ? "VICE Editor could not inspect the project asset root: " + asset_error.message()
+                : "VICE Editor project asset root does not exist: " + asset_source_root.generic_string()
+        );
+        return 1;
+    }
+    asset_error.clear();
+    if (!std::filesystem::is_regular_file(startup_world_source, asset_error) || asset_error) {
+        log(
+            LogLevel::error,
+            asset_error
+                ? "VICE Editor could not inspect the project startup World: " + asset_error.message()
+                : "VICE Editor project startup World does not exist: " + startup_world_source.generic_string()
+        );
+        return 1;
+    }
+
+    const std::filesystem::path save_path = project_save_path(project);
+    if (!save_path.empty()) {
+        std::error_code save_directory_error;
+        std::filesystem::create_directories(save_path.parent_path(), save_directory_error);
+        if (save_directory_error) {
+            log(LogLevel::error, "VICE Editor could not create the project state directory: " + save_directory_error.message());
+            return 1;
+        }
+    }
+
+    log(LogLevel::info, "Project: " + project.name + " · " + project_path.generic_string());
+
     vice::jobs::Scheduler jobs;
     auto platform_services = vice::platform::PlatformServices::create();
     if (!platform_services) {
@@ -234,7 +366,7 @@ int main() {
     }
 
     vice::platform::WindowDesc window_desc;
-    window_desc.title = "VICE Editor";
+    window_desc.title = "VICE Editor · " + project.name;
     window_desc.width = 1600;
     window_desc.height = 980;
     auto window = platform_services->create_window(window_desc);
@@ -256,13 +388,20 @@ int main() {
     }
 
     vice::editor::AssetIndex assets;
-    if (!assets.refresh(editor_asset_source_root(), editor_asset_cooked_root())) {
+    if (!assets.refresh(asset_source_root, cooked_asset_root)) {
         log(LogLevel::warning, "VICE Editor asset index: " + assets.diagnostics());
     }
 
-    const std::filesystem::path save_path = editor_save_path();
     vice::world::World world;
-    if (!load_editor_world(world, save_path)) return 1;
+    if (!load_editor_world(
+            world,
+            save_path,
+            using_default_project ? editor_legacy_save_path() : std::filesystem::path{},
+            project_cooked_startup_world(project),
+            using_default_project
+        )) {
+        return 1;
+    }
 
     vice::editor::SelectionModel selection;
     if (const auto cube_id = vice::world::PersistentId::parse(cube_id_text); cube_id.has_value() &&
@@ -302,7 +441,7 @@ int main() {
     }
 
     vice::editor::UiStatus status;
-    status.world_name = "VICE Lab World";
+    status.world_name = project.name + " · " + project.startup_world.stem().string();
     status.render_backend = std::string{vice::render::backend_name(render_device->backend())};
     status.world_loaded = true;
 
@@ -450,7 +589,7 @@ int main() {
                 std::string diagnostics;
                 if (vice::world::save_world_snapshot(save_path, world.snapshot(), &diagnostics)) {
                     history.mark_saved();
-                    log(LogLevel::info, "VICE Editor saved the World.");
+                    log(LogLevel::info, "VICE Editor saved the World for project " + project.name + ".");
                 } else {
                     log(LogLevel::error, "VICE Editor could not save the World: " + diagnostics);
                 }
