@@ -68,6 +68,7 @@ endif()
 
 if(VICE_BUILD_EDITOR)
   add_subdirectory(apps/vice_editor)
+  add_subdirectory(apps/vice_editor/authored)
 endif()
 
 if(VICE_BUILD_TESTS)
