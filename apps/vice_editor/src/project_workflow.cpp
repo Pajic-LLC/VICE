@@ -1,10 +1,12 @@
 #include <vice/editor/project_workflow.hpp>
 
 #include <vice/project/project.hpp>
-#include <vice/tools/world_cooker.hpp>
 #include <vice/world/snapshot_file.hpp>
 
-#include <array>
+#if defined(VICE_EDITOR_HAS_WORLD_COOKER)
+#include <vice/tools/world_cooker.hpp>
+#endif
+
 #include <cctype>
 #include <cstdint>
 #include <filesystem>
@@ -58,6 +60,7 @@ constexpr std::string_view default_world_source =
     return true;
 }
 
+#if defined(VICE_EDITOR_HAS_WORLD_COOKER)
 [[nodiscard]] std::optional<std::string> read_text_file(
     const std::filesystem::path& path,
     std::string& diagnostics
@@ -75,6 +78,7 @@ constexpr std::string_view default_world_source =
     }
     return stream.str();
 }
+#endif
 
 class ProjectRollback final {
 public:
@@ -199,6 +203,7 @@ bool cook_project_startup_world(
     const ProjectSession& session,
     std::string* const diagnostics
 ) {
+#if defined(VICE_EDITOR_HAS_WORLD_COOKER)
     std::string local_diagnostics;
     const auto source = read_text_file(session.startup_world_source(), local_diagnostics);
     if (!source.has_value()) {
@@ -238,6 +243,13 @@ bool cook_project_startup_world(
 
     if (diagnostics != nullptr) diagnostics->clear();
     return true;
+#else
+    (void)session;
+    if (diagnostics != nullptr) {
+        *diagnostics = "This VICE Editor build does not include the World cooker.";
+    }
+    return false;
+#endif
 }
 
 } // namespace vice::editor
