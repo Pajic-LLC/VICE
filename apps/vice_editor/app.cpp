@@ -1,3 +1,4 @@
+#include "resource_mesh_renderer.hpp"
 #include "scene_renderer.hpp"
 
 #include <vice/core/build.hpp>
@@ -5,6 +6,8 @@
 #include <vice/core/platform.hpp>
 #include <vice/core/time.hpp>
 #include <vice/core/version.hpp>
+#include <vice/editor/asset_index.hpp>
+#include <vice/editor/resource_browser_ui.hpp>
 #include <vice/editor/state.hpp>
 #include <vice/editor/ui.hpp>
 #include <vice/editor/ui_renderer.hpp>
@@ -100,6 +103,22 @@ constexpr std::string_view cube_id_text = "10000000-0000-4000-8000-000000000002"
 [[nodiscard]] std::filesystem::path editor_save_path() {
 #if defined(VICE_EDITOR_SAVE_FILE)
     return std::filesystem::path{VICE_EDITOR_SAVE_FILE};
+#else
+    return {};
+#endif
+}
+
+[[nodiscard]] std::filesystem::path editor_asset_source_root() {
+#if defined(VICE_EDITOR_ASSET_SOURCE_ROOT)
+    return std::filesystem::path{VICE_EDITOR_ASSET_SOURCE_ROOT};
+#else
+    return {};
+#endif
+}
+
+[[nodiscard]] std::filesystem::path editor_asset_cooked_root() {
+#if defined(VICE_EDITOR_ASSET_COOKED_ROOT)
+    return std::filesystem::path{VICE_EDITOR_ASSET_COOKED_ROOT};
 #else
     return {};
 #endif
@@ -238,6 +257,11 @@ int main() {
         return 1;
     }
 
+    vice::editor::AssetIndex assets;
+    if (!assets.refresh(editor_asset_source_root(), editor_asset_cooked_root())) {
+        log(LogLevel::warning, "VICE Editor asset index: " + assets.diagnostics());
+    }
+
     const std::filesystem::path save_path = editor_save_path();
     vice::world::World world;
     if (!load_editor_world(world, save_path)) return 1;
@@ -260,11 +284,14 @@ int main() {
     }
 
     vice::editor::EditorUi ui{layout_path};
+    vice::editor::ResourceBrowserUi resource_browser;
     vice::editor::UiRhiRenderer ui_renderer;
     vice::editor::detail::SceneRenderer scene_renderer;
+    vice::editor::detail::ResourceMeshRenderer resource_mesh_renderer;
     if (!ui.valid() ||
         !ui_renderer.initialize(*render_device, swapchain->color_format()) ||
-        !scene_renderer.initialize(*render_device, swapchain->color_format(), editor_mesh_path())) {
+        !scene_renderer.initialize(*render_device, swapchain->color_format(), editor_mesh_path()) ||
+        !resource_mesh_renderer.initialize(*render_device, swapchain->color_format())) {
         log(LogLevel::error, "VICE Editor could not initialize its visual workspace.");
         return 1;
     }
@@ -296,6 +323,7 @@ int main() {
                     history,
                     ui.transform_tool()
                 );
+                resource_mesh_renderer.handle_event(event, active_viewport);
             }
 
             std::visit(
@@ -339,19 +367,38 @@ int main() {
         }
 
         scene_renderer.update(delta_seconds, active_viewport);
+        resource_mesh_renderer.update(delta_seconds, active_viewport);
         if (!ui.begin_frame(metrics, delta_seconds)) {
             log(LogLevel::error, "VICE Editor could not begin a UI frame.");
             break;
         }
         ui.draw(world, selection, history, console, status);
+        resource_browser.draw(assets);
         ui.end_frame();
         active_viewport = ui.scene_viewport();
 
+        if (const auto mesh_request = resource_browser.consume_add_mesh_request(); mesh_request.has_value()) {
+            std::string diagnostics;
+            const auto created = vice::editor::create_mesh_instance(
+                world,
+                history,
+                *mesh_request,
+                resource_mesh_renderer.suggested_spawn_position(world),
+                &diagnostics
+            );
+            if (created.has_value()) {
+                selection.select(*created);
+                log(LogLevel::info, "VICE Editor added a mesh instance to World.");
+            } else {
+                log(LogLevel::error, "VICE Editor could not add the mesh instance: " + diagnostics);
+            }
+        }
+
         if (ui.consume_undo_request() && history.can_undo() && !history.undo(world)) {
-            log(LogLevel::error, "VICE Editor could not undo the last transform edit.");
+            log(LogLevel::error, "VICE Editor could not undo the last authoring command.");
         }
         if (ui.consume_redo_request() && history.can_redo() && !history.redo(world)) {
-            log(LogLevel::error, "VICE Editor could not redo the next transform edit.");
+            log(LogLevel::error, "VICE Editor could not redo the next authoring command.");
         }
         if (ui.consume_save_request()) {
             if (save_path.empty()) {
@@ -381,6 +428,15 @@ int main() {
         pass.clear_depth_attachment = true;
 
         if (!commands->begin_render_pass(*swapchain, pass) ||
+            (active_viewport.drawable() &&
+                !resource_mesh_renderer.render(
+                    world,
+                    selection,
+                    assets,
+                    *commands,
+                    active_viewport,
+                    metrics
+                )) ||
             (active_viewport.drawable() &&
                 !scene_renderer.render(
                     world,
