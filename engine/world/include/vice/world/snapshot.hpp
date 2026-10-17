@@ -14,6 +14,7 @@ struct SnapshotEntity {
     PersistentId persistent_id{};
     std::optional<SpatialState> spatial_state;
     std::optional<AuthoredTransform> authored_transform;
+    std::vector<ResourceReference> resource_references;
 };
 
 struct SnapshotRelation {

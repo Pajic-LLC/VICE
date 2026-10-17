@@ -29,6 +29,7 @@ constexpr std::uint32_t max_resources = 1'000'000U;
 constexpr std::uint32_t max_regions = 65'536U;
 constexpr std::uint32_t max_entities = 4'000'000U;
 constexpr std::uint32_t max_relations = 8'000'000U;
+constexpr std::uint32_t max_resource_references_per_entity = 256U;
 constexpr std::uint32_t max_name_bytes = 4'096U;
 constexpr std::uint64_t fnv_offset_basis = 14'695'981'039'346'656'037ULL;
 constexpr std::uint64_t fnv_prime = 1'099'511'628'211ULL;
@@ -205,6 +206,12 @@ WorldSnapshotEncodeResult encode_world_snapshot(const WorldSnapshot& snapshot_da
             return result;
         }
     }
+    for (const auto& entity : snapshot.entities) {
+        if (entity.resource_references.size() > max_resource_references_per_entity) {
+            result.diagnostics = "World snapshot contains too many resource references on one entity.";
+            return result;
+        }
+    }
 
     std::vector<std::byte> payload;
     for (const auto& type : snapshot.component_types) {
@@ -253,6 +260,11 @@ WorldSnapshotEncodeResult encode_world_snapshot(const WorldSnapshot& snapshot_da
             append_f32(payload, entity.authored_transform->scale.x);
             append_f32(payload, entity.authored_transform->scale.y);
             append_f32(payload, entity.authored_transform->scale.z);
+        }
+        append_u32(payload, static_cast<std::uint32_t>(entity.resource_references.size()));
+        for (const auto reference : entity.resource_references) {
+            append_u8(payload, static_cast<std::uint8_t>(reference.role));
+            append_id(payload, reference.resource.value);
         }
     }
     for (const auto& relation : snapshot.relations) {
@@ -428,7 +440,31 @@ WorldSnapshotDecodeResult decode_world_snapshot(const std::span<const std::byte>
                 entity.authored_transform = transform;
             }
         }
-        snapshot.entities.push_back(entity);
+
+        if (version >= 3U) {
+            std::uint32_t reference_count = 0;
+            if (!reader.read_u32(reference_count) ||
+                reference_count > max_resource_references_per_entity) {
+                result.diagnostics = "World snapshot contains invalid entity resource reference metadata.";
+                return result;
+            }
+            entity.resource_references.reserve(reference_count);
+            for (std::uint32_t reference_index = 0; reference_index < reference_count; ++reference_index) {
+                std::uint8_t role_value = 0;
+                ResourceId resource;
+                if (!reader.read_u8(role_value) || !reader.read_id(resource.value)) {
+                    result.diagnostics = "World snapshot ended inside an entity resource reference.";
+                    return result;
+                }
+                const auto role = static_cast<ResourceRole>(role_value);
+                if (!valid(role) || !resource.valid()) {
+                    result.diagnostics = "World snapshot contains an invalid entity resource reference.";
+                    return result;
+                }
+                entity.resource_references.push_back(ResourceReference{role, resource});
+            }
+        }
+        snapshot.entities.push_back(std::move(entity));
     }
     for (std::uint32_t index = 0; index < relation_count; ++index) {
         SnapshotRelation relation;

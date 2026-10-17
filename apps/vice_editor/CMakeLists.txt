@@ -32,6 +32,30 @@ target_compile_features(vice_editor_state PUBLIC cxx_std_23)
 vice_enable_warnings(vice_editor_state)
 
 add_library(
+  vice_editor_asset_index
+  STATIC
+    src/asset_index.cpp
+)
+
+add_library(VICE::EditorAssetIndex ALIAS vice_editor_asset_index)
+
+target_include_directories(
+  vice_editor_asset_index
+  PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+)
+
+target_link_libraries(
+  vice_editor_asset_index
+  PUBLIC
+    VICE::Render
+    VICE::RigidBody
+    VICE::World
+)
+target_compile_features(vice_editor_asset_index PUBLIC cxx_std_23)
+vice_enable_warnings(vice_editor_asset_index)
+
+add_library(
   vice_editor_imgui
   STATIC
     "${dearimgui_SOURCE_DIR}/imgui.cpp"
@@ -51,6 +75,7 @@ set_target_properties(vice_editor_imgui PROPERTIES FOLDER "Third Party")
 add_library(
   vice_editor_ui
   STATIC
+    src/resource_browser_ui.cpp
     src/ui.cpp
     src/ui_renderer.cpp
     src/ui_theme.cpp
@@ -69,6 +94,7 @@ target_include_directories(
 target_link_libraries(
   vice_editor_ui
   PUBLIC
+    VICE::EditorAssetIndex
     VICE::EditorState
     VICE::Platform
     VICE::Render
@@ -81,6 +107,7 @@ vice_enable_warnings(vice_editor_ui)
 add_executable(
   vice_editor
   app.cpp
+  src/resource_mesh_renderer.cpp
   src/scene_renderer.cpp
 )
 
@@ -99,6 +126,7 @@ target_link_libraries(
     VICE::Platform
     VICE::Render
     VICE::World
+    VICE::EditorAssetIndex
     VICE::EditorState
     VICE::EditorUi
 )
@@ -108,32 +136,90 @@ target_compile_definitions(
   PRIVATE
     VICE_EDITOR_LAYOUT_FILE="${CMAKE_BINARY_DIR}/editor/vice_editor.ini"
     VICE_EDITOR_SAVE_FILE="${CMAKE_BINARY_DIR}/editor/vice_editor_world.vworldc"
+    VICE_EDITOR_ASSET_SOURCE_ROOT="${PROJECT_SOURCE_DIR}/assets"
+    VICE_EDITOR_ASSET_COOKED_ROOT="${CMAKE_BINARY_DIR}/editor_assets"
 )
 vice_enable_warnings(vice_editor)
 
 if(VICE_BUILD_TOOLS)
+  set(_vice_editor_asset_outputs)
+
   if(TARGET vice_world_cooker)
-    set(_vice_editor_world_source "${PROJECT_SOURCE_DIR}/assets/worlds/vice_lab.vworld")
-    set(_vice_editor_world_asset "${CMAKE_BINARY_DIR}/cooked/vice_editor_world.vworldc")
+    file(GLOB CONFIGURE_DEPENDS _vice_editor_world_sources "${PROJECT_SOURCE_DIR}/assets/worlds/*.vworld")
+    foreach(_source IN LISTS _vice_editor_world_sources)
+      get_filename_component(_name "${_source}" NAME_WE)
+      set(_output "${CMAKE_BINARY_DIR}/editor_assets/worlds/${_name}.vworldc")
+      add_custom_command(
+        OUTPUT "${_output}"
+        COMMAND ${CMAKE_COMMAND} -E make_directory "${CMAKE_BINARY_DIR}/editor_assets/worlds"
+        COMMAND $<TARGET_FILE:vice_world_cooker> --input "${_source}" --output "${_output}"
+        DEPENDS vice_world_cooker "${_source}"
+        VERBATIM
+      )
+      list(APPEND _vice_editor_asset_outputs "${_output}")
+      if(_name STREQUAL "vice_lab")
+        set(_vice_editor_world_asset "${_output}")
+      endif()
+    endforeach()
+  endif()
 
-    add_custom_command(
-      OUTPUT "${_vice_editor_world_asset}"
-      COMMAND ${CMAKE_COMMAND} -E make_directory "${CMAKE_BINARY_DIR}/cooked"
-      COMMAND
-        $<TARGET_FILE:vice_world_cooker>
-        --input "${_vice_editor_world_source}"
-        --output "${_vice_editor_world_asset}"
-      DEPENDS
-        vice_world_cooker
-        "${_vice_editor_world_source}"
-      VERBATIM
-    )
+  if(TARGET vice_mesh_cooker)
+    file(GLOB CONFIGURE_DEPENDS _vice_editor_mesh_sources "${PROJECT_SOURCE_DIR}/assets/meshes/*.vmesh")
+    foreach(_source IN LISTS _vice_editor_mesh_sources)
+      get_filename_component(_name "${_source}" NAME_WE)
+      set(_output "${CMAKE_BINARY_DIR}/editor_assets/meshes/${_name}.vmeshc")
+      add_custom_command(
+        OUTPUT "${_output}"
+        COMMAND ${CMAKE_COMMAND} -E make_directory "${CMAKE_BINARY_DIR}/editor_assets/meshes"
+        COMMAND $<TARGET_FILE:vice_mesh_cooker> --input "${_source}" --output "${_output}"
+        DEPENDS vice_mesh_cooker "${_source}"
+        VERBATIM
+      )
+      list(APPEND _vice_editor_asset_outputs "${_output}")
+      if(_name STREQUAL "vice_lab_ramp")
+        set(_vice_editor_mesh_asset "${_output}")
+      endif()
+    endforeach()
+  endif()
 
-    add_custom_target(
-      vice_editor_world_asset
-      DEPENDS "${_vice_editor_world_asset}"
-    )
-    add_dependencies(vice_editor vice_editor_world_asset)
+  if(TARGET vice_collision_cooker)
+    file(GLOB CONFIGURE_DEPENDS _vice_editor_collision_sources "${PROJECT_SOURCE_DIR}/assets/collision/*.vcollision")
+    foreach(_source IN LISTS _vice_editor_collision_sources)
+      get_filename_component(_name "${_source}" NAME_WE)
+      set(_output "${CMAKE_BINARY_DIR}/editor_assets/collision/${_name}.vcollisionc")
+      add_custom_command(
+        OUTPUT "${_output}"
+        COMMAND ${CMAKE_COMMAND} -E make_directory "${CMAKE_BINARY_DIR}/editor_assets/collision"
+        COMMAND $<TARGET_FILE:vice_collision_cooker> --input "${_source}" --output "${_output}"
+        DEPENDS vice_collision_cooker "${_source}"
+        VERBATIM
+      )
+      list(APPEND _vice_editor_asset_outputs "${_output}")
+    endforeach()
+  endif()
+
+  if(TARGET vice_rigid_material_cooker)
+    file(GLOB CONFIGURE_DEPENDS _vice_editor_material_sources "${PROJECT_SOURCE_DIR}/assets/materials/*.vrigmat")
+    foreach(_source IN LISTS _vice_editor_material_sources)
+      get_filename_component(_name "${_source}" NAME_WE)
+      set(_output "${CMAKE_BINARY_DIR}/editor_assets/materials/${_name}.vrigmatc")
+      add_custom_command(
+        OUTPUT "${_output}"
+        COMMAND ${CMAKE_COMMAND} -E make_directory "${CMAKE_BINARY_DIR}/editor_assets/materials"
+        COMMAND $<TARGET_FILE:vice_rigid_material_cooker> --input "${_source}" --output "${_output}"
+        DEPENDS vice_rigid_material_cooker "${_source}"
+        VERBATIM
+      )
+      list(APPEND _vice_editor_asset_outputs "${_output}")
+    endforeach()
+  endif()
+
+  if(_vice_editor_asset_outputs)
+    add_custom_target(vice_editor_asset_cache DEPENDS ${_vice_editor_asset_outputs})
+    add_dependencies(vice_editor vice_editor_asset_cache)
+  endif()
+
+  if(DEFINED _vice_editor_world_asset)
     target_compile_definitions(
       vice_editor
       PRIVATE
@@ -141,28 +227,7 @@ if(VICE_BUILD_TOOLS)
     )
   endif()
 
-  if(TARGET vice_mesh_cooker)
-    set(_vice_editor_mesh_source "${PROJECT_SOURCE_DIR}/assets/meshes/vice_lab_ramp.vmesh")
-    set(_vice_editor_mesh_asset "${CMAKE_BINARY_DIR}/cooked/vice_editor_scene.vmeshc")
-
-    add_custom_command(
-      OUTPUT "${_vice_editor_mesh_asset}"
-      COMMAND ${CMAKE_COMMAND} -E make_directory "${CMAKE_BINARY_DIR}/cooked"
-      COMMAND
-        $<TARGET_FILE:vice_mesh_cooker>
-        --input "${_vice_editor_mesh_source}"
-        --output "${_vice_editor_mesh_asset}"
-      DEPENDS
-        vice_mesh_cooker
-        "${_vice_editor_mesh_source}"
-      VERBATIM
-    )
-
-    add_custom_target(
-      vice_editor_scene_asset
-      DEPENDS "${_vice_editor_mesh_asset}"
-    )
-    add_dependencies(vice_editor vice_editor_scene_asset)
+  if(DEFINED _vice_editor_mesh_asset)
     target_compile_definitions(
       vice_editor
       PRIVATE

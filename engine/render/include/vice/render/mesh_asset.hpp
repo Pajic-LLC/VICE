@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
@@ -10,8 +11,21 @@
 
 namespace vice::render {
 
-inline constexpr std::uint32_t mesh_asset_format_version = 1;
+inline constexpr std::uint32_t mesh_asset_format_version_v1 = 1;
+inline constexpr std::uint32_t mesh_asset_format_version_v2 = 2;
+inline constexpr std::uint32_t mesh_asset_format_version = mesh_asset_format_version_v2;
+inline constexpr std::uint32_t mesh_asset_min_supported_version = mesh_asset_format_version_v1;
 inline constexpr std::size_t mesh_asset_magic_size = 8;
+inline constexpr std::size_t mesh_stable_id_size = 16;
+
+using MeshStableId = std::array<std::uint8_t, mesh_stable_id_size>;
+
+[[nodiscard]] constexpr bool valid(const MeshStableId& id) noexcept {
+    for (const std::uint8_t value : id) {
+        if (value != 0U) return true;
+    }
+    return false;
+}
 
 struct MeshVertex {
     float position[3]{};
@@ -22,6 +36,7 @@ static_assert(sizeof(MeshVertex) == 24U);
 
 struct MeshAsset {
     std::uint32_t version = mesh_asset_format_version;
+    MeshStableId stable_id{};
     std::uint64_t source_fingerprint = 0;
     std::vector<MeshVertex> vertices;
     std::vector<std::uint32_t> indices;

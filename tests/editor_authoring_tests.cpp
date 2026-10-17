@@ -62,6 +62,23 @@ int main() {
     assert(history.record(edit));
     assert(history.dirty());
 
+    const world::ResourceId mesh_resource{fixed_id(88)};
+    std::string instance_diagnostics;
+    const world::GlobalPosition mesh_position{-4.0, 0.8, -2.0};
+    const auto mesh_instance = editor::create_mesh_instance(
+        world,
+        history,
+        mesh_resource,
+        mesh_position,
+        &instance_diagnostics
+    );
+    assert(mesh_instance.has_value());
+    assert(instance_diagnostics.empty());
+    const auto mesh_entity = world.find(*mesh_instance);
+    assert(mesh_entity.has_value());
+    assert(world.resource_reference(*mesh_entity, world::ResourceRole::render_mesh) ==
+        std::optional{mesh_resource});
+
     const auto path = std::filesystem::temp_directory_path() / "vice_editor_authoring_test.vworldc";
     std::error_code error;
     std::filesystem::remove(path, error);
@@ -79,6 +96,12 @@ int main() {
     const auto restored_state = editor::capture_entity_transform(restored, persistent_id);
     assert(restored_state.has_value());
     assert(*restored_state == after);
+
+    const auto restored_mesh = restored.find(*mesh_instance);
+    assert(restored_mesh.has_value());
+    assert(restored.resource_reference(*restored_mesh, world::ResourceRole::render_mesh) ==
+        std::optional{mesh_resource});
+    assert(restored.spatial_state(*restored_mesh)->global_position == mesh_position);
 
     std::filesystem::remove(path, error);
     return 0;

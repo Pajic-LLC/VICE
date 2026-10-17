@@ -34,6 +34,7 @@ EntityId World::allocate(const PersistentId persistent_id) {
     slot.persistent_id = persistent_id;
     slot.spatial_state.reset();
     slot.authored_transform.reset();
+    slot.resource_references.clear();
     slot.alive = true;
 
     const EntityId entity{index, slot.generation};
@@ -52,6 +53,7 @@ bool World::destroy_entity(const EntityId entity) {
     slot.persistent_id = PersistentId{};
     slot.spatial_state.reset();
     slot.authored_transform.reset();
+    slot.resource_references.clear();
     slot.alive = false;
 
     ++slot.generation;
@@ -95,6 +97,73 @@ std::optional<EntityId> World::find(const PersistentId persistent_id) const noex
         return std::nullopt;
     }
     return found->second;
+}
+
+bool World::set_resource_reference(const EntityId entity, const ResourceReference reference) {
+    if (!alive(entity) || !valid(reference.role) || !reference.resource.valid() ||
+        !resource_lookup_.contains(reference.resource)) {
+        return false;
+    }
+
+    auto& references = slots_[entity.index].resource_references;
+    const auto found = std::find_if(
+        references.begin(),
+        references.end(),
+        [reference](const ResourceReference& current) {
+            return current.role == reference.role;
+        }
+    );
+    if (found != references.end()) {
+        found->resource = reference.resource;
+        return true;
+    }
+
+    references.push_back(reference);
+    return true;
+}
+
+bool World::clear_resource_reference(const EntityId entity, const ResourceRole role) {
+    if (!alive(entity) || !valid(role)) {
+        return false;
+    }
+    auto& references = slots_[entity.index].resource_references;
+    const auto found = std::find_if(
+        references.begin(),
+        references.end(),
+        [role](const ResourceReference& reference) {
+            return reference.role == role;
+        }
+    );
+    if (found == references.end()) {
+        return false;
+    }
+    references.erase(found);
+    return true;
+}
+
+std::optional<ResourceId> World::resource_reference(
+    const EntityId entity,
+    const ResourceRole role
+) const noexcept {
+    if (!alive(entity) || !valid(role)) {
+        return std::nullopt;
+    }
+    const auto& references = slots_[entity.index].resource_references;
+    const auto found = std::find_if(
+        references.begin(),
+        references.end(),
+        [role](const ResourceReference& reference) {
+            return reference.role == role;
+        }
+    );
+    return found != references.end() ? std::optional<ResourceId>{found->resource} : std::nullopt;
+}
+
+std::span<const ResourceReference> World::resource_references(const EntityId entity) const noexcept {
+    if (!alive(entity)) {
+        return {};
+    }
+    return slots_[entity.index].resource_references;
 }
 
 bool World::add_relation(const Relation relation) {

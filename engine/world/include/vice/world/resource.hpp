@@ -37,4 +37,19 @@ struct ResourceHandle {
     friend constexpr bool operator==(const ResourceHandle&, const ResourceHandle&) noexcept = default;
 };
 
+enum class ResourceRole : std::uint8_t {
+    render_mesh = 1,
+};
+
+[[nodiscard]] constexpr bool valid(const ResourceRole role) noexcept {
+    return role == ResourceRole::render_mesh;
+}
+
+struct ResourceReference {
+    ResourceRole role = ResourceRole::render_mesh;
+    ResourceId resource{};
+
+    friend constexpr bool operator==(const ResourceReference&, const ResourceReference&) noexcept = default;
+};
+
 } // namespace vice::world

@@ -38,6 +38,10 @@ void append_i64(std::vector<std::byte>& bytes, const std::int64_t value) {
     append_u64(bytes, std::bit_cast<std::uint64_t>(value));
 }
 
+void append_f32(std::vector<std::byte>& bytes, const float value) {
+    append_u32(bytes, std::bit_cast<std::uint32_t>(value));
+}
+
 void append_f64(std::vector<std::byte>& bytes, const double value) {
     append_u64(bytes, std::bit_cast<std::uint64_t>(value));
 }
@@ -57,7 +61,7 @@ void append_id(std::vector<std::byte>& bytes, const vice::world::PersistentId& i
     return hash;
 }
 
-[[nodiscard]] std::vector<std::byte> legacy_v1_snapshot() {
+[[nodiscard]] std::vector<std::byte> legacy_snapshot(const std::uint32_t version) {
     using namespace vice::world;
 
     const auto entity_id = PersistentId::parse("10000000-0000-4000-8000-000000000001");
@@ -81,6 +85,16 @@ void append_id(std::vector<std::byte>& bytes, const vice::world::PersistentId& i
     append_f64(payload, 2.0);
     append_f64(payload, 3.0);
     append_u64(payload, 1U);
+    if (version >= 2U) {
+        append_u8(payload, 1U);
+        append_f32(payload, 0.0F);
+        append_f32(payload, 0.0F);
+        append_f32(payload, 0.0F);
+        append_f32(payload, 1.0F);
+        append_f32(payload, 1.5F);
+        append_f32(payload, 1.0F);
+        append_f32(payload, 0.5F);
+    }
 
     std::vector<std::byte> bytes;
     constexpr std::array magic{
@@ -88,7 +102,7 @@ void append_id(std::vector<std::byte>& bytes, const vice::world::PersistentId& i
         std::byte{'W'}, std::byte{'R'}, std::byte{'L'}, std::byte{'D'},
     };
     bytes.insert(bytes.end(), magic.begin(), magic.end());
-    append_u32(bytes, 1U);
+    append_u32(bytes, version);
     append_u32(bytes, 0U);
     append_u32(bytes, 0U);
     append_u32(bytes, 1U);
@@ -110,7 +124,7 @@ component 20000000-0000-4000-8000-000000000001 3 "transform state"
 resource 30000000-0000-4000-8000-000000000001
 region 2 202 1000 0 0 1 0 0 reduced bounds 0 -10 -10 100 10 10
 region 1 101 0 0 0 0 0 0 full bounds 0 -10 -10 100 10 10
-entity 10000000-0000-4000-8000-000000000002 spatial 1010 2 3 2 transform 0 0 0.70710678 0.70710678 1.5 2 0.75
+entity 10000000-0000-4000-8000-000000000002 spatial 1010 2 3 2 transform 0 0 0.70710678 0.70710678 1.5 2 0.75 resource render_mesh 30000000-0000-4000-8000-000000000001
 entity 10000000-0000-4000-8000-000000000001 spatial 5 1 0 1
 relation 10000000-0000-4000-8000-000000000001 40000000-0000-4000-8000-000000000001 10000000-0000-4000-8000-000000000002
 )";
@@ -127,8 +141,11 @@ relation 10000000-0000-4000-8000-000000000001 40000000-0000-4000-8000-0000000000
     assert(parsed.snapshot->regions[1].id == world::RegionId{2});
     assert(parsed.snapshot->regions[1].bounds.has_value());
     assert(!parsed.snapshot->entities[0].authored_transform.has_value());
+    assert(parsed.snapshot->entities[0].resource_references.empty());
     assert(parsed.snapshot->entities[1].authored_transform.has_value());
     assert((parsed.snapshot->entities[1].authored_transform->scale == world::AuthoredScale{1.5F, 2.0F, 0.75F}));
+    assert(parsed.snapshot->entities[1].resource_references.size() == 1U);
+    assert(parsed.snapshot->entities[1].resource_references[0].role == world::ResourceRole::render_mesh);
 
     const auto encoded = world::encode_world_snapshot(*parsed.snapshot);
     assert(encoded);
@@ -150,14 +167,12 @@ relation 10000000-0000-4000-8000-000000000001 40000000-0000-4000-8000-0000000000
 
     world::World restored;
     assert(restored.restore(*decoded.snapshot));
-    const auto player_id = world::PersistentId::parse(
-        "10000000-0000-4000-8000-000000000001"
-    );
-    const auto cube_id = world::PersistentId::parse(
-        "10000000-0000-4000-8000-000000000002"
-    );
+    const auto player_id = world::PersistentId::parse("10000000-0000-4000-8000-000000000001");
+    const auto cube_id = world::PersistentId::parse("10000000-0000-4000-8000-000000000002");
+    const auto mesh_id = world::PersistentId::parse("30000000-0000-4000-8000-000000000001");
     assert(player_id.has_value());
     assert(cube_id.has_value());
+    assert(mesh_id.has_value());
     const auto player = restored.find(*player_id);
     const auto cube = restored.find(*cube_id);
     assert(player.has_value());
@@ -169,19 +184,29 @@ relation 10000000-0000-4000-8000-000000000001 40000000-0000-4000-8000-0000000000
     assert(!restored.authored_transform(*player).has_value());
     assert(restored.authored_transform(*cube).has_value());
     assert((restored.authored_transform(*cube)->scale == world::AuthoredScale{1.5F, 2.0F, 0.75F}));
+    assert(restored.resource_reference(*cube, world::ResourceRole::render_mesh) ==
+        std::optional{world::ResourceId{*mesh_id}});
 
     const auto round_trip = world::encode_world_snapshot(restored.snapshot());
     assert(round_trip);
     assert(round_trip.bytes == encoded.bytes);
 
-    const auto legacy = world::decode_world_snapshot(legacy_v1_snapshot());
-    assert(legacy.snapshot.has_value());
-    assert(legacy.snapshot->entities.size() == 1U);
-    assert(legacy.snapshot->entities[0].spatial_state.has_value());
-    assert(!legacy.snapshot->entities[0].authored_transform.has_value());
-    const auto upgraded_legacy = world::encode_world_snapshot(*legacy.snapshot);
-    assert(upgraded_legacy);
-    assert(upgraded_legacy.bytes != legacy_v1_snapshot());
+    for (const std::uint32_t legacy_version : {1U, 2U}) {
+        const auto legacy_bytes = legacy_snapshot(legacy_version);
+        const auto legacy = world::decode_world_snapshot(legacy_bytes);
+        assert(legacy.snapshot.has_value());
+        assert(legacy.snapshot->entities.size() == 1U);
+        assert(legacy.snapshot->entities[0].spatial_state.has_value());
+        assert(legacy.snapshot->entities[0].resource_references.empty());
+        if (legacy_version == 1U) {
+            assert(!legacy.snapshot->entities[0].authored_transform.has_value());
+        } else {
+            assert(legacy.snapshot->entities[0].authored_transform.has_value());
+        }
+        const auto upgraded = world::encode_world_snapshot(*legacy.snapshot);
+        assert(upgraded);
+        assert(upgraded.bytes != legacy_bytes);
+    }
 
     auto corrupted = encoded.bytes;
     corrupted.back() ^= std::byte{0x01};
@@ -214,6 +239,13 @@ region 1 1 0 0 0 0 0 0 full none
 entity 10000000-0000-4000-8000-000000000001 spatial 0 0 0 1 transform 0 0 0 2 1 1 1
 )";
     assert(!tools::world_cooker::parse_source_manifest(invalid_transform).snapshot.has_value());
+
+    constexpr std::string_view dangling_resource = R"(
+vice-world-source 1
+region 1 1 0 0 0 0 0 0 full none
+entity 10000000-0000-4000-8000-000000000001 spatial 0 0 0 1 resource render_mesh 50000000-0000-4000-8000-000000000001
+)";
+    assert(!tools::world_cooker::parse_source_manifest(dangling_resource).snapshot.has_value());
 
     return 0;
 }

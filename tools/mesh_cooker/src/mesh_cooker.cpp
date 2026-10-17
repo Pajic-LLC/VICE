@@ -1,5 +1,7 @@
 #include <vice/tools/mesh_cooker.hpp>
 
+#include <vice/world/persistent_id.hpp>
+
 #include <bit>
 #include <cmath>
 #include <cstddef>
@@ -24,6 +26,10 @@ constexpr std::uint64_t fnv_prime = 1'099'511'628'211ULL;
         hash *= fnv_prime;
     }
     return hash;
+}
+
+void append_u8(std::vector<std::byte>& bytes, const std::uint8_t value) {
+    bytes.push_back(static_cast<std::byte>(value));
 }
 
 void append_u32(std::vector<std::byte>& bytes, const std::uint32_t value) {
@@ -68,6 +74,7 @@ ParseResult parse_source_manifest(const std::string_view source) {
     std::string line;
     std::size_t line_number = 0;
     bool header_seen = false;
+    bool id_seen = false;
 
     const auto fail = [&](const std::string& message) {
         result.diagnostics = "Mesh source line " + std::to_string(line_number) + ": " + message;
@@ -87,7 +94,7 @@ ParseResult parse_source_manifest(const std::string_view source) {
         if (!header_seen) {
             std::uint32_t version = 0;
             if (keyword != "vice-mesh-source" || !(values >> version) ||
-                version != render::mesh_asset_format_version) {
+                version != mesh_source_format_version) {
                 fail("expected `vice-mesh-source 1`.");
                 return result;
             }
@@ -105,6 +112,19 @@ ParseResult parse_source_manifest(const std::string_view source) {
                 fail("invalid or duplicate mesh name.");
                 return result;
             }
+        } else if (keyword == "id") {
+            std::string id_text;
+            if (id_seen || !(values >> id_text)) {
+                fail("invalid or duplicate mesh id.");
+                return result;
+            }
+            const auto id = world::PersistentId::parse(id_text);
+            if (!id.has_value()) {
+                fail("mesh id must be a valid UUID.");
+                return result;
+            }
+            parsed.stable_id = id->bytes();
+            id_seen = true;
         } else if (keyword == "collision") {
             std::string mode;
             if (!(values >> mode)) {
@@ -212,13 +232,14 @@ CookResult cook(const MeshSource& source) {
 
     result.source_fingerprint = fingerprint(payload);
     result.bytes.reserve(render::mesh_asset_magic_size + sizeof(std::uint32_t) * 3U +
-        sizeof(std::uint64_t) + payload.size());
+        sizeof(std::uint64_t) + render::mesh_stable_id_size + payload.size());
     constexpr std::string_view magic = "VICEMESH";
     for (const char value : magic) result.bytes.push_back(static_cast<std::byte>(value));
     append_u32(result.bytes, render::mesh_asset_format_version);
     append_u32(result.bytes, static_cast<std::uint32_t>(source.vertices.size()));
     append_u32(result.bytes, static_cast<std::uint32_t>(source.indices.size()));
     append_u64(result.bytes, result.source_fingerprint);
+    for (const std::uint8_t value : source.stable_id) append_u8(result.bytes, value);
     result.bytes.insert(result.bytes.end(), payload.begin(), payload.end());
 
     const auto decoded = render::decode_mesh_asset(result.bytes);

@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <deque>
 #include <mutex>
+#include <type_traits>
 #include <utility>
 
 namespace vice::editor {
@@ -26,6 +27,112 @@ namespace {
         return persistent_id_less(left.kind, right.kind);
     }
     return persistent_id_less(left.object, right.object);
+}
+
+[[nodiscard]] std::string entry_label(const CommandHistory::Entry& entry) {
+    return std::visit([](const auto& command) { return command.label; }, entry);
+}
+
+[[nodiscard]] bool create_snapshot_entity(
+    world::World& world,
+    const CommandHistory::CreateEntityEntry& command
+) {
+    std::vector<world::ResourceHandle> created_resources;
+    created_resources.reserve(command.owned_resources.size());
+
+    const auto rollback_resources = [&]() {
+        for (auto iterator = created_resources.rbegin(); iterator != created_resources.rend(); ++iterator) {
+            (void)world.destroy_resource(*iterator);
+        }
+    };
+
+    for (const auto resource_id : command.owned_resources) {
+        if (world.find_resource(resource_id).has_value()) {
+            continue;
+        }
+        const auto created = world.create_resource(resource_id);
+        if (!created.has_value()) {
+            rollback_resources();
+            return false;
+        }
+        created_resources.push_back(*created);
+    }
+
+    for (const auto reference : command.entity.resource_references) {
+        if (!world.find_resource(reference.resource).has_value()) {
+            rollback_resources();
+            return false;
+        }
+    }
+
+    const auto entity = world.create_entity(command.entity.persistent_id);
+    if (!entity.has_value()) {
+        rollback_resources();
+        return false;
+    }
+
+    const auto rollback_entity = [&]() {
+        (void)world.destroy_entity(*entity);
+        rollback_resources();
+    };
+
+    if (command.entity.spatial_state.has_value() &&
+        !world.set_spatial_state(*entity, *command.entity.spatial_state)) {
+        rollback_entity();
+        return false;
+    }
+    if (command.entity.authored_transform.has_value() &&
+        !world.set_authored_transform(*entity, *command.entity.authored_transform)) {
+        rollback_entity();
+        return false;
+    }
+    for (const auto reference : command.entity.resource_references) {
+        if (!world.set_resource_reference(*entity, reference)) {
+            rollback_entity();
+            return false;
+        }
+    }
+    return true;
+}
+
+[[nodiscard]] bool destroy_snapshot_entity(
+    world::World& world,
+    const CommandHistory::CreateEntityEntry& command
+) {
+    const auto entity = world.find(command.entity.persistent_id);
+    if (!entity.has_value()) {
+        return false;
+    }
+
+    const auto snapshot = world.snapshot();
+    for (const auto owned_resource : command.owned_resources) {
+        for (const auto& current_entity : snapshot.entities) {
+            if (current_entity.persistent_id == command.entity.persistent_id) {
+                continue;
+            }
+            const bool referenced = std::any_of(
+                current_entity.resource_references.begin(),
+                current_entity.resource_references.end(),
+                [owned_resource](const world::ResourceReference reference) {
+                    return reference.resource == owned_resource;
+                }
+            );
+            if (referenced) {
+                return false;
+            }
+        }
+    }
+
+    if (!world.destroy_entity(*entity)) {
+        return false;
+    }
+    for (const auto owned_resource : command.owned_resources) {
+        if (const auto resource = world.find_resource(owned_resource); resource.has_value() &&
+            !world.destroy_resource(*resource)) {
+            return false;
+        }
+    }
+    return true;
 }
 
 } // namespace
@@ -104,11 +211,21 @@ bool apply_entity_transform(
     return false;
 }
 
-bool TransformHistory::record(Entry entry) {
+bool CommandHistory::record(TransformEntry entry) {
     if (entry.persistent_id.is_nil() || entry.before == entry.after) {
         return false;
     }
+    return record_entry(Entry{std::move(entry)});
+}
 
+bool CommandHistory::record(CreateEntityEntry entry) {
+    if (entry.entity.persistent_id.is_nil()) {
+        return false;
+    }
+    return record_entry(Entry{std::move(entry)});
+}
+
+bool CommandHistory::record_entry(Entry entry) {
     if (cursor_ < entries_.size()) {
         entries_.erase(entries_.begin() + static_cast<std::ptrdiff_t>(cursor_), entries_.end());
         if (saved_cursor_.has_value() && *saved_cursor_ > cursor_) {
@@ -121,66 +238,158 @@ bool TransformHistory::record(Entry entry) {
     return true;
 }
 
-bool TransformHistory::undo(world::World& world) {
+bool CommandHistory::undo(world::World& world) {
     if (!can_undo()) {
         return false;
     }
     const Entry& entry = entries_[cursor_ - 1U];
-    if (!apply_entity_transform(world, entry.persistent_id, entry.before)) {
+    const bool applied = std::visit(
+        [&](const auto& command) {
+            using Command = std::decay_t<decltype(command)>;
+            if constexpr (std::is_same_v<Command, TransformEntry>) {
+                return apply_entity_transform(world, command.persistent_id, command.before);
+            } else {
+                return destroy_snapshot_entity(world, command);
+            }
+        },
+        entry
+    );
+    if (!applied) {
         return false;
     }
     --cursor_;
     return true;
 }
 
-bool TransformHistory::redo(world::World& world) {
+bool CommandHistory::redo(world::World& world) {
     if (!can_redo()) {
         return false;
     }
     const Entry& entry = entries_[cursor_];
-    if (!apply_entity_transform(world, entry.persistent_id, entry.after)) {
+    const bool applied = std::visit(
+        [&](const auto& command) {
+            using Command = std::decay_t<decltype(command)>;
+            if constexpr (std::is_same_v<Command, TransformEntry>) {
+                return apply_entity_transform(world, command.persistent_id, command.after);
+            } else {
+                return create_snapshot_entity(world, command);
+            }
+        },
+        entry
+    );
+    if (!applied) {
         return false;
     }
     ++cursor_;
     return true;
 }
 
-void TransformHistory::clear() noexcept {
+void CommandHistory::clear() noexcept {
     entries_.clear();
     cursor_ = 0U;
     saved_cursor_ = 0U;
 }
 
-void TransformHistory::mark_saved() noexcept {
+void CommandHistory::mark_saved() noexcept {
     saved_cursor_ = cursor_;
 }
 
-bool TransformHistory::can_undo() const noexcept {
+bool CommandHistory::can_undo() const noexcept {
     return cursor_ > 0U;
 }
 
-bool TransformHistory::can_redo() const noexcept {
+bool CommandHistory::can_redo() const noexcept {
     return cursor_ < entries_.size();
 }
 
-bool TransformHistory::dirty() const noexcept {
+bool CommandHistory::dirty() const noexcept {
     return !saved_cursor_.has_value() || *saved_cursor_ != cursor_;
 }
 
-std::size_t TransformHistory::size() const noexcept {
+std::size_t CommandHistory::size() const noexcept {
     return entries_.size();
 }
 
-std::size_t TransformHistory::applied_count() const noexcept {
+std::size_t CommandHistory::applied_count() const noexcept {
     return cursor_;
 }
 
-std::string TransformHistory::undo_label() const {
-    return can_undo() ? entries_[cursor_ - 1U].label : std::string{};
+std::string CommandHistory::undo_label() const {
+    return can_undo() ? entry_label(entries_[cursor_ - 1U]) : std::string{};
 }
 
-std::string TransformHistory::redo_label() const {
-    return can_redo() ? entries_[cursor_].label : std::string{};
+std::string CommandHistory::redo_label() const {
+    return can_redo() ? entry_label(entries_[cursor_]) : std::string{};
+}
+
+std::optional<world::PersistentId> create_mesh_instance(
+    world::World& world,
+    CommandHistory& history,
+    const world::ResourceId mesh_resource,
+    const world::GlobalPosition position,
+    std::string* diagnostics
+) {
+    const auto fail = [&](const std::string& message) -> std::optional<world::PersistentId> {
+        if (diagnostics != nullptr) *diagnostics = message;
+        return std::nullopt;
+    };
+    if (!mesh_resource.valid() || !world::finite(position)) {
+        return fail("Mesh instance requires a valid resource and finite position.");
+    }
+    const auto region = world.region_containing(position);
+    if (!region.has_value()) {
+        return fail("Mesh instance position is outside every registered World region.");
+    }
+
+    std::vector<world::ResourceId> owned_resources;
+    if (!world.find_resource(mesh_resource).has_value()) {
+        if (!world.create_resource(mesh_resource).has_value()) {
+            return fail("Could not register the mesh resource in World.");
+        }
+        owned_resources.push_back(mesh_resource);
+    }
+
+    const auto entity = world.create_entity();
+    const auto persistent_id = world.persistent_id(entity);
+    const world::SpatialState spatial{
+        .global_position = position,
+        .region = *region,
+    };
+    const world::ResourceReference reference{
+        .role = world::ResourceRole::render_mesh,
+        .resource = mesh_resource,
+    };
+    if (!persistent_id.has_value() || !world.set_spatial_state(entity, spatial) ||
+        !world.set_resource_reference(entity, reference)) {
+        (void)world.destroy_entity(entity);
+        for (const auto resource_id : owned_resources) {
+            if (const auto resource = world.find_resource(resource_id); resource.has_value()) {
+                (void)world.destroy_resource(*resource);
+            }
+        }
+        return fail("Could not create the World mesh instance.");
+    }
+
+    CommandHistory::CreateEntityEntry command;
+    command.entity = world::SnapshotEntity{
+        .persistent_id = *persistent_id,
+        .spatial_state = spatial,
+        .resource_references = {reference},
+    };
+    command.owned_resources = owned_resources;
+    command.label = "Add Mesh Instance";
+    if (!history.record(std::move(command))) {
+        (void)world.destroy_entity(entity);
+        for (const auto resource_id : owned_resources) {
+            if (const auto resource = world.find_resource(resource_id); resource.has_value()) {
+                (void)world.destroy_resource(*resource);
+            }
+        }
+        return fail("Could not record the mesh instance command.");
+    }
+
+    if (diagnostics != nullptr) diagnostics->clear();
+    return persistent_id;
 }
 
 std::vector<HierarchyEntry> build_hierarchy(const world::World& world) {
@@ -213,6 +422,8 @@ std::optional<InspectorData> project_inspector(
     inspector.entity = entity;
     inspector.spatial_state = world.spatial_state(*entity);
     inspector.authored_transform = world.authored_transform(*entity);
+    const auto references = world.resource_references(*entity);
+    inspector.resource_references.assign(references.begin(), references.end());
     inspector.simulation_island = world.simulation_island(*entity);
     inspector.streaming_cell = world.streaming_cell(*entity);
     if (inspector.spatial_state.has_value()) {

@@ -1,5 +1,6 @@
 #include <vice/render/mesh_asset.hpp>
 
+#include <algorithm>
 #include <array>
 #include <bit>
 #include <cmath>
@@ -19,8 +20,9 @@ constexpr std::array<std::byte, mesh_asset_magic_size> mesh_magic{
     std::byte{'V'}, std::byte{'I'}, std::byte{'C'}, std::byte{'E'},
     std::byte{'M'}, std::byte{'E'}, std::byte{'S'}, std::byte{'H'},
 };
-constexpr std::size_t header_size = mesh_asset_magic_size + sizeof(std::uint32_t) * 3U +
+constexpr std::size_t header_size_v1 = mesh_asset_magic_size + sizeof(std::uint32_t) * 3U +
     sizeof(std::uint64_t);
+constexpr std::size_t header_size_v2 = header_size_v1 + mesh_stable_id_size;
 constexpr std::uint32_t max_vertices = 4'000'000U;
 constexpr std::uint32_t max_indices = 12'000'000U;
 constexpr std::uint64_t fnv_offset_basis = 14'695'981'039'346'656'037ULL;
@@ -38,6 +40,13 @@ constexpr std::uint64_t fnv_prime = 1'099'511'628'211ULL;
 class Reader final {
 public:
     explicit Reader(std::span<const std::byte> bytes) noexcept : bytes_{bytes} {}
+
+    bool read_u8(std::uint8_t& value) noexcept {
+        if (remaining() < 1U) return false;
+        value = std::to_integer<std::uint8_t>(bytes_[position_]);
+        ++position_;
+        return true;
+    }
 
     bool read_u32(std::uint32_t& value) noexcept {
         if (remaining() < sizeof(value)) return false;
@@ -81,7 +90,7 @@ private:
 
 MeshAssetDecodeResult decode_mesh_asset(const std::span<const std::byte> bytes) {
     MeshAssetDecodeResult result;
-    if (bytes.size() < header_size) {
+    if (bytes.size() < header_size_v1) {
         result.diagnostics = "Mesh asset is smaller than the VICEMESH header.";
         return result;
     }
@@ -100,10 +109,26 @@ MeshAssetDecodeResult decode_mesh_asset(const std::span<const std::byte> bytes) 
         result.diagnostics = "Mesh asset header is incomplete.";
         return result;
     }
-    if (version != mesh_asset_format_version) {
+    if (version < mesh_asset_min_supported_version || version > mesh_asset_format_version) {
         result.diagnostics = "Mesh asset format version is not supported.";
         return result;
     }
+
+    MeshStableId stable_id{};
+    const std::size_t header_size = version >= mesh_asset_format_version_v2 ? header_size_v2 : header_size_v1;
+    if (bytes.size() < header_size) {
+        result.diagnostics = "Mesh asset header is incomplete.";
+        return result;
+    }
+    if (version >= mesh_asset_format_version_v2) {
+        for (std::uint8_t& value : stable_id) {
+            if (!reader.read_u8(value)) {
+                result.diagnostics = "Mesh asset stable identity is incomplete.";
+                return result;
+            }
+        }
+    }
+
     if (vertex_count < 3U || vertex_count > max_vertices || index_count < 3U ||
         index_count > max_indices || index_count % 3U != 0U) {
         result.diagnostics = "Mesh asset has invalid vertex or index counts.";
@@ -124,6 +149,7 @@ MeshAssetDecodeResult decode_mesh_asset(const std::span<const std::byte> bytes) 
 
     MeshAsset asset;
     asset.version = version;
+    asset.stable_id = stable_id;
     asset.source_fingerprint = stored_fingerprint;
     asset.vertices.resize(vertex_count);
     asset.indices.resize(index_count);

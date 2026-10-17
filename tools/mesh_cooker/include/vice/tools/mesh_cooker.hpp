@@ -13,6 +13,8 @@
 
 namespace vice::tools::mesh_cooker {
 
+inline constexpr std::uint32_t mesh_source_format_version = 1;
+
 enum class CollisionMode : std::uint8_t {
     none,
     triangle_mesh,
@@ -21,6 +23,7 @@ enum class CollisionMode : std::uint8_t {
 
 struct MeshSource {
     std::string name;
+    render::MeshStableId stable_id{};
     CollisionMode collision = CollisionMode::none;
     std::vector<render::MeshVertex> vertices;
     std::vector<std::uint32_t> indices;
