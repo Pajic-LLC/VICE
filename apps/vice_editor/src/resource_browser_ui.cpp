@@ -304,6 +304,8 @@ struct ProjectWorkflowUi::State {
     std::optional<ProjectCreateRequest> new_project_request;
     std::optional<std::filesystem::path> open_project_request;
     bool open_development_project_request = false;
+    bool build_project_request = false;
+    bool run_project_request = false;
     bool new_world_request = false;
     std::optional<std::filesystem::path> open_world_request;
     bool save_world_request = false;
@@ -390,7 +392,7 @@ void ProjectWorkflowUi::draw(const ProjectWorkflowStatus& status) {
         draw_error_text(status.diagnostics);
         ImGui::End();
     } else {
-        ImGui::SetNextWindowSize(ImVec2{360.0F, 190.0F}, ImGuiCond_FirstUseEver);
+        ImGui::SetNextWindowSize(ImVec2{360.0F, 230.0F}, ImGuiCond_FirstUseEver);
         if (ImGui::Begin("Project###VICE.ProjectWorkflow")) {
             ImGui::TextUnformatted(status.project_name.c_str());
             ImGui::TextDisabled("%s", status.project_manifest.generic_string().c_str());
@@ -415,6 +417,11 @@ void ProjectWorkflowUi::draw(const ProjectWorkflowStatus& status) {
                 if (status.world_has_path) copy_path(state_->save_world_path, status.world_path);
                 state_->save_world_as = true;
             }
+
+            ImGui::Separator();
+            if (ImGui::Button("Build Project")) state_->build_project_request = true;
+            ImGui::SameLine();
+            if (ImGui::Button("Run Project")) state_->run_project_request = true;
             draw_error_text(status.diagnostics);
         }
         ImGui::End();
@@ -573,6 +580,20 @@ bool ProjectWorkflowUi::consume_open_development_project_request() noexcept {
     if (state_ == nullptr) return false;
     const bool request = state_->open_development_project_request;
     state_->open_development_project_request = false;
+    return request;
+}
+
+bool ProjectWorkflowUi::consume_build_project_request() noexcept {
+    if (state_ == nullptr) return false;
+    const bool request = state_->build_project_request;
+    state_->build_project_request = false;
+    return request;
+}
+
+bool ProjectWorkflowUi::consume_run_project_request() noexcept {
+    if (state_ == nullptr) return false;
+    const bool request = state_->run_project_request;
+    state_->run_project_request = false;
     return request;
 }
 
