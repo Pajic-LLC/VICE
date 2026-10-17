@@ -36,7 +36,7 @@ struct Manifest {
     std::filesystem::path asset_root;
     std::filesystem::path startup_world;
 
-    constexpr bool operator==(const Manifest&) const noexcept = default;
+    bool operator==(const Manifest&) const = default;
 };
 
 struct LoadResult {
