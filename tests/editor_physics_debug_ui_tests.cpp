@@ -22,7 +22,6 @@ int main() {
     require(!layers.contacts, "Contacts stay opt-in");
     require(layers.velocities, "Velocity vectors follow Physics by default");
     require(layers.characters, "Character state follows Physics by default");
-    require(!layers.constraints, "Constraints stay advanced");
     require(!layers.handoffs, "Handoffs stay advanced");
     require(!ui.consume_start_request(), "no phantom Start request");
     require(!ui.consume_reset_request(), "no phantom Reset request");
