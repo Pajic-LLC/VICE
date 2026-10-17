@@ -32,6 +32,8 @@ struct ProjectWorkflowStatus {
     bool show_start_surface = false;
     std::string project_name;
     std::filesystem::path project_manifest;
+    std::filesystem::path startup_world;
+    std::span<const std::filesystem::path> authored_worlds;
     std::string world_name;
     bool world_dirty = false;
     bool world_has_path = false;
@@ -56,6 +58,7 @@ public:
     [[nodiscard]] std::optional<ProjectCreateRequest> consume_new_project_request();
     [[nodiscard]] std::optional<std::filesystem::path> consume_open_project_request();
     [[nodiscard]] bool consume_open_development_project_request() noexcept;
+    [[nodiscard]] std::optional<std::filesystem::path> consume_startup_world_request();
     [[nodiscard]] bool consume_build_project_request() noexcept;
     [[nodiscard]] bool consume_run_project_request() noexcept;
     [[nodiscard]] bool consume_new_world_request() noexcept;
