@@ -175,12 +175,18 @@ LoadResult parse_manifest(const std::string_view text) {
             if (assets_seen) return fail("duplicate `assets` field.");
             std::string value;
             if (!read_quoted_value(stream, value)) return fail("asset root must be quoted.");
+            if (value.find('\\') != std::string::npos) {
+                return fail("asset root must use `/` separators.");
+            }
             manifest.asset_root = std::filesystem::path{value};
             assets_seen = true;
         } else if (key == "startup_world") {
             if (startup_seen) return fail("duplicate `startup_world` field.");
             std::string value;
             if (!read_quoted_value(stream, value)) return fail("startup World must be quoted.");
+            if (value.find('\\') != std::string::npos) {
+                return fail("startup World must use `/` separators.");
+            }
             manifest.startup_world = std::filesystem::path{value};
             startup_seen = true;
         } else {
