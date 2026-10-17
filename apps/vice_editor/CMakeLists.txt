@@ -52,6 +52,7 @@ add_library(
   vice_editor_ui
   STATIC
     src/ui.cpp
+    src/ui_renderer.cpp
     src/ui_theme.cpp
 )
 
@@ -70,8 +71,101 @@ target_link_libraries(
   PUBLIC
     VICE::EditorState
     VICE::Platform
+    VICE::Render
   PRIVATE
     vice_editor_imgui
 )
 target_compile_features(vice_editor_ui PUBLIC cxx_std_23)
 vice_enable_warnings(vice_editor_ui)
+
+add_executable(
+  vice_editor
+  app.cpp
+  src/scene_renderer.cpp
+)
+
+target_include_directories(
+  vice_editor
+  PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/src"
+)
+
+target_link_libraries(
+  vice_editor
+  PRIVATE
+    VICE::Core
+    VICE::Math
+    VICE::Jobs
+    VICE::Platform
+    VICE::Render
+    VICE::World
+    VICE::EditorState
+    VICE::EditorUi
+)
+target_compile_features(vice_editor PRIVATE cxx_std_23)
+target_compile_definitions(
+  vice_editor
+  PRIVATE
+    VICE_EDITOR_LAYOUT_FILE="${CMAKE_BINARY_DIR}/editor/vice_editor.ini"
+)
+vice_enable_warnings(vice_editor)
+
+if(VICE_BUILD_TOOLS)
+  if(TARGET vice_world_cooker)
+    set(_vice_editor_world_source "${PROJECT_SOURCE_DIR}/assets/worlds/vice_lab.vworld")
+    set(_vice_editor_world_asset "${CMAKE_BINARY_DIR}/cooked/vice_editor_world.vworldc")
+
+    add_custom_command(
+      OUTPUT "${_vice_editor_world_asset}"
+      COMMAND ${CMAKE_COMMAND} -E make_directory "${CMAKE_BINARY_DIR}/cooked"
+      COMMAND
+        $<TARGET_FILE:vice_world_cooker>
+        --input "${_vice_editor_world_source}"
+        --output "${_vice_editor_world_asset}"
+      DEPENDS
+        vice_world_cooker
+        "${_vice_editor_world_source}"
+      VERBATIM
+    )
+
+    add_custom_target(
+      vice_editor_world_asset
+      DEPENDS "${_vice_editor_world_asset}"
+    )
+    add_dependencies(vice_editor vice_editor_world_asset)
+    target_compile_definitions(
+      vice_editor
+      PRIVATE
+        VICE_EDITOR_COOKED_WORLD="${_vice_editor_world_asset}"
+    )
+  endif()
+
+  if(TARGET vice_mesh_cooker)
+    set(_vice_editor_mesh_source "${PROJECT_SOURCE_DIR}/assets/meshes/vice_lab_ramp.vmesh")
+    set(_vice_editor_mesh_asset "${CMAKE_BINARY_DIR}/cooked/vice_editor_scene.vmeshc")
+
+    add_custom_command(
+      OUTPUT "${_vice_editor_mesh_asset}"
+      COMMAND ${CMAKE_COMMAND} -E make_directory "${CMAKE_BINARY_DIR}/cooked"
+      COMMAND
+        $<TARGET_FILE:vice_mesh_cooker>
+        --input "${_vice_editor_mesh_source}"
+        --output "${_vice_editor_mesh_asset}"
+      DEPENDS
+        vice_mesh_cooker
+        "${_vice_editor_mesh_source}"
+      VERBATIM
+    )
+
+    add_custom_target(
+      vice_editor_scene_asset
+      DEPENDS "${_vice_editor_mesh_asset}"
+    )
+    add_dependencies(vice_editor vice_editor_scene_asset)
+    target_compile_definitions(
+      vice_editor
+      PRIVATE
+        VICE_EDITOR_COOKED_SCENE_MESH="${_vice_editor_mesh_asset}"
+    )
+  endif()
+endif()

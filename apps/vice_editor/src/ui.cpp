@@ -455,7 +455,7 @@ void EditorUi::draw(
     ImGui::SameLine();
     ImGui::TextDisabled("%s", status.world_loaded ? status.world_name.c_str() : "No World loaded");
     ImGui::SameLine();
-    ImGui::TextDisabled("  |  %s  |  %zu entities", status.render_backend.c_str(), world.entity_count());
+    ImGui::TextDisabled("  ·  %s  ·  %zu entities", status.render_backend.c_str(), world.entity_count());
     ImGui::End();
 
     if (state_->show_hierarchy) {
@@ -508,48 +508,82 @@ void EditorUi::draw(
     }
 
     if (state_->show_scene) {
-        const bool visible = ImGui::Begin(
-            scene_window_name,
-            nullptr,
-            ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse
-        );
+        constexpr ImGuiWindowFlags scene_flags =
+            ImGuiWindowFlags_NoScrollbar |
+            ImGuiWindowFlags_NoScrollWithMouse |
+            ImGuiWindowFlags_NoBackground;
+        const bool visible = ImGui::Begin(scene_window_name, nullptr, scene_flags);
         if (visible) {
-            ImGui::TextDisabled("%s", status.render_backend.c_str());
+            const ImVec2 toolbar_pos = ImGui::GetCursorScreenPos();
+            const float toolbar_height = ImGui::GetFrameHeight() + 4.0F * state_->style_scale;
+            const float toolbar_width = ImGui::GetContentRegionAvail().x;
+            auto* draw_list = ImGui::GetWindowDrawList();
+            draw_list->AddRectFilled(
+                toolbar_pos,
+                {toolbar_pos.x + toolbar_width, toolbar_pos.y + toolbar_height},
+                IM_COL32(16, 19, 25, 242),
+                5.0F
+            );
+            draw_list->AddLine(
+                {toolbar_pos.x, toolbar_pos.y + toolbar_height},
+                {toolbar_pos.x + toolbar_width, toolbar_pos.y + toolbar_height},
+                IM_COL32(48, 56, 69, 210)
+            );
+
+            ImGui::SetCursorScreenPos({
+                toolbar_pos.x + 10.0F * state_->style_scale,
+                toolbar_pos.y + 2.0F * state_->style_scale,
+            });
+            ImGui::TextDisabled("Perspective");
             ImGui::SameLine();
+            ImGui::TextDisabled("·");
+            ImGui::SameLine();
+            ImGui::TextDisabled("Shaded");
+
             const float controls_width =
                 ImGui::CalcTextSize("Controls").x + ImGui::GetStyle().FramePadding.x * 2.0F;
-            const float available_x = ImGui::GetContentRegionAvail().x;
-            if (available_x > controls_width) {
-                ImGui::SetCursorPosX(ImGui::GetCursorPosX() + available_x - controls_width);
-            }
+            ImGui::SetCursorScreenPos({
+                toolbar_pos.x + toolbar_width - controls_width - 8.0F * state_->style_scale,
+                toolbar_pos.y + 1.0F * state_->style_scale,
+            });
             if (ImGui::SmallButton("Controls")) {
                 ImGui::OpenPopup("SceneControls");
             }
             if (ImGui::BeginPopup("SceneControls")) {
-                ImGui::TextUnformatted("Orbit   Right drag");
-                ImGui::TextUnformatted("Pan     Middle drag");
-                ImGui::TextUnformatted("Zoom    Scroll");
+                if (ImGui::BeginTable(
+                    "##SceneControlsTable",
+                    2,
+                    ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_NoSavedSettings
+                )) {
+                    property_row("Orbit", "Right drag");
+                    property_row("Pan", "Middle drag");
+                    property_row("Zoom", "Scroll");
+                    property_row("Move", "W A S D");
+                    property_row("Elevate", "Q / E");
+                    property_row("Frame", "F");
+                    ImGui::EndTable();
+                }
                 ImGui::EndPopup();
             }
-            ImGui::Separator();
 
+            ImGui::SetCursorScreenPos({toolbar_pos.x, toolbar_pos.y + toolbar_height + 5.0F * state_->style_scale});
             const ImVec2 scene_pos = ImGui::GetCursorScreenPos();
             ImVec2 scene_size = ImGui::GetContentRegionAvail();
             scene_size.x = std::max(1.0F, scene_size.x);
             scene_size.y = std::max(1.0F, scene_size.y);
             const ImVec2 scene_max{scene_pos.x + scene_size.x, scene_pos.y + scene_size.y};
 
-            auto* draw_list = ImGui::GetWindowDrawList();
-            draw_list->AddRectFilled(scene_pos, scene_max, IM_COL32(11, 14, 19, 255), 5.0F);
-            constexpr float grid_step = 32.0F;
-            const ImU32 grid_color = IM_COL32(61, 70, 84, 42);
-            for (float x = scene_pos.x; x < scene_max.x; x += grid_step) {
-                draw_list->AddLine({x, scene_pos.y}, {x, scene_max.y}, grid_color);
+            if (!status.world_loaded) {
+                draw_list->AddRectFilled(scene_pos, scene_max, IM_COL32(11, 14, 19, 255), 6.0F);
+                constexpr float grid_step = 32.0F;
+                const ImU32 grid_color = IM_COL32(61, 70, 84, 42);
+                for (float x = scene_pos.x; x < scene_max.x; x += grid_step) {
+                    draw_list->AddLine({x, scene_pos.y}, {x, scene_max.y}, grid_color);
+                }
+                for (float y = scene_pos.y; y < scene_max.y; y += grid_step) {
+                    draw_list->AddLine({scene_pos.x, y}, {scene_max.x, y}, grid_color);
+                }
             }
-            for (float y = scene_pos.y; y < scene_max.y; y += grid_step) {
-                draw_list->AddLine({scene_pos.x, y}, {scene_max.x, y}, grid_color);
-            }
-            draw_list->AddRect(scene_pos, scene_max, IM_COL32(51, 61, 74, 255), 5.0F);
 
             ImGui::InvisibleButton(
                 "##SceneViewport",
@@ -559,15 +593,24 @@ void EditorUi::draw(
                     ImGuiButtonFlags_MouseButtonMiddle
             );
 
+            const bool scene_hovered = ImGui::IsItemHovered();
+            const bool scene_focused = ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows);
             state_->scene_viewport = SceneViewport{
                 .x = scene_pos.x,
                 .y = scene_pos.y,
                 .width = scene_size.x,
                 .height = scene_size.y,
                 .framebuffer_scale = state_->metrics.scale_factor,
-                .hovered = ImGui::IsItemHovered(),
-                .focused = ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows),
+                .hovered = scene_hovered,
+                .focused = scene_focused,
             };
+
+            const ImU32 border_color = scene_focused
+                ? IM_COL32(73, 170, 246, 230)
+                : scene_hovered
+                    ? IM_COL32(73, 170, 246, 125)
+                    : IM_COL32(48, 56, 69, 190);
+            draw_list->AddRect(scene_pos, scene_max, border_color, 6.0F, 0, scene_focused ? 1.6F : 1.0F);
 
             if (!status.world_loaded) {
                 const char* message = "Open a World to start.";
