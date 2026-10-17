@@ -36,6 +36,7 @@ add_library(
   STATIC
     src/collision_asset.cpp
     src/collision_asset_file.cpp
+    src/debug.cpp
     src/material_asset.cpp
     src/jolt_job_system.cpp
     src/jolt_rigid_body_jobs.cpp
