@@ -10,6 +10,7 @@
 #include <vice/world/world.hpp>
 
 #include <memory>
+#include <optional>
 
 namespace vice::editor::detail {
 
@@ -24,7 +25,14 @@ public:
     ResourceMeshRenderer& operator=(ResourceMeshRenderer&&) noexcept;
 
     [[nodiscard]] bool initialize(render::Device& device, render::TextureFormat color_format);
-    void handle_event(const platform::Event& event, const SceneViewport& viewport);
+    void handle_event(
+        const platform::Event& event,
+        const SceneViewport& viewport,
+        const world::World& world,
+        SelectionModel& selection,
+        const AssetIndex& assets,
+        std::optional<world::PersistentId> selection_before_event
+    );
     void update(float delta_seconds, const SceneViewport& viewport);
 
     [[nodiscard]] world::GlobalPosition suggested_spawn_position(const world::World& world) const noexcept;
