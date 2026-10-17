@@ -59,12 +59,12 @@ if(VICE_BUILD_LAB)
   add_subdirectory(apps/vice_lab)
 endif()
 
-if(VICE_BUILD_EDITOR)
-  add_subdirectory(apps/vice_editor)
-endif()
-
 if(VICE_BUILD_PLAYER)
   add_subdirectory(apps/vice_player)
+endif()
+
+if(VICE_BUILD_EDITOR)
+  add_subdirectory(apps/vice_editor)
 endif()
 
 if(VICE_BUILD_TESTS)
