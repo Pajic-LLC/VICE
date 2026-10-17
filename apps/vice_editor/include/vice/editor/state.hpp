@@ -12,6 +12,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <variant>
 #include <vector>
 
 namespace vice::editor {
@@ -52,16 +53,25 @@ bool apply_entity_transform(
     const EntityTransformState& state
 );
 
-class TransformHistory {
+class CommandHistory {
 public:
-    struct Entry {
+    struct TransformEntry {
         world::PersistentId persistent_id{};
         EntityTransformState before{};
         EntityTransformState after{};
         std::string label;
     };
 
-    bool record(Entry entry);
+    struct CreateEntityEntry {
+        world::SnapshotEntity entity;
+        std::vector<world::ResourceId> owned_resources;
+        std::string label;
+    };
+
+    using Entry = std::variant<TransformEntry, CreateEntityEntry>;
+
+    bool record(TransformEntry entry);
+    bool record(CreateEntityEntry entry);
     bool undo(world::World& world);
     bool redo(world::World& world);
     void clear() noexcept;
@@ -76,10 +86,14 @@ public:
     [[nodiscard]] std::string redo_label() const;
 
 private:
+    bool record_entry(Entry entry);
+
     std::vector<Entry> entries_;
     std::size_t cursor_ = 0;
     std::optional<std::size_t> saved_cursor_ = 0U;
 };
+
+using TransformHistory = CommandHistory;
 
 struct HierarchyEntry {
     world::PersistentId persistent_id{};
@@ -93,6 +107,7 @@ struct InspectorData {
     std::optional<world::EntityId> entity;
     std::optional<world::SpatialState> spatial_state;
     std::optional<world::AuthoredTransform> authored_transform;
+    std::vector<world::ResourceReference> resource_references;
     std::optional<world::RegionDesc> region;
     std::optional<world::SimulationIslandId> simulation_island;
     std::optional<world::StreamingCellId> streaming_cell;
