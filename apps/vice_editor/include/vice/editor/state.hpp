@@ -95,6 +95,14 @@ private:
 
 using TransformHistory = CommandHistory;
 
+[[nodiscard]] std::optional<world::PersistentId> create_mesh_instance(
+    world::World& world,
+    CommandHistory& history,
+    world::ResourceId mesh_resource,
+    world::GlobalPosition position,
+    std::string* diagnostics = nullptr
+);
+
 struct HierarchyEntry {
     world::PersistentId persistent_id{};
     std::optional<world::SpatialState> spatial_state;
