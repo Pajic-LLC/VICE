@@ -68,7 +68,8 @@ public:
         std::string label;
     };
 
-    using Entry = std::variant<TransformEntry, CreateEntityEntry>;
+    using Entry = TransformEntry;
+    using StoredEntry = std::variant<TransformEntry, CreateEntityEntry>;
 
     bool record(TransformEntry entry);
     bool record(CreateEntityEntry entry);
@@ -86,9 +87,9 @@ public:
     [[nodiscard]] std::string redo_label() const;
 
 private:
-    bool record_entry(Entry entry);
+    bool record_entry(StoredEntry entry);
 
-    std::vector<Entry> entries_;
+    std::vector<StoredEntry> entries_;
     std::size_t cursor_ = 0;
     std::optional<std::size_t> saved_cursor_ = 0U;
 };
