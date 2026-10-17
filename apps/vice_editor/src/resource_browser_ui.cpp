@@ -1,6 +1,7 @@
 #include <vice/editor/resource_browser_ui.hpp>
 
 #include <imgui.h>
+#include <imgui_internal.h>
 
 #include <algorithm>
 #include <array>
@@ -14,6 +15,7 @@ namespace vice::editor {
 namespace {
 
 constexpr const char* resource_browser_window_name = "Resources###VICE.Resources";
+constexpr const char* inspector_window_name = "Inspector###VICE.Inspector";
 
 [[nodiscard]] std::string lower_copy(std::string value) {
     std::transform(value.begin(), value.end(), value.begin(), [](const unsigned char character) {
@@ -43,6 +45,36 @@ constexpr const char* resource_browser_window_name = "Resources###VICE.Resources
     if (!asset.cooked_available) return {0.70F, 0.62F, 0.48F, 1.0F};
     if (asset.cooked_valid) return {0.45F, 0.82F, 0.60F, 1.0F};
     return {0.92F, 0.40F, 0.40F, 1.0F};
+}
+
+[[nodiscard]] const char* resource_role_name(const world::ResourceRole role) noexcept {
+    switch (role) {
+    case world::ResourceRole::render_mesh: return "Render mesh";
+    }
+    return "Resource";
+}
+
+void inspector_property(const char* name, const std::string& value) {
+    ImGui::TableNextRow();
+    ImGui::TableSetColumnIndex(0);
+    ImGui::TextDisabled("%s", name);
+    ImGui::TableSetColumnIndex(1);
+    ImGui::TextWrapped("%s", value.c_str());
+}
+
+[[nodiscard]] std::string display_path(
+    const std::filesystem::path& path,
+    const std::filesystem::path& root
+) {
+    if (path.empty()) return "None";
+    std::error_code error;
+    if (!root.empty()) {
+        const auto relative = std::filesystem::relative(path, root, error);
+        if (!error && !relative.empty() && relative.native().find("..") != 0U) {
+            return relative.generic_string();
+        }
+    }
+    return path.generic_string();
 }
 
 } // namespace
@@ -189,6 +221,47 @@ void ResourceBrowserUi::draw(AssetIndex& assets) {
         }
     }
 
+    ImGui::End();
+}
+
+void ResourceBrowserUi::draw_inspector_resources(
+    const world::World& world,
+    const SelectionModel& selection,
+    const AssetIndex& assets
+) {
+    const auto selected = selection.selected();
+    if (!selected.has_value()) return;
+
+    ImGuiWindow* inspector_window = ImGui::FindWindowByName(inspector_window_name);
+    if (inspector_window == nullptr || !inspector_window->Active) return;
+
+    const auto inspector = project_inspector(world, *selected);
+    if (!inspector.has_value() || inspector->resource_references.empty()) return;
+
+    const bool visible = ImGui::Begin(inspector_window_name);
+    if (visible && ImGui::CollapsingHeader("Resources", ImGuiTreeNodeFlags_DefaultOpen)) {
+        for (const auto reference : inspector->resource_references) {
+            const std::string id = reference.resource.value.to_string();
+            ImGui::PushID(id.c_str());
+            ImGui::TextUnformatted(resource_role_name(reference.role));
+            if (ImGui::BeginTable(
+                    "##InspectorResource",
+                    2,
+                    ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_NoSavedSettings
+                )) {
+                inspector_property("Resource ID", id);
+                if (const AssetRecord* asset = assets.find_resource(reference.resource); asset != nullptr) {
+                    inspector_property("Asset", std::string{asset_kind_name(asset->kind)} + " · " + asset->name);
+                    inspector_property("Source", display_path(asset->source_path, assets.source_root()));
+                    inspector_property("Cooked", display_path(asset->cooked_path, assets.cooked_root()));
+                } else {
+                    inspector_property("Asset", "Unresolved");
+                }
+                ImGui::EndTable();
+            }
+            ImGui::PopID();
+        }
+    }
     ImGui::End();
 }
 
