@@ -14,6 +14,8 @@
 #include <vice/editor/profiler_ui.hpp>
 #include <vice/editor/project_build.hpp>
 #include <vice/editor/project_session.hpp>
+#include <vice/editor/project_settings.hpp>
+#include <vice/editor/project_settings_ui.hpp>
 #include <vice/editor/project_workflow.hpp>
 #include <vice/editor/project_workflow_ui.hpp>
 #include <vice/editor/resource_browser_ui.hpp>
@@ -459,6 +461,7 @@ int main(const int argc, char** argv) {
 
         vice::editor::EditorUi ui{layout_path};
         vice::editor::ProjectWorkflowUi project_workflow_ui;
+        vice::editor::ProjectSettingsUi project_settings_ui;
         vice::editor::PhysicsDebugUi physics_debug_ui;
         vice::editor::PreviewRuntime preview;
         vice::editor::PreviewSnapshot preview_snapshot;
@@ -707,8 +710,47 @@ int main(const int argc, char** argv) {
             workflow_status.diagnostics = workflow_diagnostics;
             project_workflow_ui.draw(workflow_status);
 
+            if (!show_start_surface) {
+                project_settings_ui.draw(
+                    vice::editor::ProjectSettingsStatus{
+                        .project_id = project.id,
+                        .project_name = project.name,
+                        .game_name = project.game_name,
+                        .asset_root = project.asset_root,
+                        .startup_world = project.startup_world,
+                    },
+                    assets
+                );
+            }
+
             ui.end_frame();
             active_viewport = show_start_surface ? vice::editor::SceneViewport{} : ui.scene_viewport();
+
+            if (!show_start_surface) {
+                if (const auto settings_request = project_settings_ui.consume_save_request();
+                    settings_request.has_value()) {
+                    std::string settings_diagnostics;
+                    const bool saved = vice::editor::save_project_settings(
+                        *project_session,
+                        *settings_request,
+                        &settings_diagnostics
+                    );
+                    project_settings_ui.complete_save(saved, settings_diagnostics);
+                    if (saved) {
+                        workflow_diagnostics.clear();
+                        if (!recent_projects.remember(project_path, &recent_diagnostics)) {
+                            log(LogLevel::warning, "VICE Editor recent projects: " + recent_diagnostics);
+                        }
+                        log(
+                            LogLevel::info,
+                            "VICE Editor saved Project Settings for " + project.name + "."
+                        );
+                    } else {
+                        workflow_diagnostics = settings_diagnostics;
+                        log(LogLevel::error, "VICE Editor could not save Project Settings: " + settings_diagnostics);
+                    }
+                }
+            }
 
             if (!show_start_surface && project_workflow_ui.consume_build_project_request()) {
                 const auto result = vice::editor::build_project(*project_session);
