@@ -98,10 +98,15 @@ private:
     std::unique_ptr<State> state_;
 };
 
-void reset_document_runtime(
+inline void reset_document_runtime(
     SelectionModel& selection,
     TransformHistory& history,
     PreviewRuntime& preview
-) noexcept;
+) noexcept {
+    selection.clear();
+    history.clear();
+    history.mark_saved();
+    preview.stop();
+}
 
 } // namespace vice::editor
