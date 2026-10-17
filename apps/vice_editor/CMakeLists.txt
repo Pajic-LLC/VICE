@@ -12,6 +12,7 @@ add_library(
   vice_editor_state
   STATIC
     src/project_session.cpp
+    src/project_settings.cpp
     src/state.cpp
 )
 
