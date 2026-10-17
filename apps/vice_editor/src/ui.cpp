@@ -9,8 +9,6 @@
 #include <array>
 #include <cmath>
 #include <cstdio>
-#include <cstring>
-#include <filesystem>
 #include <sstream>
 #include <string>
 #include <string_view>
@@ -120,11 +118,12 @@ void push_modifiers(ImGuiIO& io, const platform::ModifierMask modifiers) {
 }
 
 [[nodiscard]] std::string short_id(const world::PersistentId id) {
-    const auto full = id.to_string();
-    if (full.size() <= 8U) {
-        return full;
-    }
-    return full.substr(0, 8);
+    const std::string full = id.to_string();
+    return full.size() > 8U ? full.substr(0, 8) : full;
+}
+
+[[nodiscard]] char ascii_lower(const char value) noexcept {
+    return value >= 'A' && value <= 'Z' ? static_cast<char>(value - 'A' + 'a') : value;
 }
 
 [[nodiscard]] bool contains_case_insensitive(
@@ -134,20 +133,15 @@ void push_modifiers(ImGuiIO& io, const platform::ModifierMask modifiers) {
     if (needle.empty()) {
         return true;
     }
-    const auto found = std::search(
-        haystack.begin(), haystack.end(),
-        needle.begin(), needle.end(),
+    return std::search(
+        haystack.begin(),
+        haystack.end(),
+        needle.begin(),
+        needle.end(),
         [](const char left, const char right) {
-            const auto lower = [](const char value) {
-                if (value >= 'A' && value <= 'Z') {
-                    return static_cast<char>(value - 'A' + 'a');
-                }
-                return value;
-            };
-            return lower(left) == lower(right);
+            return ascii_lower(left) == ascii_lower(right);
         }
-    );
-    return found != haystack.end();
+    ) != haystack.end();
 }
 
 void property_row(const char* label, const std::string& value) {
@@ -189,7 +183,7 @@ void property_row(const char* label, const std::string& value) {
     return {0.80F, 0.80F, 0.80F, 1.00F};
 }
 
-void draw_filter_button(
+void filter_button(
     const char* label,
     const core::LogLevel level,
     core::LogLevel& current
@@ -207,6 +201,26 @@ void draw_filter_button(
     }
 }
 
+void build_default_dock_layout(const ImGuiID dockspace_id, const ImVec2 dock_size) {
+    ImGui::DockBuilderRemoveNode(dockspace_id);
+    ImGui::DockBuilderAddNode(dockspace_id, ImGuiDockNodeFlags_DockSpace);
+    ImGui::DockBuilderSetNodeSize(dockspace_id, dock_size);
+
+    ImGuiID center = dockspace_id;
+    ImGuiID left = 0;
+    ImGuiID right = 0;
+    ImGuiID bottom = 0;
+    ImGui::DockBuilderSplitNode(center, ImGuiDir_Left, 0.18F, &left, &center);
+    ImGui::DockBuilderSplitNode(center, ImGuiDir_Right, 0.24F, &right, &center);
+    ImGui::DockBuilderSplitNode(center, ImGuiDir_Down, 0.22F, &bottom, &center);
+
+    ImGui::DockBuilderDockWindow(hierarchy_window_name, left);
+    ImGui::DockBuilderDockWindow(scene_window_name, center);
+    ImGui::DockBuilderDockWindow(inspector_window_name, right);
+    ImGui::DockBuilderDockWindow(console_window_name, bottom);
+    ImGui::DockBuilderFinish(dockspace_id);
+}
+
 } // namespace
 
 struct EditorUi::State {
@@ -214,7 +228,7 @@ struct EditorUi::State {
     std::string ini_path;
     SceneViewport scene_viewport{};
     platform::WindowMetrics metrics{};
-    float style_scale = 0.0F;
+    float style_scale = 1.0F;
     bool frame_active = false;
     bool reset_layout = false;
     bool quit_requested = false;
@@ -251,11 +265,10 @@ EditorUi::EditorUi(std::filesystem::path layout_path)
     }
 
     detail::apply_editor_theme(1.0F);
-    state_->style_scale = 1.0F;
 }
 
 EditorUi::~EditorUi() {
-    if (state_ == nullptr || state_->context == nullptr) {
+    if (!valid()) {
         return;
     }
     ImGui::SetCurrentContext(state_->context);
@@ -321,15 +334,15 @@ bool EditorUi::begin_frame(const platform::WindowMetrics metrics, const float de
 
     ImGui::SetCurrentContext(state_->context);
     auto& io = ImGui::GetIO();
-    io.DisplaySize = ImVec2{static_cast<float>(metrics.width), static_cast<float>(metrics.height)};
+    io.DisplaySize = {static_cast<float>(metrics.width), static_cast<float>(metrics.height)};
 
-    const float scale_x = metrics.width > 0U && metrics.drawable_width > 0U
+    const float scale_x = metrics.drawable_width > 0U
         ? static_cast<float>(metrics.drawable_width) / static_cast<float>(metrics.width)
         : metrics.scale_factor;
-    const float scale_y = metrics.height > 0U && metrics.drawable_height > 0U
+    const float scale_y = metrics.drawable_height > 0U
         ? static_cast<float>(metrics.drawable_height) / static_cast<float>(metrics.height)
         : metrics.scale_factor;
-    io.DisplayFramebufferScale = ImVec2{std::max(0.5F, scale_x), std::max(0.5F, scale_y)};
+    io.DisplayFramebufferScale = {std::max(0.5F, scale_x), std::max(0.5F, scale_y)};
     io.DeltaTime = std::clamp(delta_seconds, 1.0F / 1000.0F, 0.25F);
 
     const float style_scale = std::max(0.75F, metrics.scale_factor);
@@ -421,26 +434,9 @@ void EditorUi::draw(
     dock_size.y = std::max(1.0F, dock_size.y - status_height);
 
     if (state_->reset_layout || ImGui::DockBuilderGetNode(dockspace_id) == nullptr) {
-        ImGui::DockBuilderRemoveNode(dockspace_id);
-        ImGui::DockBuilderAddNode(dockspace_id, ImGuiDockNodeFlags_DockSpace);
-        ImGui::DockBuilderSetNodeSize(dockspace_id, dock_size);
-
-        ImGuiID center_id = dockspace_id;
-        ImGuiID left_id = 0;
-        ImGuiID right_id = 0;
-        ImGuiID bottom_id = 0;
-        ImGui::DockBuilderSplitNode(center_id, ImGuiDir_Left, 0.18F, &left_id, &center_id);
-        ImGui::DockBuilderSplitNode(center_id, ImGuiDir_Right, 0.24F, &right_id, &center_id);
-        ImGui::DockBuilderSplitNode(center_id, ImGuiDir_Down, 0.22F, &bottom_id, &center_id);
-
-        ImGui::DockBuilderDockWindow(hierarchy_window_name, left_id);
-        ImGui::DockBuilderDockWindow(scene_window_name, center_id);
-        ImGui::DockBuilderDockWindow(inspector_window_name, right_id);
-        ImGui::DockBuilderDockWindow(console_window_name, bottom_id);
-        ImGui::DockBuilderFinish(dockspace_id);
+        build_default_dock_layout(dockspace_id, dock_size);
         state_->reset_layout = false;
     }
-
     ImGui::DockSpace(dockspace_id, dock_size, ImGuiDockNodeFlags_None);
 
     ImGui::Separator();
@@ -451,259 +447,265 @@ void EditorUi::draw(
     );
     const ImVec2 cursor = ImGui::GetCursorScreenPos();
     ImGui::GetWindowDrawList()->AddCircleFilled(
-        ImVec2{cursor.x + 6.0F, cursor.y + ImGui::GetTextLineHeight() * 0.5F},
+        {cursor.x + 6.0F, cursor.y + ImGui::GetTextLineHeight() * 0.5F},
         3.0F,
         status_color
     );
-    ImGui::Dummy(ImVec2{15.0F, 1.0F});
+    ImGui::Dummy({15.0F, 1.0F});
     ImGui::SameLine();
     ImGui::TextDisabled("%s", status.world_loaded ? status.world_name.c_str() : "No World loaded");
     ImGui::SameLine();
     ImGui::TextDisabled("  |  %s  |  %zu entities", status.render_backend.c_str(), world.entity_count());
-
     ImGui::End();
 
-    if (state_->show_hierarchy && ImGui::Begin(hierarchy_window_name, &state_->show_hierarchy)) {
-        ImGui::SetNextItemWidth(-1.0F);
-        ImGui::InputTextWithHint(
-            "##HierarchyFilter",
-            "Search entities",
-            state_->hierarchy_filter.data(),
-            state_->hierarchy_filter.size()
-        );
-
-        const auto entries = build_hierarchy(world);
-        ImGui::TextDisabled("%zu %s", entries.size(), entries.size() == 1U ? "entity" : "entities");
-        ImGui::Separator();
-
-        std::size_t visible_count = 0;
-        for (const auto& entry : entries) {
-            const std::string id = entry.persistent_id.to_string();
-            if (!contains_case_insensitive(id, state_->hierarchy_filter.data())) {
-                continue;
-            }
-            ++visible_count;
-
-            const std::string short_name = short_id(entry.persistent_id);
-            std::string label = "Entity  " + short_name;
-            if (entry.spatial_state.has_value()) {
-                label += "   R" + std::to_string(entry.spatial_state->region.value);
-            }
-            label += "###" + id;
-
-            const bool selected = selection.selected() == std::optional{entry.persistent_id};
-            if (ImGui::Selectable(label.c_str(), selected, ImGuiSelectableFlags_SpanAllColumns)) {
-                selection.select(entry.persistent_id);
-            }
-            if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayNormal)) {
-                ImGui::SetTooltip("%s", id.c_str());
-            }
-        }
-
-        if (entries.empty()) {
-            ImGui::Spacing();
-            ImGui::TextDisabled("No entities in this World.");
-        } else if (visible_count == 0U) {
-            ImGui::Spacing();
-            ImGui::TextDisabled("No entities match your search.");
-        }
-    }
     if (state_->show_hierarchy) {
-        ImGui::End();
-    }
-
-    if (state_->show_scene && ImGui::Begin(
-        scene_window_name,
-        &state_->show_scene,
-        ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse
-    )) {
-        ImGui::TextDisabled("%s", status.render_backend.c_str());
-        ImGui::SameLine();
-        const float controls_width = ImGui::CalcTextSize("Controls").x + ImGui::GetStyle().FramePadding.x * 2.0F;
-        const float available_x = ImGui::GetContentRegionAvail().x;
-        if (available_x > controls_width) {
-            ImGui::SetCursorPosX(ImGui::GetCursorPosX() + available_x - controls_width);
-        }
-        if (ImGui::SmallButton("Controls")) {
-            ImGui::OpenPopup("SceneControls");
-        }
-        if (ImGui::BeginPopup("SceneControls")) {
-            ImGui::TextUnformatted("Orbit   Right drag");
-            ImGui::TextUnformatted("Pan     Middle drag");
-            ImGui::TextUnformatted("Zoom    Scroll");
-            ImGui::EndPopup();
-        }
-        ImGui::Separator();
-
-        const ImVec2 scene_pos = ImGui::GetCursorScreenPos();
-        ImVec2 scene_size = ImGui::GetContentRegionAvail();
-        scene_size.x = std::max(1.0F, scene_size.x);
-        scene_size.y = std::max(1.0F, scene_size.y);
-
-        auto* draw_list = ImGui::GetWindowDrawList();
-        const ImVec2 scene_max{scene_pos.x + scene_size.x, scene_pos.y + scene_size.y};
-        draw_list->AddRectFilled(scene_pos, scene_max, IM_COL32(11, 14, 19, 255), 5.0F);
-
-        constexpr float grid_step = 32.0F;
-        const ImU32 grid_color = IM_COL32(61, 70, 84, 42);
-        for (float x = scene_pos.x; x < scene_max.x; x += grid_step) {
-            draw_list->AddLine(ImVec2{x, scene_pos.y}, ImVec2{x, scene_max.y}, grid_color);
-        }
-        for (float y = scene_pos.y; y < scene_max.y; y += grid_step) {
-            draw_list->AddLine(ImVec2{scene_pos.x, y}, ImVec2{scene_max.x, y}, grid_color);
-        }
-        draw_list->AddRect(scene_pos, scene_max, IM_COL32(51, 61, 74, 255), 5.0F);
-
-        ImGui::InvisibleButton(
-            "##SceneViewport",
-            scene_size,
-            ImGuiButtonFlags_MouseButtonLeft |
-                ImGuiButtonFlags_MouseButtonRight |
-                ImGuiButtonFlags_MouseButtonMiddle
-        );
-
-        state_->scene_viewport = SceneViewport{
-            .x = scene_pos.x,
-            .y = scene_pos.y,
-            .width = scene_size.x,
-            .height = scene_size.y,
-            .framebuffer_scale = state_->metrics.scale_factor,
-            .hovered = ImGui::IsItemHovered(),
-            .focused = ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows),
-        };
-
-        if (!status.world_loaded) {
-            const char* message = "Open a World to start.";
-            const ImVec2 text_size = ImGui::CalcTextSize(message);
-            draw_list->AddText(
-                ImVec2{
-                    scene_pos.x + (scene_size.x - text_size.x) * 0.5F,
-                    scene_pos.y + (scene_size.y - text_size.y) * 0.5F,
-                },
-                IM_COL32(150, 160, 174, 255),
-                message
+        const bool visible = ImGui::Begin(hierarchy_window_name, nullptr);
+        if (visible) {
+            ImGui::SetNextItemWidth(-1.0F);
+            ImGui::InputTextWithHint(
+                "##HierarchyFilter",
+                "Search entities",
+                state_->hierarchy_filter.data(),
+                state_->hierarchy_filter.size()
             );
-        }
-    }
-    if (state_->show_scene) {
-        ImGui::End();
-    }
 
-    if (state_->show_inspector && ImGui::Begin(inspector_window_name, &state_->show_inspector)) {
-        const auto selected_id = selection.selected();
-        if (!selected_id.has_value()) {
-            ImGui::Spacing();
-            ImGui::TextDisabled("Select an entity to inspect it.");
-        } else if (const auto inspector = project_inspector(world, *selected_id)) {
-            const std::string short_name = short_id(inspector->persistent_id);
-            ImGui::Text("Entity  %s", short_name.c_str());
+            const auto entries = build_hierarchy(world);
+            ImGui::TextDisabled("%zu %s", entries.size(), entries.size() == 1U ? "entity" : "entities");
             ImGui::Separator();
 
-            if (ImGui::CollapsingHeader("Position", ImGuiTreeNodeFlags_DefaultOpen)) {
-                if (ImGui::BeginTable(
-                    "##InspectorPosition",
-                    2,
-                    ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_NoSavedSettings
-                )) {
-                    if (inspector->spatial_state.has_value()) {
-                        property_row("World", format_position(inspector->spatial_state->global_position));
-                        property_row("Region", std::to_string(inspector->spatial_state->region.value));
-                    } else {
-                        property_row("World", "Not spatial");
-                    }
-                    ImGui::EndTable();
+            std::size_t visible_count = 0;
+            for (const auto& entry : entries) {
+                const std::string full_id = entry.persistent_id.to_string();
+                if (!contains_case_insensitive(full_id, state_->hierarchy_filter.data())) {
+                    continue;
+                }
+                ++visible_count;
+
+                std::string label = "Entity  " + short_id(entry.persistent_id);
+                if (entry.spatial_state.has_value()) {
+                    label += "   R" + std::to_string(entry.spatial_state->region.value);
+                }
+                label += "###" + full_id;
+
+                const bool selected = selection.selected() == std::optional{entry.persistent_id};
+                if (ImGui::Selectable(label.c_str(), selected, ImGuiSelectableFlags_SpanAllColumns)) {
+                    selection.select(entry.persistent_id);
+                }
+                if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayNormal)) {
+                    ImGui::SetTooltip("%s", full_id.c_str());
                 }
             }
 
-            if (ImGui::CollapsingHeader("Runtime", ImGuiTreeNodeFlags_DefaultOpen)) {
-                if (ImGui::BeginTable(
-                    "##InspectorRuntime",
-                    2,
-                    ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_NoSavedSettings
-                )) {
-                    property_row(
-                        "Simulation island",
-                        inspector->simulation_island.has_value()
-                            ? std::to_string(inspector->simulation_island->value)
-                            : "None"
-                    );
-                    property_row(
-                        "Streaming cell",
-                        inspector->streaming_cell.has_value()
-                            ? format_cell(*inspector->streaming_cell)
-                            : "None"
-                    );
-                    property_row("Relations", std::to_string(inspector->relations.size()));
-                    ImGui::EndTable();
-                }
+            if (entries.empty()) {
+                ImGui::Spacing();
+                ImGui::TextDisabled("No entities in this World.");
+            } else if (visible_count == 0U) {
+                ImGui::Spacing();
+                ImGui::TextDisabled("No entities match your search.");
             }
-
-            if (ImGui::CollapsingHeader("Identity")) {
-                if (ImGui::BeginTable(
-                    "##InspectorIdentity",
-                    2,
-                    ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_NoSavedSettings
-                )) {
-                    property_row("Persistent ID", inspector->persistent_id.to_string());
-                    if (inspector->entity.has_value()) {
-                        property_row("Live index", std::to_string(inspector->entity->index));
-                        property_row("Generation", std::to_string(inspector->entity->generation));
-                    }
-                    ImGui::EndTable();
-                }
-            }
-        } else {
-            ImGui::TextDisabled("The selected entity is not currently loaded.");
         }
-    }
-    if (state_->show_inspector) {
         ImGui::End();
     }
 
-    if (state_->show_console && ImGui::Begin(console_window_name, &state_->show_console)) {
-        draw_filter_button("All", core::LogLevel::trace, state_->console_minimum);
-        ImGui::SameLine();
-        draw_filter_button("Warnings", core::LogLevel::warning, state_->console_minimum);
-        ImGui::SameLine();
-        draw_filter_button("Errors", core::LogLevel::error, state_->console_minimum);
+    if (state_->show_scene) {
+        const bool visible = ImGui::Begin(
+            scene_window_name,
+            nullptr,
+            ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse
+        );
+        if (visible) {
+            ImGui::TextDisabled("%s", status.render_backend.c_str());
+            ImGui::SameLine();
+            const float controls_width =
+                ImGui::CalcTextSize("Controls").x + ImGui::GetStyle().FramePadding.x * 2.0F;
+            const float available_x = ImGui::GetContentRegionAvail().x;
+            if (available_x > controls_width) {
+                ImGui::SetCursorPosX(ImGui::GetCursorPosX() + available_x - controls_width);
+            }
+            if (ImGui::SmallButton("Controls")) {
+                ImGui::OpenPopup("SceneControls");
+            }
+            if (ImGui::BeginPopup("SceneControls")) {
+                ImGui::TextUnformatted("Orbit   Right drag");
+                ImGui::TextUnformatted("Pan     Middle drag");
+                ImGui::TextUnformatted("Zoom    Scroll");
+                ImGui::EndPopup();
+            }
+            ImGui::Separator();
 
-        const float clear_width = ImGui::CalcTextSize("Clear").x + ImGui::GetStyle().FramePadding.x * 2.0F;
-        const float console_available = ImGui::GetContentRegionAvail().x;
-        if (console_available > clear_width) {
-            ImGui::SameLine(ImGui::GetCursorPosX() + console_available - clear_width);
-        }
-        if (ImGui::SmallButton("Clear")) {
-            console.clear();
-            state_->last_console_sequence = 0;
-        }
-        ImGui::Separator();
+            const ImVec2 scene_pos = ImGui::GetCursorScreenPos();
+            ImVec2 scene_size = ImGui::GetContentRegionAvail();
+            scene_size.x = std::max(1.0F, scene_size.x);
+            scene_size.y = std::max(1.0F, scene_size.y);
+            const ImVec2 scene_max{scene_pos.x + scene_size.x, scene_pos.y + scene_size.y};
 
-        const auto entries = console.entries(state_->console_minimum);
-        const bool was_at_bottom = ImGui::GetScrollY() >= ImGui::GetScrollMaxY() - 2.0F;
-        const std::uint64_t newest_sequence = entries.empty() ? 0 : entries.back().sequence;
-        const bool new_entries = newest_sequence > state_->last_console_sequence;
+            auto* draw_list = ImGui::GetWindowDrawList();
+            draw_list->AddRectFilled(scene_pos, scene_max, IM_COL32(11, 14, 19, 255), 5.0F);
+            constexpr float grid_step = 32.0F;
+            const ImU32 grid_color = IM_COL32(61, 70, 84, 42);
+            for (float x = scene_pos.x; x < scene_max.x; x += grid_step) {
+                draw_list->AddLine({x, scene_pos.y}, {x, scene_max.y}, grid_color);
+            }
+            for (float y = scene_pos.y; y < scene_max.y; y += grid_step) {
+                draw_list->AddLine({scene_pos.x, y}, {scene_max.x, y}, grid_color);
+            }
+            draw_list->AddRect(scene_pos, scene_max, IM_COL32(51, 61, 74, 255), 5.0F);
 
-        ImGuiListClipper clipper;
-        clipper.Begin(static_cast<int>(entries.size()));
-        while (clipper.Step()) {
-            for (int index = clipper.DisplayStart; index < clipper.DisplayEnd; ++index) {
-                const auto& entry = entries[static_cast<std::size_t>(index)];
-                ImGui::PushID(static_cast<int>(entry.sequence & 0x7fffffffU));
-                ImGui::TextColored(level_color(entry.level), "%s", core::log_level_name(entry.level).data());
-                ImGui::SameLine(58.0F * state_->style_scale);
-                ImGui::TextUnformatted(entry.message.c_str());
-                if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayNormal) && !entry.source_file.empty()) {
-                    ImGui::SetTooltip("%s:%u", entry.source_file.c_str(), entry.source_line);
-                }
-                ImGui::PopID();
+            ImGui::InvisibleButton(
+                "##SceneViewport",
+                scene_size,
+                ImGuiButtonFlags_MouseButtonLeft |
+                    ImGuiButtonFlags_MouseButtonRight |
+                    ImGuiButtonFlags_MouseButtonMiddle
+            );
+
+            state_->scene_viewport = SceneViewport{
+                .x = scene_pos.x,
+                .y = scene_pos.y,
+                .width = scene_size.x,
+                .height = scene_size.y,
+                .framebuffer_scale = state_->metrics.scale_factor,
+                .hovered = ImGui::IsItemHovered(),
+                .focused = ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows),
+            };
+
+            if (!status.world_loaded) {
+                const char* message = "Open a World to start.";
+                const ImVec2 text_size = ImGui::CalcTextSize(message);
+                draw_list->AddText(
+                    {
+                        scene_pos.x + (scene_size.x - text_size.x) * 0.5F,
+                        scene_pos.y + (scene_size.y - text_size.y) * 0.5F,
+                    },
+                    IM_COL32(150, 160, 174, 255),
+                    message
+                );
             }
         }
-        if (new_entries && was_at_bottom) {
-            ImGui::SetScrollHereY(1.0F);
-        }
-        state_->last_console_sequence = newest_sequence;
+        ImGui::End();
     }
+
+    if (state_->show_inspector) {
+        const bool visible = ImGui::Begin(inspector_window_name, nullptr);
+        if (visible) {
+            const auto selected_id = selection.selected();
+            if (!selected_id.has_value()) {
+                ImGui::Spacing();
+                ImGui::TextDisabled("Select an entity to inspect it.");
+            } else if (const auto inspector = project_inspector(world, *selected_id)) {
+                ImGui::Text("Entity  %s", short_id(inspector->persistent_id).c_str());
+                ImGui::Separator();
+
+                if (ImGui::CollapsingHeader("Position", ImGuiTreeNodeFlags_DefaultOpen)) {
+                    if (ImGui::BeginTable(
+                        "##InspectorPosition",
+                        2,
+                        ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_NoSavedSettings
+                    )) {
+                        if (inspector->spatial_state.has_value()) {
+                            property_row("World", format_position(inspector->spatial_state->global_position));
+                            property_row("Region", std::to_string(inspector->spatial_state->region.value));
+                        } else {
+                            property_row("World", "Not spatial");
+                        }
+                        ImGui::EndTable();
+                    }
+                }
+
+                if (ImGui::CollapsingHeader("Runtime", ImGuiTreeNodeFlags_DefaultOpen)) {
+                    if (ImGui::BeginTable(
+                        "##InspectorRuntime",
+                        2,
+                        ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_NoSavedSettings
+                    )) {
+                        property_row(
+                            "Simulation island",
+                            inspector->simulation_island.has_value()
+                                ? std::to_string(inspector->simulation_island->value)
+                                : "None"
+                        );
+                        property_row(
+                            "Streaming cell",
+                            inspector->streaming_cell.has_value()
+                                ? format_cell(*inspector->streaming_cell)
+                                : "None"
+                        );
+                        property_row("Relations", std::to_string(inspector->relations.size()));
+                        ImGui::EndTable();
+                    }
+                }
+
+                if (ImGui::CollapsingHeader("Identity")) {
+                    if (ImGui::BeginTable(
+                        "##InspectorIdentity",
+                        2,
+                        ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_NoSavedSettings
+                    )) {
+                        property_row("Persistent ID", inspector->persistent_id.to_string());
+                        if (inspector->entity.has_value()) {
+                            property_row("Live index", std::to_string(inspector->entity->index));
+                            property_row("Generation", std::to_string(inspector->entity->generation));
+                        }
+                        ImGui::EndTable();
+                    }
+                }
+            } else {
+                ImGui::TextDisabled("The selected entity is not currently loaded.");
+            }
+        }
+        ImGui::End();
+    }
+
     if (state_->show_console) {
+        const bool visible = ImGui::Begin(console_window_name, nullptr);
+        if (visible) {
+            filter_button("All", core::LogLevel::trace, state_->console_minimum);
+            ImGui::SameLine();
+            filter_button("Warnings", core::LogLevel::warning, state_->console_minimum);
+            ImGui::SameLine();
+            filter_button("Errors", core::LogLevel::error, state_->console_minimum);
+
+            const float clear_width =
+                ImGui::CalcTextSize("Clear").x + ImGui::GetStyle().FramePadding.x * 2.0F;
+            const float available = ImGui::GetContentRegionAvail().x;
+            if (available > clear_width) {
+                ImGui::SameLine(ImGui::GetCursorPosX() + available - clear_width);
+            }
+            if (ImGui::SmallButton("Clear")) {
+                console.clear();
+                state_->last_console_sequence = 0;
+            }
+            ImGui::Separator();
+
+            const auto entries = console.entries(state_->console_minimum);
+            const bool was_at_bottom = ImGui::GetScrollY() >= ImGui::GetScrollMaxY() - 2.0F;
+            const std::uint64_t newest_sequence = entries.empty() ? 0 : entries.back().sequence;
+            const bool new_entries = newest_sequence > state_->last_console_sequence;
+
+            ImGuiListClipper clipper;
+            clipper.Begin(static_cast<int>(entries.size()));
+            while (clipper.Step()) {
+                for (int index = clipper.DisplayStart; index < clipper.DisplayEnd; ++index) {
+                    const auto& entry = entries[static_cast<std::size_t>(index)];
+                    ImGui::PushID(static_cast<int>(entry.sequence & 0x7fffffffU));
+                    ImGui::TextColored(
+                        level_color(entry.level),
+                        "%s",
+                        core::log_level_name(entry.level).data()
+                    );
+                    ImGui::SameLine(58.0F * state_->style_scale);
+                    ImGui::TextUnformatted(entry.message.c_str());
+                    if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayNormal) && !entry.source_file.empty()) {
+                        ImGui::SetTooltip("%s:%u", entry.source_file.c_str(), entry.source_line);
+                    }
+                    ImGui::PopID();
+                }
+            }
+            if (new_entries && was_at_bottom) {
+                ImGui::SetScrollHereY(1.0F);
+            }
+            state_->last_console_sequence = newest_sequence;
+        }
         ImGui::End();
     }
 }
@@ -718,10 +720,7 @@ void EditorUi::end_frame() {
 }
 
 SceneViewport EditorUi::scene_viewport() const noexcept {
-    if (!valid()) {
-        return {};
-    }
-    return state_->scene_viewport;
+    return valid() ? state_->scene_viewport : SceneViewport{};
 }
 
 void EditorUi::request_reset_layout() noexcept {
