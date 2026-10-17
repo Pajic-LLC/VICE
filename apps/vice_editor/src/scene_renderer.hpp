@@ -26,7 +26,12 @@ public:
         const std::filesystem::path& authored_mesh_path
     );
 
-    void handle_event(const platform::Event& event, const SceneViewport& viewport);
+    void handle_event(
+        const platform::Event& event,
+        const SceneViewport& viewport,
+        const world::World& world,
+        SelectionModel& selection
+    );
     void update(float delta_seconds, const SceneViewport& viewport);
 
     [[nodiscard]] bool render(
