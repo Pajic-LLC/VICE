@@ -64,11 +64,12 @@ int main() {
 
     const world::ResourceId mesh_resource{fixed_id(88)};
     std::string instance_diagnostics;
+    const world::GlobalPosition mesh_position{-4.0, 0.8, -2.0};
     const auto mesh_instance = editor::create_mesh_instance(
         world,
         history,
         mesh_resource,
-        world::GlobalPosition{-4.0, 0.8, -2.0},
+        mesh_position,
         &instance_diagnostics
     );
     assert(mesh_instance.has_value());
@@ -100,7 +101,7 @@ int main() {
     assert(restored_mesh.has_value());
     assert(restored.resource_reference(*restored_mesh, world::ResourceRole::render_mesh) ==
         std::optional{mesh_resource});
-    assert(restored.spatial_state(*restored_mesh)->global_position == world::GlobalPosition{-4.0, 0.8, -2.0});
+    assert(restored.spatial_state(*restored_mesh)->global_position == mesh_position);
 
     std::filesystem::remove(path, error);
     return 0;
