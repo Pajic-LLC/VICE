@@ -258,6 +258,7 @@ void test_render_device_stats() {
     assert(commands != nullptr);
     const auto submission = device->submit(std::move(commands));
     assert(submission != render::invalid_submission);
+    assert(device->wait_for_submission(submission));
 
     const auto stats = device->stats();
     assert(stats.created_buffers == 1U);
