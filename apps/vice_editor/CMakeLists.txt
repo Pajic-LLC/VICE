@@ -34,6 +34,34 @@ target_compile_features(vice_editor_state PUBLIC cxx_std_23)
 vice_enable_warnings(vice_editor_state)
 
 add_library(
+  vice_editor_project_workflow
+  STATIC
+    src/project_workflow.cpp
+)
+
+add_library(VICE::EditorProjectWorkflow ALIAS vice_editor_project_workflow)
+
+target_include_directories(
+  vice_editor_project_workflow
+  PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+)
+
+target_link_libraries(
+  vice_editor_project_workflow
+  PUBLIC
+    VICE::EditorState
+    VICE::Project
+    VICE::World
+)
+if(TARGET vice_world_cooker_lib)
+  target_link_libraries(vice_editor_project_workflow PRIVATE VICE::WorldCooker)
+  target_compile_definitions(vice_editor_project_workflow PUBLIC VICE_EDITOR_HAS_WORLD_COOKER=1)
+endif()
+target_compile_features(vice_editor_project_workflow PUBLIC cxx_std_23)
+vice_enable_warnings(vice_editor_project_workflow)
+
+add_library(
   vice_editor_asset_index
   STATIC
     src/asset_index.cpp
@@ -192,6 +220,7 @@ target_link_libraries(
     VICE::EditorAssetIndex
     VICE::EditorPreview
     VICE::EditorProfiler
+    VICE::EditorProjectWorkflow
     VICE::EditorState
     VICE::EditorUi
 )
