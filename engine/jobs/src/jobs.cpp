@@ -58,6 +58,7 @@ struct Scheduler::Impl {
             const std::uint32_t hardware_threads = std::thread::hardware_concurrency();
             desired_workers = hardware_threads > 1 ? hardware_threads - 1 : 1;
         }
+        configured_workers = desired_workers;
 
         workers.reserve(desired_workers);
         for (std::uint32_t index = 0; index < desired_workers; ++index) {
@@ -80,6 +81,14 @@ struct Scheduler::Impl {
             }
         }
         return false;
+    }
+
+    [[nodiscard]] static std::size_t queued_count(const QueueSet& queues) noexcept {
+        std::size_t count = 0;
+        for (const auto& queue : queues) {
+            count += queue.size();
+        }
+        return count;
     }
 
     [[nodiscard]] static std::shared_ptr<detail::TaskState> pop_highest_locked(QueueSet& queues) {
@@ -131,6 +140,11 @@ struct Scheduler::Impl {
 
     void complete_task(const std::shared_ptr<detail::TaskState>& state, const Status result) {
         state->status.store(result, std::memory_order_release);
+        running_tasks.fetch_sub(1, std::memory_order_acq_rel);
+        total_completed.fetch_add(1, std::memory_order_relaxed);
+        if (result == Status::failed) {
+            total_failed.fetch_add(1, std::memory_order_relaxed);
+        }
 
         {
             std::lock_guard lock{state->completion_mutex};
@@ -167,6 +181,7 @@ struct Scheduler::Impl {
 
     void execute(const std::shared_ptr<detail::TaskState>& state) {
         state->status.store(Status::running, std::memory_order_release);
+        running_tasks.fetch_add(1, std::memory_order_acq_rel);
         emit(JobEventType::started, state);
 
         try {
@@ -225,6 +240,7 @@ struct Scheduler::Impl {
         state->task = std::move(task);
 
         outstanding.fetch_add(1, std::memory_order_acq_rel);
+        total_submitted.fetch_add(1, std::memory_order_relaxed);
         emit(JobEventType::submitted, state);
 
         bool ready = false;
@@ -305,6 +321,22 @@ struct Scheduler::Impl {
         return handle.state_->status.load(std::memory_order_acquire);
     }
 
+    [[nodiscard]] SchedulerStats stats() noexcept {
+        SchedulerStats result;
+        result.worker_count = configured_workers;
+        result.outstanding_tasks = outstanding.load(std::memory_order_acquire);
+        result.running_tasks = running_tasks.load(std::memory_order_acquire);
+        result.total_submitted = total_submitted.load(std::memory_order_relaxed);
+        result.total_completed = total_completed.load(std::memory_order_relaxed);
+        result.total_failed = total_failed.load(std::memory_order_relaxed);
+        {
+            std::lock_guard lock{queue_mutex};
+            result.queued_worker_tasks = queued_count(worker_queues);
+            result.queued_main_thread_tasks = queued_count(main_queues);
+        }
+        return result;
+    }
+
     void shutdown() {
         bool expected = true;
         if (!accepting.compare_exchange_strong(
@@ -343,8 +375,13 @@ struct Scheduler::Impl {
 
     const std::uint64_t scheduler_id;
     const std::thread::id main_thread;
+    std::uint32_t configured_workers = 0;
     std::atomic<std::uint64_t> next_task_id{1};
     std::atomic<std::size_t> outstanding{0};
+    std::atomic<std::size_t> running_tasks{0};
+    std::atomic<std::uint64_t> total_submitted{0};
+    std::atomic<std::uint64_t> total_completed{0};
+    std::atomic<std::uint64_t> total_failed{0};
     std::atomic<bool> accepting{true};
 
     std::mutex graph_mutex;
@@ -416,6 +453,10 @@ std::uint32_t Scheduler::worker_count() const noexcept {
 
 std::thread::id Scheduler::main_thread_id() const noexcept {
     return impl_->main_thread;
+}
+
+SchedulerStats Scheduler::stats() const noexcept {
+    return impl_->stats();
 }
 
 const char* priority_name(const Priority priority) noexcept {
