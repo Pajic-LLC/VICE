@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <deque>
 #include <mutex>
+#include <type_traits>
 #include <utility>
 
 namespace vice::editor {
@@ -319,6 +320,76 @@ std::string CommandHistory::undo_label() const {
 
 std::string CommandHistory::redo_label() const {
     return can_redo() ? entry_label(entries_[cursor_]) : std::string{};
+}
+
+std::optional<world::PersistentId> create_mesh_instance(
+    world::World& world,
+    CommandHistory& history,
+    const world::ResourceId mesh_resource,
+    const world::GlobalPosition position,
+    std::string* diagnostics
+) {
+    const auto fail = [&](const std::string& message) -> std::optional<world::PersistentId> {
+        if (diagnostics != nullptr) *diagnostics = message;
+        return std::nullopt;
+    };
+    if (!mesh_resource.valid() || !world::finite(position)) {
+        return fail("Mesh instance requires a valid resource and finite position.");
+    }
+    const auto region = world.region_containing(position);
+    if (!region.has_value()) {
+        return fail("Mesh instance position is outside every registered World region.");
+    }
+
+    std::vector<world::ResourceId> owned_resources;
+    if (!world.find_resource(mesh_resource).has_value()) {
+        if (!world.create_resource(mesh_resource).has_value()) {
+            return fail("Could not register the mesh resource in World.");
+        }
+        owned_resources.push_back(mesh_resource);
+    }
+
+    const auto entity = world.create_entity();
+    const auto persistent_id = world.persistent_id(entity);
+    const world::SpatialState spatial{
+        .global_position = position,
+        .region = *region,
+    };
+    const world::ResourceReference reference{
+        .role = world::ResourceRole::render_mesh,
+        .resource = mesh_resource,
+    };
+    if (!persistent_id.has_value() || !world.set_spatial_state(entity, spatial) ||
+        !world.set_resource_reference(entity, reference)) {
+        (void)world.destroy_entity(entity);
+        for (const auto resource_id : owned_resources) {
+            if (const auto resource = world.find_resource(resource_id); resource.has_value()) {
+                (void)world.destroy_resource(*resource);
+            }
+        }
+        return fail("Could not create the World mesh instance.");
+    }
+
+    CommandHistory::CreateEntityEntry command;
+    command.entity = world::SnapshotEntity{
+        .persistent_id = *persistent_id,
+        .spatial_state = spatial,
+        .resource_references = {reference},
+    };
+    command.owned_resources = owned_resources;
+    command.label = "Add Mesh Instance";
+    if (!history.record(std::move(command))) {
+        (void)world.destroy_entity(entity);
+        for (const auto resource_id : owned_resources) {
+            if (const auto resource = world.find_resource(resource_id); resource.has_value()) {
+                (void)world.destroy_resource(*resource);
+            }
+        }
+        return fail("Could not record the mesh instance command.");
+    }
+
+    if (diagnostics != nullptr) diagnostics->clear();
+    return persistent_id;
 }
 
 std::vector<HierarchyEntry> build_hierarchy(const world::World& world) {
