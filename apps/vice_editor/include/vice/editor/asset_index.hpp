@@ -1,5 +1,6 @@
 #pragma once
 
+#include <vice/math/math.hpp>
 #include <vice/world/resource.hpp>
 
 #include <cstddef>
@@ -24,6 +25,13 @@ enum class AssetKind : std::uint8_t {
 
 [[nodiscard]] const char* asset_kind_name(AssetKind kind) noexcept;
 
+struct MeshBounds {
+    math::Vec3 minimum{};
+    math::Vec3 maximum{};
+
+    friend bool operator==(const MeshBounds&, const MeshBounds&) = default;
+};
+
 struct AssetRecord {
     AssetKind kind = AssetKind::unknown;
     std::string name;
@@ -31,6 +39,7 @@ struct AssetRecord {
     std::filesystem::path source_path;
     std::filesystem::path cooked_path;
     std::optional<world::ResourceId> resource_id;
+    std::optional<MeshBounds> mesh_bounds;
     std::uint32_t format_version = 0;
     std::uint64_t source_fingerprint = 0;
     std::string summary;
