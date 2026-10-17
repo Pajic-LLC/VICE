@@ -11,10 +11,12 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <optional>
 #include <span>
 #include <string_view>
 #include <type_traits>
+#include <utility>
 #include <variant>
 
 namespace vice::editor::detail {
@@ -24,7 +26,14 @@ using SceneVertex = render::MeshVertex;
 
 constexpr std::string_view player_id_text = "10000000-0000-4000-8000-000000000001";
 constexpr std::string_view cube_id_text = "10000000-0000-4000-8000-000000000002";
-constexpr world::RegionId authored_region{1};
+constexpr std::string_view terrain_a_id_text = "10000000-0000-4000-8000-000000000003";
+constexpr std::string_view terrain_b_id_text = "10000000-0000-4000-8000-000000000004";
+constexpr std::string_view ramp_id_text = "10000000-0000-4000-8000-000000000005";
+constexpr world::RegionId region_a_id{1};
+constexpr world::RegionId region_b_id{2};
+constexpr float scene_fov = 0.82F;
+constexpr float ground_min_z = -10.0F;
+constexpr float ground_max_z = 10.0F;
 
 static constexpr std::array<SceneVertex, 8> cube_vertices{{
     {{-0.65F, -0.65F, -0.65F}, {0.17F, 0.62F, 0.94F}},
@@ -47,10 +56,10 @@ static constexpr std::array<std::uint16_t, 36> cube_indices{
 };
 
 static constexpr std::array<SceneVertex, 4> ground_vertices{{
-    {{-12.0F, -0.03F, -12.0F}, {0.115F, 0.135F, 0.165F}},
-    {{ 12.0F, -0.03F, -12.0F}, {0.135F, 0.155F, 0.185F}},
-    {{ 12.0F, -0.03F,  12.0F}, {0.105F, 0.125F, 0.155F}},
-    {{-12.0F, -0.03F,  12.0F}, {0.125F, 0.145F, 0.175F}},
+    {{0.0F, -0.03F, ground_min_z}, {0.105F, 0.124F, 0.153F}},
+    {{8.0F, -0.03F, ground_min_z}, {0.125F, 0.145F, 0.175F}},
+    {{8.0F, -0.03F, ground_max_z}, {0.095F, 0.114F, 0.143F}},
+    {{0.0F, -0.03F, ground_max_z}, {0.115F, 0.134F, 0.163F}},
 }};
 
 static constexpr std::array<std::uint16_t, 6> ground_indices{0, 2, 1, 0, 3, 2};
@@ -214,6 +223,70 @@ fragment float4 vice_editor_scene_fs(VertexOut input [[stage_in]]) {
     };
 }
 
+[[nodiscard]] float axis_value(const math::Vec3 value, const int axis) noexcept {
+    switch (axis) {
+    case 0: return value.x;
+    case 1: return value.y;
+    default: return value.z;
+    }
+}
+
+[[nodiscard]] std::optional<float> ray_aabb_distance(
+    const math::Vec3 origin,
+    const math::Vec3 direction,
+    const math::Vec3 minimum,
+    const math::Vec3 maximum
+) noexcept {
+    float near_distance = 0.0F;
+    float far_distance = std::numeric_limits<float>::max();
+
+    for (int axis = 0; axis < 3; ++axis) {
+        const float origin_axis = axis_value(origin, axis);
+        const float direction_axis = axis_value(direction, axis);
+        const float minimum_axis = axis_value(minimum, axis);
+        const float maximum_axis = axis_value(maximum, axis);
+
+        if (std::abs(direction_axis) < 1.0e-6F) {
+            if (origin_axis < minimum_axis || origin_axis > maximum_axis) {
+                return std::nullopt;
+            }
+            continue;
+        }
+
+        float first = (minimum_axis - origin_axis) / direction_axis;
+        float second = (maximum_axis - origin_axis) / direction_axis;
+        if (first > second) {
+            std::swap(first, second);
+        }
+        near_distance = std::max(near_distance, first);
+        far_distance = std::min(far_distance, second);
+        if (far_distance < near_distance) {
+            return std::nullopt;
+        }
+    }
+
+    return far_distance >= 0.0F ? std::optional<float>{std::max(0.0F, near_distance)} : std::nullopt;
+}
+
+[[nodiscard]] std::optional<math::Vec3> entity_position(
+    const world::World& world,
+    const world::PersistentId persistent_id
+) {
+    const auto entity = world.find(persistent_id);
+    if (!entity.has_value()) {
+        return std::nullopt;
+    }
+    const auto spatial = world.spatial_state(*entity);
+    if (!spatial.has_value()) {
+        return std::nullopt;
+    }
+    return math::Vec3{
+        static_cast<float>(spatial->global_position.x),
+        static_cast<float>(spatial->global_position.y),
+        static_cast<float>(spatial->global_position.z),
+    };
+}
+
 [[nodiscard]] std::unique_ptr<render::Buffer> create_buffer_with_data(
     render::Device& device,
     const render::BufferUsage usage,
@@ -261,14 +334,22 @@ struct SceneRenderer::State {
     std::unique_ptr<render::Buffer> ramp_vertices;
     std::unique_ptr<render::Buffer> ramp_indices;
 
-    std::unique_ptr<render::Buffer> ground_constants;
+    std::unique_ptr<render::Buffer> ground_a_constants;
+    std::unique_ptr<render::Buffer> ground_b_constants;
     std::unique_ptr<render::Buffer> ramp_constants;
     std::unique_ptr<render::Buffer> cube_constants;
     std::unique_ptr<render::Buffer> player_constants;
 
     std::uint32_t ramp_index_count = 0;
+    math::Vec3 ramp_minimum{};
+    math::Vec3 ramp_maximum{};
+    bool ramp_bounds_valid = false;
+
     std::optional<world::PersistentId> player_id;
     std::optional<world::PersistentId> cube_id;
+    std::optional<world::PersistentId> terrain_a_id;
+    std::optional<world::PersistentId> terrain_b_id;
+    std::optional<world::PersistentId> ramp_id;
 
     math::Vec3 target{0.0F, 0.8F, -2.0F};
     float yaw = 0.62F;
@@ -300,7 +381,12 @@ bool SceneRenderer::initialize(
 
     state_->player_id = world::PersistentId::parse(player_id_text);
     state_->cube_id = world::PersistentId::parse(cube_id_text);
-    if (!state_->player_id.has_value() || !state_->cube_id.has_value()) {
+    state_->terrain_a_id = world::PersistentId::parse(terrain_a_id_text);
+    state_->terrain_b_id = world::PersistentId::parse(terrain_b_id_text);
+    state_->ramp_id = world::PersistentId::parse(ramp_id_text);
+    if (!state_->player_id.has_value() || !state_->cube_id.has_value() ||
+        !state_->terrain_a_id.has_value() || !state_->terrain_b_id.has_value() ||
+        !state_->ramp_id.has_value()) {
         return false;
     }
 
@@ -320,13 +406,13 @@ bool SceneRenderer::initialize(
         device,
         render::BufferUsage::vertex,
         std::as_bytes(std::span{ground_vertices}),
-        "VICE Editor ground vertices"
+        "VICE Editor region ground vertices"
     );
     state_->ground_indices = create_buffer_with_data(
         device,
         render::BufferUsage::index,
         std::as_bytes(std::span{ground_indices}),
-        "VICE Editor ground indices"
+        "VICE Editor region ground indices"
     );
 
     if (!state_->cube_vertices || !state_->cube_indices ||
@@ -351,6 +437,19 @@ bool SceneRenderer::initialize(
                 "VICE Editor authored scene indices"
             );
             state_->ramp_index_count = static_cast<std::uint32_t>(loaded.asset->indices.size());
+
+            const auto& first = loaded.asset->vertices.front().position;
+            state_->ramp_minimum = {first[0], first[1], first[2]};
+            state_->ramp_maximum = state_->ramp_minimum;
+            for (const auto& vertex : loaded.asset->vertices) {
+                state_->ramp_minimum.x = std::min(state_->ramp_minimum.x, vertex.position[0]);
+                state_->ramp_minimum.y = std::min(state_->ramp_minimum.y, vertex.position[1]);
+                state_->ramp_minimum.z = std::min(state_->ramp_minimum.z, vertex.position[2]);
+                state_->ramp_maximum.x = std::max(state_->ramp_maximum.x, vertex.position[0]);
+                state_->ramp_maximum.y = std::max(state_->ramp_maximum.y, vertex.position[1]);
+                state_->ramp_maximum.z = std::max(state_->ramp_maximum.z, vertex.position[2]);
+            }
+            state_->ramp_bounds_valid = state_->ramp_vertices != nullptr && state_->ramp_indices != nullptr;
         } else {
             core::log(
                 core::LogLevel::warning,
@@ -359,11 +458,12 @@ bool SceneRenderer::initialize(
         }
     }
 
-    state_->ground_constants = create_constant_buffer(device, "VICE Editor ground constants");
+    state_->ground_a_constants = create_constant_buffer(device, "VICE Editor terrain A constants");
+    state_->ground_b_constants = create_constant_buffer(device, "VICE Editor terrain B constants");
     state_->ramp_constants = create_constant_buffer(device, "VICE Editor ramp constants");
     state_->cube_constants = create_constant_buffer(device, "VICE Editor cube constants");
     state_->player_constants = create_constant_buffer(device, "VICE Editor player constants");
-    if (!state_->ground_constants || !state_->ramp_constants ||
+    if (!state_->ground_a_constants || !state_->ground_b_constants || !state_->ramp_constants ||
         !state_->cube_constants || !state_->player_constants) {
         return false;
     }
@@ -412,10 +512,128 @@ bool SceneRenderer::initialize(
     return true;
 }
 
-void SceneRenderer::handle_event(const platform::Event& event, const SceneViewport& viewport) {
+void SceneRenderer::handle_event(
+    const platform::Event& event,
+    const SceneViewport& viewport,
+    const world::World& world,
+    SelectionModel& selection
+) {
     if (state_ == nullptr || !state_->initialized) {
         return;
     }
+
+    const auto pick_at = [&](const double pointer_x, const double pointer_y) {
+        if (!viewport.drawable() || !contains(viewport, pointer_x, pointer_y)) {
+            return;
+        }
+
+        const float aspect = viewport.width / std::max(1.0F, viewport.height);
+        const math::Vec3 eye = camera_eye(state_->target, state_->yaw, state_->pitch, state_->distance);
+        const math::Vec3 forward = math::normalize(state_->target - eye);
+        const math::Vec3 right = math::normalize(math::cross(forward, {0.0F, 1.0F, 0.0F}));
+        const math::Vec3 up = math::normalize(math::cross(right, forward));
+        const float normalized_x = static_cast<float>((pointer_x - viewport.x) / viewport.width);
+        const float normalized_y = static_cast<float>((pointer_y - viewport.y) / viewport.height);
+        const float ndc_x = normalized_x * 2.0F - 1.0F;
+        const float ndc_y = 1.0F - normalized_y * 2.0F;
+        const float half_height = std::tan(scene_fov * 0.5F);
+        const math::Vec3 direction = math::normalize(add(
+            forward,
+            add(
+                scaled(right, ndc_x * aspect * half_height),
+                scaled(up, ndc_y * half_height)
+            )
+        ));
+
+        float nearest = std::numeric_limits<float>::max();
+        std::optional<world::PersistentId> picked;
+        const auto consider_bounds = [&](
+            const std::optional<world::PersistentId>& persistent_id,
+            const math::Vec3 minimum,
+            const math::Vec3 maximum
+        ) {
+            if (!persistent_id.has_value()) {
+                return;
+            }
+            const auto distance = ray_aabb_distance(eye, direction, minimum, maximum);
+            if (distance.has_value() && *distance < nearest) {
+                nearest = *distance;
+                picked = *persistent_id;
+            }
+        };
+
+        if (state_->cube_id.has_value()) {
+            if (const auto position = entity_position(world, *state_->cube_id); position.has_value()) {
+                consider_bounds(
+                    state_->cube_id,
+                    add(*position, {-0.65F, -0.65F, -0.65F}),
+                    add(*position, {0.65F, 0.65F, 0.65F})
+                );
+            }
+        }
+
+        if (state_->player_id.has_value()) {
+            if (auto position = entity_position(world, *state_->player_id); position.has_value()) {
+                position->y += 0.90F;
+                consider_bounds(
+                    state_->player_id,
+                    add(*position, {-0.32F, -0.88F, -0.32F}),
+                    add(*position, {0.32F, 0.88F, 0.32F})
+                );
+            }
+        }
+
+        if (state_->ramp_id.has_value() && state_->ramp_bounds_valid) {
+            if (const auto region = world.region(region_a_id); region.has_value()) {
+                const math::Vec3 origin{
+                    static_cast<float>(region->origin.x),
+                    static_cast<float>(region->origin.y),
+                    static_cast<float>(region->origin.z),
+                };
+                consider_bounds(
+                    state_->ramp_id,
+                    add(origin, state_->ramp_minimum),
+                    add(origin, state_->ramp_maximum)
+                );
+            }
+        }
+
+        if (std::abs(direction.y) > 1.0e-6F) {
+            const float terrain_distance = (-0.03F - eye.y) / direction.y;
+            if (terrain_distance >= 0.0F && terrain_distance < nearest) {
+                const math::Vec3 hit = add(eye, scaled(direction, terrain_distance));
+                const auto consider_terrain = [&](
+                    const world::RegionId region_id,
+                    const std::optional<world::PersistentId>& persistent_id
+                ) {
+                    if (!persistent_id.has_value()) {
+                        return;
+                    }
+                    const auto region = world.region(region_id);
+                    if (!region.has_value()) {
+                        return;
+                    }
+                    const float origin_x = static_cast<float>(region->origin.x);
+                    const float origin_z = static_cast<float>(region->origin.z);
+                    if (hit.x >= origin_x && hit.x <= origin_x + 8.0F &&
+                        hit.z >= origin_z + ground_min_z && hit.z <= origin_z + ground_max_z) {
+                        picked = *persistent_id;
+                        nearest = terrain_distance;
+                    }
+                };
+                consider_terrain(region_a_id, state_->terrain_a_id);
+                if (terrain_distance < nearest || !picked.has_value()) {
+                    consider_terrain(region_b_id, state_->terrain_b_id);
+                }
+            }
+        }
+
+        if (picked.has_value()) {
+            selection.select(*picked);
+        } else {
+            selection.clear();
+        }
+    };
 
     std::visit(
         [&](const auto& payload) {
@@ -433,6 +651,9 @@ void SceneRenderer::handle_event(const platform::Event& event, const SceneViewpo
                     state_->right_dragging = payload.pressed ? inside : false;
                 } else if (payload.button == platform::MouseButton::middle) {
                     state_->middle_dragging = payload.pressed ? inside : false;
+                } else if (payload.button == platform::MouseButton::left && payload.pressed && inside &&
+                    !state_->right_dragging && !state_->middle_dragging) {
+                    pick_at(payload.x, payload.y);
                 }
             } else if constexpr (std::is_same_v<Payload, platform::MouseMoveEvent>) {
                 if (state_->right_dragging) {
@@ -533,9 +754,12 @@ bool SceneRenderer::render(
     const SceneViewport& viewport,
     const platform::WindowMetrics metrics
 ) {
-    if (state_ == nullptr || !state_->initialized || !viewport.drawable() ||
-        state_->pipeline == nullptr || metrics.width == 0U || metrics.height == 0U) {
+    if (state_ == nullptr || !state_->initialized || state_->pipeline == nullptr ||
+        metrics.width == 0U || metrics.height == 0U) {
         return false;
+    }
+    if (!viewport.drawable()) {
+        return true;
     }
 
     const float scale_x = metrics.drawable_width > 0U
@@ -554,8 +778,10 @@ bool SceneRenderer::render(
 
     const std::int32_t scissor_x = static_cast<std::int32_t>(std::floor(viewport_x));
     const std::int32_t scissor_y = static_cast<std::int32_t>(std::floor(viewport_y));
-    const std::uint32_t scissor_width = static_cast<std::uint32_t>(std::max(1.0F, std::ceil(viewport_width)));
-    const std::uint32_t scissor_height = static_cast<std::uint32_t>(std::max(1.0F, std::ceil(viewport_height)));
+    const std::uint32_t scissor_width =
+        static_cast<std::uint32_t>(std::max(1.0F, std::ceil(viewport_width)));
+    const std::uint32_t scissor_height =
+        static_cast<std::uint32_t>(std::max(1.0F, std::ceil(viewport_height)));
 
     if (!commands.set_viewport(render::Viewport{
             .x = viewport_x,
@@ -576,7 +802,7 @@ bool SceneRenderer::render(
     const float aspect = viewport_width / std::max(1.0F, viewport_height);
     const math::Vec3 eye = camera_eye(state_->target, state_->yaw, state_->pitch, state_->distance);
     const math::Mat4 view = math::look_at_rh(eye, state_->target, {0.0F, 1.0F, 0.0F});
-    const math::Mat4 projection = math::perspective_rh_zo(0.82F, aspect, 0.05F, 250.0F);
+    const math::Mat4 projection = math::perspective_rh_zo(scene_fov, aspect, 0.05F, 250.0F);
     const math::Mat4 view_projection = math::multiply(projection, view);
 
     const auto selected = selection.selected();
@@ -611,28 +837,61 @@ bool SceneRenderer::render(
             commands.draw_indexed(index_count);
     };
 
-    if (!draw_object(
+    const auto draw_ground_region = [&](
+        const world::RegionId region_id,
+        const std::optional<world::PersistentId>& persistent_id,
+        render::Buffer& constants_buffer,
+        const std::array<float, 3> accent
+    ) -> bool {
+        const auto region = world.region(region_id);
+        if (!region.has_value()) {
+            return true;
+        }
+        const math::Vec3 origin{
+            static_cast<float>(region->origin.x),
+            static_cast<float>(region->origin.y),
+            static_cast<float>(region->origin.z),
+        };
+        const bool highlighted = persistent_id.has_value() && selected.has_value() &&
+            *persistent_id == *selected;
+        return draw_object(
             *state_->ground_vertices,
             *state_->ground_indices,
             render::IndexFormat::uint16,
             static_cast<std::uint32_t>(ground_indices.size()),
-            *state_->ground_constants,
-            math::identity(),
-            false,
-            {0.0F, 0.0F, 0.0F}
+            constants_buffer,
+            model_matrix(origin),
+            highlighted,
+            accent
+        );
+    };
+
+    if (!draw_ground_region(
+            region_a_id,
+            state_->terrain_a_id,
+            *state_->ground_a_constants,
+            {0.08F, 0.58F, 0.98F}
+        ) ||
+        !draw_ground_region(
+            region_b_id,
+            state_->terrain_b_id,
+            *state_->ground_b_constants,
+            {0.25F, 0.70F, 1.00F}
         )) {
         return false;
     }
 
     if (state_->ramp_vertices && state_->ramp_indices && state_->ramp_index_count > 0U) {
         math::Vec3 ramp_position{-8.0F, 0.0F, 0.0F};
-        if (const auto region = world.region(authored_region); region.has_value()) {
+        if (const auto region = world.region(region_a_id); region.has_value()) {
             ramp_position = {
                 static_cast<float>(region->origin.x),
                 static_cast<float>(region->origin.y),
                 static_cast<float>(region->origin.z),
             };
         }
+        const bool highlighted = state_->ramp_id.has_value() && selected.has_value() &&
+            *state_->ramp_id == *selected;
         if (!draw_object(
                 *state_->ramp_vertices,
                 *state_->ramp_indices,
@@ -640,8 +899,8 @@ bool SceneRenderer::render(
                 state_->ramp_index_count,
                 *state_->ramp_constants,
                 model_matrix(ramp_position),
-                false,
-                {0.0F, 0.0F, 0.0F}
+                highlighted,
+                {0.16F, 0.72F, 1.00F}
             )) {
             return false;
         }
@@ -651,24 +910,17 @@ bool SceneRenderer::render(
         const std::optional<world::PersistentId>& persistent_id,
         render::Buffer& constants,
         const math::Vec3 scale,
+        const math::Vec3 visual_offset,
         const std::array<float, 3> accent
     ) -> bool {
         if (!persistent_id.has_value()) {
             return true;
         }
-        const auto entity = world.find(*persistent_id);
-        if (!entity.has_value()) {
+        auto position = entity_position(world, *persistent_id);
+        if (!position.has_value()) {
             return true;
         }
-        const auto spatial = world.spatial_state(*entity);
-        if (!spatial.has_value()) {
-            return true;
-        }
-        const math::Vec3 position{
-            static_cast<float>(spatial->global_position.x),
-            static_cast<float>(spatial->global_position.y),
-            static_cast<float>(spatial->global_position.z),
-        };
+        *position = add(*position, visual_offset);
         const bool highlighted = selected.has_value() && *selected == *persistent_id;
         return draw_object(
             *state_->cube_vertices,
@@ -676,7 +928,7 @@ bool SceneRenderer::render(
             render::IndexFormat::uint16,
             static_cast<std::uint32_t>(cube_indices.size()),
             constants,
-            model_matrix(position, scale),
+            model_matrix(*position, scale),
             highlighted,
             accent
         );
@@ -686,11 +938,13 @@ bool SceneRenderer::render(
         state_->cube_id,
         *state_->cube_constants,
         {1.0F, 1.0F, 1.0F},
+        {0.0F, 0.0F, 0.0F},
         {0.10F, 0.72F, 1.00F}
     ) && draw_role(
         state_->player_id,
         *state_->player_constants,
         {0.48F, 1.35F, 0.48F},
+        {0.0F, 0.90F, 0.0F},
         {0.38F, 1.00F, 0.68F}
     );
 }
