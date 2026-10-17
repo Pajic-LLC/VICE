@@ -154,7 +154,6 @@ void PhysicsDebugUi::draw(const PreviewSnapshot& preview, const bool authored_wo
     if (ImGui::CollapsingHeader("Advanced")) {
         ImGui::Checkbox("Velocity vectors", &state_->layers.velocities);
         ImGui::Checkbox("Character state", &state_->layers.characters);
-        ImGui::Checkbox("Constraints", &state_->layers.constraints);
         ImGui::Checkbox("Region handoffs", &state_->layers.handoffs);
     }
 
