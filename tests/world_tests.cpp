@@ -51,6 +51,7 @@ void test_entity_lifetime_and_stale_handles() {
     assert(world.alive(second));
     assert(!world.spatial_state(second).has_value());
     assert(!world.authored_transform(second).has_value());
+    assert(world.resource_references(second).empty());
 }
 
 void test_persistent_identity_restore() {
@@ -85,6 +86,52 @@ void test_relations() {
 
     assert(world.destroy_entity(parent));
     assert(world.relations().empty());
+}
+
+void test_resource_references() {
+    using namespace vice::world;
+
+    World world;
+    const ResourceId mesh_resource{fixed_id(60)};
+    const ResourceId missing_resource{fixed_id(61)};
+    const auto resource = world.create_resource(mesh_resource);
+    assert(resource.has_value());
+
+    const auto entity_id = fixed_id(62);
+    const auto entity = world.create_entity(entity_id);
+    assert(entity.has_value());
+
+    const ResourceReference missing_reference{
+        .role = ResourceRole::render_mesh,
+        .resource = missing_resource,
+    };
+    assert(!world.set_resource_reference(*entity, missing_reference));
+
+    const ResourceReference mesh_reference{
+        .role = ResourceRole::render_mesh,
+        .resource = mesh_resource,
+    };
+    assert(world.set_resource_reference(*entity, mesh_reference));
+    assert(world.resource_reference(*entity, ResourceRole::render_mesh) == std::optional{mesh_resource});
+    assert(world.resource_references(*entity).size() == 1U);
+    assert(!world.destroy_resource(*resource));
+
+    const auto snapshot = world.snapshot();
+    assert(snapshot.entities.size() == 1U);
+    assert(snapshot.entities[0].resource_references.size() == 1U);
+    assert(snapshot.entities[0].resource_references[0] == mesh_reference);
+
+    World restored;
+    assert(restored.restore(snapshot));
+    const auto restored_entity = restored.find(entity_id);
+    const auto restored_resource = restored.find_resource(mesh_resource);
+    assert(restored_entity.has_value());
+    assert(restored_resource.has_value());
+    assert(restored.resource_reference(*restored_entity, ResourceRole::render_mesh) == std::optional{mesh_resource});
+    assert(!restored.destroy_resource(*restored_resource));
+    assert(restored.clear_resource_reference(*restored_entity, ResourceRole::render_mesh));
+    assert(!restored.resource_reference(*restored_entity, ResourceRole::render_mesh).has_value());
+    assert(restored.destroy_resource(*restored_resource));
 }
 
 void test_large_world_coordinate_conversion() {
@@ -293,6 +340,7 @@ int main() {
     test_entity_lifetime_and_stale_handles();
     test_persistent_identity_restore();
     test_relations();
+    test_resource_references();
     test_large_world_coordinate_conversion();
     test_region_registration_and_island_handoff();
     test_small_world_uses_same_spatial_api();
