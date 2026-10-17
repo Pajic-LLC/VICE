@@ -24,11 +24,16 @@ struct LogRecord {
 };
 
 using LogSink = std::function<void(const LogRecord&)>;
+using LogObserverId = std::uint64_t;
+inline constexpr LogObserverId invalid_log_observer_id = 0;
 
 [[nodiscard]] std::string_view log_level_name(LogLevel level) noexcept;
 
 void set_log_sink(LogSink sink);
 void reset_log_sink();
+
+[[nodiscard]] LogObserverId add_log_observer(LogSink observer);
+bool remove_log_observer(LogObserverId observer_id);
 
 void set_min_log_level(LogLevel level) noexcept;
 [[nodiscard]] LogLevel min_log_level() noexcept;
