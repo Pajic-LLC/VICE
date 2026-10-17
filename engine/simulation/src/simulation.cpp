@@ -1,6 +1,7 @@
 #include <vice/simulation/simulation.hpp>
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 
 namespace vice::simulation {
@@ -111,6 +112,7 @@ bool Coordinator::set_fixed_delta_seconds(const double seconds) noexcept {
 }
 
 void Coordinator::step() {
+    const auto started = std::chrono::steady_clock::now();
     std::vector<InteractionEvent> emitted_interactions;
 
     for (auto& entry : domains_) {
@@ -176,6 +178,12 @@ void Coordinator::step() {
 
     pending_interactions_ = std::move(emitted_interactions);
     ++step_index_;
+
+    const auto finished = std::chrono::steady_clock::now();
+    last_step_wall_seconds_ = std::chrono::duration<double>(finished - started).count();
+    recent_step_wall_seconds_[recent_step_cursor_] = last_step_wall_seconds_;
+    recent_step_cursor_ = (recent_step_cursor_ + 1U) % timing_history_capacity;
+    recent_step_count_ = std::min(recent_step_count_ + 1U, timing_history_capacity);
 }
 
 std::vector<DomainDebugSnapshot> Coordinator::debug_snapshots() const {
@@ -195,6 +203,32 @@ std::vector<DomainDebugSnapshot> Coordinator::debug_snapshots() const {
         });
     }
     return snapshots;
+}
+
+CoordinatorStats Coordinator::stats() const noexcept {
+    CoordinatorStats result;
+    result.fixed_delta_seconds = fixed_delta_seconds_;
+    result.step_index = step_index_;
+    result.last_step_wall_seconds = last_step_wall_seconds_;
+
+    double total_step_seconds = 0.0;
+    for (std::size_t index = 0; index < recent_step_count_; ++index) {
+        total_step_seconds += recent_step_wall_seconds_[index];
+    }
+    if (recent_step_count_ > 0U) {
+        result.recent_step_average_seconds = total_step_seconds / static_cast<double>(recent_step_count_);
+    }
+
+    for (const auto& entry : domains_) {
+        if (entry.domain == nullptr) continue;
+        ++result.registered_domains;
+        switch (entry.domain->fidelity()) {
+        case Fidelity::full: ++result.full_domains; break;
+        case Fidelity::reduced: ++result.reduced_domains; break;
+        case Fidelity::off: ++result.off_domains; break;
+        }
+    }
+    return result;
 }
 
 bool Coordinator::contains_domain(const DomainId id) const noexcept {
