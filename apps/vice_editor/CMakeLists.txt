@@ -83,6 +83,34 @@ target_compile_features(vice_editor_profiler PUBLIC cxx_std_23)
 vice_enable_warnings(vice_editor_profiler)
 
 add_library(
+  vice_editor_preview
+  STATIC
+    src/preview_runtime.cpp
+)
+
+add_library(VICE::EditorPreview ALIAS vice_editor_preview)
+
+target_include_directories(
+  vice_editor_preview
+  PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+)
+
+target_link_libraries(
+  vice_editor_preview
+  PUBLIC
+    VICE::EditorAssetIndex
+    VICE::Jobs
+    VICE::RigidBody
+    VICE::RigidBodyWorld
+    VICE::Simulation
+    VICE::SimulationWorld
+    VICE::World
+)
+target_compile_features(vice_editor_preview PUBLIC cxx_std_23)
+vice_enable_warnings(vice_editor_preview)
+
+add_library(
   vice_editor_imgui
   STATIC
     "${dearimgui_SOURCE_DIR}/imgui.cpp"
@@ -102,6 +130,7 @@ set_target_properties(vice_editor_imgui PROPERTIES FOLDER "Third Party")
 add_library(
   vice_editor_ui
   STATIC
+    src/physics_debug_ui.cpp
     src/profiler_ui.cpp
     src/resource_browser_ui.cpp
     src/ui.cpp
@@ -123,6 +152,7 @@ target_link_libraries(
   vice_editor_ui
   PUBLIC
     VICE::EditorAssetIndex
+    VICE::EditorPreview
     VICE::EditorProfiler
     VICE::EditorState
     VICE::Platform
@@ -136,6 +166,7 @@ vice_enable_warnings(vice_editor_ui)
 add_executable(
   vice_editor
   app.cpp
+  src/physics_debug_renderer.cpp
   src/resource_mesh_renderer.cpp
   src/scene_renderer.cpp
 )
@@ -156,6 +187,7 @@ target_link_libraries(
     VICE::Render
     VICE::World
     VICE::EditorAssetIndex
+    VICE::EditorPreview
     VICE::EditorProfiler
     VICE::EditorState
     VICE::EditorUi

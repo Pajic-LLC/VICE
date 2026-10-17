@@ -48,6 +48,17 @@ if(TARGET vice_editor_asset_index AND TARGET vice_mesh_cooker_lib)
   add_test(NAME vice_editor_mesh_picking_tests COMMAND vice_editor_mesh_picking_tests)
 endif()
 
+if(TARGET vice_editor_preview)
+  add_executable(
+    vice_editor_preview_runtime_tests
+    ../editor_preview_runtime_tests.cpp
+  )
+  target_link_libraries(vice_editor_preview_runtime_tests PRIVATE VICE::EditorPreview)
+  target_compile_features(vice_editor_preview_runtime_tests PRIVATE cxx_std_23)
+  vice_enable_warnings(vice_editor_preview_runtime_tests)
+  add_test(NAME vice_editor_preview_runtime_tests COMMAND vice_editor_preview_runtime_tests)
+endif()
+
 if(TARGET vice_editor_profiler)
   add_executable(
     vice_editor_profiler_tests
@@ -74,4 +85,13 @@ if(TARGET vice_editor_ui)
   target_compile_features(vice_editor_ui_tests PRIVATE cxx_std_23)
   vice_enable_warnings(vice_editor_ui_tests)
   add_test(NAME vice_editor_ui_tests COMMAND vice_editor_ui_tests)
+
+  add_executable(
+    vice_editor_physics_debug_ui_tests
+    ../editor_physics_debug_ui_tests.cpp
+  )
+  target_link_libraries(vice_editor_physics_debug_ui_tests PRIVATE VICE::EditorUi)
+  target_compile_features(vice_editor_physics_debug_ui_tests PRIVATE cxx_std_23)
+  vice_enable_warnings(vice_editor_physics_debug_ui_tests)
+  add_test(NAME vice_editor_physics_debug_ui_tests COMMAND vice_editor_physics_debug_ui_tests)
 endif()

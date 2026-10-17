@@ -1,3 +1,4 @@
+#include "physics_debug_renderer.hpp"
 #include "resource_mesh_renderer.hpp"
 #include "scene_renderer.hpp"
 
@@ -7,6 +8,8 @@
 #include <vice/core/time.hpp>
 #include <vice/core/version.hpp>
 #include <vice/editor/asset_index.hpp>
+#include <vice/editor/physics_debug_ui.hpp>
+#include <vice/editor/preview_runtime.hpp>
 #include <vice/editor/profiler.hpp>
 #include <vice/editor/profiler_ui.hpp>
 #include <vice/editor/resource_browser_ui.hpp>
@@ -279,16 +282,21 @@ int main() {
     }
 
     vice::editor::EditorUi ui{layout_path};
+    vice::editor::PhysicsDebugUi physics_debug_ui;
+    vice::editor::PreviewRuntime preview;
+    vice::editor::PreviewSnapshot preview_snapshot;
     vice::editor::ProfilerUi profiler_ui;
     vice::editor::ProfilerHistory profiler_history{180U};
     vice::editor::ResourceBrowserUi resource_browser;
     vice::editor::UiRhiRenderer ui_renderer;
     vice::editor::detail::SceneRenderer scene_renderer;
     vice::editor::detail::ResourceMeshRenderer resource_mesh_renderer;
+    vice::editor::detail::PhysicsDebugRenderer physics_debug_renderer;
     if (!ui.valid() ||
         !ui_renderer.initialize(*render_device, swapchain->color_format()) ||
         !scene_renderer.initialize(*render_device, swapchain->color_format(), {}) ||
-        !resource_mesh_renderer.initialize(*render_device, swapchain->color_format())) {
+        !resource_mesh_renderer.initialize(*render_device, swapchain->color_format()) ||
+        !physics_debug_renderer.initialize(*render_device, swapchain->color_format())) {
         log(LogLevel::error, "VICE Editor could not initialize its visual workspace.");
         return 1;
     }
@@ -305,6 +313,8 @@ int main() {
 
     vice::core::FrameClock clock;
     vice::editor::SceneViewport active_viewport{};
+    std::size_t preview_history_size = 0U;
+    std::size_t preview_history_cursor = 0U;
     bool running = true;
 
     while (running) {
@@ -328,6 +338,12 @@ int main() {
                     selection,
                     assets,
                     selection_before_event
+                );
+                physics_debug_renderer.handle_event(
+                    event,
+                    active_viewport,
+                    preview_snapshot,
+                    selection
                 );
             }
 
@@ -371,17 +387,24 @@ int main() {
             continue;
         }
 
+        if (!preview.update(delta_seconds)) {
+            log(LogLevel::error, "VICE Editor Live Preview could not advance simulation.");
+            preview.pause();
+        }
+        preview_snapshot = preview.snapshot();
+
         profiler_history.push_frame(delta_seconds);
         const auto profiler_snapshot = vice::editor::sample_profiler(
             delta_seconds,
             jobs,
-            nullptr,
+            preview.coordinator(),
             *render_device,
             world
         );
 
         scene_renderer.update(delta_seconds, active_viewport);
         resource_mesh_renderer.update(delta_seconds, active_viewport);
+        physics_debug_renderer.update(delta_seconds, active_viewport);
         if (!ui.begin_frame(metrics, delta_seconds)) {
             log(LogLevel::error, "VICE Editor could not begin a UI frame.");
             break;
@@ -390,6 +413,10 @@ int main() {
         resource_browser.draw(assets);
         resource_browser.draw_inspector_resources(world, selection, assets);
         profiler_ui.draw(profiler_snapshot, profiler_history);
+        const bool preview_stale = preview.active() &&
+            (history.size() != preview_history_size || history.applied_count() != preview_history_cursor);
+        physics_debug_ui.draw(preview_snapshot, preview_stale);
+        physics_debug_ui.draw_inspector_live(preview_snapshot, selection);
         ui.end_frame();
         active_viewport = ui.scene_viewport();
 
@@ -430,6 +457,33 @@ int main() {
             }
         }
 
+        const bool stop_preview = physics_debug_ui.consume_stop_request();
+        const bool start_preview = physics_debug_ui.consume_start_request();
+        const bool reset_preview = physics_debug_ui.consume_reset_request();
+        const bool toggle_preview = physics_debug_ui.consume_play_pause_request();
+        const bool step_preview = physics_debug_ui.consume_step_request();
+
+        if (stop_preview) preview.stop();
+        if (start_preview || reset_preview) {
+            std::string diagnostics;
+            if (preview.reset(world, jobs, assets, &diagnostics)) {
+                preview_history_size = history.size();
+                preview_history_cursor = history.applied_count();
+                log(LogLevel::info, "VICE Editor Live Preview reset from the authored World.");
+            } else {
+                log(LogLevel::error, "VICE Editor Live Preview could not start: " + diagnostics);
+            }
+        }
+        if (toggle_preview && preview.active()) {
+            if (preview.playback() == vice::editor::PreviewPlayback::running) preview.pause();
+            else preview.play();
+        }
+        if (step_preview && preview.active() && preview.playback() != vice::editor::PreviewPlayback::running &&
+            !preview.step_once()) {
+            log(LogLevel::error, "VICE Editor Live Preview could not single-step simulation.");
+        }
+        preview_snapshot = preview.snapshot();
+
         auto commands = render_device->create_command_list();
         if (!commands) {
             log(LogLevel::error, "VICE Editor could not create a render command list.");
@@ -458,6 +512,15 @@ int main() {
                     world,
                     selection,
                     ui.transform_tool(),
+                    *commands,
+                    active_viewport,
+                    metrics
+                )) ||
+            (active_viewport.drawable() &&
+                !physics_debug_renderer.render(
+                    preview_snapshot,
+                    physics_debug_ui.layers(),
+                    selection,
                     *commands,
                     active_viewport,
                     metrics
