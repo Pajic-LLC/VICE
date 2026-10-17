@@ -2,6 +2,7 @@
 
 #include <cstdlib>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <string_view>
 
@@ -103,6 +104,14 @@ int main() {
         "startup_world \"worlds/main.vworld\"\n"
     ).manifest.has_value(), "non-portable separator rejected");
 
+    require(!parse_manifest(
+        "vice-project 1\n"
+        "id 40000000-0000-4000-8000-000000000001\n"
+        "name \"Wrong startup type\"\n"
+        "assets \"assets\"\n"
+        "startup_world \"worlds/main.vworldc\"\n"
+    ).manifest.has_value(), "cooked startup World rejected");
+
     const std::filesystem::path first_manifest =
         std::filesystem::path{"root"} / "first" / "game.viceproj";
     const std::filesystem::path second_manifest =
@@ -126,6 +135,22 @@ int main() {
             "root/moved/assets/worlds/vice_lab.vworld",
         "moved startup resolution"
     );
+
+    std::error_code temp_error;
+    const auto temp_root = std::filesystem::temp_directory_path(temp_error);
+    require(!temp_error, "temporary directory resolution");
+    const auto temp_manifest = temp_root / "vice_project_manifest_test_40000000.viceproj";
+    {
+        std::ofstream output{temp_manifest, std::ios::binary | std::ios::trunc};
+        require(static_cast<bool>(output), "temporary manifest open");
+        output << valid_manifest;
+        require(static_cast<bool>(output), "temporary manifest write");
+    }
+    const auto loaded = load_manifest(temp_manifest);
+    require(loaded.manifest.has_value(), "manifest file load");
+    require(*loaded.manifest == *parsed.manifest, "manifest file load value");
+    std::filesystem::remove(temp_manifest, temp_error);
+    require(!temp_error, "temporary manifest cleanup");
 
     return 0;
 }
