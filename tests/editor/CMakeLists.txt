@@ -55,6 +55,12 @@ if(TARGET vice_editor_profiler)
   )
   target_link_libraries(vice_editor_profiler_tests PRIVATE VICE::EditorProfiler)
   target_compile_features(vice_editor_profiler_tests PRIVATE cxx_std_23)
+  target_compile_options(
+    vice_editor_profiler_tests
+    PRIVATE
+      $<$<CXX_COMPILER_ID:MSVC>:/UNDEBUG>
+      $<$<NOT:$<CXX_COMPILER_ID:MSVC>>:-UNDEBUG>
+  )
   vice_enable_warnings(vice_editor_profiler_tests)
   add_test(NAME vice_editor_profiler_tests COMMAND vice_editor_profiler_tests)
 endif()
