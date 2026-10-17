@@ -97,6 +97,24 @@ bool World::destroy_resource(const ResourceHandle resource) {
         return false;
     }
 
+    const ResourceId id = resource_slots_[resource.index].resource_id;
+    const bool referenced = std::any_of(
+        slots_.begin(),
+        slots_.end(),
+        [id](const Slot& entity_slot) {
+            return entity_slot.alive && std::any_of(
+                entity_slot.resource_references.begin(),
+                entity_slot.resource_references.end(),
+                [id](const ResourceReference& reference) {
+                    return reference.resource == id;
+                }
+            );
+        }
+    );
+    if (referenced) {
+        return false;
+    }
+
     auto& slot = resource_slots_[resource.index];
     resource_lookup_.erase(slot.resource_id);
     slot.resource_id = ResourceId{};
@@ -185,11 +203,23 @@ WorldSnapshot World::snapshot() const {
         if (!slot.alive) {
             continue;
         }
-        output.entities.push_back(SnapshotEntity{
+        SnapshotEntity entity{
             .persistent_id = slot.persistent_id,
             .spatial_state = slot.spatial_state,
             .authored_transform = slot.authored_transform,
-        });
+            .resource_references = slot.resource_references,
+        };
+        std::sort(
+            entity.resource_references.begin(),
+            entity.resource_references.end(),
+            [](const ResourceReference& left, const ResourceReference& right) {
+                if (left.role != right.role) {
+                    return static_cast<std::uint8_t>(left.role) < static_cast<std::uint8_t>(right.role);
+                }
+                return persistent_less(left.resource.value, right.resource.value);
+            }
+        );
+        output.entities.push_back(std::move(entity));
     }
     std::sort(
         output.entities.begin(),
@@ -262,6 +292,11 @@ bool World::restore(const WorldSnapshot& snapshot_data) {
         if (entity_record.authored_transform.has_value() &&
             !restored.set_authored_transform(*entity, *entity_record.authored_transform)) {
             return false;
+        }
+        for (const auto reference : entity_record.resource_references) {
+            if (!restored.set_resource_reference(*entity, reference)) {
+                return false;
+            }
         }
     }
 
