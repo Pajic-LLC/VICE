@@ -26,9 +26,9 @@ int main() {
 vice-mesh-source 1
 name indexed_mesh
 id 50000000-0000-4000-8000-000000000055
-vertex 0 0 0 1 0 0
-vertex 1 0 0 0 1 0
-vertex 0 1 0 0 0 1
+vertex -2 -1 -3 1 0 0
+vertex 4 0 2 0 1 0
+vertex 0 5 1 0 0 1
 triangle 0 1 2
 )";
     {
@@ -72,6 +72,13 @@ triangle 0 1 2
     assert(mesh->format_version == render::mesh_asset_format_version);
     assert(mesh->source_fingerprint == cooked.source_fingerprint);
     assert(mesh->summary == "3 vertices, 1 triangles");
+    assert(mesh->mesh_bounds.has_value());
+    assert(mesh->mesh_bounds->minimum.x == -2.0F);
+    assert(mesh->mesh_bounds->minimum.y == -1.0F);
+    assert(mesh->mesh_bounds->minimum.z == -3.0F);
+    assert(mesh->mesh_bounds->maximum.x == 4.0F);
+    assert(mesh->mesh_bounds->maximum.y == 5.0F);
+    assert(mesh->mesh_bounds->maximum.z == 2.0F);
 
     bool shader_found = false;
     for (const auto& asset : index.assets()) {
@@ -79,6 +86,7 @@ triangle 0 1 2
             shader_found = true;
             assert(asset.name == "basic");
             assert(!asset.cooked_available);
+            assert(!asset.mesh_bounds.has_value());
         }
     }
     assert(shader_found);
