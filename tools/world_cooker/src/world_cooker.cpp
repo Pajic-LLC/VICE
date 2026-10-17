@@ -34,6 +34,13 @@ namespace {
     return std::nullopt;
 }
 
+[[nodiscard]] std::optional<world::ResourceRole> parse_resource_role(
+    const std::string_view text
+) noexcept {
+    if (text == "render_mesh") return world::ResourceRole::render_mesh;
+    return std::nullopt;
+}
+
 } // namespace
 
 ParseResult parse_source_manifest(const std::string_view source) {
@@ -158,26 +165,52 @@ ParseResult parse_source_manifest(const std::string_view source) {
                 return result;
             }
 
-            std::string transform_mode;
-            if (values >> transform_mode) {
-                if (transform_mode != "transform") {
-                    fail("entity trailing data must begin with `transform`.");
-                    return result;
+            std::string metadata;
+            while (values >> metadata) {
+                if (metadata == "transform") {
+                    if (entity.authored_transform.has_value()) {
+                        fail("entity authored transform is duplicated.");
+                        return result;
+                    }
+                    if (!entity.spatial_state.has_value()) {
+                        fail("authored transform requires a spatial entity.");
+                        return result;
+                    }
+                    world::AuthoredTransform transform;
+                    if (!(values >> transform.rotation.x >> transform.rotation.y >>
+                            transform.rotation.z >> transform.rotation.w >>
+                            transform.scale.x >> transform.scale.y >> transform.scale.z)) {
+                        fail("entity authored transform is incomplete.");
+                        return result;
+                    }
+                    entity.authored_transform = transform;
+                    continue;
                 }
-                if (!entity.spatial_state.has_value()) {
-                    fail("authored transform requires a spatial entity.");
-                    return result;
+
+                if (metadata == "resource") {
+                    std::string role_text;
+                    std::string resource_text;
+                    if (!(values >> role_text >> resource_text)) {
+                        fail("entity resource reference is incomplete.");
+                        return result;
+                    }
+                    const auto role = parse_resource_role(role_text);
+                    const auto resource_id = parse_id(resource_text);
+                    if (!role.has_value() || !resource_id.has_value()) {
+                        fail("entity resource reference is invalid.");
+                        return result;
+                    }
+                    entity.resource_references.push_back(world::ResourceReference{
+                        .role = *role,
+                        .resource = world::ResourceId{*resource_id},
+                    });
+                    continue;
                 }
-                world::AuthoredTransform transform;
-                if (!(values >> transform.rotation.x >> transform.rotation.y >>
-                        transform.rotation.z >> transform.rotation.w >>
-                        transform.scale.x >> transform.scale.y >> transform.scale.z)) {
-                    fail("entity authored transform is incomplete.");
-                    return result;
-                }
-                entity.authored_transform = transform;
+
+                fail("unknown entity metadata `" + metadata + "`.");
+                return result;
             }
-            parsed.entities.push_back(entity);
+            parsed.entities.push_back(std::move(entity));
         } else if (keyword == "relation") {
             std::string subject_text;
             std::string kind_text;
