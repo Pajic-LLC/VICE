@@ -13,7 +13,6 @@ struct PhysicsDebugLayers {
     bool contacts = false;
     bool velocities = true;
     bool characters = true;
-    bool constraints = false;
     bool handoffs = false;
 };
 
