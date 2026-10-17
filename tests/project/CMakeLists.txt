@@ -1,0 +1,5 @@
+add_executable(vice_project_tests project_tests.cpp)
+target_link_libraries(vice_project_tests PRIVATE VICE::Project)
+target_compile_features(vice_project_tests PRIVATE cxx_std_23)
+vice_enable_warnings(vice_project_tests)
+add_test(NAME vice_project_tests COMMAND vice_project_tests)
