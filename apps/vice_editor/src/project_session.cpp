@@ -300,21 +300,18 @@ std::optional<ProjectSession> ProjectSession::open(
     session.manifest_path_ = resolved_manifest;
     session.asset_root_ = project::resolve_asset_root(resolved_manifest, session.manifest_);
     session.startup_world_source_ = project::resolve_startup_world(resolved_manifest, session.manifest_);
-    if (session.asset_root_.empty() || session.startup_world_source_.empty()) {
-        if (diagnostics != nullptr) *diagnostics = "Project authored asset paths could not be resolved.";
+    session.cooked_root_ = project::resolve_cooked_root(cooked_base, session.manifest_);
+    session.cooked_startup_world_ = project::resolve_cooked_startup_world(cooked_base, session.manifest_);
+    if (session.asset_root_.empty() || session.startup_world_source_.empty() ||
+        session.cooked_root_.empty() || session.cooked_startup_world_.empty()) {
+        if (diagnostics != nullptr) *diagnostics = "Project asset or runtime paths could not be resolved.";
         return std::nullopt;
     }
 
     const std::string project_key = session.manifest_.id.to_string();
-    session.cooked_root_ = (cooked_base / project_key).lexically_normal();
     session.editor_state_root_ = (state_base / project_key).lexically_normal();
     session.layout_path_ = session.editor_state_root_ / "layout.ini";
     session.working_world_path_ = session.editor_state_root_ / "world.vworldc";
-
-    auto cooked_startup_relative = session.manifest_.startup_world;
-    cooked_startup_relative.replace_extension(".vworldc");
-    session.cooked_startup_world_ =
-        (session.cooked_root_ / cooked_startup_relative).lexically_normal();
 
     if (diagnostics != nullptr) diagnostics->clear();
     return session;
