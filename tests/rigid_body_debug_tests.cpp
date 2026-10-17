@@ -22,9 +22,14 @@ int main() {
     require(domain != nullptr, "domain creation");
     domain->set_fidelity(simulation::Fidelity::full);
 
+    const simulation::MaterialId floor_material{100};
+    const simulation::MaterialId cube_material{200};
+    require(domain->register_material(floor_material, simulation::Material{}), "floor material registration");
+    require(domain->register_material(cube_material, simulation::Material{}), "cube material registration");
+
     rigid_body::BoxBodyDesc floor;
     floor.participant = simulation::ParticipantId{10};
-    floor.material = simulation::MaterialId{100};
+    floor.material = floor_material;
     floor.motion = rigid_body::MotionType::static_body;
     floor.half_extents = {4.0F, 0.5F, 4.0F};
     floor.position = {0.0F, -0.5F, 0.0F};
@@ -32,7 +37,7 @@ int main() {
 
     rigid_body::BoxBodyDesc cube;
     cube.participant = simulation::ParticipantId{20};
-    cube.material = simulation::MaterialId{200};
+    cube.material = cube_material;
     cube.motion = rigid_body::MotionType::dynamic_body;
     cube.motion_quality = rigid_body::MotionQuality::continuous;
     cube.half_extents = {0.75F, 0.5F, 0.25F};
