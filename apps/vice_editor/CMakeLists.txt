@@ -84,6 +84,12 @@ add_executable(
   src/scene_renderer.cpp
 )
 
+target_include_directories(
+  vice_editor
+  PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/src"
+)
+
 target_link_libraries(
   vice_editor
   PRIVATE
