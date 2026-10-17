@@ -317,7 +317,8 @@ int main() {
         pass.clear_depth_attachment = true;
 
         if (!commands->begin_render_pass(*swapchain, pass) ||
-            !scene_renderer.render(world, selection, *commands, active_viewport, metrics) ||
+            (active_viewport.drawable() &&
+                !scene_renderer.render(world, selection, *commands, active_viewport, metrics)) ||
             !ui_renderer.render(*render_device, *commands, metrics) ||
             !commands->end_render_pass() ||
             !commands->present(*swapchain) ||
