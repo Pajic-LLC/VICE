@@ -11,6 +11,7 @@ namespace vice::editor {
 
 struct ProjectWorkflowStatus {
     bool project_loaded = false;
+    bool show_start_surface = false;
     std::string project_name;
     std::filesystem::path project_manifest;
     std::string world_name;
