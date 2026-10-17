@@ -28,6 +28,12 @@ private:
     std::optional<world::PersistentId> selected_;
 };
 
+enum class TransformTool : std::uint8_t {
+    move,
+    rotate,
+    scale,
+};
+
 struct EntityTransformState {
     world::SpatialState spatial_state{};
     std::optional<world::AuthoredTransform> authored_transform;
