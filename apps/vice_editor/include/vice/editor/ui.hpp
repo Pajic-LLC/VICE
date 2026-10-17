@@ -45,17 +45,22 @@ public:
     void handle_event(const platform::Event& event);
     [[nodiscard]] bool begin_frame(platform::WindowMetrics metrics, float delta_seconds);
     void draw(
-        const world::World& world,
+        world::World& world,
         SelectionModel& selection,
+        TransformHistory& history,
         ConsoleHistory& console,
         const UiStatus& status
     );
     void end_frame();
 
     [[nodiscard]] SceneViewport scene_viewport() const noexcept;
+    [[nodiscard]] TransformTool transform_tool() const noexcept;
 
     void request_reset_layout() noexcept;
     [[nodiscard]] bool consume_quit_request() noexcept;
+    [[nodiscard]] bool consume_save_request() noexcept;
+    [[nodiscard]] bool consume_undo_request() noexcept;
+    [[nodiscard]] bool consume_redo_request() noexcept;
 
 private:
     struct State;
