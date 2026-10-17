@@ -60,4 +60,14 @@ struct LoadResult {
     const Manifest& manifest
 );
 
+[[nodiscard]] std::filesystem::path resolve_cooked_root(
+    const std::filesystem::path& cooked_cache_base,
+    const Manifest& manifest
+);
+
+[[nodiscard]] std::filesystem::path resolve_cooked_startup_world(
+    const std::filesystem::path& cooked_cache_base,
+    const Manifest& manifest
+);
+
 } // namespace vice::project
