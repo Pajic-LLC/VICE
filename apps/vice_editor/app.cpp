@@ -93,7 +93,7 @@ constexpr std::string_view cube_id_text = "10000000-0000-4000-8000-000000000002"
     return world.set_spatial_state(
         *player,
         vice::world::SpatialState{
-            .global_position = {-4.0, 0.9, 0.0},
+            .global_position = {-4.0, 0.0, 0.0},
             .region = vice::world::RegionId{1},
         }
     ) && world.set_spatial_state(
@@ -248,7 +248,7 @@ int main() {
         vice::platform::Event event{vice::platform::QuitRequested{}};
         while (platform_services->poll_event(event)) {
             ui.handle_event(event);
-            scene_renderer.handle_event(event, active_viewport);
+            scene_renderer.handle_event(event, active_viewport, world, selection);
 
             std::visit(
                 [&](const auto& payload) {
