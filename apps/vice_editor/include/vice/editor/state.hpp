@@ -28,6 +28,53 @@ private:
     std::optional<world::PersistentId> selected_;
 };
 
+struct EntityTransformState {
+    world::SpatialState spatial_state{};
+    std::optional<world::AuthoredTransform> authored_transform;
+
+    friend bool operator==(const EntityTransformState&, const EntityTransformState&) = default;
+};
+
+[[nodiscard]] std::optional<EntityTransformState> capture_entity_transform(
+    const world::World& world,
+    world::PersistentId persistent_id
+);
+
+bool apply_entity_transform(
+    world::World& world,
+    world::PersistentId persistent_id,
+    const EntityTransformState& state
+);
+
+class TransformHistory {
+public:
+    struct Entry {
+        world::PersistentId persistent_id{};
+        EntityTransformState before{};
+        EntityTransformState after{};
+        std::string label;
+    };
+
+    bool record(Entry entry);
+    bool undo(world::World& world);
+    bool redo(world::World& world);
+    void clear() noexcept;
+    void mark_saved() noexcept;
+
+    [[nodiscard]] bool can_undo() const noexcept;
+    [[nodiscard]] bool can_redo() const noexcept;
+    [[nodiscard]] bool dirty() const noexcept;
+    [[nodiscard]] std::size_t size() const noexcept;
+    [[nodiscard]] std::size_t applied_count() const noexcept;
+    [[nodiscard]] std::string undo_label() const;
+    [[nodiscard]] std::string redo_label() const;
+
+private:
+    std::vector<Entry> entries_;
+    std::size_t cursor_ = 0;
+    std::optional<std::size_t> saved_cursor_ = 0U;
+};
+
 struct HierarchyEntry {
     world::PersistentId persistent_id{};
     std::optional<world::SpatialState> spatial_state;
@@ -39,6 +86,7 @@ struct InspectorData {
     world::PersistentId persistent_id{};
     std::optional<world::EntityId> entity;
     std::optional<world::SpatialState> spatial_state;
+    std::optional<world::AuthoredTransform> authored_transform;
     std::optional<world::RegionDesc> region;
     std::optional<world::SimulationIslandId> simulation_island;
     std::optional<world::StreamingCellId> streaming_cell;
