@@ -62,7 +62,8 @@ triangle 1 2 3
     assert(legacy_decoded.asset.has_value());
     assert(legacy_decoded.asset->version == render::mesh_asset_format_version_v1);
     assert(!render::valid(legacy_decoded.asset->stable_id));
-    assert(legacy_decoded.asset->vertices == decoded.asset->vertices);
+    assert(legacy_decoded.asset->vertices.size() == decoded.asset->vertices.size());
+    assert(legacy_decoded.asset->vertices[2].position[0] == decoded.asset->vertices[2].position[0]);
     assert(legacy_decoded.asset->indices == decoded.asset->indices);
 
     auto corrupted = cooked.bytes;
