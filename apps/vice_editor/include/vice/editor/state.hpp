@@ -93,7 +93,10 @@ private:
     std::optional<std::size_t> saved_cursor_ = 0U;
 };
 
-using TransformHistory = CommandHistory;
+class TransformHistory final : public CommandHistory {
+public:
+    using Entry = CommandHistory::TransformEntry;
+};
 
 [[nodiscard]] std::optional<world::PersistentId> create_mesh_instance(
     world::World& world,
