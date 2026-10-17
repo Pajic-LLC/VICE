@@ -68,6 +68,11 @@ void test_inspector_projection() {
         .global_position = vice::world::GlobalPosition{104.0, 2.0, -3.0},
         .region = region_id,
     }));
+    const vice::world::AuthoredTransform authored{
+        .rotation = {0.0F, 0.0F, 0.70710678F, 0.70710678F},
+        .scale = {2.0F, 1.5F, 0.75F},
+    };
+    assert(world.set_authored_transform(*spatial, authored));
     assert(world.add_relation(vice::world::Relation{
         .subject = *spatial,
         .kind = kind_id,
@@ -78,6 +83,7 @@ void test_inspector_projection() {
     assert(spatial_inspector.has_value());
     assert(spatial_inspector->entity == spatial);
     assert(spatial_inspector->spatial_state.has_value());
+    assert(spatial_inspector->authored_transform == std::optional{authored});
     assert(spatial_inspector->region.has_value());
     assert(spatial_inspector->region->id == region_id);
     assert(spatial_inspector->simulation_island == vice::world::SimulationIslandId{70});
@@ -87,11 +93,109 @@ void test_inspector_projection() {
     const auto plain_inspector = vice::editor::project_inspector(world, plain_id);
     assert(plain_inspector.has_value());
     assert(!plain_inspector->spatial_state.has_value());
+    assert(!plain_inspector->authored_transform.has_value());
     assert(!plain_inspector->region.has_value());
     assert(!plain_inspector->simulation_island.has_value());
     assert(!plain_inspector->streaming_cell.has_value());
     assert(plain_inspector->relations.size() == 1);
     assert(!vice::editor::project_inspector(world, fixed_id(99)).has_value());
+}
+
+void test_transform_history() {
+    using namespace vice;
+
+    world::World world;
+    assert(world.register_region(world::RegionDesc{
+        .id = world::RegionId{1},
+        .simulation_island = world::SimulationIslandId{1},
+        .origin = {},
+        .streaming_cell = {},
+        .fidelity = world::RegionFidelity::full,
+    }));
+    const auto persistent_id = fixed_id(50);
+    const auto entity = world.create_entity(persistent_id);
+    assert(entity.has_value());
+    assert(world.set_spatial_state(*entity, world::SpatialState{
+        .global_position = {1.0, 2.0, 3.0},
+        .region = world::RegionId{1},
+    }));
+
+    editor::TransformHistory history;
+    history.mark_saved();
+    assert(!history.dirty());
+    assert(!history.can_undo());
+    assert(!history.can_redo());
+
+    const auto before = editor::capture_entity_transform(world, persistent_id);
+    assert(before.has_value());
+
+    auto preview = *before;
+    preview.spatial_state.global_position.x = 2.0;
+    assert(editor::apply_entity_transform(world, persistent_id, preview));
+    preview.spatial_state.global_position.x = 3.0;
+    assert(editor::apply_entity_transform(world, persistent_id, preview));
+
+    auto moved = preview;
+    moved.spatial_state.global_position.x = 5.0;
+    moved.authored_transform = world::AuthoredTransform{
+        .rotation = {0.0F, 0.0F, 0.0F, 1.0F},
+        .scale = {2.0F, 2.0F, 2.0F},
+    };
+    assert(editor::apply_entity_transform(world, persistent_id, moved));
+    assert(history.record(editor::TransformHistory::Entry{
+        .persistent_id = persistent_id,
+        .before = *before,
+        .after = moved,
+        .label = "Move Entity",
+    }));
+
+    assert(history.size() == 1U);
+    assert(history.applied_count() == 1U);
+    assert(history.dirty());
+    assert(history.can_undo());
+    assert(!history.can_redo());
+    assert(history.undo_label() == "Move Entity");
+
+    assert(history.undo(world));
+    assert(editor::capture_entity_transform(world, persistent_id) == before);
+    assert(!history.dirty());
+    assert(!history.can_undo());
+    assert(history.can_redo());
+    assert(history.redo_label() == "Move Entity");
+
+    assert(history.redo(world));
+    assert(editor::capture_entity_transform(world, persistent_id) == std::optional{moved});
+    history.mark_saved();
+    assert(!history.dirty());
+
+    auto scaled = moved;
+    scaled.authored_transform->scale = {3.0F, 1.0F, 1.0F};
+    assert(editor::apply_entity_transform(world, persistent_id, scaled));
+    assert(history.record(editor::TransformHistory::Entry{
+        .persistent_id = persistent_id,
+        .before = moved,
+        .after = scaled,
+        .label = "Scale Entity",
+    }));
+    assert(history.dirty());
+    assert(history.undo(world));
+    assert(!history.dirty());
+    assert(history.can_redo());
+
+    auto rotated = moved;
+    rotated.authored_transform->rotation = {0.0F, 0.0F, 0.70710678F, 0.70710678F};
+    assert(editor::apply_entity_transform(world, persistent_id, rotated));
+    assert(history.record(editor::TransformHistory::Entry{
+        .persistent_id = persistent_id,
+        .before = moved,
+        .after = rotated,
+        .label = "Rotate Entity",
+    }));
+    assert(history.dirty());
+    assert(!history.can_redo());
+    assert(history.undo(world));
+    assert(!history.dirty());
+    assert(editor::capture_entity_transform(world, persistent_id) == std::optional{moved});
 }
 
 void test_console_history() {
@@ -164,6 +268,7 @@ int main() {
     test_selection_survives_restore();
     test_hierarchy_is_deterministic();
     test_inspector_projection();
+    test_transform_history();
     test_console_history();
     test_editor_state_does_not_mutate_world_snapshot();
     return 0;
