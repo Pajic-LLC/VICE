@@ -1,4 +1,5 @@
 #include <vice/editor/project_session.hpp>
+#include <vice/editor/project_workflow.hpp>
 
 #include <cstdlib>
 #include <filesystem>
