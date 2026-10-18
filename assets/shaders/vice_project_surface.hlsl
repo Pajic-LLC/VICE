@@ -1,9 +1,17 @@
+static const uint VICE_MAX_LIGHTS = 8;
+
+struct ViceLight {
+    float4 position_or_direction;
+    float4 color_intensity;
+    float4 parameters;
+};
+
 cbuffer SceneFrame : register(b0, space0) {
     column_major float4x4 view_projection;
     column_major float4x4 model;
     float4 camera_position;
-    float4 light_direction;
-    float4 light_color;
+    float4 light_metadata;
+    ViceLight lights[VICE_MAX_LIGHTS];
 };
 
 cbuffer MaterialParams : register(b1, space0) {
@@ -57,23 +65,37 @@ float3 fresnel_schlick(float cosine, float3 f0) {
     return f0 + (1.0 - f0) * pow(1.0 - saturate(cosine), 5.0);
 }
 
-float4 vice_surface_fs(VertexOut input) : SV_Target0 {
-    const float4 sampled = base_color_texture.Sample(base_color_sampler, input.uv);
-    const float4 albedo_sample = sampled * base_color * float4(input.color, 1.0);
-    const float3 albedo = albedo_sample.rgb;
+float3 evaluate_light(
+    ViceLight light,
+    float3 world_position,
+    float3 normal,
+    float3 view_direction,
+    float3 albedo,
+    float metallic_value,
+    float roughness_value
+) {
+    float3 to_light;
+    float attenuation = 1.0;
+    if (light.position_or_direction.w < 0.5) {
+        to_light = normalize(-light.position_or_direction.xyz);
+    } else {
+        const float3 delta = light.position_or_direction.xyz - world_position;
+        const float distance = max(length(delta), 0.0001);
+        to_light = delta / distance;
+        const float range = max(light.parameters.x, 0.0001);
+        const float smooth_range = saturate(1.0 - distance / range);
+        attenuation = smooth_range * smooth_range;
+    }
 
-    const float3 normal = normalize(input.world_normal);
-    const float3 view_direction = normalize(camera_position.xyz - input.world_position);
-    const float3 to_light = normalize(light_direction.xyz);
-    const float3 half_vector = normalize(view_direction + to_light);
-
-    const float clamped_roughness = clamp(roughness, 0.04, 1.0);
-    const float alpha = clamped_roughness * clamped_roughness;
     const float normal_light = saturate(dot(normal, to_light));
+    if (normal_light <= 0.0 || attenuation <= 0.0) return float3(0.0, 0.0, 0.0);
+
+    const float3 half_vector = normalize(view_direction + to_light);
     const float normal_view = saturate(dot(normal, view_direction));
     const float half_view = saturate(dot(half_vector, view_direction));
-
-    const float3 f0 = lerp(float3(0.04, 0.04, 0.04), albedo, saturate(metallic));
+    const float clamped_roughness = clamp(roughness_value, 0.04, 1.0);
+    const float alpha = clamped_roughness * clamped_roughness;
+    const float3 f0 = lerp(float3(0.04, 0.04, 0.04), albedo, saturate(metallic_value));
     const float3 fresnel = fresnel_schlick(half_view, f0);
     const float distribution = distribution_ggx(normal, half_vector, alpha);
     const float geometry_k = ((clamped_roughness + 1.0) * (clamped_roughness + 1.0)) / 8.0;
@@ -81,10 +103,33 @@ float4 vice_surface_fs(VertexOut input) : SV_Target0 {
         geometry_schlick_ggx(normal_light, geometry_k);
     const float3 specular = distribution * geometry * fresnel /
         max(4.0 * normal_view * normal_light, 0.0001);
-
-    const float3 kd = (1.0 - fresnel) * (1.0 - saturate(metallic));
+    const float3 kd = (1.0 - fresnel) * (1.0 - saturate(metallic_value));
     const float3 diffuse = kd * albedo / 3.14159265;
-    const float3 direct = (diffuse + specular) * light_color.rgb * normal_light;
+    const float3 radiance = light.color_intensity.rgb * light.color_intensity.w * attenuation;
+    return (diffuse + specular) * radiance * normal_light;
+}
+
+float4 vice_surface_fs(VertexOut input) : SV_Target0 {
+    const float4 sampled = base_color_texture.Sample(base_color_sampler, input.uv);
+    const float4 albedo_sample = sampled * base_color * float4(input.color, 1.0);
+    const float3 albedo = albedo_sample.rgb;
+    const float3 normal = normalize(input.world_normal);
+    const float3 view_direction = normalize(camera_position.xyz - input.world_position);
+
+    float3 direct = float3(0.0, 0.0, 0.0);
+    const uint light_count = min((uint)light_metadata.x, VICE_MAX_LIGHTS);
+    for (uint index = 0; index < light_count; ++index) {
+        direct += evaluate_light(
+            lights[index],
+            input.world_position,
+            normal,
+            view_direction,
+            albedo,
+            metallic,
+            roughness
+        );
+    }
+
     const float3 ambient = albedo * 0.035;
     return float4(ambient + direct, albedo_sample.a);
 }

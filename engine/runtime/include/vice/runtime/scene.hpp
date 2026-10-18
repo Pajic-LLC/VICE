@@ -7,6 +7,7 @@
 #include <vice/render/rhi.hpp>
 #include <vice/world/world.hpp>
 
+#include <cstddef>
 #include <filesystem>
 #include <memory>
 #include <optional>
@@ -66,6 +67,17 @@ struct RuntimeCameraView {
     math::Vec3 position{};
     math::Mat4 view_projection{};
 };
+
+inline constexpr std::size_t max_runtime_lights = 8U;
+
+struct RuntimeLight {
+    world::PersistentId entity{};
+    world::Light light{};
+    math::Vec3 position{};
+    math::Vec3 direction{};
+};
+
+[[nodiscard]] std::vector<RuntimeLight> collect_runtime_lights(const world::World& world);
 
 [[nodiscard]] std::vector<RenderMeshInstance> collect_render_mesh_instances(
     const world::World& world
