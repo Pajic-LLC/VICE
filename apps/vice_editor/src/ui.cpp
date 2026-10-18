@@ -314,6 +314,9 @@ struct EditorUi::State {
     std::optional<world::PersistentId> inspector_edit_id;
     std::optional<EntityTransformState> inspector_edit_before;
     std::string inspector_edit_label;
+    std::optional<world::PersistentId> inspector_camera_edit_id;
+    std::optional<world::Camera> inspector_camera_edit_before;
+    std::string inspector_camera_edit_label;
 };
 
 EditorUi::EditorUi(std::filesystem::path layout_path)
@@ -604,6 +607,9 @@ void EditorUi::draw(
                 if (entry.spatial_state.has_value()) {
                     label += "   R" + std::to_string(entry.spatial_state->region.value);
                 }
+                if (entry.camera.has_value()) {
+                    label += entry.camera->primary ? "   Primary Camera" : "   Camera";
+                }
                 label += "###" + full_id;
 
                 const bool selected = selection.selected() == std::optional{entry.persistent_id};
@@ -876,6 +882,143 @@ void EditorUi::draw(
                     ImGui::TextDisabled("Region %llu", static_cast<unsigned long long>(inspector->spatial_state->region.value));
                 } else if (!inspector->spatial_state.has_value()) {
                     ImGui::TextDisabled("This entity has no spatial transform.");
+                }
+
+                if (inspector->camera.has_value() &&
+                    ImGui::CollapsingHeader("Camera", ImGuiTreeNodeFlags_DefaultOpen)) {
+                    const auto begin_camera_transaction = [&](const char* label) {
+                        if (ImGui::IsItemActivated()) {
+                            state_->inspector_camera_edit_id = inspector->persistent_id;
+                            state_->inspector_camera_edit_before = world.camera(*inspector->entity);
+                            state_->inspector_camera_edit_label = label;
+                        }
+                    };
+                    const auto finish_camera_transaction = [&]() {
+                        if (!ImGui::IsItemDeactivatedAfterEdit() ||
+                            !state_->inspector_camera_edit_id.has_value() ||
+                            !state_->inspector_camera_edit_before.has_value() ||
+                            *state_->inspector_camera_edit_id != inspector->persistent_id) {
+                            return;
+                        }
+                        const auto after = capture_entity_camera(world, inspector->persistent_id);
+                        if (after.has_value()) {
+                            history.record(CommandHistory::CameraEntry{
+                                .before = {{
+                                    .persistent_id = inspector->persistent_id,
+                                    .camera = *state_->inspector_camera_edit_before,
+                                }},
+                                .after = {*after},
+                                .label = state_->inspector_camera_edit_label,
+                            });
+                        }
+                        state_->inspector_camera_edit_id.reset();
+                        state_->inspector_camera_edit_before.reset();
+                        state_->inspector_camera_edit_label.clear();
+                    };
+
+                    auto current_camera = world.camera(*inspector->entity);
+                    if (current_camera.has_value()) {
+                        constexpr float radians_to_degrees = 180.0F / pi;
+                        constexpr float degrees_to_radians = pi / 180.0F;
+                        float fov_degrees = current_camera->vertical_fov_radians * radians_to_degrees;
+                        const bool fov_changed = ImGui::DragFloat(
+                            "Vertical FOV",
+                            &fov_degrees,
+                            0.25F,
+                            1.0F,
+                            179.0F,
+                            "%.1f°",
+                            ImGuiSliderFlags_AlwaysClamp
+                        );
+                        begin_camera_transaction("Edit Camera FOV");
+                        if (fov_changed) {
+                            current_camera->vertical_fov_radians = fov_degrees * degrees_to_radians;
+                            if (!world.set_camera(*inspector->entity, *current_camera)) {
+                                core::log(core::LogLevel::error, "VICE Editor could not apply camera FOV edit.");
+                            }
+                        }
+                        finish_camera_transaction();
+
+                        current_camera = world.camera(*inspector->entity);
+                        float near_plane = current_camera->near_plane;
+                        const float near_max = std::max(0.001F, current_camera->far_plane - 0.001F);
+                        const bool near_changed = ImGui::DragFloat(
+                            "Near Plane",
+                            &near_plane,
+                            0.01F,
+                            0.001F,
+                            near_max,
+                            "%.3f",
+                            ImGuiSliderFlags_AlwaysClamp
+                        );
+                        begin_camera_transaction("Edit Camera Near Plane");
+                        if (near_changed) {
+                            current_camera->near_plane = near_plane;
+                            if (!world.set_camera(*inspector->entity, *current_camera)) {
+                                core::log(core::LogLevel::error, "VICE Editor could not apply camera near plane edit.");
+                            }
+                        }
+                        finish_camera_transaction();
+
+                        current_camera = world.camera(*inspector->entity);
+                        float far_plane = current_camera->far_plane;
+                        const float far_min = current_camera->near_plane + 0.001F;
+                        const bool far_changed = ImGui::DragFloat(
+                            "Far Plane",
+                            &far_plane,
+                            1.0F,
+                            far_min,
+                            1'000'000.0F,
+                            "%.1f",
+                            ImGuiSliderFlags_AlwaysClamp
+                        );
+                        begin_camera_transaction("Edit Camera Far Plane");
+                        if (far_changed) {
+                            current_camera->far_plane = far_plane;
+                            if (!world.set_camera(*inspector->entity, *current_camera)) {
+                                core::log(core::LogLevel::error, "VICE Editor could not apply camera far plane edit.");
+                            }
+                        }
+                        finish_camera_transaction();
+
+                        current_camera = world.camera(*inspector->entity);
+                        bool primary = current_camera->primary;
+                        if (ImGui::Checkbox("Primary", &primary) && primary != current_camera->primary) {
+                            std::vector<EntityCameraState> before;
+                            std::vector<EntityCameraState> after;
+                            if (primary) {
+                                if (const auto existing_primary = world.primary_camera();
+                                    existing_primary.has_value() && *existing_primary != *inspector->entity) {
+                                    const auto existing_id = world.persistent_id(*existing_primary);
+                                    if (existing_id.has_value()) {
+                                        const auto existing_before = capture_entity_camera(world, *existing_id);
+                                        if (existing_before.has_value()) {
+                                            before.push_back(*existing_before);
+                                            auto demoted = *existing_before;
+                                            demoted.camera->primary = false;
+                                            after.push_back(std::move(demoted));
+                                        }
+                                    }
+                                }
+                            }
+                            const auto target_before = capture_entity_camera(world, inspector->persistent_id);
+                            if (target_before.has_value()) {
+                                before.push_back(*target_before);
+                                auto target_after = *target_before;
+                                target_after.camera->primary = primary;
+                                after.push_back(std::move(target_after));
+                            }
+                            if (!before.empty() && apply_camera_states(world, after)) {
+                                history.record(CommandHistory::CameraEntry{
+                                    .before = std::move(before),
+                                    .after = std::move(after),
+                                    .label = primary ? "Make Primary Camera" : "Clear Primary Camera",
+                                });
+                            } else {
+                                core::log(core::LogLevel::error, "VICE Editor could not change the primary camera.");
+                            }
+                        }
+                    }
                 }
 
                 if (ImGui::CollapsingHeader("Runtime", ImGuiTreeNodeFlags_DefaultOpen)) {
