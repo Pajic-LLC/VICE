@@ -35,6 +35,9 @@ public:
     [[nodiscard]] const std::filesystem::path& cooked_startup_world() const noexcept {
         return cooked_startup_world_;
     }
+    [[nodiscard]] std::filesystem::path game_output_root() const {
+        return project::resolve_game_output_root(manifest_path_, manifest_);
+    }
     [[nodiscard]] const std::filesystem::path& editor_state_root() const noexcept {
         return editor_state_root_;
     }
