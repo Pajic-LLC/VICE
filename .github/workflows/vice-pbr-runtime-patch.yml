@@ -1,0 +1,28 @@
+name: VICE PBR runtime patch
+
+on:
+  push:
+    branches:
+      - render/pbr-textures
+    paths:
+      - .github/vice_pbr_runtime_patch.py
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: render/pbr-textures
+      - run: python3 .github/vice_pbr_runtime_patch.py
+      - run: |
+          rm .github/vice_pbr_runtime_patch.py
+          rm .github/workflows/vice-pbr-runtime-patch.yml
+          git config user.name "VICE Build Bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add -A
+          git commit -m "Bind PBR textures in the runtime scene"
+          git push origin HEAD:render/pbr-textures
