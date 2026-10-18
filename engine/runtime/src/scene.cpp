@@ -1,5 +1,7 @@
 #include <vice/runtime/scene.hpp>
 
+#include "material_pipeline.hpp"
+
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -56,6 +58,13 @@ static constexpr std::array vertex_resources{
 constexpr render::ShaderBindingKey frame_binding{
     .register_class = render::ShaderRegisterClass::constant_buffer,
     .binding = 0,
+    .space = 0,
+    .array_element = 0,
+};
+
+constexpr render::ShaderBindingKey material_binding{
+    .register_class = render::ShaderRegisterClass::constant_buffer,
+    .binding = 1,
     .space = 0,
     .array_element = 0,
 };
@@ -351,15 +360,21 @@ std::vector<RenderMeshInstance> collect_render_mesh_instances(const world::World
     const auto snapshot = world.snapshot();
     for (const auto& entity : snapshot.entities) {
         if (!entity.spatial_state.has_value()) continue;
+        std::optional<world::ResourceId> mesh;
+        std::optional<world::ResourceId> material;
         for (const auto& reference : entity.resource_references) {
-            if (reference.role != world::ResourceRole::render_mesh || !reference.resource.valid()) continue;
-            instances.push_back(RenderMeshInstance{
-                .entity = entity.persistent_id,
-                .mesh = reference.resource,
-                .spatial = *entity.spatial_state,
-                .authored = entity.authored_transform.value_or(world::AuthoredTransform{}),
-            });
+            if (!reference.resource.valid()) continue;
+            if (reference.role == world::ResourceRole::render_mesh) mesh = reference.resource;
+            if (reference.role == world::ResourceRole::render_material) material = reference.resource;
         }
+        if (!mesh.has_value()) continue;
+        instances.push_back(RenderMeshInstance{
+            .entity = entity.persistent_id,
+            .mesh = *mesh,
+            .material = material,
+            .spatial = *entity.spatial_state,
+            .authored = entity.authored_transform.value_or(world::AuthoredTransform{}),
+        });
     }
     return instances;
 }
@@ -434,6 +449,7 @@ struct RuntimeSceneRenderer::State {
 
     render::Device* device = nullptr;
     CookedMeshCatalog catalog;
+    detail::RuntimeMaterialLibrary materials;
     std::unique_ptr<render::ShaderModule> vertex_shader;
     std::unique_ptr<render::ShaderModule> fragment_shader;
     std::unique_ptr<render::GraphicsPipeline> pipeline;
@@ -465,6 +481,9 @@ bool RuntimeSceneRenderer::initialize(
         set_diagnostics(diagnostics, state_->catalog.diagnostics());
         return false;
     }
+    if (!state_->materials.initialize(device, color_format, mesh_layouts, content_root, diagnostics)) {
+        return false;
+    }
 
     const bool metal = device.backend() == render::Backend::metal;
     render::ShaderModuleDesc vertex_desc;
@@ -473,19 +492,19 @@ bool RuntimeSceneRenderer::initialize(
     vertex_desc.source = metal ? metal_source : hlsl_source;
     vertex_desc.resources = vertex_resources;
     vertex_desc.entry_point = "vice_runtime_mesh_vs";
-    vertex_desc.debug_name = "VICE Runtime mesh vertex";
+    vertex_desc.debug_name = "VICE Runtime mesh vertex fallback";
 
     render::ShaderModuleDesc fragment_desc;
     fragment_desc.stage = render::ShaderStage::fragment;
     fragment_desc.language = vertex_desc.language;
     fragment_desc.source = vertex_desc.source;
     fragment_desc.entry_point = "vice_runtime_mesh_fs";
-    fragment_desc.debug_name = "VICE Runtime mesh fragment";
+    fragment_desc.debug_name = "VICE Runtime mesh fragment fallback";
 
     state_->vertex_shader = device.create_shader_module(vertex_desc);
     state_->fragment_shader = device.create_shader_module(fragment_desc);
     if (!state_->vertex_shader || !state_->fragment_shader) {
-        set_diagnostics(diagnostics, "VICE Runtime could not create scene shaders.");
+        set_diagnostics(diagnostics, "VICE Runtime could not create fallback scene shaders.");
         return false;
     }
 
@@ -499,10 +518,10 @@ bool RuntimeSceneRenderer::initialize(
     pipeline_desc.depth.write_enabled = true;
     pipeline_desc.depth.compare = render::CompareOp::less;
     pipeline_desc.vertex_buffers = mesh_layouts;
-    pipeline_desc.debug_name = "VICE Runtime mesh pipeline";
+    pipeline_desc.debug_name = "VICE Runtime mesh fallback pipeline";
     state_->pipeline = device.create_graphics_pipeline(pipeline_desc);
     if (!state_->pipeline) {
-        set_diagnostics(diagnostics, "VICE Runtime could not create the scene graphics pipeline.");
+        set_diagnostics(diagnostics, "VICE Runtime could not create the fallback scene graphics pipeline.");
         return false;
     }
 
@@ -606,6 +625,15 @@ bool RuntimeSceneRenderer::render(
             );
             return false;
         }
+        if (instance.material.has_value() &&
+            state_->materials.find(*instance.material).pipeline == nullptr) {
+            set_diagnostics(
+                diagnostics,
+                "Runtime World references missing cooked render material `" +
+                    instance.material->value.to_string() + "`."
+            );
+            return false;
+        }
     }
 
     const float aspect = static_cast<float>(metrics.drawable_width) /
@@ -633,8 +661,7 @@ bool RuntimeSceneRenderer::render(
         !commands->set_scissor_rect(render::ScissorRect{
             .width = metrics.drawable_width,
             .height = metrics.drawable_height,
-        }) ||
-        !commands->set_graphics_pipeline(*state_->pipeline)) {
+        })) {
         set_diagnostics(diagnostics, "VICE Runtime could not begin the scene render pass.");
         return false;
     }
@@ -659,6 +686,18 @@ bool RuntimeSceneRenderer::render(
             return false;
         }
 
+        render::GraphicsPipeline* pipeline = state_->pipeline.get();
+        render::Buffer* material_constants = nullptr;
+        if (instance.material.has_value()) {
+            const auto material = state_->materials.find(*instance.material);
+            pipeline = material.pipeline;
+            material_constants = material.constants;
+        }
+        if (pipeline == nullptr || !commands->set_graphics_pipeline(*pipeline)) {
+            set_diagnostics(diagnostics, "VICE Runtime could not bind a scene material pipeline.");
+            return false;
+        }
+
         auto& mesh = state_->meshes.at(instance.mesh);
         if (!commands->set_vertex_buffer(0U, *mesh.vertices) ||
             !commands->set_index_buffer(*mesh.indices, render::IndexFormat::uint32) ||
@@ -667,8 +706,28 @@ bool RuntimeSceneRenderer::render(
                 *constants_iterator->second,
                 0,
                 sizeof(SceneConstants)
-            ) ||
-            !commands->draw_indexed(mesh.index_count)) {
+            )) {
+            set_diagnostics(
+                diagnostics,
+                "VICE Runtime could not bind mesh `" + instance.mesh.value.to_string() + "`."
+            );
+            return false;
+        }
+        if (material_constants != nullptr &&
+            !commands->set_graphics_constant_buffer(
+                material_binding,
+                *material_constants,
+                0,
+                sizeof(float) * 4U
+            )) {
+            set_diagnostics(
+                diagnostics,
+                "VICE Runtime could not bind render material constants for mesh `" +
+                    instance.mesh.value.to_string() + "`."
+            );
+            return false;
+        }
+        if (!commands->draw_indexed(mesh.index_count)) {
             set_diagnostics(
                 diagnostics,
                 "VICE Runtime could not encode mesh `" + instance.mesh.value.to_string() + "`."
