@@ -1,0 +1,56 @@
+name: VICE cascaded shadow runtime patch v2
+
+on:
+  push:
+    branches:
+      - render/cascaded-directional-shadows
+    paths:
+      - .github/workflows/vice-csm-patch-v2.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          ref: render/cascaded-directional-shadows
+          fetch-depth: 0
+      - name: Correct MaterialGpu anchor
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('.github/scripts/apply_csm_runtime.py')
+          text = path.read_text()
+          old = '''material = replace_once(
+              material,
+              "        bool supports_directional_shadow = false;",
+              "        std::uint32_t directional_shadow_cascade_count = 0;",
+              material_path,
+          )
+          '''
+          new = '''material = replace_once(
+              material,
+              """        std::unique_ptr<render::Sampler> sampler;\n        bool supports_directional_shadow = false;\n""",
+              """        std::unique_ptr<render::Sampler> sampler;\n        std::uint32_t directional_shadow_cascade_count = 0;\n""",
+              material_path,
+          )
+          '''
+          if old not in text:
+              raise SystemExit('MaterialGpu helper anchor not found')
+          path.write_text(text.replace(old, new, 1))
+          PY
+      - name: Apply cascaded shadow runtime patch
+        run: python3 .github/scripts/apply_csm_runtime.py
+      - name: Validate patch
+        run: git diff --check
+      - name: Commit runtime changes
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add engine/runtime/src/scene.cpp engine/runtime/src/material_pipeline.cpp tests/runtime_scene_tests.cpp
+          git commit -m "Implement stabilized cascaded directional shadows"
+          git push origin HEAD:render/cascaded-directional-shadows
