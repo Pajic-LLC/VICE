@@ -55,9 +55,7 @@ namespace {
     return root / (target + runtime_host.extension().string());
 }
 
-} // namespace
-
-ProjectBuildResult build_project(const ProjectSession& session) {
+[[nodiscard]] ProjectBuildResult cook_project(const ProjectSession& session) {
     const auto& source_path = session.startup_world_source();
     const auto& output_path = session.cooked_startup_world();
     if (source_path.empty()) {
@@ -108,11 +106,24 @@ ProjectBuildResult build_project(const ProjectSession& session) {
     return result;
 }
 
+} // namespace
+
+ProjectBuildResult build_project(const ProjectSession& session) {
+#if defined(VICE_EDITOR_RUNTIME_HOST_EXECUTABLE)
+    return build_game_target(
+        session,
+        std::filesystem::path{VICE_EDITOR_RUNTIME_HOST_EXECUTABLE}
+    );
+#else
+    return cook_project(session);
+#endif
+}
+
 ProjectBuildResult build_game_target(
     const ProjectSession& session,
     const std::filesystem::path& runtime_host_executable
 ) {
-    ProjectBuildResult result = build_project(session);
+    ProjectBuildResult result = cook_project(session);
     if (!result) return result;
 
     if (runtime_host_executable.empty()) {
