@@ -97,6 +97,20 @@ constexpr render::ShaderBindingKey material_sampler_binding{
     .array_element = 0,
 };
 
+constexpr render::ShaderBindingKey shadow_texture_binding{
+    .register_class = render::ShaderRegisterClass::shader_resource,
+    .binding = 1,
+    .space = 0,
+    .array_element = 0,
+};
+
+constexpr render::ShaderBindingKey shadow_sampler_binding{
+    .register_class = render::ShaderRegisterClass::sampler,
+    .binding = 1,
+    .space = 0,
+    .array_element = 0,
+};
+
 struct SceneLightConstants {
     float position_or_direction[4]{};
     float color_intensity[4]{};
@@ -689,6 +703,7 @@ struct RuntimeSceneRenderer::State {
     std::unique_ptr<render::ShaderModule> shadow_vertex_shader;
     std::unique_ptr<render::GraphicsPipeline> shadow_pipeline;
     std::unique_ptr<render::Texture> shadow_map;
+    std::unique_ptr<render::Sampler> shadow_sampler;
     std::unique_ptr<render::Texture> depth;
     std::unordered_map<world::ResourceId, MeshGpu, world::ResourceIdHash> meshes;
     std::unordered_map<world::PersistentId, std::unique_ptr<render::Buffer>, world::PersistentIdHash> constants;
@@ -801,6 +816,20 @@ bool RuntimeSceneRenderer::initialize(
     state_->shadow_map = device.create_texture(shadow_desc);
     if (!state_->shadow_map) {
         set_diagnostics(diagnostics, "VICE Runtime could not create the directional shadow map.");
+        return false;
+    }
+
+    render::SamplerDesc shadow_sampler_desc;
+    shadow_sampler_desc.min_filter = render::Filter::nearest;
+    shadow_sampler_desc.mag_filter = render::Filter::nearest;
+    shadow_sampler_desc.mip_filter = render::Filter::nearest;
+    shadow_sampler_desc.address_u = render::AddressMode::clamp_to_edge;
+    shadow_sampler_desc.address_v = render::AddressMode::clamp_to_edge;
+    shadow_sampler_desc.address_w = render::AddressMode::clamp_to_edge;
+    shadow_sampler_desc.debug_name = "VICE Runtime directional shadow sampler";
+    state_->shadow_sampler = device.create_sampler(shadow_sampler_desc);
+    if (!state_->shadow_sampler) {
+        set_diagnostics(diagnostics, "VICE Runtime could not create the directional shadow sampler.");
         return false;
     }
 
@@ -1126,6 +1155,16 @@ bool RuntimeSceneRenderer::render(
             set_diagnostics(
                 diagnostics,
                 "VICE Runtime could not bind the PBR texture and sampler for mesh `" +
+                    instance.mesh.value.to_string() + "`."
+            );
+            return false;
+        }
+        if (material_state.supports_directional_shadow &&
+            (!commands->set_graphics_texture(shadow_texture_binding, *state_->shadow_map) ||
+                !commands->set_graphics_sampler(shadow_sampler_binding, *state_->shadow_sampler))) {
+            set_diagnostics(
+                diagnostics,
+                "VICE Runtime could not bind the directional shadow map for mesh `" +
                     instance.mesh.value.to_string() + "`."
             );
             return false;
