@@ -1,0 +1,318 @@
+#include <vice/runtime/runtime.hpp>
+
+#include <vice/core/log.hpp>
+#include <vice/core/platform.hpp>
+#include <vice/core/time.hpp>
+#include <vice/platform/services.hpp>
+#include <vice/world/snapshot_file.hpp>
+
+#include <algorithm>
+#include <chrono>
+#include <filesystem>
+#include <string>
+#include <thread>
+#include <type_traits>
+#include <utility>
+#include <variant>
+
+namespace vice::runtime {
+namespace {
+
+[[nodiscard]] std::filesystem::path absolute_normalized(
+    const std::filesystem::path& path,
+    std::string& diagnostics
+) {
+    if (path.empty()) {
+        diagnostics = "Path is empty.";
+        return {};
+    }
+
+    std::error_code error;
+    auto resolved = std::filesystem::absolute(path, error);
+    if (error) {
+        diagnostics = "Could not resolve path: " + error.message();
+        return {};
+    }
+    diagnostics.clear();
+    return resolved.lexically_normal();
+}
+
+[[nodiscard]] bool same_window(
+    const platform::WindowId event_window,
+    const platform::WindowId game_window
+) noexcept {
+    return event_window == game_window;
+}
+
+} // namespace
+
+LaunchPaths staged_launch_paths(
+    const std::filesystem::path& executable,
+    std::string* const diagnostics
+) {
+    std::string local_diagnostics;
+    const auto resolved_executable = absolute_normalized(executable, local_diagnostics);
+    if (resolved_executable.empty()) {
+        if (diagnostics != nullptr) *diagnostics = std::move(local_diagnostics);
+        return {};
+    }
+
+    const auto root = resolved_executable.parent_path();
+    if (root.empty()) {
+        if (diagnostics != nullptr) *diagnostics = "Could not resolve runtime output directory.";
+        return {};
+    }
+
+    if (diagnostics != nullptr) diagnostics->clear();
+    return LaunchPaths{
+        .manifest = root / "vice.runtime.viceproj",
+        .cooked_cache_root = root / "content",
+    };
+}
+
+LaunchPaths explicit_launch_paths(
+    const std::filesystem::path& manifest,
+    const std::filesystem::path& cooked_cache_root,
+    std::string* const diagnostics
+) {
+    std::string local_diagnostics;
+    const auto resolved_manifest = absolute_normalized(manifest, local_diagnostics);
+    if (resolved_manifest.empty()) {
+        if (diagnostics != nullptr) *diagnostics = std::move(local_diagnostics);
+        return {};
+    }
+    const auto resolved_cache = absolute_normalized(cooked_cache_root, local_diagnostics);
+    if (resolved_cache.empty()) {
+        if (diagnostics != nullptr) *diagnostics = std::move(local_diagnostics);
+        return {};
+    }
+
+    if (diagnostics != nullptr) diagnostics->clear();
+    return LaunchPaths{
+        .manifest = resolved_manifest,
+        .cooked_cache_root = resolved_cache,
+    };
+}
+
+LoadResult load_project(const LaunchPaths& launch) {
+    LoadResult result;
+    if (launch.manifest.empty()) {
+        result.diagnostics = "Runtime project manifest path is empty.";
+        return result;
+    }
+    if (launch.cooked_cache_root.empty()) {
+        result.diagnostics = "Runtime cooked-content root is empty.";
+        return result;
+    }
+
+    const auto loaded_manifest = project::load_manifest(launch.manifest);
+    if (!loaded_manifest.manifest.has_value()) {
+        result.diagnostics = "Could not open runtime project: " + loaded_manifest.diagnostics;
+        return result;
+    }
+
+    const auto startup_world = project::resolve_cooked_startup_world(
+        launch.cooked_cache_root,
+        *loaded_manifest.manifest
+    );
+    if (startup_world.empty()) {
+        result.diagnostics = "Could not resolve the cooked startup World for the runtime project.";
+        return result;
+    }
+
+    const auto loaded_world = world::load_world_snapshot(startup_world);
+    if (!loaded_world.snapshot.has_value()) {
+        result.diagnostics =
+            "Could not load cooked startup World `" + startup_world.generic_string() + "`: " +
+            loaded_world.diagnostics;
+        return result;
+    }
+
+    auto runtime_world = std::make_unique<world::World>();
+    if (!runtime_world->restore(*loaded_world.snapshot)) {
+        result.diagnostics =
+            "Could not restore cooked startup World `" + startup_world.generic_string() + "`.";
+        return result;
+    }
+
+    result.project = LoadedProject{
+        .manifest = *loaded_manifest.manifest,
+        .manifest_path = launch.manifest,
+        .startup_world_path = startup_world,
+        .world = std::move(runtime_world),
+    };
+    return result;
+}
+
+GameModuleLifecycle::GameModuleLifecycle(GameModule& module, GameContext context) noexcept
+    : module_{&module}, context_{context} {}
+
+GameModuleLifecycle::~GameModuleLifecycle() {
+    stop();
+}
+
+bool GameModuleLifecycle::start() {
+    if (started_ || stopped_ || module_ == nullptr) return false;
+    if (!module_->on_start(context_)) return false;
+    started_ = true;
+    return true;
+}
+
+void GameModuleLifecycle::event(const platform::Event& event) {
+    if (!started_ || stopped_ || module_ == nullptr) return;
+    module_->on_event(context_, event);
+}
+
+void GameModuleLifecycle::update(const double delta_seconds) {
+    if (!started_ || stopped_ || module_ == nullptr) return;
+    module_->on_update(context_, delta_seconds);
+}
+
+void GameModuleLifecycle::frame(render::Color& clear_color) {
+    if (!started_ || stopped_ || module_ == nullptr) return;
+    module_->on_frame(context_, clear_color);
+}
+
+void GameModuleLifecycle::stop() {
+    if (stopped_) return;
+    if (started_ && module_ != nullptr) module_->on_stop(context_);
+    stopped_ = true;
+}
+
+EventDecision classify_event(
+    const platform::Event& event,
+    const platform::WindowId game_window
+) noexcept {
+    EventDecision decision;
+    std::visit(
+        [&](const auto& payload) {
+            using Payload = std::decay_t<decltype(payload)>;
+            if constexpr (std::is_same_v<Payload, platform::QuitRequested>) {
+                decision.quit = true;
+            } else if constexpr (std::is_same_v<Payload, platform::WindowCloseRequested>) {
+                decision.quit = same_window(payload.window, game_window);
+            } else if constexpr (std::is_same_v<Payload, platform::WindowMetricsChanged>) {
+                if (same_window(payload.window, game_window)) decision.resize = payload.metrics;
+            } else if constexpr (std::is_same_v<Payload, platform::KeyEvent>) {
+                decision.quit = same_window(payload.window, game_window) && payload.pressed &&
+                    payload.key == platform::Key::escape;
+            }
+        },
+        event.payload
+    );
+    return decision;
+}
+
+int run_native_game(
+    LoadedProject& runtime_project,
+    GameModule& module,
+    const ApplicationConfig& config
+) {
+    using core::LogLevel;
+    using core::log;
+
+    if (runtime_project.world == nullptr) {
+        log(LogLevel::error, "VICE Runtime has no authoritative World.");
+        return 1;
+    }
+    if (core::current_platform() == core::Platform::Unsupported) {
+        log(LogLevel::fatal, "This platform is not a VICE runtime target.");
+        return 1;
+    }
+
+    auto platform_services = platform::PlatformServices::create();
+    if (!platform_services) {
+        log(LogLevel::error, "VICE Runtime could not initialize platform services.");
+        return 1;
+    }
+
+    platform::WindowDesc window_desc;
+    window_desc.title = runtime_project.manifest.game_name;
+    window_desc.width = config.width;
+    window_desc.height = config.height;
+    window_desc.resizable = config.resizable;
+    auto window = platform_services->create_window(window_desc);
+    if (!window) {
+        log(LogLevel::error, "VICE Runtime could not create the game window.");
+        return 1;
+    }
+
+    auto render_device = render::Device::create();
+    if (!render_device) {
+        log(LogLevel::error, "VICE Runtime could not create a render device.");
+        return 1;
+    }
+    auto swapchain = render_device->create_swapchain(*window);
+    if (!swapchain) {
+        log(LogLevel::error, "VICE Runtime could not create the game swapchain.");
+        return 1;
+    }
+
+    log(
+        LogLevel::info,
+        "Game: " + runtime_project.manifest.game_name +
+            " | Target: " + runtime_project.manifest.game_target
+    );
+    log(LogLevel::info, "Render backend: " + std::string{render::backend_name(render_device->backend())});
+    log(LogLevel::info, "Startup World: " + runtime_project.startup_world_path.generic_string());
+    log(
+        LogLevel::info,
+        "World: " + std::to_string(runtime_project.world->entity_count()) + " entities, " +
+            std::to_string(runtime_project.world->resource_count()) + " resources"
+    );
+
+    GameContext context{
+        .project = runtime_project.manifest,
+        .world = *runtime_project.world,
+    };
+    GameModuleLifecycle lifecycle{module, context};
+    if (!lifecycle.start()) {
+        log(LogLevel::error, "VICE Runtime game module rejected startup.");
+        return 1;
+    }
+
+    bool running = true;
+    auto metrics = window->metrics();
+    bool drawable = metrics.drawable_width > 0U && metrics.drawable_height > 0U;
+    core::FrameClock clock;
+    int exit_code = 0;
+
+    while (running) {
+        platform::Event event{platform::QuitRequested{}};
+        while (platform_services->poll_event(event)) {
+            lifecycle.event(event);
+            const auto decision = classify_event(event, window->id());
+            if (decision.quit) running = false;
+            if (decision.resize.has_value()) {
+                metrics = *decision.resize;
+                drawable = metrics.drawable_width > 0U && metrics.drawable_height > 0U;
+                if (drawable && (!render_device->wait_idle() || !swapchain->resize(metrics))) {
+                    log(LogLevel::error, "VICE Runtime could not resize the game swapchain.");
+                    running = false;
+                    exit_code = 1;
+                }
+            }
+        }
+        if (!running) break;
+
+        clock.tick();
+        const double delta_seconds = std::min(clock.delta_seconds(), 0.25);
+        lifecycle.update(delta_seconds);
+
+        render::Color clear_color = config.clear_color;
+        lifecycle.frame(clear_color);
+        if (drawable && !swapchain->clear_and_present(clear_color)) {
+            log(LogLevel::error, "VICE Runtime could not present the game frame.");
+            running = false;
+            exit_code = 1;
+        }
+
+        std::this_thread::sleep_for(std::chrono::milliseconds{1});
+    }
+
+    (void)render_device->wait_idle();
+    lifecycle.stop();
+    return exit_code;
+}
+
+} // namespace vice::runtime
