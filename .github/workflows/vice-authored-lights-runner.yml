@@ -20,7 +20,9 @@ jobs:
           ref: render/authored-lights
       - name: Apply World authored lights
         shell: bash
-        run: python3 .github/patch_authored_lights_world.py
+        run: |
+          python3 -c "from pathlib import Path; p=Path('.github/patch_authored_lights_world.py'); t=p.read_text(); t=t.replace('world_snapshot_file_format_version = 4U;', 'world_snapshot_file_format_version = 4;').replace('world_snapshot_file_format_version = 5U;', 'world_snapshot_file_format_version = 5;'); p.write_text(t)"
+          python3 .github/patch_authored_lights_world.py
       - name: Commit World implementation
         shell: bash
         run: rm -f .github/patch_authored_lights_world.py .github/workflows/vice-authored-lights-core-patch.yml .github/workflows/vice-authored-lights-runner.yml && git config user.name 'github-actions[bot]' && git config user.email '41898282+github-actions[bot]@users.noreply.github.com' && git add -A && git commit -m 'Add authored lights to World persistence' && git push origin HEAD:render/authored-lights
