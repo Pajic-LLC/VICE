@@ -1,3 +1,4 @@
+#include <vice/runtime/module_loader.hpp>
 #include <vice/runtime/runtime.hpp>
 
 #include <filesystem>
@@ -13,8 +14,9 @@ class DefaultGameModule final : public vice::runtime::GameModule {};
 int main(const int argc, char** argv) {
     std::string diagnostics;
     vice::runtime::LaunchPaths launch;
+    const bool staged_mode = argc == 1;
 
-    if (argc == 1) {
+    if (staged_mode) {
         launch = vice::runtime::staged_launch_paths(
             std::filesystem::path{argv[0]},
             &diagnostics
@@ -42,6 +44,36 @@ int main(const int argc, char** argv) {
         return 1;
     }
 
-    DefaultGameModule game;
-    return vice::runtime::run_native_game(*loaded.project, game);
+    DefaultGameModule default_game;
+    vice::runtime::GameModule* game = &default_game;
+    vice::runtime::GameModuleLoadResult project_game;
+
+    if (staged_mode) {
+        const auto module_path = vice::runtime::staged_game_module_path(
+            launch.manifest.parent_path() / "game-target",
+            loaded.project->manifest.game_target
+        );
+        std::error_code error;
+        const bool module_exists = std::filesystem::is_regular_file(module_path, error);
+        if (error) {
+            std::cerr
+                << "VICE Runtime could not inspect project game module `"
+                << module_path.generic_string()
+                << "`: "
+                << error.message()
+                << '\n';
+            return 1;
+        }
+        if (module_exists) {
+            project_game = vice::runtime::load_game_module(module_path);
+            if (!project_game) {
+                std::cerr << "VICE Runtime could not load project game code: "
+                          << project_game.diagnostics << '\n';
+                return 1;
+            }
+            game = project_game.module.get();
+        }
+    }
+
+    return vice::runtime::run_native_game(*loaded.project, *game);
 }
