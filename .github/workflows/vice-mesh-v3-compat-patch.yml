@@ -1,0 +1,26 @@
+name: VICE mesh v3 compatibility patch
+
+on:
+  push:
+    branches: [render/pbr-textures]
+    paths: [.github/vice_mesh_v3_compat_patch.py]
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: render/pbr-textures
+      - run: python3 .github/vice_mesh_v3_compat_patch.py
+      - run: |
+          rm .github/vice_mesh_v3_compat_patch.py
+          rm .github/workflows/vice-mesh-v3-compat-patch.yml
+          git config user.name "VICE Build Bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add -A
+          git commit -m "Preserve legacy mesh cook behavior"
+          git push origin HEAD:render/pbr-textures
