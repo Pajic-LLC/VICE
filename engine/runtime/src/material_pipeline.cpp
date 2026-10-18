@@ -1,4 +1,5 @@
 #include "material_pipeline.hpp"
+#include "texture_pipeline.hpp"
 
 #include <vice/render/material_asset.hpp>
 #include <vice/render/shader_asset.hpp>
@@ -18,11 +19,14 @@ namespace {
 
 struct MaterialConstants {
     float base_color[4]{};
+    float metallic = 0.0F;
+    float roughness = 1.0F;
+    float padding[2]{};
 };
 
-static_assert(sizeof(MaterialConstants) == 16U);
+static_assert(sizeof(MaterialConstants) == 32U);
 
-[[nodiscard]] bool valid_material_resources(
+[[nodiscard]] bool valid_v1_resources(
     const render::ShaderModule& module,
     const std::uint32_t required_binding
 ) noexcept {
@@ -38,9 +42,39 @@ static_assert(sizeof(MaterialConstants) == 16U);
     return required_found;
 }
 
+[[nodiscard]] bool valid_v2_vertex_resources(const render::ShaderModule& module) noexcept {
+    return valid_v1_resources(module, 0U);
+}
+
+[[nodiscard]] bool valid_v2_fragment_resources(const render::ShaderModule& module) noexcept {
+    bool material_constants = false;
+    bool base_color_texture = false;
+    bool sampler = false;
+    for (const auto& resource : module.resources()) {
+        if (resource.space != 0U || resource.count != 1U || resource.unbounded) return false;
+        switch (resource.register_class) {
+        case render::ShaderRegisterClass::constant_buffer:
+            if (resource.binding != 0U && resource.binding != 1U) return false;
+            if (resource.binding == 1U) material_constants = true;
+            break;
+        case render::ShaderRegisterClass::shader_resource:
+            if (resource.binding != 0U) return false;
+            base_color_texture = true;
+            break;
+        case render::ShaderRegisterClass::sampler:
+            if (resource.binding != 0U) return false;
+            sampler = true;
+            break;
+        case render::ShaderRegisterClass::unordered_access:
+            return false;
+        }
+    }
+    return material_constants && base_color_texture && sampler;
+}
+
 [[nodiscard]] std::unique_ptr<render::Buffer> create_material_constants(
     render::Device& device,
-    const render::Color color
+    const render::RenderMaterialAsset& material
 ) {
     render::BufferDesc desc;
     desc.size = sizeof(MaterialConstants);
@@ -50,9 +84,34 @@ static_assert(sizeof(MaterialConstants) == 16U);
     auto buffer = device.create_buffer(desc);
     if (!buffer) return nullptr;
 
-    const MaterialConstants constants{{color.red, color.green, color.blue, color.alpha}};
-    if (!buffer->write(0, std::as_bytes(std::span{&constants, 1}))) return nullptr;
+    const MaterialConstants constants{
+        .base_color = {
+            material.base_color.red,
+            material.base_color.green,
+            material.base_color.blue,
+            material.base_color.alpha,
+        },
+        .metallic = material.metallic,
+        .roughness = material.roughness,
+    };
+    if (!buffer->write(0U, std::as_bytes(std::span{&constants, 1}))) return nullptr;
     return buffer;
+}
+
+[[nodiscard]] std::unique_ptr<render::Sampler> create_material_sampler(
+    render::Device& device,
+    const render::RenderMaterialAsset& material
+) {
+    render::SamplerDesc desc;
+    desc.min_filter = material.min_filter;
+    desc.mag_filter = material.mag_filter;
+    desc.mip_filter = material.mip_filter;
+    desc.address_u = material.address_u;
+    desc.address_v = material.address_v;
+    desc.address_w = material.address_w;
+    desc.max_anisotropy = material.max_anisotropy;
+    desc.debug_name = "VICE Runtime project material sampler";
+    return device.create_sampler(desc);
 }
 
 void set_diagnostics(std::string* const diagnostics, std::string message) {
@@ -98,9 +157,7 @@ bool CookedRenderMaterialCatalog::load(const std::filesystem::path& content_root
                 iterator->path().generic_string() + "`: " + loaded.diagnostics;
             return false;
         }
-        const world::ResourceId resource{
-            world::PersistentId{loaded.asset->stable_id},
-        };
+        const world::ResourceId resource{world::PersistentId{loaded.asset->stable_id}};
         if (!resource.valid()) {
             diagnostics_ = "Cooked runtime render material has no stable ID: " +
                 iterator->path().generic_string();
@@ -123,13 +180,9 @@ bool CookedRenderMaterialCatalog::load(const std::filesystem::path& content_root
 const CookedRenderMaterialRecord* CookedRenderMaterialCatalog::find(
     const world::ResourceId resource_id
 ) const noexcept {
-    const auto found = std::find_if(
-        records_.begin(),
-        records_.end(),
-        [resource_id](const CookedRenderMaterialRecord& record) {
-            return record.resource_id == resource_id;
-        }
-    );
+    const auto found = std::find_if(records_.begin(), records_.end(), [resource_id](const auto& record) {
+        return record.resource_id == resource_id;
+    });
     return found == records_.end() ? nullptr : &*found;
 }
 
@@ -149,9 +202,12 @@ struct RuntimeMaterialLibrary::State {
         std::unique_ptr<render::ShaderModule> fragment_shader;
         std::unique_ptr<render::GraphicsPipeline> pipeline;
         std::unique_ptr<render::Buffer> constants;
+        render::Texture* base_color_texture = nullptr;
+        std::unique_ptr<render::Sampler> sampler;
     };
 
     CookedRenderMaterialCatalog catalog;
+    RuntimeTextureLibrary textures;
     std::unordered_map<world::ResourceId, MaterialGpu, world::ResourceIdHash> materials;
 };
 
@@ -176,6 +232,7 @@ bool RuntimeMaterialLibrary::initialize(
         set_diagnostics(diagnostics, state_->catalog.diagnostics());
         return false;
     }
+    if (!state_->textures.initialize(device, content_root, diagnostics)) return false;
 
     for (const auto& record : state_->catalog.records()) {
         const auto vertex_manifest = (
@@ -186,32 +243,44 @@ bool RuntimeMaterialLibrary::initialize(
         ).lexically_normal();
         auto vertex = render::load_cooked_shader(device, vertex_manifest);
         if (!vertex) {
-            set_diagnostics(
-                diagnostics,
-                "Could not load vertex shader for render material `" +
-                    record.resource_id.value.to_string() + "`: " + vertex.diagnostics
-            );
+            set_diagnostics(diagnostics, "Could not load vertex shader for render material `" +
+                record.resource_id.value.to_string() + "`: " + vertex.diagnostics);
             return false;
         }
         auto fragment = render::load_cooked_shader(device, fragment_manifest);
         if (!fragment) {
-            set_diagnostics(
-                diagnostics,
-                "Could not load fragment shader for render material `" +
-                    record.resource_id.value.to_string() + "`: " + fragment.diagnostics
-            );
+            set_diagnostics(diagnostics, "Could not load fragment shader for render material `" +
+                record.resource_id.value.to_string() + "`: " + fragment.diagnostics);
             return false;
         }
+
+        const bool textured = record.asset.version >= render::render_material_asset_format_version_v2;
+        const bool resources_valid = textured
+            ? valid_v2_vertex_resources(*vertex.module) && valid_v2_fragment_resources(*fragment.module)
+            : valid_v1_resources(*vertex.module, 0U) && valid_v1_resources(*fragment.module, 1U);
         if (vertex.module->stage() != render::ShaderStage::vertex ||
-            fragment.module->stage() != render::ShaderStage::fragment ||
-            !valid_material_resources(*vertex.module, 0U) ||
-            !valid_material_resources(*fragment.module, 1U)) {
-            set_diagnostics(
-                diagnostics,
-                "Render material `" + record.resource_id.value.to_string() +
-                    "` does not satisfy the VICE b0 scene / b1 material shader contract."
-            );
+            fragment.module->stage() != render::ShaderStage::fragment || !resources_valid) {
+            set_diagnostics(diagnostics, "Render material `" + record.resource_id.value.to_string() +
+                "` does not satisfy its VICE shader binding contract.");
             return false;
+        }
+
+        render::Texture* base_color_texture = nullptr;
+        std::unique_ptr<render::Sampler> sampler;
+        if (textured) {
+            const world::ResourceId texture_id{world::PersistentId{record.asset.base_color_texture}};
+            base_color_texture = state_->textures.find(texture_id);
+            if (base_color_texture == nullptr) {
+                set_diagnostics(diagnostics, "Render material `" + record.resource_id.value.to_string() +
+                    "` references missing cooked texture `" + texture_id.value.to_string() + "`.");
+                return false;
+            }
+            sampler = create_material_sampler(device, record.asset);
+            if (!sampler) {
+                set_diagnostics(diagnostics, "Could not create sampler for render material `" +
+                    record.resource_id.value.to_string() + "`.");
+                return false;
+            }
         }
 
         render::GraphicsPipelineDesc pipeline_desc;
@@ -227,32 +296,25 @@ bool RuntimeMaterialLibrary::initialize(
         pipeline_desc.debug_name = "VICE Runtime project material pipeline";
         auto pipeline = device.create_graphics_pipeline(pipeline_desc);
         if (!pipeline) {
-            set_diagnostics(
-                diagnostics,
-                "Renderer rejected pipeline for render material `" +
-                    record.resource_id.value.to_string() + "`."
-            );
+            set_diagnostics(diagnostics, "Renderer rejected pipeline for render material `" +
+                record.resource_id.value.to_string() + "`.");
             return false;
         }
-        auto constants = create_material_constants(device, record.asset.base_color);
+        auto constants = create_material_constants(device, record.asset);
         if (!constants) {
-            set_diagnostics(
-                diagnostics,
-                "Could not create constants for render material `" +
-                    record.resource_id.value.to_string() + "`."
-            );
+            set_diagnostics(diagnostics, "Could not create constants for render material `" +
+                record.resource_id.value.to_string() + "`.");
             return false;
         }
 
-        state_->materials.emplace(
-            record.resource_id,
-            State::MaterialGpu{
-                .vertex_shader = std::move(vertex.module),
-                .fragment_shader = std::move(fragment.module),
-                .pipeline = std::move(pipeline),
-                .constants = std::move(constants),
-            }
-        );
+        state_->materials.emplace(record.resource_id, State::MaterialGpu{
+            .vertex_shader = std::move(vertex.module),
+            .fragment_shader = std::move(fragment.module),
+            .pipeline = std::move(pipeline),
+            .constants = std::move(constants),
+            .base_color_texture = base_color_texture,
+            .sampler = std::move(sampler),
+        });
     }
 
     if (diagnostics != nullptr) diagnostics->clear();
@@ -268,6 +330,8 @@ RuntimeMaterialBinding RuntimeMaterialLibrary::find(
     return RuntimeMaterialBinding{
         .pipeline = found->second.pipeline.get(),
         .constants = found->second.constants.get(),
+        .base_color_texture = found->second.base_color_texture,
+        .sampler = found->second.sampler.get(),
     };
 }
 
