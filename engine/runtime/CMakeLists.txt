@@ -6,6 +6,7 @@ add_library(
     src/module_paths.cpp
     src/runtime.cpp
     src/scene.cpp
+    src/texture_pipeline.cpp
 )
 
 add_library(VICE::Runtime ALIAS vice_runtime)

@@ -34,6 +34,20 @@ static constexpr std::array mesh_attributes{
         .format = render::VertexFormat::float32x3,
         .offset = 12,
     },
+    render::VertexAttributeDesc{
+        .semantic = "NORMAL",
+        .semantic_index = 0,
+        .shader_location = 2,
+        .format = render::VertexFormat::float32x3,
+        .offset = 24,
+    },
+    render::VertexAttributeDesc{
+        .semantic = "TEXCOORD",
+        .semantic_index = 0,
+        .shader_location = 3,
+        .format = render::VertexFormat::float32x2,
+        .offset = 36,
+    },
 };
 
 static constexpr std::array mesh_layouts{
@@ -69,12 +83,29 @@ constexpr render::ShaderBindingKey material_binding{
     .array_element = 0,
 };
 
+constexpr render::ShaderBindingKey base_color_texture_binding{
+    .register_class = render::ShaderRegisterClass::shader_resource,
+    .binding = 0,
+    .space = 0,
+    .array_element = 0,
+};
+
+constexpr render::ShaderBindingKey material_sampler_binding{
+    .register_class = render::ShaderRegisterClass::sampler,
+    .binding = 0,
+    .space = 0,
+    .array_element = 0,
+};
+
 struct SceneConstants {
     math::Mat4 view_projection{};
     math::Mat4 model{};
+    float camera_position[4]{};
+    float light_direction[4]{};
+    float light_color[4]{};
 };
 
-static_assert(sizeof(SceneConstants) == 128U);
+static_assert(sizeof(SceneConstants) == 176U);
 
 constexpr std::string_view hlsl_source = R"(
 cbuffer SceneFrame : register(b0) {
@@ -205,7 +236,12 @@ fragment float4 vice_runtime_mesh_fs(VertexOut input [[stage_in]]) {
     return std::sqrt(radius_squared);
 }
 
-[[nodiscard]] math::Mat4 fallback_view_projection(
+struct FallbackCamera {
+    math::Mat4 view_projection{};
+    math::Vec3 position{};
+};
+
+[[nodiscard]] FallbackCamera fallback_camera(
     const std::span<const RenderMeshInstance> instances,
     const CookedMeshCatalog& catalog,
     const float aspect
@@ -213,10 +249,13 @@ fragment float4 vice_runtime_mesh_fs(VertexOut input [[stage_in]]) {
     if (instances.empty()) {
         const math::Vec3 target{};
         const math::Vec3 eye{6.0F, 4.5F, 8.0F};
-        return math::multiply(
-            math::perspective_rh_zo(runtime_fov, aspect, 0.05F, 250.0F),
-            math::look_at_rh(eye, target, {0.0F, 1.0F, 0.0F})
-        );
+        return FallbackCamera{
+            .view_projection = math::multiply(
+                math::perspective_rh_zo(runtime_fov, aspect, 0.05F, 250.0F),
+                math::look_at_rh(eye, target, {0.0F, 1.0F, 0.0F})
+            ),
+            .position = eye,
+        };
     }
 
     math::Vec3 minimum{
@@ -265,10 +304,13 @@ fragment float4 vice_runtime_mesh_fs(VertexOut input [[stage_in]]) {
     const math::Vec3 eye = add(target, scaled(direction, distance));
     const float far_plane = std::max(250.0F, distance + radius * 6.0F);
 
-    return math::multiply(
-        math::perspective_rh_zo(runtime_fov, aspect, 0.05F, far_plane),
-        math::look_at_rh(eye, target, {0.0F, 1.0F, 0.0F})
-    );
+    return FallbackCamera{
+        .view_projection = math::multiply(
+            math::perspective_rh_zo(runtime_fov, aspect, 0.05F, far_plane),
+            math::look_at_rh(eye, target, {0.0F, 1.0F, 0.0F})
+        ),
+        .position = eye,
+    };
 }
 
 void set_diagnostics(std::string* const diagnostics, std::string message) {
@@ -428,6 +470,7 @@ std::optional<RuntimeCameraView> primary_camera_view(
     return RuntimeCameraView{
         .entity = *persistent_id,
         .camera = *camera,
+        .position = eye,
         .view_projection = math::multiply(
             math::perspective_rh_zo(
                 camera->vertical_fov_radians,
@@ -639,9 +682,13 @@ bool RuntimeSceneRenderer::render(
     const float aspect = static_cast<float>(metrics.drawable_width) /
         static_cast<float>(std::max(1U, metrics.drawable_height));
     const auto authored_camera = primary_camera_view(world, aspect);
+    const auto fallback = fallback_camera(instances, state_->catalog, aspect);
     const math::Mat4 view_projection = authored_camera.has_value()
         ? authored_camera->view_projection
-        : fallback_view_projection(instances, state_->catalog, aspect);
+        : fallback.view_projection;
+    const math::Vec3 camera_position = authored_camera.has_value()
+        ? authored_camera->position
+        : fallback.position;
 
     auto commands = state_->device->create_command_list();
     if (!commands) {
@@ -680,6 +727,9 @@ bool RuntimeSceneRenderer::render(
         const SceneConstants constants{
             .view_projection = view_projection,
             .model = runtime_model_matrix(instance),
+            .camera_position = {camera_position.x, camera_position.y, camera_position.z, 1.0F},
+            .light_direction = {0.431934F, 0.863868F, 0.259161F, 0.0F},
+            .light_color = {4.2F, 4.0F, 3.7F, 1.0F},
         };
         if (!constants_iterator->second->write(0, std::as_bytes(std::span{&constants, 1}))) {
             set_diagnostics(diagnostics, "VICE Runtime could not update scene constants.");
@@ -687,11 +737,10 @@ bool RuntimeSceneRenderer::render(
         }
 
         render::GraphicsPipeline* pipeline = state_->pipeline.get();
-        render::Buffer* material_constants = nullptr;
+        detail::RuntimeMaterialBinding material_state{};
         if (instance.material.has_value()) {
-            const auto material = state_->materials.find(*instance.material);
-            pipeline = material.pipeline;
-            material_constants = material.constants;
+            material_state = state_->materials.find(*instance.material);
+            pipeline = material_state.pipeline;
         }
         if (pipeline == nullptr || !commands->set_graphics_pipeline(*pipeline)) {
             set_diagnostics(diagnostics, "VICE Runtime could not bind a scene material pipeline.");
@@ -713,16 +762,29 @@ bool RuntimeSceneRenderer::render(
             );
             return false;
         }
-        if (material_constants != nullptr &&
+        if (material_state.constants != nullptr &&
             !commands->set_graphics_constant_buffer(
                 material_binding,
-                *material_constants,
+                *material_state.constants,
                 0,
-                sizeof(float) * 4U
+                sizeof(float) * 8U
             )) {
             set_diagnostics(
                 diagnostics,
                 "VICE Runtime could not bind render material constants for mesh `" +
+                    instance.mesh.value.to_string() + "`."
+            );
+            return false;
+        }
+        if (material_state.base_color_texture != nullptr &&
+            (!commands->set_graphics_texture(
+                base_color_texture_binding,
+                *material_state.base_color_texture
+            ) || material_state.sampler == nullptr ||
+            !commands->set_graphics_sampler(material_sampler_binding, *material_state.sampler))) {
+            set_diagnostics(
+                diagnostics,
+                "VICE Runtime could not bind the PBR texture and sampler for mesh `" +
                     instance.mesh.value.to_string() + "`."
             );
             return false;
