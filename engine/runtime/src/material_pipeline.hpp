@@ -3,6 +3,7 @@
 #include <vice/render/rhi.hpp>
 #include <vice/runtime/scene.hpp>
 
+#include <cstdint>
 #include <filesystem>
 #include <memory>
 #include <span>
@@ -15,7 +16,7 @@ struct RuntimeMaterialBinding {
     render::Buffer* constants = nullptr;
     render::Texture* base_color_texture = nullptr;
     render::Sampler* sampler = nullptr;
-    bool supports_directional_shadow = false;
+    std::uint32_t directional_shadow_cascade_count = 0;
 };
 
 class RuntimeMaterialLibrary final {
