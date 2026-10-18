@@ -16,6 +16,7 @@ namespace vice::editor {
 enum class AssetKind : std::uint8_t {
     world,
     mesh,
+    render_material,
     collision,
     rigid_material,
     shader_source,
