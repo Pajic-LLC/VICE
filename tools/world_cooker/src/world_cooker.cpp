@@ -231,6 +231,54 @@ ParseResult parse_source_manifest(const std::string_view source) {
                     continue;
                 }
 
+                if (metadata == "light") {
+                    if (entity.light.has_value()) {
+                        fail("entity light is duplicated.");
+                        return result;
+                    }
+                    if (!entity.spatial_state.has_value()) {
+                        fail("light requires a spatial entity.");
+                        return result;
+                    }
+                    std::string type_text;
+                    std::string enabled_text;
+                    world::Light light;
+                    if (!(values >> type_text >> light.color.red >> light.color.green >>
+                            light.color.blue >> light.intensity)) {
+                        fail("entity light is incomplete.");
+                        return result;
+                    }
+                    if (type_text == "directional") {
+                        light.type = world::LightType::directional;
+                        light.range = 0.0F;
+                    } else if (type_text == "point") {
+                        light.type = world::LightType::point;
+                        if (!(values >> light.range)) {
+                            fail("point light range is missing.");
+                            return result;
+                        }
+                    } else {
+                        fail("light type must be `directional` or `point`.");
+                        return result;
+                    }
+                    if (!(values >> enabled_text)) {
+                        fail("light enabled state is missing.");
+                        return result;
+                    }
+                    if (enabled_text == "enabled") light.enabled = true;
+                    else if (enabled_text == "disabled") light.enabled = false;
+                    else {
+                        fail("light state must be `enabled` or `disabled`.");
+                        return result;
+                    }
+                    if (!world::valid(light)) {
+                        fail("entity light values are invalid.");
+                        return result;
+                    }
+                    entity.light = light;
+                    continue;
+                }
+
                 if (metadata == "resource") {
                     std::string role_text;
                     std::string resource_text;

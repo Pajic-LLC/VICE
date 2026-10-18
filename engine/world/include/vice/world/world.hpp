@@ -3,6 +3,7 @@
 #include <vice/world/camera.hpp>
 #include <vice/world/component.hpp>
 #include <vice/world/entity.hpp>
+#include <vice/world/light.hpp>
 #include <vice/world/persistent_id.hpp>
 #include <vice/world/relation.hpp>
 #include <vice/world/resource.hpp>
@@ -72,6 +73,10 @@ public:
     [[nodiscard]] std::optional<Camera> camera(EntityId entity) const noexcept;
     [[nodiscard]] std::optional<EntityId> primary_camera() const noexcept;
 
+    bool set_light(EntityId entity, Light light);
+    bool clear_light(EntityId entity);
+    [[nodiscard]] std::optional<Light> light(EntityId entity) const noexcept;
+
     [[nodiscard]] std::optional<SpatialState> spatial_state(EntityId entity) const noexcept;
     [[nodiscard]] std::optional<AuthoredTransform> authored_transform(EntityId entity) const noexcept;
     [[nodiscard]] std::optional<LocalPosition> local_position(EntityId entity) const noexcept;
@@ -87,6 +92,7 @@ private:
         std::optional<SpatialState> spatial_state;
         std::optional<AuthoredTransform> authored_transform;
         std::optional<Camera> camera;
+        std::optional<Light> light;
         std::vector<ResourceReference> resource_references;
         std::uint32_t generation = 1;
         bool alive = false;

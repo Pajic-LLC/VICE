@@ -96,6 +96,14 @@ void append_id(std::vector<std::byte>& bytes, const vice::world::PersistentId& i
         append_f32(payload, 1.0F);
         append_f32(payload, 0.5F);
     }
+    if (version >= 4U) {
+        append_u8(payload, 1U);
+        append_u8(payload, static_cast<std::uint8_t>(CameraProjection::perspective));
+        append_f32(payload, 1.0471975512F);
+        append_f32(payload, 0.05F);
+        append_f32(payload, 500.0F);
+        append_u8(payload, 1U);
+    }
     if (version >= 3U) {
         append_u32(payload, 0U);
     }
@@ -147,6 +155,9 @@ relation 10000000-0000-4000-8000-000000000001 40000000-0000-4000-8000-0000000000
     assert(!parsed.snapshot->entities[0].authored_transform.has_value());
     assert(parsed.snapshot->entities[0].camera.has_value());
     assert(parsed.snapshot->entities[0].camera->primary);
+    assert(parsed.snapshot->entities[0].light.has_value());
+    assert(parsed.snapshot->entities[0].light->type == world::LightType::directional);
+    assert(parsed.snapshot->entities[0].light->intensity == 2.5F);
     assert(std::abs(parsed.snapshot->entities[0].camera->vertical_fov_radians - 1.2566371F) < 0.0001F);
     assert(parsed.snapshot->entities[0].resource_references.empty());
     assert(parsed.snapshot->entities[1].authored_transform.has_value());
@@ -195,6 +206,8 @@ relation 10000000-0000-4000-8000-000000000001 40000000-0000-4000-8000-0000000000
     assert(restored.camera(*player).has_value());
     assert(restored.camera(*player)->primary);
     assert(restored.primary_camera() == player);
+    assert(restored.light(*player).has_value());
+    assert(restored.light(*player)->color.green == 0.9F);
     assert(!restored.camera(*cube).has_value());
     assert(restored.resource_reference(*cube, world::ResourceRole::render_mesh) ==
         std::optional{world::ResourceId{*mesh_id}});
@@ -203,13 +216,19 @@ relation 10000000-0000-4000-8000-000000000001 40000000-0000-4000-8000-0000000000
     assert(round_trip);
     assert(round_trip.bytes == encoded.bytes);
 
-    for (const std::uint32_t legacy_version : {1U, 2U, 3U}) {
+    for (const std::uint32_t legacy_version : {1U, 2U, 3U, 4U}) {
         const auto legacy_bytes = legacy_snapshot(legacy_version);
         const auto legacy = world::decode_world_snapshot(legacy_bytes);
         assert(legacy.snapshot.has_value());
         assert(legacy.snapshot->entities.size() == 1U);
         assert(legacy.snapshot->entities[0].spatial_state.has_value());
-        assert(!legacy.snapshot->entities[0].camera.has_value());
+        if (legacy_version >= 4U) {
+            assert(legacy.snapshot->entities[0].camera.has_value());
+            assert(legacy.snapshot->entities[0].camera->primary);
+        } else {
+            assert(!legacy.snapshot->entities[0].camera.has_value());
+        }
+        assert(!legacy.snapshot->entities[0].light.has_value());
         assert(legacy.snapshot->entities[0].resource_references.empty());
         if (legacy_version == 1U) {
             assert(!legacy.snapshot->entities[0].authored_transform.has_value());
@@ -259,6 +278,20 @@ region 1 1 0 0 0 0 0 0 full none
 entity 10000000-0000-4000-8000-000000000001 spatial 0 0 0 1 camera perspective 60 1 0.5 primary
 )";
     assert(!tools::world_cooker::parse_source_manifest(invalid_camera).snapshot.has_value());
+
+    constexpr std::string_view invalid_light = R"(
+vice-world-source 1
+region 1 1 0 0 0 0 0 0 full none
+entity 10000000-0000-4000-8000-000000000001 spatial 0 0 0 1 light point 1 1 1 2 0 enabled
+)";
+    assert(!tools::world_cooker::parse_source_manifest(invalid_light).snapshot.has_value());
+
+    constexpr std::string_view duplicate_light = R"(
+vice-world-source 1
+region 1 1 0 0 0 0 0 0 full none
+entity 10000000-0000-4000-8000-000000000001 spatial 0 0 0 1 light directional 1 1 1 1 enabled light directional 1 1 1 1 enabled
+)";
+    assert(!tools::world_cooker::parse_source_manifest(duplicate_light).snapshot.has_value());
 
     constexpr std::string_view duplicate_primary_camera = R"(
 vice-world-source 1
