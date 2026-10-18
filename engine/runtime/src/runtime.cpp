@@ -139,7 +139,10 @@ LoadResult load_project(const LaunchPaths& launch) {
     result.project = LoadedProject{
         .manifest = *loaded_manifest.manifest,
         .manifest_path = launch.manifest,
-        .cooked_content_root = launch.cooked_cache_root,
+        .cooked_content_root = project::resolve_cooked_root(
+            launch.cooked_cache_root,
+            *loaded_manifest.manifest
+        ),
         .startup_world_path = startup_world,
         .world = std::move(runtime_world),
     };
