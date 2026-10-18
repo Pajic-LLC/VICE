@@ -42,6 +42,7 @@ int main() {
 
     const auto material_id = required_id("70000000-0000-4000-8000-000000000001");
     render::RenderMaterialAsset asset;
+    asset.version = render::render_material_asset_format_version_v1;
     std::copy(material_id.bytes().begin(), material_id.bytes().end(), asset.stable_id.begin());
     asset.source_fingerprint = 42U;
     asset.base_color = {0.2F, 0.4F, 0.8F, 1.0F};
