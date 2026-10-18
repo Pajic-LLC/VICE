@@ -6,6 +6,7 @@
 #include <array>
 #include <bit>
 #include <cassert>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
@@ -95,6 +96,9 @@ void append_id(std::vector<std::byte>& bytes, const vice::world::PersistentId& i
         append_f32(payload, 1.0F);
         append_f32(payload, 0.5F);
     }
+    if (version >= 3U) {
+        append_u32(payload, 0U);
+    }
 
     std::vector<std::byte> bytes;
     constexpr std::array magic{
@@ -125,7 +129,7 @@ resource 30000000-0000-4000-8000-000000000001
 region 2 202 1000 0 0 1 0 0 reduced bounds 0 -10 -10 100 10 10
 region 1 101 0 0 0 0 0 0 full bounds 0 -10 -10 100 10 10
 entity 10000000-0000-4000-8000-000000000002 spatial 1010 2 3 2 transform 0 0 0.70710678 0.70710678 1.5 2 0.75 resource render_mesh 30000000-0000-4000-8000-000000000001
-entity 10000000-0000-4000-8000-000000000001 spatial 5 1 0 1
+entity 10000000-0000-4000-8000-000000000001 spatial 5 1 0 1 camera perspective 72 0.1 750 primary
 relation 10000000-0000-4000-8000-000000000001 40000000-0000-4000-8000-000000000001 10000000-0000-4000-8000-000000000002
 )";
 
@@ -141,8 +145,12 @@ relation 10000000-0000-4000-8000-000000000001 40000000-0000-4000-8000-0000000000
     assert(parsed.snapshot->regions[1].id == world::RegionId{2});
     assert(parsed.snapshot->regions[1].bounds.has_value());
     assert(!parsed.snapshot->entities[0].authored_transform.has_value());
+    assert(parsed.snapshot->entities[0].camera.has_value());
+    assert(parsed.snapshot->entities[0].camera->primary);
+    assert(std::abs(parsed.snapshot->entities[0].camera->vertical_fov_radians - 1.2566371F) < 0.0001F);
     assert(parsed.snapshot->entities[0].resource_references.empty());
     assert(parsed.snapshot->entities[1].authored_transform.has_value());
+    assert(!parsed.snapshot->entities[1].camera.has_value());
     assert((parsed.snapshot->entities[1].authored_transform->scale == world::AuthoredScale{1.5F, 2.0F, 0.75F}));
     assert(parsed.snapshot->entities[1].resource_references.size() == 1U);
     assert(parsed.snapshot->entities[1].resource_references[0].role == world::ResourceRole::render_mesh);
@@ -184,6 +192,10 @@ relation 10000000-0000-4000-8000-000000000001 40000000-0000-4000-8000-0000000000
     assert(!restored.authored_transform(*player).has_value());
     assert(restored.authored_transform(*cube).has_value());
     assert((restored.authored_transform(*cube)->scale == world::AuthoredScale{1.5F, 2.0F, 0.75F}));
+    assert(restored.camera(*player).has_value());
+    assert(restored.camera(*player)->primary);
+    assert(restored.primary_camera() == player);
+    assert(!restored.camera(*cube).has_value());
     assert(restored.resource_reference(*cube, world::ResourceRole::render_mesh) ==
         std::optional{world::ResourceId{*mesh_id}});
 
@@ -191,12 +203,13 @@ relation 10000000-0000-4000-8000-000000000001 40000000-0000-4000-8000-0000000000
     assert(round_trip);
     assert(round_trip.bytes == encoded.bytes);
 
-    for (const std::uint32_t legacy_version : {1U, 2U}) {
+    for (const std::uint32_t legacy_version : {1U, 2U, 3U}) {
         const auto legacy_bytes = legacy_snapshot(legacy_version);
         const auto legacy = world::decode_world_snapshot(legacy_bytes);
         assert(legacy.snapshot.has_value());
         assert(legacy.snapshot->entities.size() == 1U);
         assert(legacy.snapshot->entities[0].spatial_state.has_value());
+        assert(!legacy.snapshot->entities[0].camera.has_value());
         assert(legacy.snapshot->entities[0].resource_references.empty());
         if (legacy_version == 1U) {
             assert(!legacy.snapshot->entities[0].authored_transform.has_value());
@@ -239,6 +252,21 @@ region 1 1 0 0 0 0 0 0 full none
 entity 10000000-0000-4000-8000-000000000001 spatial 0 0 0 1 transform 0 0 0 2 1 1 1
 )";
     assert(!tools::world_cooker::parse_source_manifest(invalid_transform).snapshot.has_value());
+
+    constexpr std::string_view invalid_camera = R"(
+vice-world-source 1
+region 1 1 0 0 0 0 0 0 full none
+entity 10000000-0000-4000-8000-000000000001 spatial 0 0 0 1 camera perspective 60 1 0.5 primary
+)";
+    assert(!tools::world_cooker::parse_source_manifest(invalid_camera).snapshot.has_value());
+
+    constexpr std::string_view duplicate_primary_camera = R"(
+vice-world-source 1
+region 1 1 0 0 0 0 0 0 full none
+entity 10000000-0000-4000-8000-000000000001 spatial 0 0 0 1 camera perspective 60 0.05 500 primary
+entity 10000000-0000-4000-8000-000000000002 spatial 1 0 0 1 camera perspective 60 0.05 500 primary
+)";
+    assert(!tools::world_cooker::parse_source_manifest(duplicate_primary_camera).snapshot.has_value());
 
     constexpr std::string_view dangling_resource = R"(
 vice-world-source 1

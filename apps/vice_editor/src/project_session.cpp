@@ -240,7 +240,8 @@ ProjectCreateResult create_project(const ProjectCreateRequest& request) {
 
     const std::string world_text =
         "vice-world-source 1\n\n"
-        "region 1 1 0 0 0 0 0 0 full bounds -100 -100 -100 100 100 100\n";
+        "region 1 1 0 0 0 0 0 0 full bounds -100 -100 -100 100 100 100\n"
+        "entity a0000000-0000-4000-8000-000000000001 spatial 0 3 8 1 camera perspective 60 0.05 1000 primary\n";
 
     const std::string game_text =
         "#include <vice/runtime/module_api.hpp>\n\n"

@@ -1,6 +1,7 @@
 #include <vice/runtime/scene.hpp>
 #include <vice/tools/mesh_cooker.hpp>
 
+#include <cmath>
 #include <cstdlib>
 #include <filesystem>
 #include <iostream>
@@ -13,6 +14,16 @@ void require(const bool condition, const std::string_view message) {
     if (condition) return;
     std::cerr << "runtime scene test failed: " << message << '\n';
     std::exit(1);
+}
+
+[[nodiscard]] bool matrix_differs(
+    const vice::math::Mat4& left,
+    const vice::math::Mat4& right
+) noexcept {
+    for (std::size_t index = 0; index < left.values.size(); ++index) {
+        if (std::abs(left.values[index] - right.values[index]) > 0.0001F) return true;
+    }
+    return false;
 }
 
 } // namespace
@@ -143,6 +154,75 @@ int main() {
     require(instances.size() == 1U, "render instance remains after movement");
     model = runtime::runtime_model_matrix(instances.front());
     require(model(0, 3) == 8.0F && model(1, 3) == 9.0F && model(2, 3) == 10.0F, "current World position drives model");
+
+    require(!runtime::primary_camera_view(world_state, 16.0F / 9.0F).has_value(), "legacy World has no authored camera view");
+
+    const auto camera_id = world::PersistentId::parse("52000000-0000-4000-8000-000000000003");
+    require(camera_id.has_value(), "camera entity ID parse");
+    const auto camera_entity = world_state.create_entity(*camera_id);
+    require(camera_entity.has_value(), "camera entity creates");
+    require(
+        world_state.set_spatial_state(
+            *camera_entity,
+            world::SpatialState{
+                .global_position = {0.0, 2.0, 8.0},
+                .region = region.id,
+            }
+        ),
+        "camera spatial state"
+    );
+    require(
+        world_state.set_camera(
+            *camera_entity,
+            world::Camera{
+                .projection = world::CameraProjection::perspective,
+                .vertical_fov_radians = 1.0471975512F,
+                .near_plane = 0.1F,
+                .far_plane = 500.0F,
+                .primary = true,
+            }
+        ),
+        "primary camera authored"
+    );
+
+    const auto first_camera = runtime::primary_camera_view(world_state, 16.0F / 9.0F);
+    require(first_camera.has_value(), "runtime resolves authored primary camera");
+    require(first_camera->entity == *camera_id, "runtime camera identity");
+    require(first_camera->camera.primary, "runtime camera retains primary flag");
+
+    require(
+        world_state.set_spatial_state(
+            *camera_entity,
+            world::SpatialState{
+                .global_position = {3.0, 4.0, 9.0},
+                .region = region.id,
+            }
+        ),
+        "gameplay moves camera entity"
+    );
+    const auto moved_camera = runtime::primary_camera_view(world_state, 16.0F / 9.0F);
+    require(moved_camera.has_value(), "runtime camera remains after movement");
+    require(
+        matrix_differs(first_camera->view_projection, moved_camera->view_projection),
+        "current World camera position drives view matrix"
+    );
+
+    require(
+        world_state.set_authored_transform(
+            *camera_entity,
+            world::AuthoredTransform{
+                .rotation = {0.0F, 0.25881904F, 0.0F, 0.96592583F},
+                .scale = {1.0F, 1.0F, 1.0F},
+            }
+        ),
+        "gameplay rotates camera entity"
+    );
+    const auto rotated_camera = runtime::primary_camera_view(world_state, 16.0F / 9.0F);
+    require(rotated_camera.has_value(), "runtime camera remains after rotation");
+    require(
+        matrix_differs(moved_camera->view_projection, rotated_camera->view_projection),
+        "current authored camera rotation drives view matrix"
+    );
 
     std::filesystem::remove_all(root, error);
     require(!error, "temporary cleanup");

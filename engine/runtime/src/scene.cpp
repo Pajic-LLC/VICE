@@ -135,6 +135,22 @@ fragment float4 vice_runtime_mesh_fs(VertexOut input [[stage_in]]) {
     return {value.x * scale, value.y * scale, value.z * scale};
 }
 
+[[nodiscard]] math::Vec3 rotate_vector(
+    const world::AuthoredRotation rotation,
+    const math::Vec3 value
+) noexcept {
+    const math::Vec3 axis{rotation.x, rotation.y, rotation.z};
+    const float axis_dot = math::dot(axis, value);
+    const float axis_length_squared = math::dot(axis, axis);
+    return add(
+        add(
+            scaled(axis, 2.0F * axis_dot),
+            scaled(value, rotation.w * rotation.w - axis_length_squared)
+        ),
+        scaled(math::cross(axis, value), 2.0F * rotation.w)
+    );
+}
+
 [[nodiscard]] math::Mat4 scale_matrix(const world::AuthoredScale scale) noexcept {
     math::Mat4 result = math::identity();
     result(0, 0) = scale.x;
@@ -366,6 +382,49 @@ math::Mat4 runtime_model_matrix(const RenderMeshInstance& instance) noexcept {
     return math::multiply(result, scale_matrix(instance.authored.scale));
 }
 
+std::optional<RuntimeCameraView> primary_camera_view(
+    const world::World& world,
+    const float aspect_ratio
+) noexcept {
+    if (!std::isfinite(aspect_ratio) || aspect_ratio <= 0.0F) {
+        return std::nullopt;
+    }
+    const auto entity = world.primary_camera();
+    if (!entity.has_value()) {
+        return std::nullopt;
+    }
+    const auto camera = world.camera(*entity);
+    const auto spatial = world.spatial_state(*entity);
+    const auto persistent_id = world.persistent_id(*entity);
+    if (!camera.has_value() || !spatial.has_value() || !persistent_id.has_value()) {
+        return std::nullopt;
+    }
+
+    const auto transform = world.authored_transform(*entity).value_or(world::AuthoredTransform{});
+    const math::Vec3 eye{
+        static_cast<float>(spatial->global_position.x),
+        static_cast<float>(spatial->global_position.y),
+        static_cast<float>(spatial->global_position.z),
+    };
+    const math::Vec3 forward = math::normalize(rotate_vector(transform.rotation, {0.0F, 0.0F, -1.0F}));
+    const math::Vec3 up = math::normalize(rotate_vector(transform.rotation, {0.0F, 1.0F, 0.0F}));
+    const math::Vec3 target = add(eye, forward);
+
+    return RuntimeCameraView{
+        .entity = *persistent_id,
+        .camera = *camera,
+        .view_projection = math::multiply(
+            math::perspective_rh_zo(
+                camera->vertical_fov_radians,
+                aspect_ratio,
+                camera->near_plane,
+                camera->far_plane
+            ),
+            math::look_at_rh(eye, target, up)
+        ),
+    };
+}
+
 struct RuntimeSceneRenderer::State {
     struct MeshGpu {
         std::unique_ptr<render::Buffer> vertices;
@@ -551,7 +610,10 @@ bool RuntimeSceneRenderer::render(
 
     const float aspect = static_cast<float>(metrics.drawable_width) /
         static_cast<float>(std::max(1U, metrics.drawable_height));
-    const math::Mat4 view_projection = fallback_view_projection(instances, state_->catalog, aspect);
+    const auto authored_camera = primary_camera_view(world, aspect);
+    const math::Mat4 view_projection = authored_camera.has_value()
+        ? authored_camera->view_projection
+        : fallback_view_projection(instances, state_->catalog, aspect);
 
     auto commands = state_->device->create_command_list();
     if (!commands) {

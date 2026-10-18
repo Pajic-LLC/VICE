@@ -1,5 +1,6 @@
 #pragma once
 
+#include <vice/world/camera.hpp>
 #include <vice/world/component.hpp>
 #include <vice/world/persistent_id.hpp>
 #include <vice/world/resource.hpp>
@@ -14,6 +15,7 @@ struct SnapshotEntity {
     PersistentId persistent_id{};
     std::optional<SpatialState> spatial_state;
     std::optional<AuthoredTransform> authored_transform;
+    std::optional<Camera> camera;
     std::vector<ResourceReference> resource_references;
 };
 

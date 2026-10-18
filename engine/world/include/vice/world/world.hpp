@@ -1,5 +1,6 @@
 #pragma once
 
+#include <vice/world/camera.hpp>
 #include <vice/world/component.hpp>
 #include <vice/world/entity.hpp>
 #include <vice/world/persistent_id.hpp>
@@ -66,6 +67,11 @@ public:
     bool set_authored_transform(EntityId entity, AuthoredTransform transform);
     bool clear_authored_transform(EntityId entity);
 
+    bool set_camera(EntityId entity, Camera camera);
+    bool clear_camera(EntityId entity);
+    [[nodiscard]] std::optional<Camera> camera(EntityId entity) const noexcept;
+    [[nodiscard]] std::optional<EntityId> primary_camera() const noexcept;
+
     [[nodiscard]] std::optional<SpatialState> spatial_state(EntityId entity) const noexcept;
     [[nodiscard]] std::optional<AuthoredTransform> authored_transform(EntityId entity) const noexcept;
     [[nodiscard]] std::optional<LocalPosition> local_position(EntityId entity) const noexcept;
@@ -80,6 +86,7 @@ private:
         PersistentId persistent_id;
         std::optional<SpatialState> spatial_state;
         std::optional<AuthoredTransform> authored_transform;
+        std::optional<Camera> camera;
         std::vector<ResourceReference> resource_references;
         std::uint32_t generation = 1;
         bool alive = false;

@@ -207,6 +207,7 @@ WorldSnapshot World::snapshot() const {
             .persistent_id = slot.persistent_id,
             .spatial_state = slot.spatial_state,
             .authored_transform = slot.authored_transform,
+            .camera = slot.camera,
             .resource_references = slot.resource_references,
         };
         std::sort(
@@ -291,6 +292,10 @@ bool World::restore(const WorldSnapshot& snapshot_data) {
         }
         if (entity_record.authored_transform.has_value() &&
             !restored.set_authored_transform(*entity, *entity_record.authored_transform)) {
+            return false;
+        }
+        if (entity_record.camera.has_value() &&
+            !restored.set_camera(*entity, *entity_record.camera)) {
             return false;
         }
         for (const auto reference : entity_record.resource_references) {
