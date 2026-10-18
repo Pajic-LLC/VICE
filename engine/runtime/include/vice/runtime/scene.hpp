@@ -8,6 +8,7 @@
 
 #include <filesystem>
 #include <memory>
+#include <optional>
 #include <span>
 #include <string>
 #include <vector>
@@ -39,11 +40,22 @@ struct RenderMeshInstance {
     world::AuthoredTransform authored{};
 };
 
+struct RuntimeCameraView {
+    world::PersistentId entity{};
+    world::Camera camera{};
+    math::Mat4 view_projection{};
+};
+
 [[nodiscard]] std::vector<RenderMeshInstance> collect_render_mesh_instances(
     const world::World& world
 );
 
 [[nodiscard]] math::Mat4 runtime_model_matrix(const RenderMeshInstance& instance) noexcept;
+
+[[nodiscard]] std::optional<RuntimeCameraView> primary_camera_view(
+    const world::World& world,
+    float aspect_ratio
+) noexcept;
 
 class RuntimeSceneRenderer final {
 public:
