@@ -49,8 +49,8 @@ int main(const int argc, char** argv) {
     vice::runtime::GameModuleLoadResult project_game;
 
     if (staged_mode) {
-        const auto module_path = vice::runtime::staged_game_module_path(
-            launch.manifest.parent_path() / "game-target",
+        const auto module_path = vice::runtime::game_module_path(
+            launch.manifest.parent_path(),
             loaded.project->manifest.game_target
         );
         std::error_code error;
