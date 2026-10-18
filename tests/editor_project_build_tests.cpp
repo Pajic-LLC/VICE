@@ -59,6 +59,8 @@ int main() {
     const auto manifest_path = project_root / "game.viceproj";
     const auto startup_world = project_root / "assets" / "worlds" / "main.vworld";
     const auto game_source = project_root / "game" / "game.cpp";
+    const auto texture_source = project_root / "assets" / "textures" / "surface.vtex";
+    const auto texture_image = project_root / "assets" / "textures" / "surface.ppm";
     const auto cache_base = root / "cache";
     const auto state_base = root / "state";
 
@@ -77,6 +79,17 @@ int main() {
         "vice-world-source 1\n\n"
         "region 1 1 0 0 0 0 0 0 full bounds -10 -10 -10 10 10 10\n"
     );
+    write_text(
+        texture_image,
+        "P3\n2 1\n255\n255 32 16  16 96 255\n"
+    );
+    write_text(
+        texture_source,
+        "vice-texture-source 1\n"
+        "id 71000000-0000-4000-8000-000000000133\n"
+        "image \"textures/surface.ppm\"\n"
+        "color_space srgb\n"
+    );
 
     std::string diagnostics;
     auto session = editor::ProjectSession::open(
@@ -92,6 +105,7 @@ int main() {
     require(static_cast<bool>(built), "project build succeeds");
     require(built.diagnostics.empty(), "project build diagnostics");
     require(built.game_module.empty(), "legacy project without game source has no module");
+    require(built.texture_count == 1U, "project build cooks one texture");
     const auto expected_cooked = (
         cache_base /
         "43000000-0000-4000-8000-000000000133" /
@@ -173,6 +187,16 @@ int main() {
     require(std::filesystem::is_regular_file(expected_runtime_world), "runtime startup World exists");
     const auto runtime_world = world::load_world_snapshot(expected_runtime_world);
     require(runtime_world.snapshot.has_value(), "runtime startup World loads");
+
+    const auto expected_runtime_texture = (
+        expected_output /
+        "content" /
+        "43000000-0000-4000-8000-000000000133" /
+        "textures" /
+        "surface.vtexc"
+    ).lexically_normal();
+    require(game_build.texture_count == 1U, "game build reports one cooked texture");
+    require(std::filesystem::is_regular_file(expected_runtime_texture), "runtime texture is staged");
 
     const auto game_request = editor::game_run_request(game_build);
     require(game_request.executable == game_build.game_executable, "game run executable");
