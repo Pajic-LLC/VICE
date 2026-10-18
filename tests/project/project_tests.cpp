@@ -4,6 +4,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <string>
 #include <string_view>
 
 namespace {
@@ -25,6 +26,7 @@ constexpr std::string_view canonical_manifest = R"(vice-project 1
 id 40000000-0000-4000-8000-000000000001
 name "VICE Lab"
 game_name "VICE Lab"
+game_target "vice-lab"
 assets "assets"
 startup_world "worlds/vice_lab.vworld"
 )";
@@ -39,6 +41,7 @@ int main() {
     require(parsed.diagnostics.empty(), "legacy manifest diagnostics");
     require(parsed.manifest->name == "VICE Lab", "project name");
     require(parsed.manifest->game_name == "VICE Lab", "legacy game name fallback");
+    require(parsed.manifest->game_target == "vice-lab", "legacy game target fallback");
     require(parsed.manifest->asset_root.generic_string() == "assets", "asset root");
     require(
         parsed.manifest->startup_world.generic_string() == "worlds/vice_lab.vworld",
@@ -51,16 +54,28 @@ int main() {
     require(reparsed.manifest.has_value(), "canonical parse");
     require(*reparsed.manifest == *parsed.manifest, "canonical round trip");
 
+    require(default_game_target("Palma Bay") == "palma-bay", "default game target");
+    require(default_game_target("  VICE...Game  ") == "vice-game", "default target separators");
+    require(valid_game_target("palma-bay"), "portable game target");
+    require(valid_game_target("Game_2.preview"), "portable mixed game target");
+    require(!valid_game_target("-game"), "leading punctuation target rejected");
+    require(!valid_game_target("game/preview"), "path separator target rejected");
+    require(!valid_game_target("NUL"), "Windows reserved target rejected");
+    require(!valid_game_target("con.preview"), "Windows reserved target stem rejected");
+
     const auto custom_game = parse_manifest(
         "vice-project 1\n"
         "id 40000000-0000-4000-8000-000000000001\n"
         "name \"Internal Project\"\n"
         "game_name \"Palma Bay\"\n"
+        "game_target \"palma_app\"\n"
         "assets \"assets\"\n"
         "startup_world \"worlds/main.vworld\"\n"
     );
-    require(custom_game.manifest.has_value(), "explicit game name parse");
+    require(custom_game.manifest.has_value(), "explicit game target parse");
     require(custom_game.manifest->game_name == "Palma Bay", "explicit game name value");
+    require(custom_game.manifest->game_target == "palma_app", "explicit game target value");
+
     require(!parse_manifest(
         "vice-project 1\n"
         "id 40000000-0000-4000-8000-000000000001\n"
@@ -69,6 +84,16 @@ int main() {
         "assets \"assets\"\n"
         "startup_world \"worlds/main.vworld\"\n"
     ).manifest.has_value(), "empty explicit game name rejected");
+
+    require(!parse_manifest(
+        "vice-project 1\n"
+        "id 40000000-0000-4000-8000-000000000001\n"
+        "name \"Internal Project\"\n"
+        "game_name \"Game\"\n"
+        "game_target \"NUL\"\n"
+        "assets \"assets\"\n"
+        "startup_world \"worlds/main.vworld\"\n"
+    ).manifest.has_value(), "reserved explicit game target rejected");
 
     const auto id = ProjectId::parse("40000000-0000-4000-8000-000000000001");
     require(id.has_value(), "project ID parse");
@@ -163,6 +188,11 @@ int main() {
             "root/moved/assets/worlds/vice_lab.vworld",
         "moved startup resolution"
     );
+    require(
+        resolve_game_output_root(first_manifest, *parsed.manifest).generic_string() ==
+            "root/first/.vice/build/development/vice-lab",
+        "game output root"
+    );
 
     Manifest alternate_startup = *parsed.manifest;
     alternate_startup.startup_world = "worlds/alternate.vworld";
@@ -170,6 +200,14 @@ int main() {
         resolve_startup_world(first_manifest, alternate_startup).generic_string() ==
             "root/first/assets/worlds/alternate.vworld",
         "updated startup World resolution"
+    );
+
+    Manifest alternate_target = *parsed.manifest;
+    alternate_target.game_target = "vice-preview";
+    require(
+        resolve_game_output_root(first_manifest, alternate_target).generic_string() ==
+            "root/first/.vice/build/development/vice-preview",
+        "updated game target output resolution"
     );
 
     const std::filesystem::path cooked_cache = std::filesystem::path{"cache"} / "projects";
@@ -214,6 +252,7 @@ int main() {
     Manifest saved_manifest = *loaded.manifest;
     saved_manifest.name = "Settings Test";
     saved_manifest.game_name = "Settings Game";
+    saved_manifest.game_target = "settings-game";
     saved_manifest.startup_world = "worlds/settings.vworld";
     std::string save_diagnostics;
     require(save_manifest(temp_manifest, saved_manifest, &save_diagnostics), "manifest file save");

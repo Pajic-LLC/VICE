@@ -17,6 +17,17 @@ namespace {
     return -1;
 }
 
+[[nodiscard]] bool ascii_alphanumeric(const char value) noexcept {
+    return (value >= 'a' && value <= 'z') || (value >= 'A' && value <= 'Z') ||
+        (value >= '0' && value <= '9');
+}
+
+[[nodiscard]] char ascii_lower(const char value) noexcept {
+    return value >= 'A' && value <= 'Z'
+        ? static_cast<char>(value - 'A' + 'a')
+        : value;
+}
+
 [[nodiscard]] bool read_quoted_value(
     std::istringstream& stream,
     std::string& output
@@ -36,8 +47,30 @@ namespace {
     return text.size() >= 2U && std::isalpha(static_cast<unsigned char>(text[0])) != 0 && text[1] == ':';
 }
 
+[[nodiscard]] bool windows_reserved_target(const std::string_view target) noexcept {
+    std::string stem;
+    for (const char value : target) {
+        if (value == '.') break;
+        if (value >= 'a' && value <= 'z') stem.push_back(static_cast<char>(value - 'a' + 'A'));
+        else stem.push_back(value);
+    }
+
+    if (stem == "CON" || stem == "PRN" || stem == "AUX" || stem == "NUL") return true;
+    if (stem.size() == 4U && stem[3] >= '1' && stem[3] <= '9') {
+        return stem.starts_with("COM") || stem.starts_with("LPT");
+    }
+    return false;
+}
+
 [[nodiscard]] std::string portable_path(const std::filesystem::path& path) {
     return path.generic_string();
+}
+
+void normalize_legacy_fields(Manifest& manifest) {
+    if (manifest.game_name.empty() && !manifest.name.empty()) manifest.game_name = manifest.name;
+    if (manifest.game_target.empty() && !manifest.game_name.empty()) {
+        manifest.game_target = default_game_target(manifest.game_name);
+    }
 }
 
 [[nodiscard]] bool write_text_file(
@@ -119,6 +152,37 @@ bool valid_relative_path(const std::filesystem::path& path) noexcept {
     return true;
 }
 
+bool valid_game_target(const std::string_view target) noexcept {
+    if (target.empty() || target.size() > game_target_max_size || !ascii_alphanumeric(target.front()) ||
+        target.back() == '.' || windows_reserved_target(target)) {
+        return false;
+    }
+    return std::all_of(target.begin(), target.end(), [](const char value) {
+        return ascii_alphanumeric(value) || value == '-' || value == '_' || value == '.';
+    });
+}
+
+std::string default_game_target(const std::string_view display_name) {
+    std::string target;
+    target.reserve(std::min(display_name.size(), game_target_max_size));
+    bool separator_pending = false;
+    for (const char value : display_name) {
+        if (ascii_alphanumeric(value)) {
+            if (separator_pending && !target.empty() && target.size() < game_target_max_size) {
+                target.push_back('-');
+            }
+            separator_pending = false;
+            if (target.size() < game_target_max_size) target.push_back(ascii_lower(value));
+        } else if (!target.empty()) {
+            separator_pending = true;
+        }
+        if (target.size() >= game_target_max_size) break;
+    }
+    while (!target.empty() && (target.back() == '-' || target.back() == '.')) target.pop_back();
+    if (!valid_game_target(target)) return "game";
+    return target;
+}
+
 bool validate(const Manifest& manifest, std::string* const diagnostics) {
     const auto fail = [&](const std::string& message) {
         if (diagnostics != nullptr) *diagnostics = message;
@@ -131,6 +195,11 @@ bool validate(const Manifest& manifest, std::string* const diagnostics) {
     if (!manifest.id) return fail("Project manifest has no stable project ID.");
     if (manifest.name.empty()) return fail("Project manifest has no display name.");
     if (manifest.game_name.empty()) return fail("Project manifest has no game display name.");
+    if (!valid_game_target(manifest.game_target)) {
+        return fail(
+            "Project game target must be a portable identifier up to 64 characters using letters, numbers, `-`, `_`, or `.`."
+        );
+    }
     if (!valid_relative_path(manifest.asset_root)) {
         return fail("Project asset root must be a portable relative path without traversal.");
     }
@@ -153,6 +222,7 @@ LoadResult parse_manifest(const std::string_view text) {
     bool id_seen = false;
     bool name_seen = false;
     bool game_name_seen = false;
+    bool game_target_seen = false;
     bool assets_seen = false;
     bool startup_seen = false;
     Manifest manifest;
@@ -203,6 +273,11 @@ LoadResult parse_manifest(const std::string_view text) {
             if (!read_quoted_value(stream, manifest.game_name)) return fail("game display name must be quoted.");
             if (manifest.game_name.empty()) return fail("game display name must not be empty.");
             game_name_seen = true;
+        } else if (key == "game_target") {
+            if (game_target_seen) return fail("duplicate `game_target` field.");
+            if (!read_quoted_value(stream, manifest.game_target)) return fail("game target must be quoted.");
+            if (!valid_game_target(manifest.game_target)) return fail("game target is not a portable target identifier.");
+            game_target_seen = true;
         } else if (key == "assets") {
             if (assets_seen) return fail("duplicate `assets` field.");
             std::string value;
@@ -235,6 +310,7 @@ LoadResult parse_manifest(const std::string_view text) {
         return result;
     }
     if (!game_name_seen) manifest.game_name = manifest.name;
+    if (!game_target_seen) manifest.game_target = default_game_target(manifest.game_name);
     if (!validate(manifest, &result.diagnostics)) return result;
     result.manifest = std::move(manifest);
     return result;
@@ -258,7 +334,7 @@ LoadResult load_manifest(const std::filesystem::path& path) {
 
 std::string serialize_manifest(const Manifest& manifest) {
     Manifest normalized = manifest;
-    if (normalized.game_name.empty() && !normalized.name.empty()) normalized.game_name = normalized.name;
+    normalize_legacy_fields(normalized);
 
     std::string diagnostics;
     if (!validate(normalized, &diagnostics)) return {};
@@ -268,6 +344,7 @@ std::string serialize_manifest(const Manifest& manifest) {
     output << "id " << normalized.id.to_string() << '\n';
     output << "name " << std::quoted(normalized.name) << '\n';
     output << "game_name " << std::quoted(normalized.game_name) << '\n';
+    output << "game_target " << std::quoted(normalized.game_target) << '\n';
     output << "assets " << std::quoted(portable_path(normalized.asset_root)) << '\n';
     output << "startup_world " << std::quoted(portable_path(normalized.startup_world)) << '\n';
     return output.str();
@@ -284,9 +361,11 @@ bool save_manifest(
     };
 
     if (path.empty()) return fail("Project manifest save path is empty.");
+    Manifest normalized = manifest;
+    normalize_legacy_fields(normalized);
     std::string validation;
-    if (!validate(manifest, &validation)) return fail(validation);
-    const std::string text = serialize_manifest(manifest);
+    if (!validate(normalized, &validation)) return fail(validation);
+    const std::string text = serialize_manifest(normalized);
     if (text.empty()) return fail("Project manifest could not be serialized.");
 
     std::error_code error;
@@ -392,6 +471,16 @@ std::filesystem::path resolve_cooked_startup_world(
     auto cooked_startup = manifest.startup_world;
     cooked_startup.replace_extension(".vworldc");
     return (cooked_root / cooked_startup).lexically_normal();
+}
+
+std::filesystem::path resolve_game_output_root(
+    const std::filesystem::path& manifest_path,
+    const Manifest& manifest
+) {
+    if (manifest_path.empty() || !valid_game_target(manifest.game_target)) return {};
+    return (
+        manifest_path.parent_path() / ".vice" / "build" / "development" / manifest.game_target
+    ).lexically_normal();
 }
 
 } // namespace vice::project

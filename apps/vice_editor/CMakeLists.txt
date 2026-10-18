@@ -244,6 +244,14 @@ if(TARGET vice_player)
     PRIVATE
       VICE_EDITOR_PLAYER_EXECUTABLE="$<TARGET_FILE:vice_player>"
   )
+  if(TARGET vice_editor_project_build)
+    add_dependencies(vice_editor_project_build vice_player)
+    target_compile_definitions(
+      vice_editor_project_build
+      PRIVATE
+        VICE_EDITOR_RUNTIME_HOST_EXECUTABLE="$<TARGET_FILE:vice_player>"
+    )
+  endif()
 endif()
 vice_enable_warnings(vice_editor)
 

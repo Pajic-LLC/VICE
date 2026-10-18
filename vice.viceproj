@@ -1,5 +1,7 @@
 vice-project 1
 id 40000000-0000-4000-8000-000000000001
 name "VICE Lab"
+game_name "VICE Lab"
+game_target "vice-lab"
 assets "assets"
 startup_world "worlds/vice_lab.vworld"

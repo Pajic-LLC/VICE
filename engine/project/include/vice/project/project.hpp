@@ -12,6 +12,7 @@ namespace vice::project {
 
 inline constexpr std::uint32_t project_manifest_version = 1;
 inline constexpr std::size_t project_id_size = 16;
+inline constexpr std::size_t game_target_max_size = 64;
 
 struct ProjectId {
     std::array<std::uint8_t, project_id_size> bytes{};
@@ -34,6 +35,7 @@ struct Manifest {
     ProjectId id{};
     std::string name;
     std::string game_name;
+    std::string game_target;
     std::filesystem::path asset_root;
     std::filesystem::path startup_world;
 
@@ -46,6 +48,8 @@ struct LoadResult {
 };
 
 [[nodiscard]] bool valid_relative_path(const std::filesystem::path& path) noexcept;
+[[nodiscard]] bool valid_game_target(std::string_view target) noexcept;
+[[nodiscard]] std::string default_game_target(std::string_view display_name);
 [[nodiscard]] bool validate(const Manifest& manifest, std::string* diagnostics = nullptr);
 [[nodiscard]] LoadResult parse_manifest(std::string_view text);
 [[nodiscard]] LoadResult load_manifest(const std::filesystem::path& path);
@@ -73,6 +77,11 @@ struct LoadResult {
 
 [[nodiscard]] std::filesystem::path resolve_cooked_startup_world(
     const std::filesystem::path& cooked_cache_base,
+    const Manifest& manifest
+);
+
+[[nodiscard]] std::filesystem::path resolve_game_output_root(
+    const std::filesystem::path& manifest_path,
     const Manifest& manifest
 );
 
