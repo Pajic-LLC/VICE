@@ -47,6 +47,7 @@ add_subdirectory(engine/runtime)
 
 if(VICE_BUILD_EDITOR OR VICE_BUILD_TOOLS)
   add_subdirectory(tools/world_cooker)
+  add_subdirectory(tools/render_material_cooker)
 endif()
 
 if(VICE_BUILD_TOOLS)
