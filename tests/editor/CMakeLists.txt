@@ -54,6 +54,15 @@ if(TARGET vice_editor_project_build)
   target_compile_features(vice_editor_project_build_tests PRIVATE cxx_std_23)
   vice_enable_warnings(vice_editor_project_build_tests)
   add_test(NAME vice_editor_project_build_tests COMMAND vice_editor_project_build_tests)
+
+  add_executable(
+    vice_editor_project_mesh_build_tests
+    ../editor_project_mesh_build_tests.cpp
+  )
+  target_link_libraries(vice_editor_project_mesh_build_tests PRIVATE VICE::EditorProjectBuild)
+  target_compile_features(vice_editor_project_mesh_build_tests PRIVATE cxx_std_23)
+  vice_enable_warnings(vice_editor_project_mesh_build_tests)
+  add_test(NAME vice_editor_project_mesh_build_tests COMMAND vice_editor_project_mesh_build_tests)
 endif()
 
 if(TARGET vice_editor_asset_index AND TARGET vice_mesh_cooker_lib)

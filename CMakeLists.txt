@@ -57,6 +57,8 @@ if(VICE_BUILD_TOOLS)
     add_subdirectory(tools/rigid_material_cooker)
   endif()
   add_subdirectory(tools/mesh_cooker)
+elseif(VICE_BUILD_EDITOR)
+  add_subdirectory(tools/mesh_cooker)
 endif()
 
 if(VICE_BUILD_LAB)

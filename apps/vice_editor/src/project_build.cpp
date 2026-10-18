@@ -1,4 +1,5 @@
 #include <vice/editor/project_build.hpp>
+#include <vice/editor/project_mesh_cook.hpp>
 
 #include <vice/platform/dynamic_library.hpp>
 #include <vice/project/project.hpp>
@@ -230,13 +231,73 @@ struct GameModuleBuild {
         );
     }
 
+    const auto mesh_cook = cook_project_meshes(session);
+    if (!mesh_cook) {
+        return fail_build(mesh_cook.diagnostics);
+    }
+
     ProjectBuildResult result;
     result.success = true;
     result.game_target = session.manifest().game_target;
     result.cooked_startup_world = output_path;
     result.entity_count = parsed.snapshot->entities.size();
     result.region_count = parsed.snapshot->regions.size();
+    result.mesh_count = mesh_cook.meshes.size();
     return result;
+}
+
+[[nodiscard]] bool stage_project_meshes(
+    const ProjectSession& session,
+    const std::filesystem::path& staged_project_content_root,
+    std::string& diagnostics
+) {
+    std::error_code error;
+    std::filesystem::recursive_directory_iterator iterator{
+        session.asset_root(),
+        std::filesystem::directory_options::skip_permission_denied,
+        error,
+    };
+    const std::filesystem::recursive_directory_iterator end;
+    if (error) {
+        diagnostics = "Could not enumerate project meshes for staging: " + error.message();
+        return false;
+    }
+
+    for (; iterator != end; iterator.increment(error)) {
+        if (error) {
+            diagnostics = "Could not enumerate project meshes for staging: " + error.message();
+            return false;
+        }
+        if (!iterator->is_regular_file() || iterator->path().extension() != ".vmesh") continue;
+
+        auto relative = std::filesystem::relative(iterator->path(), session.asset_root(), error);
+        if (error) {
+            diagnostics = "Could not resolve project mesh path for staging: " + error.message();
+            return false;
+        }
+        relative.replace_extension(".vmeshc");
+        const auto source = (session.cooked_root() / relative).lexically_normal();
+        const auto destination = (staged_project_content_root / relative).lexically_normal();
+        std::filesystem::create_directories(destination.parent_path(), error);
+        if (error) {
+            diagnostics = "Could not create staged mesh directory `" +
+                path_text(destination.parent_path()) + "`: " + error.message();
+            return false;
+        }
+        std::filesystem::copy_file(
+            source,
+            destination,
+            std::filesystem::copy_options::overwrite_existing,
+            error
+        );
+        if (error) {
+            diagnostics = "Could not stage cooked mesh `" + path_text(source) + "`: " + error.message();
+            return false;
+        }
+    }
+
+    diagnostics.clear();
+    return true;
 }
 
 } // namespace
@@ -347,7 +408,8 @@ ProjectBuildResult build_game_target(
     auto cooked_relative = session.manifest().startup_world;
     cooked_relative.replace_extension(".vworldc");
     const auto staged_content_root = staging_root / "content";
-    const auto staged_world = staged_content_root / session.manifest().id.to_string() / cooked_relative;
+    const auto staged_project_content_root = staged_content_root / session.manifest().id.to_string();
+    const auto staged_world = staged_project_content_root / cooked_relative;
     std::filesystem::create_directories(staged_world.parent_path(), error);
     if (error) {
         const std::string message = error.message();
@@ -369,6 +431,12 @@ ProjectBuildResult build_game_target(
         return fail_build(
             "Could not stage cooked startup World `" + path_text(staged_world) + "`: " + message
         );
+    }
+
+    std::string mesh_stage_diagnostics;
+    if (!stage_project_meshes(session, staged_project_content_root, mesh_stage_diagnostics)) {
+        cleanup_staging();
+        return fail_build(std::move(mesh_stage_diagnostics));
     }
 
     if (module_build.source_present) {

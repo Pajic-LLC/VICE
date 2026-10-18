@@ -34,11 +34,12 @@ target_link_libraries(
 target_compile_features(vice_editor_state PUBLIC cxx_std_23)
 vice_enable_warnings(vice_editor_state)
 
-if(TARGET vice_world_cooker_lib)
+if(TARGET vice_world_cooker_lib AND TARGET vice_mesh_cooker_lib)
   add_library(
     vice_editor_project_build
     STATIC
       src/project_build.cpp
+      src/project_mesh_cook.cpp
   )
 
   add_library(VICE::EditorProjectBuild ALIAS vice_editor_project_build)
@@ -53,6 +54,7 @@ if(TARGET vice_world_cooker_lib)
     vice_editor_project_build
     PUBLIC
       VICE::EditorState
+      VICE::MeshCooker
       VICE::Platform
       VICE::World
       VICE::WorldCooker
