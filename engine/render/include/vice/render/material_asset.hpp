@@ -19,7 +19,7 @@ inline constexpr std::size_t render_material_stable_id_size = 16U;
 
 using RenderMaterialStableId = std::array<std::uint8_t, render_material_stable_id_size>;
 
-[[nodiscard]] constexpr bool valid(const RenderMaterialStableId& id) noexcept {
+[[nodiscard]] constexpr bool valid_render_material_id(const RenderMaterialStableId& id) noexcept {
     for (const std::uint8_t value : id) {
         if (value != 0U) return true;
     }
