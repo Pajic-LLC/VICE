@@ -2,11 +2,13 @@
 #include <vice/runtime/scene.hpp>
 #include <vice/world/world.hpp>
 
+#include <algorithm>
 #include <cassert>
 #include <filesystem>
 #include <fstream>
+#include <optional>
 #include <span>
-#include <vector>
+#include <string>
 
 namespace {
 
