@@ -1,6 +1,7 @@
 #pragma once
 
 #include <vice/core/log.hpp>
+#include <vice/world/camera.hpp>
 #include <vice/world/entity.hpp>
 #include <vice/world/persistent_id.hpp>
 #include <vice/world/snapshot.hpp>
@@ -11,6 +12,7 @@
 #include <cstdint>
 #include <memory>
 #include <optional>
+#include <span>
 #include <string>
 #include <variant>
 #include <vector>
@@ -53,6 +55,23 @@ bool apply_entity_transform(
     const EntityTransformState& state
 );
 
+struct EntityCameraState {
+    world::PersistentId persistent_id{};
+    std::optional<world::Camera> camera;
+
+    friend bool operator==(const EntityCameraState&, const EntityCameraState&) = default;
+};
+
+[[nodiscard]] std::optional<EntityCameraState> capture_entity_camera(
+    const world::World& world,
+    world::PersistentId persistent_id
+);
+
+bool apply_camera_states(
+    world::World& world,
+    std::span<const EntityCameraState> states
+);
+
 class CommandHistory {
 public:
     struct TransformEntry {
@@ -62,15 +81,22 @@ public:
         std::string label;
     };
 
+    struct CameraEntry {
+        std::vector<EntityCameraState> before;
+        std::vector<EntityCameraState> after;
+        std::string label;
+    };
+
     struct CreateEntityEntry {
         world::SnapshotEntity entity;
         std::vector<world::ResourceId> owned_resources;
         std::string label;
     };
 
-    using Entry = std::variant<TransformEntry, CreateEntityEntry>;
+    using Entry = std::variant<TransformEntry, CameraEntry, CreateEntityEntry>;
 
     bool record(TransformEntry entry);
+    bool record(CameraEntry entry);
     bool record(CreateEntityEntry entry);
     bool undo(world::World& world);
     bool redo(world::World& world);
@@ -109,6 +135,7 @@ public:
 struct HierarchyEntry {
     world::PersistentId persistent_id{};
     std::optional<world::SpatialState> spatial_state;
+    std::optional<world::Camera> camera;
 };
 
 [[nodiscard]] std::vector<HierarchyEntry> build_hierarchy(const world::World& world);
@@ -118,6 +145,7 @@ struct InspectorData {
     std::optional<world::EntityId> entity;
     std::optional<world::SpatialState> spatial_state;
     std::optional<world::AuthoredTransform> authored_transform;
+    std::optional<world::Camera> camera;
     std::vector<world::ResourceReference> resource_references;
     std::optional<world::RegionDesc> region;
     std::optional<world::SimulationIslandId> simulation_island;
