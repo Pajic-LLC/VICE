@@ -15,6 +15,7 @@ struct RuntimeMaterialBinding {
     render::Buffer* constants = nullptr;
     render::Texture* base_color_texture = nullptr;
     render::Sampler* sampler = nullptr;
+    bool supports_directional_shadow = false;
 };
 
 class RuntimeMaterialLibrary final {
