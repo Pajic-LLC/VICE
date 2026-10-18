@@ -26,6 +26,17 @@ void require(const bool condition, const std::string_view message) {
     return false;
 }
 
+[[nodiscard]] bool matrix_matches(
+    const vice::math::Mat4& left,
+    const vice::math::Mat4& right,
+    const float epsilon = 0.000001F
+) noexcept {
+    for (std::size_t index = 0; index < left.values.size(); ++index) {
+        if (std::abs(left.values[index] - right.values[index]) > epsilon) return false;
+    }
+    return true;
+}
+
 } // namespace
 
 int main() {
@@ -185,17 +196,17 @@ int main() {
         "primary camera authored"
     );
 
-    require(
-        !runtime::directional_shadow_view(
-            instances, catalog, runtime::collect_runtime_lights(world_state)
-        ).has_value(),
-        "World without directional light has no shadow view"
-    );
-
     const auto first_camera = runtime::primary_camera_view(world_state, 16.0F / 9.0F);
     require(first_camera.has_value(), "runtime resolves authored primary camera");
     require(first_camera->entity == *camera_id, "runtime camera identity");
     require(first_camera->camera.primary, "runtime camera retains primary flag");
+    require(first_camera->aspect_ratio == 16.0F / 9.0F, "runtime camera retains aspect ratio");
+    require(
+        !runtime::directional_shadow_view(
+            *first_camera, runtime::collect_runtime_lights(world_state)
+        ).has_value(),
+        "World without directional light has no shadow view"
+    );
 
     require(
         world_state.set_spatial_state(
@@ -259,12 +270,21 @@ int main() {
         "directional shadow light authored"
     );
     auto shadow_lights = runtime::collect_runtime_lights(world_state);
-    const auto first_shadow = runtime::directional_shadow_view(instances, catalog, shadow_lights);
+    const auto first_shadow = runtime::directional_shadow_view(*rotated_camera, shadow_lights);
     require(first_shadow.has_value(), "directional shadow view resolves");
     require(first_shadow->light_entity == *light_id, "shadow view keeps light identity");
     require(first_shadow->light_index == 0U, "first directional light is selected deterministically");
-    for (const float value : first_shadow->view_projection.values) {
-        require(std::isfinite(value), "shadow matrix is finite");
+    const auto splits = runtime::runtime_shadow_cascade_splits(*rotated_camera);
+    require(splits[0] > rotated_camera->camera.near_plane, "first cascade split follows camera near plane");
+    require(splits[0] < splits[1] && splits[1] < splits[2] && splits[2] < splits[3], "cascade splits increase");
+    require(splits[3] <= runtime::runtime_shadow_distance, "cascade distance is bounded");
+    for (std::size_t cascade_index = 0; cascade_index < first_shadow->cascades.size(); ++cascade_index) {
+        const auto& cascade = first_shadow->cascades[cascade_index];
+        require(cascade.split_far == splits[cascade_index], "cascade stores split far distance");
+        require(cascade.split_far > cascade.split_near, "cascade split range is valid");
+        for (const float value : cascade.view_projection.values) {
+            require(std::isfinite(value), "cascade shadow matrix is finite");
+        }
     }
 
     require(
@@ -278,12 +298,45 @@ int main() {
         "shadow light rotation updates"
     );
     shadow_lights = runtime::collect_runtime_lights(world_state);
-    const auto rotated_shadow = runtime::directional_shadow_view(instances, catalog, shadow_lights);
+    const auto rotated_shadow = runtime::directional_shadow_view(*rotated_camera, shadow_lights);
     require(rotated_shadow.has_value(), "rotated directional shadow view resolves");
     require(
-        matrix_differs(first_shadow->view_projection, rotated_shadow->view_projection),
+        matrix_differs(
+            first_shadow->cascades.front().view_projection,
+            rotated_shadow->cascades.front().view_projection
+        ),
         "authored directional rotation drives shadow view"
     );
+
+    runtime::RuntimeCameraView stable_camera{
+        .camera = world::Camera{
+            .projection = world::CameraProjection::perspective,
+            .vertical_fov_radians = 1.0471975512F,
+            .near_plane = 0.1F,
+            .far_plane = 500.0F,
+            .primary = true,
+        },
+        .position = {0.0F, 2.0F, 8.0F},
+        .forward = {0.0F, 0.0F, -1.0F},
+        .up = {0.0F, 1.0F, 0.0F},
+        .aspect_ratio = 16.0F / 9.0F,
+    };
+    auto stable_lights = shadow_lights;
+    stable_lights.front().direction = {0.0F, -1.0F, 0.0F};
+    const auto stable_shadow = runtime::directional_shadow_view(stable_camera, stable_lights);
+    require(stable_shadow.has_value(), "stable shadow view resolves");
+    stable_camera.position.x += 0.001F;
+    const auto sub_texel_shadow = runtime::directional_shadow_view(stable_camera, stable_lights);
+    require(sub_texel_shadow.has_value(), "sub-texel moved shadow view resolves");
+    for (std::size_t cascade_index = 0; cascade_index < runtime::runtime_shadow_cascade_count; ++cascade_index) {
+        require(
+            matrix_matches(
+                stable_shadow->cascades[cascade_index].view_projection,
+                sub_texel_shadow->cascades[cascade_index].view_projection
+            ),
+            "texel snapping stabilizes sub-texel camera translation"
+        );
+    }
 
     std::filesystem::remove_all(root, error);
     require(!error, "temporary cleanup");
