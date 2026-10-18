@@ -1,3 +1,4 @@
+#include <vice/platform/dynamic_library.hpp>
 #include <vice/runtime/module_api.hpp>
 #include <vice/runtime/module_loader.hpp>
 #include <vice/runtime/runtime.hpp>
