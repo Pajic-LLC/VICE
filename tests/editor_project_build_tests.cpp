@@ -1,6 +1,7 @@
 #include <vice/editor/project_build.hpp>
 #include <vice/editor/project_session.hpp>
 
+#include <vice/platform/dynamic_library.hpp>
 #include <vice/project/project.hpp>
 #include <vice/world/snapshot_file.hpp>
 
@@ -57,6 +58,7 @@ int main() {
     const auto project_root = root / "project";
     const auto manifest_path = project_root / "game.viceproj";
     const auto startup_world = project_root / "assets" / "worlds" / "main.vworld";
+    const auto game_source = project_root / "game" / "game.cpp";
     const auto cache_base = root / "cache";
     const auto state_base = root / "state";
 
@@ -89,6 +91,7 @@ int main() {
     const auto built = editor::build_project(*session);
     require(static_cast<bool>(built), "project build succeeds");
     require(built.diagnostics.empty(), "project build diagnostics");
+    require(built.game_module.empty(), "legacy project without game source has no module");
     const auto expected_cooked = (
         cache_base /
         "43000000-0000-4000-8000-000000000133" /
@@ -121,9 +124,22 @@ int main() {
     );
     require(!permission_error, "runtime host permissions write");
 
+    write_text(
+        game_source,
+        "#include <vice/runtime/module_api.hpp>\n\n"
+        "class BuildTestGame final : public vice::runtime::module::Game {\n"
+        "public:\n"
+        "    void on_frame(vice::runtime::module::Context&, vice::runtime::module::Frame& frame) override {\n"
+        "        frame.clear_color = {0.2F, 0.4F, 0.6F, 1.0F};\n"
+        "    }\n"
+        "};\n\n"
+        "VICE_GAME_MODULE(BuildTestGame)\n"
+    );
+
     const auto game_build = editor::build_game_target(*session, runtime_host);
     require(static_cast<bool>(game_build), "game target build succeeds");
     require(game_build.game_target == "palma-game", "game target identity");
+    require(game_build.game_module_source == game_source, "project game module source path");
 
     const auto expected_output = (
         project_root / ".vice" / "build" / "development" / "palma-game"
@@ -136,6 +152,11 @@ int main() {
         "runtime manifest path"
     );
     require(std::filesystem::is_regular_file(game_build.runtime_manifest), "runtime manifest exists");
+
+    const auto expected_module = expected_output / "modules" /
+        ("palma-game" + std::string{platform::dynamic_library_extension()});
+    require(game_build.game_module == expected_module, "staged project game module path");
+    require(std::filesystem::is_regular_file(expected_module), "staged project game module exists");
 
     const auto runtime_manifest = project::load_manifest(game_build.runtime_manifest);
     require(runtime_manifest.manifest.has_value(), "runtime manifest loads");

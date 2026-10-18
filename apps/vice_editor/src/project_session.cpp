@@ -215,7 +215,11 @@ ProjectCreateResult create_project(const ProjectCreateRequest& request) {
     std::filesystem::remove_all(staging, error);
     error.clear();
     const auto worlds = staging / "assets" / "worlds";
+    const auto game = staging / "game";
     std::filesystem::create_directories(worlds, error);
+    if (!error) {
+        std::filesystem::create_directories(game, error);
+    }
     if (error) {
         result.diagnostics = "Could not create the project staging directory: " + error.message();
         std::filesystem::remove_all(staging, error);
@@ -238,9 +242,29 @@ ProjectCreateResult create_project(const ProjectCreateRequest& request) {
         "vice-world-source 1\n\n"
         "region 1 1 0 0 0 0 0 0 full bounds -100 -100 -100 100 100 100\n";
 
+    const std::string game_text =
+        "#include <vice/runtime/module_api.hpp>\n\n"
+        "namespace {\n\n"
+        "using vice::runtime::module::Context;\n"
+        "using vice::runtime::module::Frame;\n"
+        "using vice::runtime::module::LogLevel;\n\n"
+        "class Game final : public vice::runtime::module::Game {\n"
+        "public:\n"
+        "    bool on_start(Context& context) override {\n"
+        "        context.log(LogLevel::info, \"Game started.\");\n"
+        "        return true;\n"
+        "    }\n\n"
+        "    void on_frame(Context&, Frame& frame) override {\n"
+        "        frame.clear_color = {0.04F, 0.06F, 0.09F, 1.0F};\n"
+        "    }\n"
+        "};\n\n"
+        "} // namespace\n\n"
+        "VICE_GAME_MODULE(Game)\n";
+
     std::string diagnostics;
     if (!write_text(staging / "vice.viceproj", manifest_text, diagnostics) ||
-        !write_text(worlds / "main.vworld", world_text, diagnostics)) {
+        !write_text(worlds / "main.vworld", world_text, diagnostics) ||
+        !write_text(game / "game.cpp", game_text, diagnostics)) {
         result.diagnostics = diagnostics;
         std::filesystem::remove_all(staging, error);
         return result;

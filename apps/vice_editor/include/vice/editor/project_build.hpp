@@ -13,6 +13,8 @@ struct ProjectBuildResult {
     bool success = false;
     std::string game_target;
     std::filesystem::path cooked_startup_world;
+    std::filesystem::path game_module_source;
+    std::filesystem::path game_module;
     std::filesystem::path game_output_root;
     std::filesystem::path game_executable;
     std::filesystem::path runtime_manifest;

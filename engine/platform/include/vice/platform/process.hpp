@@ -21,6 +21,18 @@ struct ProcessLaunchResult {
     }
 };
 
+struct ProcessRunResult {
+    bool launched = false;
+    int exit_code = -1;
+    std::string output;
+    std::string diagnostics;
+
+    [[nodiscard]] explicit operator bool() const noexcept {
+        return launched && exit_code == 0;
+    }
+};
+
 [[nodiscard]] ProcessLaunchResult launch_process(const ProcessLaunchRequest& request);
+[[nodiscard]] ProcessRunResult run_process(const ProcessLaunchRequest& request);
 
 } // namespace vice::platform

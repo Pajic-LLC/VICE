@@ -1,5 +1,6 @@
 #include <vice/editor/project_build.hpp>
 
+#include <vice/platform/dynamic_library.hpp>
 #include <vice/project/project.hpp>
 #include <vice/tools/world_cooker.hpp>
 #include <vice/world/snapshot_file.hpp>
@@ -53,6 +54,138 @@ namespace {
     const std::filesystem::path& runtime_host
 ) {
     return root / (target + runtime_host.extension().string());
+}
+
+[[nodiscard]] std::filesystem::path game_module_source(const ProjectSession& session) {
+    return (session.manifest_path().parent_path() / "game" / "game.cpp").lexically_normal();
+}
+
+[[nodiscard]] std::filesystem::path game_module_filename(const std::string& target) {
+    return std::filesystem::path{
+        target + std::string{platform::dynamic_library_extension()}
+    };
+}
+
+[[nodiscard]] std::string process_failure(
+    const std::string& label,
+    const platform::ProcessRunResult& process
+) {
+    std::string message = label;
+    if (!process.diagnostics.empty()) {
+        message += ": " + process.diagnostics;
+    }
+    if (!process.output.empty()) {
+        message += "\n" + process.output;
+    }
+    return message;
+}
+
+struct GameModuleBuild {
+    bool source_present = false;
+    bool success = true;
+    std::filesystem::path source;
+    std::filesystem::path output;
+    std::string diagnostics;
+};
+
+[[nodiscard]] GameModuleBuild build_project_game_module(const ProjectSession& session) {
+    GameModuleBuild result;
+    result.source = game_module_source(session);
+
+    std::error_code error;
+    const bool exists = std::filesystem::exists(result.source, error);
+    if (error) {
+        result.success = false;
+        result.diagnostics = "Could not inspect project game source `" + path_text(result.source) +
+            "`: " + error.message();
+        return result;
+    }
+    if (!exists) {
+        return result;
+    }
+    if (!std::filesystem::is_regular_file(result.source, error) || error) {
+        result.success = false;
+        result.diagnostics = error
+            ? "Could not inspect project game source `" + path_text(result.source) + "`: " + error.message()
+            : "Project game source is not a regular file: " + path_text(result.source);
+        return result;
+    }
+    result.source_present = true;
+
+#if !defined(VICE_EDITOR_CMAKE_EXECUTABLE) || \
+    !defined(VICE_EDITOR_GAME_MODULE_CMAKE_SOURCE) || \
+    !defined(VICE_EDITOR_GAME_MODULE_INCLUDE)
+    result.success = false;
+    result.diagnostics = "This VICE Editor build cannot compile project game modules.";
+    return result;
+#else
+    const auto project_root = session.manifest_path().parent_path();
+    const auto build_root = (
+        project_root / ".vice" / "build" / "game-module" / session.manifest().game_target
+    ).lexically_normal();
+    const auto cmake_build = build_root / "cmake";
+    const auto module_output = build_root / "output";
+    result.output = module_output / game_module_filename(session.manifest().game_target);
+
+    std::filesystem::remove_all(module_output, error);
+    error.clear();
+    std::filesystem::create_directories(module_output, error);
+    if (error) {
+        result.success = false;
+        result.diagnostics = "Could not create game module output directory `" +
+            path_text(module_output) + "`: " + error.message();
+        return result;
+    }
+
+    platform::ProcessLaunchRequest configure;
+    configure.executable = std::filesystem::path{VICE_EDITOR_CMAKE_EXECUTABLE};
+    configure.arguments = {
+        "-S",
+        path_text(std::filesystem::path{VICE_EDITOR_GAME_MODULE_CMAKE_SOURCE}),
+        "-B",
+        path_text(cmake_build),
+        "-DVICE_GAME_SOURCE=" + path_text(result.source),
+        "-DVICE_GAME_TARGET=" + session.manifest().game_target,
+        "-DVICE_GAME_MODULE_INCLUDE=" + path_text(std::filesystem::path{VICE_EDITOR_GAME_MODULE_INCLUDE}),
+        "-DVICE_GAME_OUTPUT=" + path_text(module_output),
+        "-DCMAKE_BUILD_TYPE=Debug",
+    };
+    configure.working_directory = project_root;
+    const auto configured = platform::run_process(configure);
+    if (!configured) {
+        result.success = false;
+        result.diagnostics = process_failure("Could not configure project game module build", configured);
+        return result;
+    }
+
+    platform::ProcessLaunchRequest build;
+    build.executable = std::filesystem::path{VICE_EDITOR_CMAKE_EXECUTABLE};
+    build.arguments = {
+        "--build",
+        path_text(cmake_build),
+        "--config",
+        "Debug",
+        "--target",
+        "vice_project_game",
+    };
+    build.working_directory = project_root;
+    const auto built = platform::run_process(build);
+    if (!built) {
+        result.success = false;
+        result.diagnostics = process_failure("Could not compile project game module", built);
+        return result;
+    }
+
+    if (!std::filesystem::is_regular_file(result.output, error) || error) {
+        result.success = false;
+        result.diagnostics = error
+            ? "Could not inspect compiled game module `" + path_text(result.output) + "`: " + error.message()
+            : "Project game module build did not produce `" + path_text(result.output) + "`.";
+        return result;
+    }
+
+    return result;
+#endif
 }
 
 [[nodiscard]] ProjectBuildResult cook_project(const ProjectSession& session) {
@@ -125,6 +258,14 @@ ProjectBuildResult build_game_target(
 ) {
     ProjectBuildResult result = cook_project(session);
     if (!result) return result;
+
+    const auto module_build = build_project_game_module(session);
+    if (!module_build.success) {
+        return fail_build(module_build.diagnostics);
+    }
+    if (module_build.source_present) {
+        result.game_module_source = module_build.source;
+    }
 
     if (runtime_host_executable.empty()) {
         return fail_build("VICE runtime host is not available in this editor build.");
@@ -230,6 +371,33 @@ ProjectBuildResult build_game_target(
         );
     }
 
+    if (module_build.source_present) {
+        const auto staged_module = staging_root / "modules" /
+            game_module_filename(session.manifest().game_target);
+        std::filesystem::create_directories(staged_module.parent_path(), error);
+        if (error) {
+            const std::string message = error.message();
+            cleanup_staging();
+            return fail_build(
+                "Could not create runtime module directory `" + path_text(staged_module.parent_path()) +
+                "`: " + message
+            );
+        }
+        std::filesystem::copy_file(
+            module_build.output,
+            staged_module,
+            std::filesystem::copy_options::overwrite_existing,
+            error
+        );
+        if (error) {
+            const std::string message = error.message();
+            cleanup_staging();
+            return fail_build(
+                "Could not stage project game module `" + path_text(staged_module) + "`: " + message
+            );
+        }
+    }
+
     std::filesystem::remove_all(output_root, error);
     if (error) {
         const std::string message = error.message();
@@ -255,6 +423,10 @@ ProjectBuildResult build_game_target(
     );
     result.runtime_manifest = output_root / "vice.runtime.viceproj";
     result.runtime_content_root = output_root / "content";
+    if (module_build.source_present) {
+        result.game_module = output_root / "modules" /
+            game_module_filename(session.manifest().game_target);
+    }
     return result;
 }
 

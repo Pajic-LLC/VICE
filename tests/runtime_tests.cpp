@@ -1,3 +1,6 @@
+#include <vice/platform/dynamic_library.hpp>
+#include <vice/runtime/module_api.hpp>
+#include <vice/runtime/module_loader.hpp>
 #include <vice/runtime/runtime.hpp>
 #include <vice/world/persistent_id.hpp>
 #include <vice/world/snapshot_file.hpp>
@@ -107,6 +110,13 @@ int main() {
     require(staged.manifest == manifest_path, "staged manifest path");
     require(staged.cooked_cache_root == content_root, "staged content root");
 
+    const auto staged_module = runtime::staged_game_module_path(fake_executable, "runtime-test");
+    require(
+        staged_module == temp_root / "modules" /
+            ("runtime-test" + std::string{platform::dynamic_library_extension()}),
+        "staged game module path"
+    );
+
     const auto explicit_paths = runtime::explicit_launch_paths(
         manifest_path,
         content_root,
@@ -156,6 +166,47 @@ int main() {
         "module callback order"
     );
     require(module.last_delta == 0.016, "module update delta");
+
+    auto dynamic_module = runtime::load_game_module(std::filesystem::path{VICE_RUNTIME_TEST_MODULE});
+    require(static_cast<bool>(dynamic_module), "dynamic project game module loads");
+    require(dynamic_module.diagnostics.empty(), "dynamic project game module diagnostics");
+    {
+        runtime::GameContext context{
+            .project = loaded.project->manifest,
+            .world = *loaded.project->world,
+        };
+        runtime::GameModuleLifecycle lifecycle{*dynamic_module.module, context};
+        require(lifecycle.start(), "dynamic module starts with host World API");
+        lifecycle.event(platform::Event{platform::KeyEvent{
+            .window = 7U,
+            .key = platform::Key::space,
+            .pressed = true,
+        }});
+        lifecycle.update(0.02);
+        render::Color clear_color{};
+        lifecycle.frame(clear_color);
+        require(clear_color.red == 0.75F, "dynamic module frame callback");
+        require(clear_color.green == 0.25F, "dynamic module frame color");
+        lifecycle.stop();
+    }
+
+    const auto missing_entrypoint = runtime::load_game_module(
+        std::filesystem::path{VICE_RUNTIME_BAD_MODULE}
+    );
+    require(!missing_entrypoint, "module missing VICE entrypoint rejected");
+    require(
+        missing_entrypoint.diagnostics.find(runtime::module::entrypoint_name) != std::string::npos,
+        "missing entrypoint diagnostic names symbol"
+    );
+
+    const auto incompatible_module = runtime::load_game_module(
+        std::filesystem::path{VICE_RUNTIME_INCOMPATIBLE_MODULE}
+    );
+    require(!incompatible_module, "incompatible module ABI rejected");
+    require(
+        incompatible_module.diagnostics.find("ABI version") != std::string::npos,
+        "incompatible module ABI diagnostic"
+    );
 
     constexpr platform::WindowId game_window = 7U;
     require(
