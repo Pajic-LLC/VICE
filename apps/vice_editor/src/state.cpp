@@ -4,6 +4,7 @@
 #include <deque>
 #include <mutex>
 #include <type_traits>
+#include <unordered_set>
 #include <utility>
 
 namespace vice::editor {
@@ -86,6 +87,11 @@ namespace {
         rollback_entity();
         return false;
     }
+    if (command.entity.camera.has_value() &&
+        !world.set_camera(*entity, *command.entity.camera)) {
+        rollback_entity();
+        return false;
+    }
     for (const auto reference : command.entity.resource_references) {
         if (!world.set_resource_reference(*entity, reference)) {
             rollback_entity();
@@ -130,6 +136,26 @@ namespace {
         if (const auto resource = world.find_resource(owned_resource); resource.has_value() &&
             !world.destroy_resource(*resource)) {
             return false;
+        }
+    }
+    return true;
+}
+
+[[nodiscard]] bool apply_camera_states_once(
+    world::World& world,
+    const std::span<const EntityCameraState> states
+) {
+    for (const auto& state : states) {
+        const auto entity = world.find(state.persistent_id);
+        if (!entity.has_value()) return false;
+        if (world.camera(*entity).has_value() && !world.clear_camera(*entity)) return false;
+    }
+
+    for (const bool primary : {false, true}) {
+        for (const auto& state : states) {
+            if (!state.camera.has_value() || state.camera->primary != primary) continue;
+            const auto entity = world.find(state.persistent_id);
+            if (!entity.has_value() || !world.set_camera(*entity, *state.camera)) return false;
         }
     }
     return true;
@@ -211,10 +237,54 @@ bool apply_entity_transform(
     return false;
 }
 
+std::optional<EntityCameraState> capture_entity_camera(
+    const world::World& world,
+    const world::PersistentId persistent_id
+) {
+    const auto entity = world.find(persistent_id);
+    if (!entity.has_value()) return std::nullopt;
+    return EntityCameraState{
+        .persistent_id = persistent_id,
+        .camera = world.camera(*entity),
+    };
+}
+
+bool apply_camera_states(
+    world::World& world,
+    const std::span<const EntityCameraState> states
+) {
+    if (states.empty()) return true;
+
+    std::unordered_set<world::PersistentId, world::PersistentIdHash> seen;
+    std::size_t primary_count = 0;
+    std::vector<EntityCameraState> previous;
+    previous.reserve(states.size());
+    for (const auto& state : states) {
+        if (state.persistent_id.is_nil() || !seen.insert(state.persistent_id).second) return false;
+        if (state.camera.has_value()) {
+            if (!world::valid(*state.camera)) return false;
+            if (state.camera->primary) ++primary_count;
+        }
+        const auto captured = capture_entity_camera(world, state.persistent_id);
+        if (!captured.has_value()) return false;
+        previous.push_back(*captured);
+    }
+    if (primary_count > 1U) return false;
+
+    if (apply_camera_states_once(world, states)) return true;
+    (void)apply_camera_states_once(world, previous);
+    return false;
+}
+
 bool CommandHistory::record(TransformEntry entry) {
     if (entry.persistent_id.is_nil() || entry.before == entry.after) {
         return false;
     }
+    return record_entry(Entry{std::move(entry)});
+}
+
+bool CommandHistory::record(CameraEntry entry) {
+    if (entry.before.empty() || entry.before == entry.after) return false;
     return record_entry(Entry{std::move(entry)});
 }
 
@@ -248,6 +318,8 @@ bool CommandHistory::undo(world::World& world) {
             using Command = std::decay_t<decltype(command)>;
             if constexpr (std::is_same_v<Command, TransformEntry>) {
                 return apply_entity_transform(world, command.persistent_id, command.before);
+            } else if constexpr (std::is_same_v<Command, CameraEntry>) {
+                return apply_camera_states(world, command.before);
             } else {
                 return destroy_snapshot_entity(world, command);
             }
@@ -271,6 +343,8 @@ bool CommandHistory::redo(world::World& world) {
             using Command = std::decay_t<decltype(command)>;
             if constexpr (std::is_same_v<Command, TransformEntry>) {
                 return apply_entity_transform(world, command.persistent_id, command.after);
+            } else if constexpr (std::is_same_v<Command, CameraEntry>) {
+                return apply_camera_states(world, command.after);
             } else {
                 return create_snapshot_entity(world, command);
             }
@@ -400,6 +474,7 @@ std::vector<HierarchyEntry> build_hierarchy(const world::World& world) {
         entries.push_back(HierarchyEntry{
             .persistent_id = entity.persistent_id,
             .spatial_state = entity.spatial_state,
+            .camera = entity.camera,
         });
     }
     std::sort(entries.begin(), entries.end(), [](const auto& left, const auto& right) {
@@ -422,6 +497,7 @@ std::optional<InspectorData> project_inspector(
     inspector.entity = entity;
     inspector.spatial_state = world.spatial_state(*entity);
     inspector.authored_transform = world.authored_transform(*entity);
+    inspector.camera = world.camera(*entity);
     const auto references = world.resource_references(*entity);
     inspector.resource_references.assign(references.begin(), references.end());
     inspector.simulation_island = world.simulation_island(*entity);
