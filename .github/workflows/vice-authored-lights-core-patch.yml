@@ -1,0 +1,920 @@
+name: VICE authored lights core patch
+
+on:
+  push:
+    branches: [render/authored-lights]
+    paths: [.github/workflows/vice-authored-lights-core-patch.yml]
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: render/authored-lights
+      - name: Apply core authored light implementation
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          def read(path):
+              return Path(path).read_text()
+
+          def write(path, text):
+              p = Path(path)
+              p.parent.mkdir(parents=True, exist_ok=True)
+              p.write_text(text)
+
+          def replace_once(path, old, new):
+              text = read(path)
+              if old not in text:
+                  raise SystemExit(f'pattern not found in {path}: {old[:100]!r}')
+              if text.count(old) != 1:
+                  raise SystemExit(f'pattern not unique in {path}: count={text.count(old)}')
+              write(path, text.replace(old, new, 1))
+
+          def replace_all(path, old, new, expected):
+              text = read(path)
+              count = text.count(old)
+              if count != expected:
+                  raise SystemExit(f'pattern count in {path}: expected {expected}, got {count}')
+              write(path, text.replace(old, new))
+
+          write('engine/world/include/vice/world/light.hpp', r'''#pragma once
+
+#include <cmath>
+#include <cstdint>
+
+namespace vice::world {
+
+enum class LightType : std::uint8_t {
+    directional = 1,
+    point = 2,
+};
+
+struct LightColor {
+    float red = 1.0F;
+    float green = 1.0F;
+    float blue = 1.0F;
+
+    friend bool operator==(const LightColor&, const LightColor&) = default;
+};
+
+struct Light {
+    LightType type = LightType::directional;
+    LightColor color{};
+    float intensity = 1.0F;
+    float range = 0.0F;
+    bool enabled = true;
+
+    friend bool operator==(const Light&, const Light&) = default;
+};
+
+[[nodiscard]] inline bool valid(const Light& light) noexcept {
+    if (light.type != LightType::directional && light.type != LightType::point) return false;
+    if (!std::isfinite(light.color.red) || !std::isfinite(light.color.green) ||
+        !std::isfinite(light.color.blue) || light.color.red < 0.0F ||
+        light.color.green < 0.0F || light.color.blue < 0.0F ||
+        !std::isfinite(light.intensity) || light.intensity < 0.0F ||
+        !std::isfinite(light.range) || light.range < 0.0F) {
+        return false;
+    }
+    return light.type != LightType::point || light.range > 0.0F;
+}
+
+} // namespace vice::world
+''')
+
+          replace_once(
+              'engine/world/include/vice/world/world.hpp',
+              '#include <vice/world/entity.hpp>\n',
+              '#include <vice/world/entity.hpp>\n#include <vice/world/light.hpp>\n'
+          )
+          replace_once(
+              'engine/world/include/vice/world/world.hpp',
+              '    [[nodiscard]] std::optional<EntityId> primary_camera() const noexcept;\n\n',
+              '    [[nodiscard]] std::optional<EntityId> primary_camera() const noexcept;\n\n'
+              '    bool set_light(EntityId entity, Light light);\n'
+              '    bool clear_light(EntityId entity);\n'
+              '    [[nodiscard]] std::optional<Light> light(EntityId entity) const noexcept;\n\n'
+          )
+          replace_once(
+              'engine/world/include/vice/world/world.hpp',
+              '        std::optional<Camera> camera;\n        std::vector<ResourceReference> resource_references;\n',
+              '        std::optional<Camera> camera;\n        std::optional<Light> light;\n        std::vector<ResourceReference> resource_references;\n'
+          )
+
+          replace_all(
+              'engine/world/src/world.cpp',
+              '    slot.camera.reset();\n    slot.resource_references.clear();\n',
+              '    slot.camera.reset();\n    slot.light.reset();\n    slot.resource_references.clear();\n',
+              2
+          )
+          replace_once(
+              'engine/world/src/world.cpp',
+              '    slots_[entity.index].authored_transform.reset();\n    slots_[entity.index].camera.reset();\n    return true;\n',
+              '    slots_[entity.index].authored_transform.reset();\n    slots_[entity.index].camera.reset();\n    slots_[entity.index].light.reset();\n    return true;\n'
+          )
+          replace_once(
+              'engine/world/src/world.cpp',
+              '''std::optional<EntityId> World::primary_camera() const noexcept {
+    for (std::uint32_t index = 0; index < slots_.size(); ++index) {
+        const auto& slot = slots_[index];
+        if (slot.alive && slot.camera.has_value() && slot.camera->primary) {
+            return EntityId{index, slot.generation};
+        }
+    }
+    return std::nullopt;
+}
+
+''',
+              '''std::optional<EntityId> World::primary_camera() const noexcept {
+    for (std::uint32_t index = 0; index < slots_.size(); ++index) {
+        const auto& slot = slots_[index];
+        if (slot.alive && slot.camera.has_value() && slot.camera->primary) {
+            return EntityId{index, slot.generation};
+        }
+    }
+    return std::nullopt;
+}
+
+bool World::set_light(const EntityId entity, const Light light_value) {
+    if (!alive(entity) || !slots_[entity.index].spatial_state.has_value() || !valid(light_value)) {
+        return false;
+    }
+    slots_[entity.index].light = light_value;
+    return true;
+}
+
+bool World::clear_light(const EntityId entity) {
+    if (!alive(entity) || !slots_[entity.index].light.has_value()) return false;
+    slots_[entity.index].light.reset();
+    return true;
+}
+
+std::optional<Light> World::light(const EntityId entity) const noexcept {
+    if (!alive(entity)) return std::nullopt;
+    return slots_[entity.index].light;
+}
+
+'''
+          )
+
+          replace_once(
+              'engine/world/include/vice/world/snapshot.hpp',
+              '#include <vice/world/camera.hpp>\n',
+              '#include <vice/world/camera.hpp>\n#include <vice/world/light.hpp>\n'
+          )
+          replace_once(
+              'engine/world/include/vice/world/snapshot.hpp',
+              '    std::optional<Camera> camera;\n    std::vector<ResourceReference> resource_references;\n',
+              '    std::optional<Camera> camera;\n    std::optional<Light> light;\n    std::vector<ResourceReference> resource_references;\n'
+          )
+
+          replace_once(
+              'engine/world/src/primitives.cpp',
+              '            .camera = slot.camera,\n            .resource_references = slot.resource_references,\n',
+              '            .camera = slot.camera,\n            .light = slot.light,\n            .resource_references = slot.resource_references,\n'
+          )
+          replace_once(
+              'engine/world/src/primitives.cpp',
+              '''        if (entity_record.camera.has_value() &&
+            !restored.set_camera(*entity, *entity_record.camera)) {
+            return false;
+        }
+        for (const auto reference : entity_record.resource_references) {
+''',
+              '''        if (entity_record.camera.has_value() &&
+            !restored.set_camera(*entity, *entity_record.camera)) {
+            return false;
+        }
+        if (entity_record.light.has_value() &&
+            !restored.set_light(*entity, *entity_record.light)) {
+            return false;
+        }
+        for (const auto reference : entity_record.resource_references) {
+'''
+          )
+
+          replace_once(
+              'engine/world/include/vice/world/snapshot_file.hpp',
+              'inline constexpr std::uint32_t world_snapshot_file_format_version = 4U;',
+              'inline constexpr std::uint32_t world_snapshot_file_format_version = 5U;'
+          )
+
+          camera_encode = '''        append_u8(payload, entity.camera.has_value() ? 1U : 0U);
+        if (entity.camera.has_value()) {
+            append_u8(payload, static_cast<std::uint8_t>(entity.camera->projection));
+            append_f32(payload, entity.camera->vertical_fov_radians);
+            append_f32(payload, entity.camera->near_plane);
+            append_f32(payload, entity.camera->far_plane);
+            append_u8(payload, entity.camera->primary ? 1U : 0U);
+        }
+        append_u32(payload, static_cast<std::uint32_t>(entity.resource_references.size()));
+'''
+          light_encode = '''        append_u8(payload, entity.camera.has_value() ? 1U : 0U);
+        if (entity.camera.has_value()) {
+            append_u8(payload, static_cast<std::uint8_t>(entity.camera->projection));
+            append_f32(payload, entity.camera->vertical_fov_radians);
+            append_f32(payload, entity.camera->near_plane);
+            append_f32(payload, entity.camera->far_plane);
+            append_u8(payload, entity.camera->primary ? 1U : 0U);
+        }
+        append_u8(payload, entity.light.has_value() ? 1U : 0U);
+        if (entity.light.has_value()) {
+            append_u8(payload, static_cast<std::uint8_t>(entity.light->type));
+            append_f32(payload, entity.light->color.red);
+            append_f32(payload, entity.light->color.green);
+            append_f32(payload, entity.light->color.blue);
+            append_f32(payload, entity.light->intensity);
+            append_f32(payload, entity.light->range);
+            append_u8(payload, entity.light->enabled ? 1U : 0U);
+        }
+        append_u32(payload, static_cast<std::uint32_t>(entity.resource_references.size()));
+'''
+          replace_once('engine/world/src/snapshot_file.cpp', camera_encode, light_encode)
+
+          decode_anchor = '''        if (version >= 3U) {
+            std::uint32_t reference_count = 0;
+'''
+          light_decode = '''        if (version >= 5U) {
+            std::uint8_t has_light = 0;
+            if (!reader.read_u8(has_light)) {
+                result.diagnostics = "World snapshot ended inside entity light metadata.";
+                return result;
+            }
+            if (has_light > 1U) {
+                result.diagnostics = "World snapshot contains invalid entity light metadata.";
+                return result;
+            }
+            if (has_light != 0U) {
+                std::uint8_t type = 0;
+                std::uint8_t enabled = 0;
+                Light light;
+                if (!reader.read_u8(type) ||
+                    !reader.read_f32(light.color.red) ||
+                    !reader.read_f32(light.color.green) ||
+                    !reader.read_f32(light.color.blue) ||
+                    !reader.read_f32(light.intensity) ||
+                    !reader.read_f32(light.range) ||
+                    !reader.read_u8(enabled)) {
+                    result.diagnostics = "World snapshot ended inside entity light record.";
+                    return result;
+                }
+                light.type = static_cast<LightType>(type);
+                light.enabled = enabled != 0U;
+                if (enabled > 1U || !valid(light)) {
+                    result.diagnostics = "World snapshot contains an invalid entity light record.";
+                    return result;
+                }
+                entity.light = light;
+            }
+        }
+
+        if (version >= 3U) {
+            std::uint32_t reference_count = 0;
+'''
+          replace_once('engine/world/src/snapshot_file.cpp', decode_anchor, light_decode)
+
+          parser_anchor = '''                if (metadata == "resource") {
+'''
+          parser_light = '''                if (metadata == "light") {
+                    if (entity.light.has_value()) {
+                        fail("entity light is duplicated.");
+                        return result;
+                    }
+                    if (!entity.spatial_state.has_value()) {
+                        fail("light requires a spatial entity.");
+                        return result;
+                    }
+
+                    std::string type_text;
+                    std::string enabled_text;
+                    world::Light light;
+                    if (!(values >> type_text >> light.color.red >> light.color.green >>
+                            light.color.blue >> light.intensity)) {
+                        fail("entity light is incomplete.");
+                        return result;
+                    }
+                    if (type_text == "directional") {
+                        light.type = world::LightType::directional;
+                        light.range = 0.0F;
+                    } else if (type_text == "point") {
+                        light.type = world::LightType::point;
+                        if (!(values >> light.range)) {
+                            fail("point light range is missing.");
+                            return result;
+                        }
+                    } else {
+                        fail("light type must be `directional` or `point`.");
+                        return result;
+                    }
+                    if (!(values >> enabled_text)) {
+                        fail("light enabled state is missing.");
+                        return result;
+                    }
+                    if (enabled_text == "enabled") {
+                        light.enabled = true;
+                    } else if (enabled_text == "disabled") {
+                        light.enabled = false;
+                    } else {
+                        fail("light state must be `enabled` or `disabled`.");
+                        return result;
+                    }
+                    if (!world::valid(light)) {
+                        fail("entity light values are invalid.");
+                        return result;
+                    }
+                    entity.light = light;
+                    continue;
+                }
+
+                if (metadata == "resource") {
+'''
+          replace_once('tools/world_cooker/src/world_cooker.cpp', parser_anchor, parser_light)
+
+          replace_once(
+              'engine/runtime/include/vice/runtime/scene.hpp',
+              '#include <vice/world/world.hpp>\n',
+              '#include <vice/world/world.hpp>\n\n#include <cstddef>\n'
+          )
+          replace_once(
+              'engine/runtime/include/vice/runtime/scene.hpp',
+              '''struct RuntimeCameraView {
+    world::PersistentId entity{};
+    world::Camera camera{};
+    math::Vec3 position{};
+    math::Mat4 view_projection{};
+};
+
+''',
+              '''struct RuntimeCameraView {
+    world::PersistentId entity{};
+    world::Camera camera{};
+    math::Vec3 position{};
+    math::Mat4 view_projection{};
+};
+
+inline constexpr std::size_t max_runtime_lights = 8U;
+
+struct RuntimeLight {
+    world::PersistentId entity{};
+    world::Light light{};
+    math::Vec3 position{};
+    math::Vec3 direction{};
+};
+
+[[nodiscard]] std::vector<RuntimeLight> collect_runtime_lights(const world::World& world);
+
+'''
+          )
+
+          replace_once(
+              'engine/runtime/src/scene.cpp',
+              '''struct SceneConstants {
+    math::Mat4 view_projection{};
+    math::Mat4 model{};
+    float camera_position[4]{};
+    float light_direction[4]{};
+    float light_color[4]{};
+};
+
+static_assert(sizeof(SceneConstants) == 176U);
+''',
+              '''struct SceneLightConstants {
+    float position_or_direction[4]{};
+    float color_intensity[4]{};
+    float parameters[4]{};
+};
+
+struct SceneConstants {
+    math::Mat4 view_projection{};
+    math::Mat4 model{};
+    float camera_position[4]{};
+    float light_metadata[4]{};
+    std::array<SceneLightConstants, max_runtime_lights> lights{};
+};
+
+static_assert(sizeof(SceneLightConstants) == 48U);
+static_assert(sizeof(SceneConstants) == 544U);
+'''
+          )
+
+          runtime_insert_anchor = '''math::Mat4 runtime_model_matrix(const RenderMeshInstance& instance) noexcept {
+'''
+          runtime_collect = '''std::vector<RuntimeLight> collect_runtime_lights(const world::World& world) {
+    std::vector<RuntimeLight> result;
+    result.reserve(max_runtime_lights);
+    const auto snapshot = world.snapshot();
+    for (const auto& entity : snapshot.entities) {
+        if (result.size() >= max_runtime_lights) break;
+        if (!entity.spatial_state.has_value() || !entity.light.has_value() || !entity.light->enabled) continue;
+
+        const auto authored = entity.authored_transform.value_or(world::AuthoredTransform{});
+        RuntimeLight light{
+            .entity = entity.persistent_id,
+            .light = *entity.light,
+            .position = {
+                static_cast<float>(entity.spatial_state->global_position.x),
+                static_cast<float>(entity.spatial_state->global_position.y),
+                static_cast<float>(entity.spatial_state->global_position.z),
+            },
+            .direction = {0.0F, 0.0F, 0.0F},
+        };
+        if (light.light.type == world::LightType::directional) {
+            light.direction = math::normalize(rotate_vector(authored.rotation, {0.0F, 0.0F, -1.0F}));
+        }
+        result.push_back(light);
+    }
+    return result;
+}
+
+math::Mat4 runtime_model_matrix(const RenderMeshInstance& instance) noexcept {
+'''
+          replace_once('engine/runtime/src/scene.cpp', runtime_insert_anchor, runtime_collect)
+
+          replace_once(
+              'engine/runtime/src/scene.cpp',
+              '''        const SceneConstants constants{
+            .view_projection = view_projection,
+            .model = runtime_model_matrix(instance),
+            .camera_position = {camera_position.x, camera_position.y, camera_position.z, 1.0F},
+            .light_direction = {0.431934F, 0.863868F, 0.259161F, 0.0F},
+            .light_color = {4.2F, 4.0F, 3.7F, 1.0F},
+        };
+        if (!constants_iterator->second->write(0, std::as_bytes(std::span{&constants, 1}))) {
+''',
+              '''        auto runtime_lights = collect_runtime_lights(world);
+        if (runtime_lights.empty()) {
+            runtime_lights.push_back(RuntimeLight{
+                .light = world::Light{
+                    .type = world::LightType::directional,
+                    .color = {1.0F, 0.952381F, 0.880952F},
+                    .intensity = 4.2F,
+                    .range = 0.0F,
+                    .enabled = true,
+                },
+                .direction = {-0.431934F, -0.863868F, -0.259161F},
+            });
+        }
+
+        SceneConstants constants{
+            .view_projection = view_projection,
+            .model = runtime_model_matrix(instance),
+            .camera_position = {camera_position.x, camera_position.y, camera_position.z, 1.0F},
+        };
+        constants.light_metadata[0] = static_cast<float>(runtime_lights.size());
+        for (std::size_t light_index = 0; light_index < runtime_lights.size(); ++light_index) {
+            const auto& source = runtime_lights[light_index];
+            auto& destination = constants.lights[light_index];
+            if (source.light.type == world::LightType::directional) {
+                destination.position_or_direction[0] = source.direction.x;
+                destination.position_or_direction[1] = source.direction.y;
+                destination.position_or_direction[2] = source.direction.z;
+                destination.position_or_direction[3] = 0.0F;
+            } else {
+                destination.position_or_direction[0] = source.position.x;
+                destination.position_or_direction[1] = source.position.y;
+                destination.position_or_direction[2] = source.position.z;
+                destination.position_or_direction[3] = 1.0F;
+            }
+            destination.color_intensity[0] = source.light.color.red;
+            destination.color_intensity[1] = source.light.color.green;
+            destination.color_intensity[2] = source.light.color.blue;
+            destination.color_intensity[3] = source.light.intensity;
+            destination.parameters[0] = source.light.range;
+        }
+        if (!constants_iterator->second->write(0, std::as_bytes(std::span{&constants, 1}))) {
+'''
+          )
+
+          write('assets/shaders/vice_project_surface.hlsl', r'''static const uint VICE_MAX_LIGHTS = 8;
+
+struct ViceLight {
+    float4 position_or_direction;
+    float4 color_intensity;
+    float4 parameters;
+};
+
+cbuffer SceneFrame : register(b0, space0) {
+    column_major float4x4 view_projection;
+    column_major float4x4 model;
+    float4 camera_position;
+    float4 light_metadata;
+    ViceLight lights[VICE_MAX_LIGHTS];
+};
+
+cbuffer MaterialParams : register(b1, space0) {
+    float4 base_color;
+    float metallic;
+    float roughness;
+    float2 material_padding;
+};
+
+Texture2D<float4> base_color_texture : register(t0, space0);
+SamplerState base_color_sampler : register(s0, space0);
+
+struct VertexIn {
+    float3 position : POSITION0;
+    float3 color : COLOR0;
+    float3 normal : NORMAL0;
+    float2 uv : TEXCOORD0;
+};
+
+struct VertexOut {
+    float4 position : SV_Position;
+    float3 world_position : TEXCOORD0;
+    float3 world_normal : TEXCOORD1;
+    float3 color : COLOR0;
+    float2 uv : TEXCOORD2;
+};
+
+VertexOut vice_surface_vs(VertexIn input) {
+    VertexOut output;
+    const float4 world_position = mul(model, float4(input.position, 1.0));
+    output.position = mul(view_projection, world_position);
+    output.world_position = world_position.xyz;
+    output.world_normal = normalize(mul((float3x3)model, input.normal));
+    output.color = input.color;
+    output.uv = input.uv;
+    return output;
+}
+
+float distribution_ggx(float3 normal, float3 half_vector, float alpha) {
+    const float alpha_squared = alpha * alpha;
+    const float normal_half = saturate(dot(normal, half_vector));
+    const float denominator = normal_half * normal_half * (alpha_squared - 1.0) + 1.0;
+    return alpha_squared / max(3.14159265 * denominator * denominator, 0.0001);
+}
+
+float geometry_schlick_ggx(float normal_view, float k) {
+    return normal_view / max(normal_view * (1.0 - k) + k, 0.0001);
+}
+
+float3 fresnel_schlick(float cosine, float3 f0) {
+    return f0 + (1.0 - f0) * pow(1.0 - saturate(cosine), 5.0);
+}
+
+float3 evaluate_light(
+    ViceLight light,
+    float3 world_position,
+    float3 normal,
+    float3 view_direction,
+    float3 albedo,
+    float metallic_value,
+    float roughness_value
+) {
+    float3 to_light;
+    float attenuation = 1.0;
+    if (light.position_or_direction.w < 0.5) {
+        to_light = normalize(-light.position_or_direction.xyz);
+    } else {
+        const float3 delta = light.position_or_direction.xyz - world_position;
+        const float distance = max(length(delta), 0.0001);
+        to_light = delta / distance;
+        const float range = max(light.parameters.x, 0.0001);
+        const float smooth_range = saturate(1.0 - distance / range);
+        attenuation = smooth_range * smooth_range;
+    }
+
+    const float normal_light = saturate(dot(normal, to_light));
+    if (normal_light <= 0.0 || attenuation <= 0.0) return float3(0.0, 0.0, 0.0);
+
+    const float3 half_vector = normalize(view_direction + to_light);
+    const float normal_view = saturate(dot(normal, view_direction));
+    const float half_view = saturate(dot(half_vector, view_direction));
+    const float clamped_roughness = clamp(roughness_value, 0.04, 1.0);
+    const float alpha = clamped_roughness * clamped_roughness;
+    const float3 f0 = lerp(float3(0.04, 0.04, 0.04), albedo, saturate(metallic_value));
+    const float3 fresnel = fresnel_schlick(half_view, f0);
+    const float distribution = distribution_ggx(normal, half_vector, alpha);
+    const float geometry_k = ((clamped_roughness + 1.0) * (clamped_roughness + 1.0)) / 8.0;
+    const float geometry = geometry_schlick_ggx(normal_view, geometry_k) *
+        geometry_schlick_ggx(normal_light, geometry_k);
+    const float3 specular = distribution * geometry * fresnel /
+        max(4.0 * normal_view * normal_light, 0.0001);
+    const float3 kd = (1.0 - fresnel) * (1.0 - saturate(metallic_value));
+    const float3 diffuse = kd * albedo / 3.14159265;
+    const float3 radiance = light.color_intensity.rgb * light.color_intensity.w * attenuation;
+    return (diffuse + specular) * radiance * normal_light;
+}
+
+float4 vice_surface_fs(VertexOut input) : SV_Target0 {
+    const float4 sampled = base_color_texture.Sample(base_color_sampler, input.uv);
+    const float4 albedo_sample = sampled * base_color * float4(input.color, 1.0);
+    const float3 albedo = albedo_sample.rgb;
+    const float3 normal = normalize(input.world_normal);
+    const float3 view_direction = normalize(camera_position.xyz - input.world_position);
+
+    float3 direct = float3(0.0, 0.0, 0.0);
+    const uint light_count = min((uint)light_metadata.x, VICE_MAX_LIGHTS);
+    for (uint index = 0; index < light_count; ++index) {
+        direct += evaluate_light(
+            lights[index],
+            input.world_position,
+            normal,
+            view_direction,
+            albedo,
+            metallic,
+            roughness
+        );
+    }
+
+    const float3 ambient = albedo * 0.035;
+    return float4(ambient + direct, albedo_sample.a);
+}
+''')
+
+          world_path = 'assets/worlds/vice_lab.vworld'
+          world_text = read(world_path)
+          world_text = world_text.replace(
+              '# render mat:   70000000-0000-4000-8000-000000000001\n',
+              '# render mat:   70000000-0000-4000-8000-000000000001\n'
+              '# sun light:    61000000-0000-4000-8000-000000000001\n'
+              '# point light:  61000000-0000-4000-8000-000000000002\n'
+          )
+          anchor = 'entity 60000000-0000-4000-8000-000000000001 spatial -4 6 16 1 transform -0.17364818 0 0 0.98480775 1 1 1 camera perspective 60 0.05 500 primary\n'
+          if anchor not in world_text:
+              raise SystemExit('VICE Lab camera anchor missing')
+          world_text = world_text.replace(
+              anchor,
+              anchor +
+              'entity 61000000-0000-4000-8000-000000000001 spatial -4 8 6 1 transform -0.25881905 0 0 0.96592583 1 1 1 light directional 1 0.95 0.85 3 enabled\n'
+              'entity 61000000-0000-4000-8000-000000000002 spatial -6 4 2 1 light point 1 0.55 0.30 6 14 enabled\n'
+          )
+          write(world_path, world_text)
+
+          replace_once(
+              'apps/vice_editor/src/project_session.cpp',
+              '        "entity a0000000-0000-4000-8000-000000000001 spatial 0 3 8 1 camera perspective 60 0.05 1000 primary\\n";\n',
+              '        "entity a0000000-0000-4000-8000-000000000001 spatial 0 3 8 1 camera perspective 60 0.05 1000 primary\\n"\n'
+              '        "entity a0000000-0000-4000-8000-000000000002 spatial 0 6 4 1 transform -0.25881905 0 0 0.96592583 1 1 1 light directional 1 0.95 0.9 3 enabled\\n";\n'
+          )
+
+          test_path = 'tests/world_snapshot_file_tests.cpp'
+          test = read(test_path)
+          replace = '''    if (version >= 3U) {
+        append_u32(payload, 0U);
+    }
+'''
+          repl = '''    if (version >= 4U) {
+        append_u8(payload, 1U);
+        append_u8(payload, static_cast<std::uint8_t>(CameraProjection::perspective));
+        append_f32(payload, 1.0471975512F);
+        append_f32(payload, 0.05F);
+        append_f32(payload, 500.0F);
+        append_u8(payload, 1U);
+    }
+    if (version >= 3U) {
+        append_u32(payload, 0U);
+    }
+'''
+          if replace not in test:
+              raise SystemExit('legacy snapshot version anchor missing')
+          test = test.replace(replace, repl, 1)
+          test = test.replace(
+              'entity 10000000-0000-4000-8000-000000000001 spatial 5 1 0 1 camera perspective 72 0.1 750 primary\n',
+              'entity 10000000-0000-4000-8000-000000000001 spatial 5 1 0 1 camera perspective 72 0.1 750 primary light directional 1 0.9 0.8 2.5 enabled\n',
+              1
+          )
+          test = test.replace(
+              '    assert(parsed.snapshot->entities[0].camera->primary);\n',
+              '    assert(parsed.snapshot->entities[0].camera->primary);\n'
+              '    assert(parsed.snapshot->entities[0].light.has_value());\n'
+              '    assert(parsed.snapshot->entities[0].light->type == world::LightType::directional);\n'
+              '    assert(parsed.snapshot->entities[0].light->intensity == 2.5F);\n',
+              1
+          )
+          test = test.replace(
+              '    assert(restored.primary_camera() == player);\n',
+              '    assert(restored.primary_camera() == player);\n'
+              '    assert(restored.light(*player).has_value());\n'
+              '    assert(restored.light(*player)->color.green == 0.9F);\n',
+              1
+          )
+          test = test.replace(
+              '    for (const std::uint32_t legacy_version : {1U, 2U, 3U}) {\n',
+              '    for (const std::uint32_t legacy_version : {1U, 2U, 3U, 4U}) {\n',
+              1
+          )
+          test = test.replace(
+              '        assert(!legacy.snapshot->entities[0].camera.has_value());\n',
+              '        if (legacy_version >= 4U) {\n'
+              '            assert(legacy.snapshot->entities[0].camera.has_value());\n'
+              '            assert(legacy.snapshot->entities[0].camera->primary);\n'
+              '        } else {\n'
+              '            assert(!legacy.snapshot->entities[0].camera.has_value());\n'
+              '        }\n'
+              '        assert(!legacy.snapshot->entities[0].light.has_value());\n',
+              1
+          )
+          invalid_camera = '''    constexpr std::string_view duplicate_primary_camera = R"(
+'''
+          invalid_light = '''    constexpr std::string_view invalid_light = R"(
+vice-world-source 1
+region 1 1 0 0 0 0 0 0 full none
+entity 10000000-0000-4000-8000-000000000001 spatial 0 0 0 1 light point 1 1 1 2 0 enabled
+)";
+    assert(!tools::world_cooker::parse_source_manifest(invalid_light).snapshot.has_value());
+
+    constexpr std::string_view duplicate_light = R"(
+vice-world-source 1
+region 1 1 0 0 0 0 0 0 full none
+entity 10000000-0000-4000-8000-000000000001 spatial 0 0 0 1 light directional 1 1 1 1 enabled light directional 1 1 1 1 enabled
+)";
+    assert(!tools::world_cooker::parse_source_manifest(duplicate_light).snapshot.has_value());
+
+    constexpr std::string_view duplicate_primary_camera = R"(
+'''
+          if invalid_camera not in test:
+              raise SystemExit('invalid camera test anchor missing')
+          test = test.replace(invalid_camera, invalid_light, 1)
+          write(test_path, test)
+
+          write('tests/world_light_tests.cpp', r'''#include <vice/world/world.hpp>
+
+#include <cassert>
+#include <limits>
+
+int main() {
+    using namespace vice::world;
+
+    World world;
+    assert(world.register_region(RegionDesc{
+        .id = RegionId{1U},
+        .simulation_island = SimulationIslandId{1U},
+        .bounds = RegionBounds{.min = {-20.0F, -20.0F, -20.0F}, .max = {20.0F, 20.0F, 20.0F}},
+    }));
+
+    const auto entity = world.create_entity();
+    assert(!world.set_light(entity, Light{}));
+    assert(world.set_spatial_state(entity, SpatialState{.global_position = {}, .region = RegionId{1U}}));
+
+    Light directional;
+    directional.type = LightType::directional;
+    directional.color = {1.0F, 0.5F, 0.25F};
+    directional.intensity = 3.0F;
+    assert(world.set_light(entity, directional));
+    assert(world.light(entity) == std::optional{directional});
+
+    Light invalid = directional;
+    invalid.intensity = std::numeric_limits<float>::quiet_NaN();
+    assert(!world.set_light(entity, invalid));
+    invalid = directional;
+    invalid.type = LightType::point;
+    invalid.range = 0.0F;
+    assert(!world.set_light(entity, invalid));
+
+    Light point = directional;
+    point.type = LightType::point;
+    point.range = 12.0F;
+    assert(world.set_light(entity, point));
+    assert(world.light(entity) == std::optional{point});
+
+    const auto snapshot = world.snapshot();
+    assert(snapshot.entities.size() == 1U);
+    assert(snapshot.entities[0].light == std::optional{point});
+    World restored;
+    assert(restored.restore(snapshot));
+    const auto restored_entity = restored.find(snapshot.entities[0].persistent_id);
+    assert(restored_entity.has_value());
+    assert(restored.light(*restored_entity) == std::optional{point});
+
+    assert(world.clear_spatial_state(entity));
+    assert(!world.light(entity).has_value());
+    return 0;
+}
+''')
+
+          replace_once(
+              'tests/CMakeLists.txt',
+              '''add_test(NAME vice_world_tests COMMAND vice_world_tests)
+
+''',
+              '''add_test(NAME vice_world_tests COMMAND vice_world_tests)
+
+add_executable(vice_world_light_tests world_light_tests.cpp)
+target_link_libraries(vice_world_light_tests PRIVATE VICE::World)
+target_compile_features(vice_world_light_tests PRIVATE cxx_std_23)
+vice_enable_warnings(vice_world_light_tests)
+add_test(NAME vice_world_light_tests COMMAND vice_world_light_tests)
+
+'''
+          )
+
+          write('tests/runtime_light_tests.cpp', r'''#include <vice/runtime/scene.hpp>
+#include <vice/world/world.hpp>
+
+#include <cassert>
+#include <cmath>
+#include <string>
+
+namespace {
+
+vice::world::PersistentId id(const int value) {
+    char text[37]{};
+    std::snprintf(text, sizeof(text), "61000000-0000-4000-8000-%012d", value);
+    const auto parsed = vice::world::PersistentId::parse(text);
+    assert(parsed.has_value());
+    return *parsed;
+}
+
+} // namespace
+
+int main() {
+    using namespace vice;
+
+    world::World scene;
+    assert(scene.register_region(world::RegionDesc{
+        .id = world::RegionId{1U},
+        .simulation_island = world::SimulationIslandId{1U},
+        .bounds = world::RegionBounds{.min = {-50.0F, -50.0F, -50.0F}, .max = {50.0F, 50.0F, 50.0F}},
+    }));
+
+    for (int index = 1; index <= 10; ++index) {
+        const auto entity = scene.create_entity(id(index));
+        assert(entity.has_value());
+        assert(scene.set_spatial_state(*entity, world::SpatialState{
+            .global_position = {static_cast<double>(index), 2.0, 3.0},
+            .region = world::RegionId{1U},
+        }));
+        world::Light light;
+        light.type = index == 1 ? world::LightType::directional : world::LightType::point;
+        light.range = light.type == world::LightType::point ? 20.0F : 0.0F;
+        light.intensity = static_cast<float>(index);
+        assert(scene.set_light(*entity, light));
+    }
+
+    auto lights = runtime::collect_runtime_lights(scene);
+    assert(lights.size() == runtime::max_runtime_lights);
+    assert(lights.front().entity == id(1));
+    assert(lights.back().entity == id(8));
+    assert(lights.front().light.type == world::LightType::directional);
+    assert(std::abs(lights.front().direction.x) < 0.0001F);
+    assert(std::abs(lights.front().direction.y) < 0.0001F);
+    assert(std::abs(lights.front().direction.z + 1.0F) < 0.0001F);
+
+    const auto first = scene.find(id(1));
+    assert(first.has_value());
+    assert(scene.set_authored_transform(*first, world::AuthoredTransform{
+        .rotation = {0.0F, 1.0F, 0.0F, 0.0F},
+    }));
+    lights = runtime::collect_runtime_lights(scene);
+    assert(std::abs(lights.front().direction.z - 1.0F) < 0.0001F);
+
+    const auto second = scene.find(id(2));
+    assert(second.has_value());
+    assert(scene.set_spatial_state(*second, world::SpatialState{
+        .global_position = {17.0, 4.0, -2.0},
+        .region = world::RegionId{1U},
+    }));
+    lights = runtime::collect_runtime_lights(scene);
+    assert(lights[1].position.x == 17.0F);
+    assert(lights[1].position.y == 4.0F);
+    assert(lights[1].position.z == -2.0F);
+
+    auto disabled = scene.light(*first);
+    assert(disabled.has_value());
+    disabled->enabled = false;
+    assert(scene.set_light(*first, *disabled));
+    lights = runtime::collect_runtime_lights(scene);
+    assert(lights.front().entity == id(2));
+    assert(lights.back().entity == id(9));
+    return 0;
+}
+''')
+          replace_once(
+              'tests/runtime/CMakeLists.txt',
+              '''add_test(NAME vice_runtime_render_material_tests COMMAND vice_runtime_render_material_tests)
+
+''',
+              '''add_test(NAME vice_runtime_render_material_tests COMMAND vice_runtime_render_material_tests)
+
+add_executable(
+  vice_runtime_light_tests
+  ../runtime_light_tests.cpp
+)
+target_link_libraries(vice_runtime_light_tests PRIVATE VICE::Runtime)
+target_compile_features(vice_runtime_light_tests PRIVATE cxx_std_23)
+vice_enable_warnings(vice_runtime_light_tests)
+add_test(NAME vice_runtime_light_tests COMMAND vice_runtime_light_tests)
+
+'''
+          )
+
+          # Keep the patch workflow out of the resulting feature branch.
+          Path('.github/workflows/vice-authored-lights-core-patch.yml').unlink()
+          PY
+      - name: Commit core authored lights
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Add authored World lights and runtime lighting"
+          git push origin HEAD:render/authored-lights
