@@ -1,6 +1,7 @@
 #pragma once
 
 #include <vice/render/rhi.hpp>
+#include <vice/render/texture_asset.hpp>
 
 #include <array>
 #include <cstddef>
@@ -13,7 +14,11 @@
 
 namespace vice::render {
 
-inline constexpr std::uint32_t render_material_asset_format_version = 1U;
+inline constexpr std::uint32_t render_material_asset_format_version_v1 = 1U;
+inline constexpr std::uint32_t render_material_asset_format_version_v2 = 2U;
+inline constexpr std::uint32_t render_material_asset_format_version = render_material_asset_format_version_v2;
+inline constexpr std::uint32_t render_material_asset_min_supported_version =
+    render_material_asset_format_version_v1;
 inline constexpr std::size_t render_material_asset_magic_size = 8U;
 inline constexpr std::size_t render_material_stable_id_size = 16U;
 
@@ -31,6 +36,16 @@ struct RenderMaterialAsset {
     RenderMaterialStableId stable_id{};
     std::uint64_t source_fingerprint = 0U;
     Color base_color{1.0F, 1.0F, 1.0F, 1.0F};
+    float metallic = 0.0F;
+    float roughness = 1.0F;
+    TextureStableId base_color_texture{};
+    Filter min_filter = Filter::linear;
+    Filter mag_filter = Filter::linear;
+    Filter mip_filter = Filter::linear;
+    AddressMode address_u = AddressMode::repeat;
+    AddressMode address_v = AddressMode::repeat;
+    AddressMode address_w = AddressMode::repeat;
+    std::uint32_t max_anisotropy = 1U;
     std::string vertex_shader_manifest;
     std::string fragment_shader_manifest;
 };
