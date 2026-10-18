@@ -47,6 +47,7 @@ add_subdirectory(engine/runtime)
 
 if(VICE_BUILD_EDITOR OR VICE_BUILD_TOOLS)
   add_subdirectory(tools/world_cooker)
+  add_subdirectory(tools/mesh_cooker)
 endif()
 
 if(VICE_BUILD_TOOLS)
@@ -56,7 +57,6 @@ if(VICE_BUILD_TOOLS)
     add_subdirectory(tools/collision_import)
     add_subdirectory(tools/rigid_material_cooker)
   endif()
-  add_subdirectory(tools/mesh_cooker)
 endif()
 
 if(VICE_BUILD_LAB)
