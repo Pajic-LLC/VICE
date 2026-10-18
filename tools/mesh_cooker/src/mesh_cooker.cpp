@@ -289,7 +289,7 @@ ParseResult parse_source_manifest(const std::string_view source) {
 CookResult cook(const MeshSource& source) {
     CookResult result;
     if (source.name.empty() || source.vertices.size() < 3U || source.indices.size() < 3U ||
-        source.indices.size() % 3U != 0U || !render::valid(source.stable_id)) {
+        source.indices.size() % 3U != 0U) {
         result.diagnostics = "Mesh source is incomplete.";
         return result;
     }
