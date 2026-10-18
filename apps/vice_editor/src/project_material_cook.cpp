@@ -16,10 +16,7 @@ namespace {
 
 [[nodiscard]] std::string path_text(const std::filesystem::path& path) {
     const auto value = path.generic_u8string();
-    return std::string{
-        reinterpret_cast<const char*>(value.data()),
-        value.size()
-    };
+    return std::string{reinterpret_cast<const char*>(value.data()), value.size()};
 }
 
 [[nodiscard]] std::optional<std::string> read_text(
@@ -92,7 +89,7 @@ namespace {
     );
 }
 
-[[nodiscard]] bool supported_material_reflection(
+[[nodiscard]] bool supported_v1_reflection(
     const tools::shader_cooker::ShaderReflection& reflection
 ) noexcept {
     return reflection.valid && std::all_of(
@@ -106,6 +103,42 @@ namespace {
     );
 }
 
+[[nodiscard]] bool supported_v2_vertex_reflection(
+    const tools::shader_cooker::ShaderReflection& reflection
+) noexcept {
+    return supported_v1_reflection(reflection);
+}
+
+[[nodiscard]] bool supported_v2_fragment_reflection(
+    const tools::shader_cooker::ShaderReflection& reflection
+) noexcept {
+    return reflection.valid && std::all_of(
+        reflection.resources.begin(),
+        reflection.resources.end(),
+        [](const tools::shader_cooker::ShaderResourceReflection& resource) {
+            if (resource.space != 0U || resource.count != 1U || resource.unbounded) return false;
+            if (resource.register_class == tools::shader_cooker::ShaderRegisterClass::constant_buffer) {
+                return resource.binding == 0U || resource.binding == 1U;
+            }
+            if (resource.register_class == tools::shader_cooker::ShaderRegisterClass::shader_resource) {
+                return resource.binding == 0U;
+            }
+            if (resource.register_class == tools::shader_cooker::ShaderRegisterClass::sampler) {
+                return resource.binding == 0U;
+            }
+            return false;
+        }
+    );
+}
+
+[[nodiscard]] bool texture_available(
+    const render::TextureStableId& texture,
+    const std::span<const world::ResourceId> available
+) noexcept {
+    const world::ResourceId id{world::PersistentId{texture}};
+    return std::find(available.begin(), available.end(), id) != available.end();
+}
+
 [[nodiscard]] std::string shader_failure(
     const std::filesystem::path& material,
     const std::string_view stage,
@@ -117,7 +150,10 @@ namespace {
 
 } // namespace
 
-ProjectMaterialCookResult cook_project_render_materials(const ProjectSession& session) {
+ProjectMaterialCookResult cook_project_render_materials(
+    const ProjectSession& session,
+    const std::span<const world::ResourceId> available_textures
+) {
     ProjectMaterialCookResult result;
     const auto& source_root = session.asset_root();
     const auto& cooked_root = session.cooked_root();
@@ -166,6 +202,13 @@ ProjectMaterialCookResult cook_project_render_materials(const ProjectSession& se
                 "`: " + parsed.diagnostics;
             return result;
         }
+        const bool textured = parsed.source->version >=
+            tools::render_material_cooker::render_material_source_format_version_v2;
+        if (textured && !texture_available(parsed.source->base_color_texture, available_textures)) {
+            result.diagnostics = "Render material `" + path_text(iterator->path()) +
+                "` references a base-color texture that this project did not cook.";
+            return result;
+        }
 
         const auto shader_source = (source_root / parsed.source->shader_source).lexically_normal();
         if (!within_root(source_root, shader_source) ||
@@ -196,14 +239,16 @@ ProjectMaterialCookResult cook_project_render_materials(const ProjectSession& se
             result.diagnostics = shader_failure(iterator->path(), "vertex", vertex);
             return result;
         }
-        if (!supported_material_reflection(vertex.reflection) ||
-            !has_binding(
+        const bool vertex_supported = textured
+            ? supported_v2_vertex_reflection(vertex.reflection)
+            : supported_v1_reflection(vertex.reflection);
+        if (!vertex_supported || !has_binding(
                 vertex.reflection,
                 tools::shader_cooker::ShaderRegisterClass::constant_buffer,
                 0U
             )) {
             result.diagnostics = "Render material vertex shader `" + path_text(shader_source) +
-                "` must use the VICE scene constant buffer at b0, space0 and may only use b0/b1 constant buffers.";
+                "` must use the VICE scene constant buffer at b0, space0 without unsupported resources.";
             return result;
         }
 
@@ -219,14 +264,30 @@ ProjectMaterialCookResult cook_project_render_materials(const ProjectSession& se
             result.diagnostics = shader_failure(iterator->path(), "fragment", fragment);
             return result;
         }
-        if (!supported_material_reflection(fragment.reflection) ||
-            !has_binding(
+        const bool fragment_supported = textured
+            ? supported_v2_fragment_reflection(fragment.reflection)
+            : supported_v1_reflection(fragment.reflection);
+        const bool fragment_required = has_binding(
+            fragment.reflection,
+            tools::shader_cooker::ShaderRegisterClass::constant_buffer,
+            1U
+        ) && (!textured || (
+            has_binding(
                 fragment.reflection,
-                tools::shader_cooker::ShaderRegisterClass::constant_buffer,
-                1U
-            )) {
-            result.diagnostics = "Render material fragment shader `" + path_text(shader_source) +
-                "` must use the VICE material constant buffer at b1, space0 and may only use b0/b1 constant buffers.";
+                tools::shader_cooker::ShaderRegisterClass::shader_resource,
+                0U
+            ) && has_binding(
+                fragment.reflection,
+                tools::shader_cooker::ShaderRegisterClass::sampler,
+                0U
+            )
+        ));
+        if (!fragment_supported || !fragment_required) {
+            result.diagnostics = textured
+                ? "Render material v2 fragment shader `" + path_text(shader_source) +
+                    "` must use b1 material constants, t0 base-color texture, and s0 sampler in space0."
+                : "Render material fragment shader `" + path_text(shader_source) +
+                    "` must use the VICE material constant buffer at b1, space0.";
             return result;
         }
 
