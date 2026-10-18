@@ -92,6 +92,11 @@ namespace {
         rollback_entity();
         return false;
     }
+    if (command.entity.light.has_value() &&
+        !world.set_light(*entity, *command.entity.light)) {
+        rollback_entity();
+        return false;
+    }
     for (const auto reference : command.entity.resource_references) {
         if (!world.set_resource_reference(*entity, reference)) {
             rollback_entity();
@@ -276,6 +281,30 @@ bool apply_camera_states(
     return false;
 }
 
+std::optional<EntityLightState> capture_entity_light(
+    const world::World& world,
+    const world::PersistentId persistent_id
+) {
+    const auto entity = world.find(persistent_id);
+    if (!entity.has_value()) return std::nullopt;
+    return EntityLightState{
+        .persistent_id = persistent_id,
+        .light = world.light(*entity),
+    };
+}
+
+bool apply_entity_light(world::World& world, const EntityLightState& state) {
+    if (state.persistent_id.is_nil()) return false;
+    const auto entity = world.find(state.persistent_id);
+    if (!entity.has_value()) return false;
+    const auto previous = world.light(*entity);
+    if (previous.has_value() && !world.clear_light(*entity)) return false;
+    if (!state.light.has_value()) return true;
+    if (world.set_light(*entity, *state.light)) return true;
+    if (previous.has_value()) (void)world.set_light(*entity, *previous);
+    return false;
+}
+
 bool CommandHistory::record(TransformEntry entry) {
     if (entry.persistent_id.is_nil() || entry.before == entry.after) {
         return false;
@@ -285,6 +314,14 @@ bool CommandHistory::record(TransformEntry entry) {
 
 bool CommandHistory::record(CameraEntry entry) {
     if (entry.before.empty() || entry.before == entry.after) return false;
+    return record_entry(Entry{std::move(entry)});
+}
+
+bool CommandHistory::record(LightEntry entry) {
+    if (entry.before.persistent_id.is_nil() || entry.before.persistent_id != entry.after.persistent_id ||
+        entry.before == entry.after) {
+        return false;
+    }
     return record_entry(Entry{std::move(entry)});
 }
 
@@ -320,6 +357,8 @@ bool CommandHistory::undo(world::World& world) {
                 return apply_entity_transform(world, command.persistent_id, command.before);
             } else if constexpr (std::is_same_v<Command, CameraEntry>) {
                 return apply_camera_states(world, command.before);
+            } else if constexpr (std::is_same_v<Command, LightEntry>) {
+                return apply_entity_light(world, command.before);
             } else {
                 return destroy_snapshot_entity(world, command);
             }
@@ -345,6 +384,8 @@ bool CommandHistory::redo(world::World& world) {
                 return apply_entity_transform(world, command.persistent_id, command.after);
             } else if constexpr (std::is_same_v<Command, CameraEntry>) {
                 return apply_camera_states(world, command.after);
+            } else if constexpr (std::is_same_v<Command, LightEntry>) {
+                return apply_entity_light(world, command.after);
             } else {
                 return create_snapshot_entity(world, command);
             }
@@ -475,6 +516,7 @@ std::vector<HierarchyEntry> build_hierarchy(const world::World& world) {
             .persistent_id = entity.persistent_id,
             .spatial_state = entity.spatial_state,
             .camera = entity.camera,
+            .light = entity.light,
         });
     }
     std::sort(entries.begin(), entries.end(), [](const auto& left, const auto& right) {
@@ -498,6 +540,7 @@ std::optional<InspectorData> project_inspector(
     inspector.spatial_state = world.spatial_state(*entity);
     inspector.authored_transform = world.authored_transform(*entity);
     inspector.camera = world.camera(*entity);
+    inspector.light = world.light(*entity);
     const auto references = world.resource_references(*entity);
     inspector.resource_references.assign(references.begin(), references.end());
     inspector.simulation_island = world.simulation_island(*entity);
