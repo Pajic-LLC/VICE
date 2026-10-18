@@ -1,6 +1,7 @@
 #include <vice/editor/project_build.hpp>
 #include <vice/editor/project_session.hpp>
 
+#include <vice/project/project.hpp>
 #include <vice/world/snapshot_file.hpp>
 
 #include <cstdlib>
@@ -31,6 +32,11 @@ void require(const bool condition, const std::string_view message) {
 }
 
 void write_text(const std::filesystem::path& path, const std::string_view text) {
+    std::error_code error;
+    if (!path.parent_path().empty()) {
+        std::filesystem::create_directories(path.parent_path(), error);
+        require(!error, "text file parent directory");
+    }
     std::ofstream output{path, std::ios::binary | std::ios::trunc};
     require(static_cast<bool>(output), "text file open");
     output << text;
@@ -59,6 +65,8 @@ int main() {
         "vice-project 1\n"
         "id 43000000-0000-4000-8000-000000000133\n"
         "name \"Build Test\"\n"
+        "game_name \"Palma Game\"\n"
+        "game_target \"palma-game\"\n"
         "assets \"assets\"\n"
         "startup_world \"worlds/main.vworld\"\n"
     );
@@ -69,7 +77,7 @@ int main() {
     );
 
     std::string diagnostics;
-    const auto session = editor::ProjectSession::open(
+    auto session = editor::ProjectSession::open(
         manifest_path,
         cache_base,
         state_base,
@@ -93,21 +101,82 @@ int main() {
     require(loaded.snapshot.has_value(), "cooked startup World loads");
     require(loaded.snapshot->regions.size() == 1U, "cooked startup World region count");
 
-    const auto player = root / "bin" / "vice_player";
-    const auto request = editor::project_run_request(*session, player);
-    require(request.executable == player, "run executable");
-    require(request.arguments.size() == 2U, "run argument count");
+#ifdef _WIN32
+    const auto runtime_host = root / "bin" / "vice_player.exe";
+    const std::string target_filename = "palma-game.exe";
+#else
+    const auto runtime_host = root / "bin" / "vice_player";
+    const std::string target_filename = "palma-game";
+#endif
+    write_text(runtime_host, "VICE runtime host placeholder\n");
+
+    std::error_code permission_error;
+    const auto host_permissions = std::filesystem::status(runtime_host, permission_error).permissions();
+    require(!permission_error, "runtime host permissions read");
+    std::filesystem::permissions(
+        runtime_host,
+        host_permissions | std::filesystem::perms::owner_exec,
+        std::filesystem::perm_options::replace,
+        permission_error
+    );
+    require(!permission_error, "runtime host permissions write");
+
+    const auto game_build = editor::build_game_target(*session, runtime_host);
+    require(static_cast<bool>(game_build), "game target build succeeds");
+    require(game_build.game_target == "palma-game", "game target identity");
+
+    const auto expected_output = (
+        project_root / ".vice" / "build" / "development" / "palma-game"
+    ).lexically_normal();
+    require(game_build.game_output_root == expected_output, "game output root");
+    require(game_build.game_executable == expected_output / target_filename, "target executable path");
+    require(std::filesystem::is_regular_file(game_build.game_executable), "target executable exists");
     require(
-        request.arguments[0] == path_text(std::filesystem::absolute(manifest_path).lexically_normal()),
-        "run manifest argument"
+        game_build.runtime_manifest == expected_output / "vice.runtime.viceproj",
+        "runtime manifest path"
+    );
+    require(std::filesystem::is_regular_file(game_build.runtime_manifest), "runtime manifest exists");
+
+    const auto runtime_manifest = project::load_manifest(game_build.runtime_manifest);
+    require(runtime_manifest.manifest.has_value(), "runtime manifest loads");
+    require(runtime_manifest.manifest->game_target == "palma-game", "runtime manifest target");
+    require(runtime_manifest.manifest->game_name == "Palma Game", "runtime manifest display name");
+
+    const auto expected_runtime_world = (
+        expected_output /
+        "content" /
+        "43000000-0000-4000-8000-000000000133" /
+        "worlds" /
+        "main.vworldc"
+    ).lexically_normal();
+    require(std::filesystem::is_regular_file(expected_runtime_world), "runtime startup World exists");
+    const auto runtime_world = world::load_world_snapshot(expected_runtime_world);
+    require(runtime_world.snapshot.has_value(), "runtime startup World loads");
+
+    const auto game_request = editor::game_run_request(game_build);
+    require(game_request.executable == game_build.game_executable, "game run executable");
+    require(game_request.arguments.empty(), "staged game target needs no arguments");
+    require(game_request.working_directory == expected_output, "game run working directory");
+
+    const auto compatibility_request = editor::project_run_request(*session, runtime_host);
+    require(compatibility_request.executable == runtime_host, "compatibility run executable");
+    require(compatibility_request.arguments.size() == 2U, "compatibility argument count");
+    require(
+        compatibility_request.arguments[0] == path_text(std::filesystem::absolute(manifest_path).lexically_normal()),
+        "compatibility manifest argument"
     );
     require(
-        request.arguments[1] == path_text(std::filesystem::absolute(cache_base).lexically_normal()),
-        "run cooked-cache argument"
+        compatibility_request.arguments[1] == path_text(std::filesystem::absolute(cache_base).lexically_normal()),
+        "compatibility cooked-cache argument"
     );
+
+    auto retargeted = session->manifest();
+    retargeted.game_target = "palma-preview";
+    require(session->apply_manifest(std::move(retargeted), &diagnostics), "live game target update");
     require(
-        request.working_directory == std::filesystem::absolute(project_root).lexically_normal(),
-        "run working directory"
+        session->game_output_root() ==
+            (project_root / ".vice" / "build" / "development" / "palma-preview").lexically_normal(),
+        "retargeted output root"
     );
 
     write_text(startup_world, "this is not a VICE World\n");
