@@ -34,6 +34,7 @@ EntityId World::allocate(const PersistentId persistent_id) {
     slot.persistent_id = persistent_id;
     slot.spatial_state.reset();
     slot.authored_transform.reset();
+    slot.camera.reset();
     slot.resource_references.clear();
     slot.alive = true;
 
@@ -53,6 +54,7 @@ bool World::destroy_entity(const EntityId entity) {
     slot.persistent_id = PersistentId{};
     slot.spatial_state.reset();
     slot.authored_transform.reset();
+    slot.camera.reset();
     slot.resource_references.clear();
     slot.alive = false;
 
@@ -268,6 +270,7 @@ bool World::clear_spatial_state(const EntityId entity) {
     }
     slots_[entity.index].spatial_state.reset();
     slots_[entity.index].authored_transform.reset();
+    slots_[entity.index].camera.reset();
     return true;
 }
 
@@ -323,6 +326,48 @@ bool World::clear_authored_transform(const EntityId entity) {
     }
     slots_[entity.index].authored_transform.reset();
     return true;
+}
+
+bool World::set_camera(const EntityId entity, const Camera camera_value) {
+    if (!alive(entity) || !slots_[entity.index].spatial_state.has_value() || !valid(camera_value)) {
+        return false;
+    }
+    if (camera_value.primary) {
+        for (std::uint32_t index = 0; index < slots_.size(); ++index) {
+            if (index == entity.index) continue;
+            const auto& slot = slots_[index];
+            if (slot.alive && slot.camera.has_value() && slot.camera->primary) {
+                return false;
+            }
+        }
+    }
+    slots_[entity.index].camera = camera_value;
+    return true;
+}
+
+bool World::clear_camera(const EntityId entity) {
+    if (!alive(entity) || !slots_[entity.index].camera.has_value()) {
+        return false;
+    }
+    slots_[entity.index].camera.reset();
+    return true;
+}
+
+std::optional<Camera> World::camera(const EntityId entity) const noexcept {
+    if (!alive(entity)) {
+        return std::nullopt;
+    }
+    return slots_[entity.index].camera;
+}
+
+std::optional<EntityId> World::primary_camera() const noexcept {
+    for (std::uint32_t index = 0; index < slots_.size(); ++index) {
+        const auto& slot = slots_[index];
+        if (slot.alive && slot.camera.has_value() && slot.camera->primary) {
+            return EntityId{index, slot.generation};
+        }
+    }
+    return std::nullopt;
 }
 
 std::optional<SpatialState> World::spatial_state(const EntityId entity) const noexcept {
