@@ -1,0 +1,26 @@
+name: VICE authored lights editor patch
+
+on:
+  push:
+    branches:
+      - render/authored-lights
+    paths:
+      - .github/workflows/vice-authored-lights-editor-runner.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: render/authored-lights
+      - name: Apply Editor authored lights
+        shell: bash
+        run: python3 .github/patch_authored_lights_editor.py
+      - name: Commit Editor implementation
+        shell: bash
+        run: rm -f .github/patch_authored_lights_editor.py .github/workflows/vice-authored-lights-editor-runner.yml && git config user.name 'github-actions[bot]' && git config user.email '41898282+github-actions[bot]@users.noreply.github.com' && git add -A && git commit -m 'Add authored light controls to Editor' && git push origin HEAD:render/authored-lights
