@@ -155,7 +155,8 @@ private:
 
 RenderMaterialEncodeResult encode_render_material_asset(const RenderMaterialAsset& asset) {
     RenderMaterialEncodeResult result;
-    if (asset.version != render_material_asset_format_version || !valid(asset.stable_id) ||
+    if (asset.version != render_material_asset_format_version ||
+        !valid_render_material_id(asset.stable_id) ||
         asset.source_fingerprint == 0U || !finite_color(asset.base_color) ||
         !safe_relative_path(asset.vertex_shader_manifest) ||
         !safe_relative_path(asset.fragment_shader_manifest)) {
@@ -205,8 +206,8 @@ RenderMaterialDecodeResult decode_render_material_asset(const std::span<const st
         result.diagnostics = "Render material asset metadata is incomplete.";
         return result;
     }
-    if (asset.version != render_material_asset_format_version || !valid(asset.stable_id) ||
-        asset.source_fingerprint == 0U) {
+    if (asset.version != render_material_asset_format_version ||
+        !valid_render_material_id(asset.stable_id) || asset.source_fingerprint == 0U) {
         result.diagnostics = "Render material asset identity is invalid or unsupported.";
         return result;
     }
