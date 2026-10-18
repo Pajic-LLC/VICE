@@ -32,24 +32,43 @@ namespace {
     return {bytes.begin(), bytes.end()};
 }
 
+[[nodiscard]] bool inside_root(
+    const std::filesystem::path& candidate,
+    const std::filesystem::path& root
+) {
+    std::error_code error;
+    const auto relative = std::filesystem::relative(candidate, root, error);
+    if (error || relative.empty()) return false;
+    for (const auto& part : relative) {
+        if (part == "..") return false;
+    }
+    return true;
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
-    if (argc != 3) {
-        std::cerr << "Usage: vice_texture_cooker <input.vtex> <output.vtexc>\n";
+    if (argc != 4) {
+        std::cerr << "Usage: vice_texture_cooker <input.vtex> <asset-root> <output.vtexc>\n";
         return 2;
     }
 
     const std::filesystem::path source_path{argv[1]};
-    const std::filesystem::path output_path{argv[2]};
+    const std::filesystem::path asset_root = std::filesystem::absolute(argv[2]).lexically_normal();
+    const std::filesystem::path output_path{argv[3]};
     const std::string source_text = read_text(source_path);
     const auto parsed = vice::tools::texture_cooker::parse_source_manifest(source_text);
     if (!parsed.source.has_value()) {
         std::cerr << parsed.diagnostics << '\n';
         return 1;
     }
-    const auto asset_root = source_path.parent_path().parent_path();
+
     const auto image_path = (asset_root / parsed.source->image_source).lexically_normal();
+    std::error_code error;
+    if (!inside_root(image_path, asset_root) || !std::filesystem::is_regular_file(image_path, error) || error) {
+        std::cerr << "Texture image is outside the asset root or unavailable: " << image_path.string() << '\n';
+        return 1;
+    }
     const auto image = read_bytes(image_path);
     if (image.empty()) {
         std::cerr << "Could not read texture image: " << image_path.string() << '\n';
