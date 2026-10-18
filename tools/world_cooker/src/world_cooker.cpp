@@ -12,6 +12,8 @@
 namespace vice::tools::world_cooker {
 namespace {
 
+constexpr float degrees_to_radians = 0.01745329251994329577F;
+
 [[nodiscard]] std::string trim(std::string value) {
     const auto first = value.find_first_not_of(" \t\r\n");
     if (first == std::string::npos) return {};
@@ -184,6 +186,47 @@ ParseResult parse_source_manifest(const std::string_view source) {
                         return result;
                     }
                     entity.authored_transform = transform;
+                    continue;
+                }
+
+                if (metadata == "camera") {
+                    if (entity.camera.has_value()) {
+                        fail("entity camera is duplicated.");
+                        return result;
+                    }
+                    if (!entity.spatial_state.has_value()) {
+                        fail("camera requires a spatial entity.");
+                        return result;
+                    }
+
+                    std::string projection_text;
+                    std::string primary_text;
+                    float fov_degrees = 0.0F;
+                    world::Camera camera;
+                    if (!(values >> projection_text >> fov_degrees >> camera.near_plane >>
+                            camera.far_plane >> primary_text)) {
+                        fail("entity camera is incomplete.");
+                        return result;
+                    }
+                    if (projection_text != "perspective") {
+                        fail("camera projection must be `perspective`.");
+                        return result;
+                    }
+                    if (primary_text == "primary") {
+                        camera.primary = true;
+                    } else if (primary_text == "secondary") {
+                        camera.primary = false;
+                    } else {
+                        fail("camera role must be `primary` or `secondary`.");
+                        return result;
+                    }
+                    camera.projection = world::CameraProjection::perspective;
+                    camera.vertical_fov_radians = fov_degrees * degrees_to_radians;
+                    if (!world::valid(camera)) {
+                        fail("entity camera values are invalid.");
+                        return result;
+                    }
+                    entity.camera = camera;
                     continue;
                 }
 
