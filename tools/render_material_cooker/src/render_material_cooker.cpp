@@ -187,7 +187,7 @@ CookResult cook(
     std::string fragment_shader_manifest
 ) {
     CookResult result;
-    if (!render::valid(source.stable_id) || source.source_fingerprint == 0U ||
+    if (!render::valid_render_material_id(source.stable_id) || source.source_fingerprint == 0U ||
         !safe_shader_source_path(source.shader_source) || !valid_entry_point(source.vertex_entry) ||
         !valid_entry_point(source.fragment_entry) || !valid_color(source.base_color)) {
         result.diagnostics = "Render material source is invalid.";
