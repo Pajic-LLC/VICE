@@ -22,6 +22,7 @@ struct Light {
     LightType type = LightType::directional;
     LightColor color{};
     float intensity = 1.0F;
+    // Directional lights ignore range. Point lights require a positive range.
     float range = 0.0F;
     bool enabled = true;
 
