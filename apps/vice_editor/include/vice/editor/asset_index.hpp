@@ -21,6 +21,7 @@ enum class AssetKind : std::uint8_t {
     shader_source,
     shader_manifest,
     render_material,
+    texture,
     unknown,
 };
 
