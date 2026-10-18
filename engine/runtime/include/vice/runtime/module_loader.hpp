@@ -18,6 +18,11 @@ struct GameModuleLoadResult {
     }
 };
 
+[[nodiscard]] std::filesystem::path game_module_path(
+    const std::filesystem::path& runtime_root,
+    std::string_view game_target
+);
+
 [[nodiscard]] std::filesystem::path staged_game_module_path(
     const std::filesystem::path& executable,
     std::string_view game_target
