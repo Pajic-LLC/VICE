@@ -22,6 +22,7 @@ struct LaunchPaths {
 struct LoadedProject {
     project::Manifest manifest;
     std::filesystem::path manifest_path;
+    std::filesystem::path cooked_content_root;
     std::filesystem::path startup_world_path;
     std::unique_ptr<world::World> world;
 };
