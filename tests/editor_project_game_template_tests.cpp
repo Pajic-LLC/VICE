@@ -19,10 +19,10 @@ void require(const bool condition, const std::string_view message) {
 
 [[nodiscard]] std::string read_text(const std::filesystem::path& path) {
     std::ifstream input{path, std::ios::binary};
-    require(static_cast<bool>(input), "starter game source opens");
+    require(static_cast<bool>(input), "template file opens");
     std::ostringstream output;
     output << input.rdbuf();
-    require(input.eof() || !input.fail(), "starter game source reads");
+    require(input.eof() || !input.fail(), "template file reads");
     return output.str();
 }
 
@@ -46,7 +46,8 @@ int main() {
     const auto created = editor::create_project(request);
     require(static_cast<bool>(created), "new project creation");
 
-    const auto game_source = root / "Module Starter" / "game" / "game.cpp";
+    const auto project_root = root / "Module Starter";
+    const auto game_source = project_root / "game" / "game.cpp";
     require(std::filesystem::is_regular_file(game_source), "new project owns game/game.cpp");
     const std::string source = read_text(game_source);
     require(
@@ -56,6 +57,18 @@ int main() {
     require(source.find("class Game final") != std::string::npos, "starter has Game class");
     require(source.find("VICE_GAME_MODULE(Game)") != std::string::npos, "starter exports game module");
     require(source.find("Game started.") != std::string::npos, "starter startup callback is readable");
+
+    const auto startup_world = project_root / "assets" / "worlds" / "main.vworld";
+    require(std::filesystem::is_regular_file(startup_world), "new project owns startup World");
+    const std::string world_source = read_text(startup_world);
+    require(
+        world_source.find("camera perspective 60 0.05 1000 primary") != std::string::npos,
+        "new project startup World contains a primary camera"
+    );
+    require(
+        world_source.find("spatial 0 3 8 1") != std::string::npos,
+        "new project camera has a useful starting transform"
+    );
 
     std::filesystem::remove_all(root, error);
     require(!error, "temporary cleanup");
