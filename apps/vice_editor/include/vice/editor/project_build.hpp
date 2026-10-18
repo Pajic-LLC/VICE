@@ -22,6 +22,7 @@ struct ProjectBuildResult {
     std::size_t entity_count = 0;
     std::size_t region_count = 0;
     std::size_t mesh_count = 0;
+    std::size_t material_count = 0;
     std::string diagnostics;
 
     [[nodiscard]] explicit operator bool() const noexcept {
