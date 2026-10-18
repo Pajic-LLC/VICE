@@ -58,6 +58,13 @@ if(TARGET vice_world_cooker_lib)
       VICE::WorldCooker
   )
   target_compile_features(vice_editor_project_build PUBLIC cxx_std_23)
+  target_compile_definitions(
+    vice_editor_project_build
+    PRIVATE
+      VICE_EDITOR_CMAKE_EXECUTABLE="${CMAKE_COMMAND}"
+      VICE_EDITOR_GAME_MODULE_CMAKE_SOURCE="${PROJECT_SOURCE_DIR}/cmake/game_module"
+      VICE_EDITOR_GAME_MODULE_INCLUDE="${PROJECT_SOURCE_DIR}/engine/runtime/include"
+  )
   vice_enable_warnings(vice_editor_project_build)
 endif()
 
