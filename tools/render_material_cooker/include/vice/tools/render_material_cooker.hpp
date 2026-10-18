@@ -13,14 +13,28 @@
 
 namespace vice::tools::render_material_cooker {
 
-inline constexpr std::uint32_t render_material_source_format_version = 1U;
+inline constexpr std::uint32_t render_material_source_format_version_v1 = 1U;
+inline constexpr std::uint32_t render_material_source_format_version_v2 = 2U;
+inline constexpr std::uint32_t render_material_source_format_version =
+    render_material_source_format_version_v2;
 
 struct MaterialSource {
+    std::uint32_t version = render_material_source_format_version;
     render::RenderMaterialStableId stable_id{};
     std::filesystem::path shader_source;
     std::string vertex_entry;
     std::string fragment_entry;
     render::Color base_color{1.0F, 1.0F, 1.0F, 1.0F};
+    float metallic = 0.0F;
+    float roughness = 1.0F;
+    render::TextureStableId base_color_texture{};
+    render::Filter min_filter = render::Filter::linear;
+    render::Filter mag_filter = render::Filter::linear;
+    render::Filter mip_filter = render::Filter::linear;
+    render::AddressMode address_u = render::AddressMode::repeat;
+    render::AddressMode address_v = render::AddressMode::repeat;
+    render::AddressMode address_w = render::AddressMode::repeat;
+    std::uint32_t max_anisotropy = 1U;
     std::uint64_t source_fingerprint = 0U;
 };
 

@@ -111,6 +111,7 @@ constexpr std::uint64_t maximum_constant_buffer_size = 64U * 1024U;
 [[nodiscard]] DXGI_FORMAT pixel_format(const TextureFormat format) noexcept {
     switch (format) {
     case TextureFormat::rgba8_unorm: return DXGI_FORMAT_R8G8B8A8_UNORM;
+    case TextureFormat::rgba8_unorm_srgb: return DXGI_FORMAT_R8G8B8A8_UNORM_SRGB;
     case TextureFormat::bgra8_unorm: return DXGI_FORMAT_B8G8R8A8_UNORM;
     case TextureFormat::rgba16_float: return DXGI_FORMAT_R16G16B16A16_FLOAT;
     case TextureFormat::r32_float: return DXGI_FORMAT_R32_FLOAT;
@@ -343,10 +344,13 @@ class D3D12Texture final : public Texture {
 public:
     D3D12Texture(
         const TextureDesc& desc,
+        ComPtr<ID3D12Device> device,
+        ComPtr<ID3D12CommandQueue> command_queue,
         ComPtr<ID3D12Resource> resource,
         const D3D12_RESOURCE_STATES state,
         ComPtr<ID3D12DescriptorHeap> dsv_heap = {}
-    ) : desc_{desc}, resource_{std::move(resource)}, state_{state}, dsv_heap_{std::move(dsv_heap)} {
+    ) : desc_{desc}, device_{std::move(device)}, command_queue_{std::move(command_queue)},
+        resource_{std::move(resource)}, state_{state}, dsv_heap_{std::move(dsv_heap)} {
         desc_.debug_name = {};
     }
 
@@ -356,6 +360,167 @@ public:
     [[nodiscard]] std::uint32_t width() const noexcept override { return desc_.width; }
     [[nodiscard]] std::uint32_t height() const noexcept override { return desc_.height; }
     [[nodiscard]] std::uint32_t depth() const noexcept override { return desc_.depth; }
+
+    bool write_2d(
+        const std::span<const std::byte> data,
+        const std::uint64_t bytes_per_row
+    ) override {
+        if (device_ == nullptr || command_queue_ == nullptr || resource_ == nullptr ||
+            desc_.dimension != TextureDimension::d2 || desc_.depth != 1U ||
+            desc_.array_layers != 1U || desc_.mip_levels != 1U || desc_.sample_count != 1U ||
+            !has_usage(desc_.usage, TextureUsage::copy_destination) ||
+            desc_.format == TextureFormat::depth32_float) {
+            return false;
+        }
+
+        const std::uint64_t bytes_per_pixel = texture_format_bytes_per_pixel(desc_.format);
+        if (bytes_per_pixel == 0U ||
+            desc_.width > std::numeric_limits<std::uint64_t>::max() / bytes_per_pixel) {
+            return false;
+        }
+        const std::uint64_t minimum_row = static_cast<std::uint64_t>(desc_.width) * bytes_per_pixel;
+        if (bytes_per_row < minimum_row ||
+            desc_.height > 0U && bytes_per_row >
+                std::numeric_limits<std::uint64_t>::max() / desc_.height) {
+            return false;
+        }
+        const std::uint64_t required_source = bytes_per_row * desc_.height;
+        if (required_source > data.size()) {
+            return false;
+        }
+
+        const D3D12_RESOURCE_DESC texture_desc = resource_->GetDesc();
+        D3D12_PLACED_SUBRESOURCE_FOOTPRINT footprint{};
+        UINT row_count = 0U;
+        UINT64 row_size = 0U;
+        UINT64 upload_size = 0U;
+        device_->GetCopyableFootprints(
+            &texture_desc,
+            0U,
+            1U,
+            0U,
+            &footprint,
+            &row_count,
+            &row_size,
+            &upload_size
+        );
+        if (row_count != desc_.height || row_size < minimum_row || upload_size == 0U ||
+            upload_size > std::numeric_limits<std::size_t>::max()) {
+            return false;
+        }
+
+        D3D12_HEAP_PROPERTIES upload_heap{};
+        upload_heap.Type = D3D12_HEAP_TYPE_UPLOAD;
+        upload_heap.CreationNodeMask = 1U;
+        upload_heap.VisibleNodeMask = 1U;
+        D3D12_RESOURCE_DESC upload_desc{};
+        upload_desc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+        upload_desc.Width = upload_size;
+        upload_desc.Height = 1U;
+        upload_desc.DepthOrArraySize = 1U;
+        upload_desc.MipLevels = 1U;
+        upload_desc.SampleDesc.Count = 1U;
+        upload_desc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+
+        ComPtr<ID3D12Resource> upload;
+        if (FAILED(device_->CreateCommittedResource(
+                &upload_heap,
+                D3D12_HEAP_FLAG_NONE,
+                &upload_desc,
+                D3D12_RESOURCE_STATE_GENERIC_READ,
+                nullptr,
+                IID_PPV_ARGS(&upload)
+            ))) {
+            return false;
+        }
+
+        void* mapped = nullptr;
+        const D3D12_RANGE read_range{0U, 0U};
+        if (FAILED(upload->Map(0U, &read_range, &mapped)) || mapped == nullptr) {
+            return false;
+        }
+        auto* destination = static_cast<std::byte*>(mapped) +
+            static_cast<std::size_t>(footprint.Offset);
+        for (std::uint32_t row = 0U; row < desc_.height; ++row) {
+            std::memcpy(
+                destination + static_cast<std::size_t>(row) * footprint.Footprint.RowPitch,
+                data.data() + static_cast<std::size_t>(row) * static_cast<std::size_t>(bytes_per_row),
+                static_cast<std::size_t>(minimum_row)
+            );
+        }
+        upload->Unmap(0U, nullptr);
+
+        ComPtr<ID3D12CommandAllocator> allocator;
+        ComPtr<ID3D12GraphicsCommandList> commands;
+        if (FAILED(device_->CreateCommandAllocator(
+                D3D12_COMMAND_LIST_TYPE_DIRECT,
+                IID_PPV_ARGS(&allocator)
+            )) || FAILED(device_->CreateCommandList(
+                0U,
+                D3D12_COMMAND_LIST_TYPE_DIRECT,
+                allocator.Get(),
+                nullptr,
+                IID_PPV_ARGS(&commands)
+            ))) {
+            return false;
+        }
+
+        if (state_ != D3D12_RESOURCE_STATE_COPY_DEST) {
+            D3D12_RESOURCE_BARRIER barrier{};
+            barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+            barrier.Transition.pResource = resource_.Get();
+            barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+            barrier.Transition.StateBefore = state_;
+            barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_DEST;
+            commands->ResourceBarrier(1U, &barrier);
+        }
+
+        D3D12_TEXTURE_COPY_LOCATION source{};
+        source.pResource = upload.Get();
+        source.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
+        source.PlacedFootprint = footprint;
+        D3D12_TEXTURE_COPY_LOCATION destination_location{};
+        destination_location.pResource = resource_.Get();
+        destination_location.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+        destination_location.SubresourceIndex = 0U;
+        commands->CopyTextureRegion(&destination_location, 0U, 0U, 0U, &source, nullptr);
+
+        D3D12_RESOURCE_BARRIER final_barrier{};
+        final_barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+        final_barrier.Transition.pResource = resource_.Get();
+        final_barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+        final_barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_DEST;
+        final_barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_COMMON;
+        commands->ResourceBarrier(1U, &final_barrier);
+
+        if (FAILED(commands->Close())) {
+            return false;
+        }
+        ID3D12CommandList* submitted[] = {commands.Get()};
+        command_queue_->ExecuteCommandLists(1U, submitted);
+
+        ComPtr<ID3D12Fence> fence;
+        if (FAILED(device_->CreateFence(0U, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&fence)))) {
+            return false;
+        }
+        HANDLE event = CreateEventW(nullptr, FALSE, FALSE, nullptr);
+        if (event == nullptr) {
+            return false;
+        }
+        const HRESULT signal = command_queue_->Signal(fence.Get(), 1U);
+        bool completed = SUCCEEDED(signal);
+        if (completed && fence->GetCompletedValue() < 1U) {
+            completed = SUCCEEDED(fence->SetEventOnCompletion(1U, event)) &&
+                WaitForSingleObject(event, INFINITE) == WAIT_OBJECT_0;
+        }
+        CloseHandle(event);
+        if (!completed) {
+            return false;
+        }
+        state_ = D3D12_RESOURCE_STATE_COMMON;
+        return true;
+    }
+
     [[nodiscard]] const TextureDesc& desc() const noexcept { return desc_; }
     [[nodiscard]] ID3D12Resource* native() const noexcept { return resource_.Get(); }
     [[nodiscard]] D3D12_RESOURCE_STATES state() const noexcept { return state_; }
@@ -369,6 +534,8 @@ public:
 
 private:
     TextureDesc desc_{};
+    ComPtr<ID3D12Device> device_;
+    ComPtr<ID3D12CommandQueue> command_queue_;
     ComPtr<ID3D12Resource> resource_;
     D3D12_RESOURCE_STATES state_ = D3D12_RESOURCE_STATE_COMMON;
     ComPtr<ID3D12DescriptorHeap> dsv_heap_;
@@ -2057,6 +2224,8 @@ public:
 
         return std::make_unique<D3D12Texture>(
             desc,
+            device_,
+            command_queue_,
             std::move(resource),
             D3D12_RESOURCE_STATE_COMMON,
             std::move(dsv_heap)

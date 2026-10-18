@@ -13,7 +13,9 @@
 
 namespace vice::tools::mesh_cooker {
 
-inline constexpr std::uint32_t mesh_source_format_version = 1;
+inline constexpr std::uint32_t mesh_source_format_version_v1 = 1U;
+inline constexpr std::uint32_t mesh_source_format_version_v2 = 2U;
+inline constexpr std::uint32_t mesh_source_format_version = mesh_source_format_version_v2;
 
 enum class CollisionMode : std::uint8_t {
     none,
@@ -22,6 +24,7 @@ enum class CollisionMode : std::uint8_t {
 };
 
 struct MeshSource {
+    std::uint32_t version = mesh_source_format_version;
     std::string name;
     render::MeshStableId stable_id{};
     CollisionMode collision = CollisionMode::none;
@@ -36,7 +39,7 @@ struct ParseResult {
 
 struct CookResult {
     bool success = false;
-    std::uint64_t source_fingerprint = 0;
+    std::uint64_t source_fingerprint = 0U;
     std::vector<std::byte> bytes;
     std::string diagnostics;
 };

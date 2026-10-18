@@ -85,6 +85,7 @@ enum class TextureDimension : std::uint8_t {
 enum class TextureFormat : std::uint8_t {
     undefined,
     rgba8_unorm,
+    rgba8_unorm_srgb,
     bgra8_unorm,
     rgba16_float,
     r32_float,
@@ -217,6 +218,10 @@ struct SamplerDesc {
     if (!depth_format && has_usage(desc.usage, TextureUsage::depth_attachment)) {
         return false;
     }
+    if (desc.format == TextureFormat::rgba8_unorm_srgb &&
+        has_usage(desc.usage, TextureUsage::storage)) {
+        return false;
+    }
 
     return true;
 }
@@ -238,6 +243,7 @@ struct SamplerDesc {
 ) noexcept {
     switch (format) {
     case TextureFormat::rgba8_unorm:
+    case TextureFormat::rgba8_unorm_srgb:
     case TextureFormat::bgra8_unorm:
     case TextureFormat::r32_float:
     case TextureFormat::depth32_float:
@@ -529,6 +535,11 @@ public:
     [[nodiscard]] virtual std::uint32_t width() const noexcept = 0;
     [[nodiscard]] virtual std::uint32_t height() const noexcept = 0;
     [[nodiscard]] virtual std::uint32_t depth() const noexcept = 0;
+
+    virtual bool write_2d(
+        std::span<const std::byte> data,
+        std::uint64_t bytes_per_row
+    ) = 0;
 };
 
 class Sampler {

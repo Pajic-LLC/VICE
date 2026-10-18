@@ -1,0 +1,4 @@
+vice-texture-source 1
+id 71000000-0000-4000-8000-000000000001
+image "textures/vice_lab_checker.ppm"
+color_space srgb

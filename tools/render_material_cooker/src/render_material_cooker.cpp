@@ -66,6 +66,37 @@ constexpr std::uint64_t fnv_prime = 1'099'511'628'211ULL;
         color.alpha >= 0.0F && color.alpha <= 1.0F;
 }
 
+[[nodiscard]] std::optional<render::Filter> parse_filter(const std::string_view value) noexcept {
+    if (value == "nearest") return render::Filter::nearest;
+    if (value == "linear") return render::Filter::linear;
+    return std::nullopt;
+}
+
+[[nodiscard]] std::optional<render::AddressMode> parse_address(const std::string_view value) noexcept {
+    if (value == "clamp") return render::AddressMode::clamp_to_edge;
+    if (value == "repeat") return render::AddressMode::repeat;
+    if (value == "mirror") return render::AddressMode::mirrored_repeat;
+    return std::nullopt;
+}
+
+[[nodiscard]] bool valid_pbr(const MaterialSource& source) noexcept {
+    if (!std::isfinite(source.metallic) || !std::isfinite(source.roughness) ||
+        source.metallic < 0.0F || source.metallic > 1.0F ||
+        source.roughness < 0.0F || source.roughness > 1.0F ||
+        !render::valid_texture_id(source.base_color_texture)) {
+        return false;
+    }
+    render::SamplerDesc sampler;
+    sampler.min_filter = source.min_filter;
+    sampler.mag_filter = source.mag_filter;
+    sampler.mip_filter = source.mip_filter;
+    sampler.address_u = source.address_u;
+    sampler.address_v = source.address_v;
+    sampler.address_w = source.address_w;
+    sampler.max_anisotropy = source.max_anisotropy;
+    return render::is_valid(sampler);
+}
+
 } // namespace
 
 ParseResult parse_source_manifest(const std::string_view source_text) {
@@ -82,6 +113,10 @@ ParseResult parse_source_manifest(const std::string_view source_text) {
     bool vertex_seen = false;
     bool fragment_seen = false;
     bool color_seen = false;
+    bool metallic_seen = false;
+    bool roughness_seen = false;
+    bool texture_seen = false;
+    bool sampler_seen = false;
     std::istringstream source{std::string{source_text}};
     std::string line;
     std::size_t line_number = 0U;
@@ -102,8 +137,9 @@ ParseResult parse_source_manifest(const std::string_view source_text) {
         if (!header_seen) {
             std::uint32_t version = 0U;
             if (keyword != "vice-render-material" || !(values >> version) ||
-                version != render_material_source_format_version) {
-                fail("expected `vice-render-material 1`.");
+                (version != render_material_source_format_version_v1 &&
+                    version != render_material_source_format_version_v2)) {
+                fail("expected `vice-render-material 1` or `vice-render-material 2`.");
                 return result;
             }
             std::string trailing;
@@ -111,6 +147,7 @@ ParseResult parse_source_manifest(const std::string_view source_text) {
                 fail("source header has trailing data.");
                 return result;
             }
+            parsed.version = version;
             header_seen = true;
             continue;
         }
@@ -159,6 +196,77 @@ ParseResult parse_source_manifest(const std::string_view source_text) {
                 return result;
             }
             color_seen = true;
+        } else if (keyword == "metallic") {
+            if (metallic_seen || !(values >> parsed.metallic) || !std::isfinite(parsed.metallic) ||
+                parsed.metallic < 0.0F || parsed.metallic > 1.0F) {
+                fail(metallic_seen ? "metallic is duplicated." : "metallic must be between 0 and 1.");
+                return result;
+            }
+            metallic_seen = true;
+        } else if (keyword == "roughness") {
+            if (roughness_seen || !(values >> parsed.roughness) || !std::isfinite(parsed.roughness) ||
+                parsed.roughness < 0.0F || parsed.roughness > 1.0F) {
+                fail(roughness_seen ? "roughness is duplicated." : "roughness must be between 0 and 1.");
+                return result;
+            }
+            roughness_seen = true;
+        } else if (keyword == "base_color_texture") {
+            std::string id_text;
+            if (texture_seen || !(values >> id_text)) {
+                fail(texture_seen ? "base-color texture is duplicated." : "base-color texture ID is missing.");
+                return result;
+            }
+            const auto id = world::PersistentId::parse(id_text);
+            if (!id.has_value() || id->is_nil()) {
+                fail("base-color texture ID is invalid.");
+                return result;
+            }
+            std::copy(id->bytes().begin(), id->bytes().end(), parsed.base_color_texture.begin());
+            texture_seen = true;
+        } else if (keyword == "sampler") {
+            std::string min_filter;
+            std::string mag_filter;
+            std::string mip_filter;
+            std::string address_u;
+            std::string address_v;
+            std::string address_w;
+            std::uint32_t anisotropy = 0U;
+            if (sampler_seen || !(values >> min_filter >> mag_filter >> mip_filter >>
+                    address_u >> address_v >> address_w >> anisotropy)) {
+                fail(sampler_seen ? "sampler is duplicated." : "sampler data is invalid.");
+                return result;
+            }
+            const auto parsed_min = parse_filter(min_filter);
+            const auto parsed_mag = parse_filter(mag_filter);
+            const auto parsed_mip = parse_filter(mip_filter);
+            const auto parsed_u = parse_address(address_u);
+            const auto parsed_v = parse_address(address_v);
+            const auto parsed_w = parse_address(address_w);
+            if (!parsed_min.has_value() || !parsed_mag.has_value() || !parsed_mip.has_value() ||
+                !parsed_u.has_value() || !parsed_v.has_value() || !parsed_w.has_value()) {
+                fail("sampler uses an unknown filter or address mode.");
+                return result;
+            }
+            parsed.min_filter = *parsed_min;
+            parsed.mag_filter = *parsed_mag;
+            parsed.mip_filter = *parsed_mip;
+            parsed.address_u = *parsed_u;
+            parsed.address_v = *parsed_v;
+            parsed.address_w = *parsed_w;
+            parsed.max_anisotropy = anisotropy;
+            render::SamplerDesc sampler;
+            sampler.min_filter = parsed.min_filter;
+            sampler.mag_filter = parsed.mag_filter;
+            sampler.mip_filter = parsed.mip_filter;
+            sampler.address_u = parsed.address_u;
+            sampler.address_v = parsed.address_v;
+            sampler.address_w = parsed.address_w;
+            sampler.max_anisotropy = parsed.max_anisotropy;
+            if (!render::is_valid(sampler)) {
+                fail("sampler settings are not valid for VICE.");
+                return result;
+            }
+            sampler_seen = true;
         } else {
             fail("unknown keyword `" + keyword + "`.");
             return result;
@@ -175,6 +283,12 @@ ParseResult parse_source_manifest(const std::string_view source_text) {
         result.diagnostics = "Render material source is missing one or more required fields.";
         return result;
     }
+    if (parsed.version >= render_material_source_format_version_v2 &&
+        (!metallic_seen || !roughness_seen || !texture_seen || !sampler_seen || !valid_pbr(parsed))) {
+        result.diagnostics = "Render material v2 requires metallic, roughness, base_color_texture, and sampler.";
+        return result;
+    }
+
     parsed.source_fingerprint = fingerprint(source_text);
     if (parsed.source_fingerprint == 0U) parsed.source_fingerprint = 1U;
     result.source = std::move(parsed);
@@ -187,17 +301,31 @@ CookResult cook(
     std::string fragment_shader_manifest
 ) {
     CookResult result;
-    if (!render::valid_render_material_id(source.stable_id) || source.source_fingerprint == 0U ||
+    if ((source.version != render_material_source_format_version_v1 &&
+            source.version != render_material_source_format_version_v2) ||
+        !render::valid_render_material_id(source.stable_id) || source.source_fingerprint == 0U ||
         !safe_shader_source_path(source.shader_source) || !valid_entry_point(source.vertex_entry) ||
-        !valid_entry_point(source.fragment_entry) || !valid_color(source.base_color)) {
+        !valid_entry_point(source.fragment_entry) || !valid_color(source.base_color) ||
+        (source.version >= render_material_source_format_version_v2 && !valid_pbr(source))) {
         result.diagnostics = "Render material source is invalid.";
         return result;
     }
 
     render::RenderMaterialAsset asset;
+    asset.version = source.version;
     asset.stable_id = source.stable_id;
     asset.source_fingerprint = source.source_fingerprint;
     asset.base_color = source.base_color;
+    asset.metallic = source.metallic;
+    asset.roughness = source.roughness;
+    asset.base_color_texture = source.base_color_texture;
+    asset.min_filter = source.min_filter;
+    asset.mag_filter = source.mag_filter;
+    asset.mip_filter = source.mip_filter;
+    asset.address_u = source.address_u;
+    asset.address_v = source.address_v;
+    asset.address_w = source.address_w;
+    asset.max_anisotropy = source.max_anisotropy;
     asset.vertex_shader_manifest = std::move(vertex_shader_manifest);
     asset.fragment_shader_manifest = std::move(fragment_shader_manifest);
     auto encoded = render::encode_render_material_asset(asset);

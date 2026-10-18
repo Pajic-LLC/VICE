@@ -68,6 +68,7 @@ void log_error(const char* prefix, NSError* error) {
 [[nodiscard]] MTLPixelFormat pixel_format(const TextureFormat format) noexcept {
     switch (format) {
     case TextureFormat::rgba8_unorm: return MTLPixelFormatRGBA8Unorm;
+    case TextureFormat::rgba8_unorm_srgb: return MTLPixelFormatRGBA8Unorm_sRGB;
     case TextureFormat::bgra8_unorm: return MTLPixelFormatBGRA8Unorm;
     case TextureFormat::rgba16_float: return MTLPixelFormatRGBA16Float;
     case TextureFormat::r32_float: return MTLPixelFormatR32Float;
@@ -337,8 +338,12 @@ private:
 
 class MetalTexture final : public Texture {
 public:
-    MetalTexture(const TextureDesc& desc, id<MTLTexture> texture)
-        : desc_{desc}, texture_{texture} {
+    MetalTexture(
+        const TextureDesc& desc,
+        id<MTLDevice> device,
+        id<MTLCommandQueue> command_queue,
+        id<MTLTexture> texture
+    ) : desc_{desc}, device_{device}, command_queue_{command_queue}, texture_{texture} {
         desc_.debug_name = {};
     }
 
@@ -348,10 +353,90 @@ public:
     [[nodiscard]] std::uint32_t width() const noexcept override { return desc_.width; }
     [[nodiscard]] std::uint32_t height() const noexcept override { return desc_.height; }
     [[nodiscard]] std::uint32_t depth() const noexcept override { return desc_.depth; }
+
+    bool write_2d(
+        const std::span<const std::byte> data,
+        const std::uint64_t bytes_per_row
+    ) override {
+        if (device_ == nil || command_queue_ == nil || texture_ == nil ||
+            desc_.dimension != TextureDimension::d2 || desc_.depth != 1U ||
+            desc_.array_layers != 1U || desc_.mip_levels != 1U || desc_.sample_count != 1U ||
+            !has_usage(desc_.usage, TextureUsage::copy_destination) ||
+            desc_.format == TextureFormat::depth32_float) {
+            return false;
+        }
+
+        const std::uint64_t bytes_per_pixel = texture_format_bytes_per_pixel(desc_.format);
+        if (bytes_per_pixel == 0U ||
+            desc_.width > std::numeric_limits<std::uint64_t>::max() / bytes_per_pixel) {
+            return false;
+        }
+        const std::uint64_t minimum_row = static_cast<std::uint64_t>(desc_.width) * bytes_per_pixel;
+        if (bytes_per_row < minimum_row ||
+            desc_.height > 0U && bytes_per_row >
+                std::numeric_limits<std::uint64_t>::max() / desc_.height) {
+            return false;
+        }
+        const std::uint64_t required_source = bytes_per_row * desc_.height;
+        if (required_source > data.size()) {
+            return false;
+        }
+
+        constexpr std::uint64_t row_alignment = 256U;
+        if (minimum_row > std::numeric_limits<std::uint64_t>::max() - (row_alignment - 1U)) {
+            return false;
+        }
+        const std::uint64_t staging_row =
+            (minimum_row + row_alignment - 1U) / row_alignment * row_alignment;
+        if (desc_.height > 0U && staging_row >
+            std::numeric_limits<std::uint64_t>::max() / desc_.height) {
+            return false;
+        }
+        const std::uint64_t staging_size = staging_row * desc_.height;
+        if (staging_size == 0U || staging_size > std::numeric_limits<NSUInteger>::max()) {
+            return false;
+        }
+
+        id<MTLBuffer> staging = [device_ newBufferWithLength:static_cast<NSUInteger>(staging_size)
+                                                    options:MTLResourceStorageModeShared];
+        if (staging == nil || [staging contents] == nullptr) {
+            return false;
+        }
+        auto* destination = static_cast<std::byte*>([staging contents]);
+        for (std::uint32_t row = 0U; row < desc_.height; ++row) {
+            std::memcpy(
+                destination + static_cast<std::size_t>(row) * static_cast<std::size_t>(staging_row),
+                data.data() + static_cast<std::size_t>(row) * static_cast<std::size_t>(bytes_per_row),
+                static_cast<std::size_t>(minimum_row)
+            );
+        }
+
+        id<MTLCommandBuffer> command_buffer = [command_queue_ commandBuffer];
+        id<MTLBlitCommandEncoder> blit = [command_buffer blitCommandEncoder];
+        if (command_buffer == nil || blit == nil) {
+            return false;
+        }
+        [blit copyFromBuffer:staging
+                sourceOffset:0U
+           sourceBytesPerRow:static_cast<NSUInteger>(staging_row)
+         sourceBytesPerImage:static_cast<NSUInteger>(staging_size)
+                  sourceSize:MTLSizeMake(desc_.width, desc_.height, 1U)
+                   toTexture:texture_
+            destinationSlice:0U
+            destinationLevel:0U
+           destinationOrigin:MTLOriginMake(0U, 0U, 0U)];
+        [blit endEncoding];
+        [command_buffer commit];
+        [command_buffer waitUntilCompleted];
+        return [command_buffer status] == MTLCommandBufferStatusCompleted;
+    }
+
     [[nodiscard]] id<MTLTexture> native() const noexcept { return texture_; }
 
 private:
     TextureDesc desc_{};
+    id<MTLDevice> device_ = nil;
+    id<MTLCommandQueue> command_queue_ = nil;
     id<MTLTexture> texture_ = nil;
 };
 
@@ -1532,7 +1617,7 @@ public:
         if (NSString* label = make_label(desc.debug_name)) {
             [texture setLabel:label];
         }
-        return std::make_unique<MetalTexture>(desc, texture);
+        return std::make_unique<MetalTexture>(desc, device_, command_queue_, texture);
     }
 
     [[nodiscard]] std::unique_ptr<Sampler> create_sampler(const SamplerDesc& desc) override {

@@ -23,6 +23,8 @@ constexpr std::array<std::byte, mesh_asset_magic_size> mesh_magic{
 constexpr std::size_t header_size_v1 = mesh_asset_magic_size + sizeof(std::uint32_t) * 3U +
     sizeof(std::uint64_t);
 constexpr std::size_t header_size_v2 = header_size_v1 + mesh_stable_id_size;
+constexpr std::size_t legacy_vertex_bytes = sizeof(float) * 6U;
+constexpr std::size_t vertex_bytes_v3 = sizeof(MeshVertex);
 constexpr std::uint32_t max_vertices = 4'000'000U;
 constexpr std::uint32_t max_indices = 12'000'000U;
 constexpr std::uint64_t fnv_offset_basis = 14'695'981'039'346'656'037ULL;
@@ -50,8 +52,8 @@ public:
 
     bool read_u32(std::uint32_t& value) noexcept {
         if (remaining() < sizeof(value)) return false;
-        value = 0;
-        for (std::size_t index = 0; index < sizeof(value); ++index) {
+        value = 0U;
+        for (std::size_t index = 0U; index < sizeof(value); ++index) {
             value |= static_cast<std::uint32_t>(std::to_integer<std::uint8_t>(bytes_[position_ + index]))
                 << (index * 8U);
         }
@@ -61,8 +63,8 @@ public:
 
     bool read_u64(std::uint64_t& value) noexcept {
         if (remaining() < sizeof(value)) return false;
-        value = 0;
-        for (std::size_t index = 0; index < sizeof(value); ++index) {
+        value = 0U;
+        for (std::size_t index = 0U; index < sizeof(value); ++index) {
             value |= static_cast<std::uint64_t>(std::to_integer<std::uint8_t>(bytes_[position_ + index]))
                 << (index * 8U);
         }
@@ -71,7 +73,7 @@ public:
     }
 
     bool read_f32(float& value) noexcept {
-        std::uint32_t bits = 0;
+        std::uint32_t bits = 0U;
         if (!read_u32(bits)) return false;
         value = std::bit_cast<float>(bits);
         return true;
@@ -83,8 +85,20 @@ public:
 
 private:
     std::span<const std::byte> bytes_;
-    std::size_t position_ = 0;
+    std::size_t position_ = 0U;
 };
+
+[[nodiscard]] bool finite_vertex(const MeshVertex& vertex, const bool extended) noexcept {
+    for (const float value : vertex.position) if (!std::isfinite(value)) return false;
+    for (const float value : vertex.color) if (!std::isfinite(value)) return false;
+    if (!extended) return true;
+    for (const float value : vertex.normal) if (!std::isfinite(value)) return false;
+    for (const float value : vertex.uv) if (!std::isfinite(value)) return false;
+    const float normal_length_squared =
+        vertex.normal[0] * vertex.normal[0] + vertex.normal[1] * vertex.normal[1] +
+        vertex.normal[2] * vertex.normal[2];
+    return normal_length_squared > 1.0e-8F;
+}
 
 } // namespace
 
@@ -100,10 +114,10 @@ MeshAssetDecodeResult decode_mesh_asset(const std::span<const std::byte> bytes) 
     }
 
     Reader reader{bytes.subspan(mesh_asset_magic_size)};
-    std::uint32_t version = 0;
-    std::uint32_t vertex_count = 0;
-    std::uint32_t index_count = 0;
-    std::uint64_t stored_fingerprint = 0;
+    std::uint32_t version = 0U;
+    std::uint32_t vertex_count = 0U;
+    std::uint32_t index_count = 0U;
+    std::uint64_t stored_fingerprint = 0U;
     if (!reader.read_u32(version) || !reader.read_u32(vertex_count) ||
         !reader.read_u32(index_count) || !reader.read_u64(stored_fingerprint)) {
         result.diagnostics = "Mesh asset header is incomplete.";
@@ -135,8 +149,10 @@ MeshAssetDecodeResult decode_mesh_asset(const std::span<const std::byte> bytes) 
         return result;
     }
 
-    constexpr std::size_t vertex_bytes = sizeof(MeshVertex);
-    const std::size_t expected_payload = static_cast<std::size_t>(vertex_count) * vertex_bytes +
+    const std::size_t stored_vertex_bytes = version >= mesh_asset_format_version_v3
+        ? vertex_bytes_v3
+        : legacy_vertex_bytes;
+    const std::size_t expected_payload = static_cast<std::size_t>(vertex_count) * stored_vertex_bytes +
         static_cast<std::size_t>(index_count) * sizeof(std::uint32_t);
     if (bytes.size() != header_size + expected_payload) {
         result.diagnostics = "Mesh asset payload size does not match its header.";
@@ -154,18 +170,37 @@ MeshAssetDecodeResult decode_mesh_asset(const std::span<const std::byte> bytes) 
     asset.vertices.resize(vertex_count);
     asset.indices.resize(index_count);
 
+    const bool extended = version >= mesh_asset_format_version_v3;
     for (auto& vertex : asset.vertices) {
         for (float& component : vertex.position) {
-            if (!reader.read_f32(component) || !std::isfinite(component)) {
-                result.diagnostics = "Mesh asset contains an invalid vertex position.";
+            if (!reader.read_f32(component)) {
+                result.diagnostics = "Mesh asset contains an incomplete vertex position.";
                 return result;
             }
         }
         for (float& component : vertex.color) {
-            if (!reader.read_f32(component) || !std::isfinite(component)) {
-                result.diagnostics = "Mesh asset contains an invalid vertex color.";
+            if (!reader.read_f32(component)) {
+                result.diagnostics = "Mesh asset contains an incomplete vertex color.";
                 return result;
             }
+        }
+        if (extended) {
+            for (float& component : vertex.normal) {
+                if (!reader.read_f32(component)) {
+                    result.diagnostics = "Mesh asset contains an incomplete vertex normal.";
+                    return result;
+                }
+            }
+            for (float& component : vertex.uv) {
+                if (!reader.read_f32(component)) {
+                    result.diagnostics = "Mesh asset contains incomplete UV coordinates.";
+                    return result;
+                }
+            }
+        }
+        if (!finite_vertex(vertex, extended)) {
+            result.diagnostics = "Mesh asset contains invalid vertex data.";
+            return result;
         }
     }
 
@@ -175,7 +210,7 @@ MeshAssetDecodeResult decode_mesh_asset(const std::span<const std::byte> bytes) 
             return result;
         }
     }
-    for (std::size_t index = 0; index < asset.indices.size(); index += 3U) {
+    for (std::size_t index = 0U; index < asset.indices.size(); index += 3U) {
         const auto a = asset.indices[index];
         const auto b = asset.indices[index + 1U];
         const auto c = asset.indices[index + 2U];

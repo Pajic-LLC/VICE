@@ -2,6 +2,7 @@
 
 #include <vice/world/persistent_id.hpp>
 
+#include <algorithm>
 #include <bit>
 #include <cmath>
 #include <cstddef>
@@ -33,13 +34,13 @@ void append_u8(std::vector<std::byte>& bytes, const std::uint8_t value) {
 }
 
 void append_u32(std::vector<std::byte>& bytes, const std::uint32_t value) {
-    for (std::size_t index = 0; index < sizeof(value); ++index) {
+    for (std::size_t index = 0U; index < sizeof(value); ++index) {
         bytes.push_back(static_cast<std::byte>((value >> (index * 8U)) & 0xFFU));
     }
 }
 
 void append_u64(std::vector<std::byte>& bytes, const std::uint64_t value) {
-    for (std::size_t index = 0; index < sizeof(value); ++index) {
+    for (std::size_t index = 0U; index < sizeof(value); ++index) {
         bytes.push_back(static_cast<std::byte>((value >> (index * 8U)) & 0xFFU));
     }
 }
@@ -48,7 +49,26 @@ void append_f32(std::vector<std::byte>& bytes, const float value) {
     append_u32(bytes, std::bit_cast<std::uint32_t>(value));
 }
 
-[[nodiscard]] bool finite_vertex(const render::MeshVertex& vertex) noexcept {
+[[nodiscard]] bool finite_surface_vertex(const render::MeshVertex& vertex) noexcept {
+    for (const float component : vertex.position) {
+        if (!std::isfinite(component)) return false;
+    }
+    for (const float component : vertex.color) {
+        if (!std::isfinite(component) || component < 0.0F || component > 1.0F) return false;
+    }
+    for (const float component : vertex.normal) {
+        if (!std::isfinite(component)) return false;
+    }
+    for (const float component : vertex.uv) {
+        if (!std::isfinite(component)) return false;
+    }
+    const float normal_length_squared =
+        vertex.normal[0] * vertex.normal[0] + vertex.normal[1] * vertex.normal[1] +
+        vertex.normal[2] * vertex.normal[2];
+    return normal_length_squared > 1.0e-8F;
+}
+
+[[nodiscard]] bool finite_legacy_vertex(const render::MeshVertex& vertex) noexcept {
     for (const float component : vertex.position) {
         if (!std::isfinite(component)) return false;
     }
@@ -56,6 +76,62 @@ void append_f32(std::vector<std::byte>& bytes, const float value) {
         if (!std::isfinite(component) || component < 0.0F || component > 1.0F) return false;
     }
     return true;
+}
+
+void normalize_normal(render::MeshVertex& vertex) noexcept {
+    const float length_squared =
+        vertex.normal[0] * vertex.normal[0] + vertex.normal[1] * vertex.normal[1] +
+        vertex.normal[2] * vertex.normal[2];
+    if (length_squared <= 1.0e-8F) return;
+    const float inverse = 1.0F / std::sqrt(length_squared);
+    vertex.normal[0] *= inverse;
+    vertex.normal[1] *= inverse;
+    vertex.normal[2] *= inverse;
+}
+
+void derive_legacy_normals(MeshSource& mesh) noexcept {
+    for (auto& vertex : mesh.vertices) {
+        vertex.normal[0] = 0.0F;
+        vertex.normal[1] = 0.0F;
+        vertex.normal[2] = 0.0F;
+        vertex.uv[0] = 0.0F;
+        vertex.uv[1] = 0.0F;
+    }
+    for (std::size_t offset = 0U; offset + 2U < mesh.indices.size(); offset += 3U) {
+        const auto a = mesh.indices[offset];
+        const auto b = mesh.indices[offset + 1U];
+        const auto c = mesh.indices[offset + 2U];
+        if (a >= mesh.vertices.size() || b >= mesh.vertices.size() || c >= mesh.vertices.size()) continue;
+        const auto& pa = mesh.vertices[a].position;
+        const auto& pb = mesh.vertices[b].position;
+        const auto& pc = mesh.vertices[c].position;
+        const float abx = pb[0] - pa[0];
+        const float aby = pb[1] - pa[1];
+        const float abz = pb[2] - pa[2];
+        const float acx = pc[0] - pa[0];
+        const float acy = pc[1] - pa[1];
+        const float acz = pc[2] - pa[2];
+        const float nx = aby * acz - abz * acy;
+        const float ny = abz * acx - abx * acz;
+        const float nz = abx * acy - aby * acx;
+        for (const auto index : {a, b, c}) {
+            mesh.vertices[index].normal[0] += nx;
+            mesh.vertices[index].normal[1] += ny;
+            mesh.vertices[index].normal[2] += nz;
+        }
+    }
+    for (auto& vertex : mesh.vertices) {
+        const float length_squared =
+            vertex.normal[0] * vertex.normal[0] + vertex.normal[1] * vertex.normal[1] +
+            vertex.normal[2] * vertex.normal[2];
+        if (length_squared <= 1.0e-8F) {
+            vertex.normal[0] = 0.0F;
+            vertex.normal[1] = 1.0F;
+            vertex.normal[2] = 0.0F;
+        } else {
+            normalize_normal(vertex);
+        }
+    }
 }
 
 [[nodiscard]] std::string trim(std::string value) {
@@ -72,7 +148,7 @@ ParseResult parse_source_manifest(const std::string_view source) {
     MeshSource parsed;
     std::istringstream stream{std::string{source}};
     std::string line;
-    std::size_t line_number = 0;
+    std::size_t line_number = 0U;
     bool header_seen = false;
     bool id_seen = false;
 
@@ -92,10 +168,10 @@ ParseResult parse_source_manifest(const std::string_view source) {
         std::string keyword;
         values >> keyword;
         if (!header_seen) {
-            std::uint32_t version = 0;
+            std::uint32_t version = 0U;
             if (keyword != "vice-mesh-source" || !(values >> version) ||
-                version != mesh_source_format_version) {
-                fail("expected `vice-mesh-source 1`.");
+                (version != mesh_source_format_version_v1 && version != mesh_source_format_version_v2)) {
+                fail("expected `vice-mesh-source 1` or `vice-mesh-source 2`.");
                 return result;
             }
             std::string trailing;
@@ -103,6 +179,7 @@ ParseResult parse_source_manifest(const std::string_view source) {
                 fail("source header has trailing data.");
                 return result;
             }
+            parsed.version = version;
             header_seen = true;
             continue;
         }
@@ -119,8 +196,8 @@ ParseResult parse_source_manifest(const std::string_view source) {
                 return result;
             }
             const auto id = world::PersistentId::parse(id_text);
-            if (!id.has_value()) {
-                fail("mesh id must be a valid UUID.");
+            if (!id.has_value() || id->is_nil()) {
+                fail("mesh id must be a valid non-nil UUID.");
                 return result;
             }
             parsed.stable_id = id->bytes();
@@ -131,29 +208,38 @@ ParseResult parse_source_manifest(const std::string_view source) {
                 fail("collision requires a mode.");
                 return result;
             }
-            if (mode == "none") {
-                parsed.collision = CollisionMode::none;
-            } else if (mode == "triangle_mesh") {
-                parsed.collision = CollisionMode::triangle_mesh;
-            } else if (mode == "convex_hull") {
-                parsed.collision = CollisionMode::convex_hull;
-            } else {
+            if (mode == "none") parsed.collision = CollisionMode::none;
+            else if (mode == "triangle_mesh") parsed.collision = CollisionMode::triangle_mesh;
+            else if (mode == "convex_hull") parsed.collision = CollisionMode::convex_hull;
+            else {
                 fail("unknown collision mode.");
                 return result;
             }
         } else if (keyword == "vertex") {
             render::MeshVertex vertex;
-            if (!(values >> vertex.position[0] >> vertex.position[1] >> vertex.position[2] >>
-                    vertex.color[0] >> vertex.color[1] >> vertex.color[2]) ||
-                !finite_vertex(vertex)) {
+            const bool base = static_cast<bool>(values >>
+                vertex.position[0] >> vertex.position[1] >> vertex.position[2] >>
+                vertex.color[0] >> vertex.color[1] >> vertex.color[2]);
+            if (!base) {
+                fail("invalid vertex.");
+                return result;
+            }
+            if (parsed.version >= mesh_source_format_version_v2) {
+                if (!(values >> vertex.normal[0] >> vertex.normal[1] >> vertex.normal[2] >>
+                        vertex.uv[0] >> vertex.uv[1]) || !finite_surface_vertex(vertex)) {
+                    fail("v2 vertex requires a finite non-zero normal and UV0.");
+                    return result;
+                }
+                normalize_normal(vertex);
+            } else if (!finite_legacy_vertex(vertex)) {
                 fail("invalid vertex.");
                 return result;
             }
             parsed.vertices.push_back(vertex);
         } else if (keyword == "triangle") {
-            std::uint32_t a = 0;
-            std::uint32_t b = 0;
-            std::uint32_t c = 0;
+            std::uint32_t a = 0U;
+            std::uint32_t b = 0U;
+            std::uint32_t c = 0U;
             if (!(values >> a >> b >> c) || a == b || b == c || a == c) {
                 fail("invalid triangle.");
                 return result;
@@ -192,6 +278,9 @@ ParseResult parse_source_manifest(const std::string_view source) {
             return result;
         }
     }
+    if (parsed.version == mesh_source_format_version_v1) {
+        derive_legacy_normals(parsed);
+    }
 
     result.source = std::move(parsed);
     return result;
@@ -205,12 +294,12 @@ CookResult cook(const MeshSource& source) {
         return result;
     }
     for (const auto& vertex : source.vertices) {
-        if (!finite_vertex(vertex)) {
-            result.diagnostics = "Mesh source contains an invalid vertex.";
+        if (!finite_surface_vertex(vertex)) {
+            result.diagnostics = "Mesh source contains an invalid surface vertex.";
             return result;
         }
     }
-    for (std::size_t offset = 0; offset < source.indices.size(); offset += 3U) {
+    for (std::size_t offset = 0U; offset < source.indices.size(); offset += 3U) {
         const auto a = source.indices[offset];
         const auto b = source.indices[offset + 1U];
         const auto c = source.indices[offset + 2U];
@@ -227,6 +316,8 @@ CookResult cook(const MeshSource& source) {
     for (const auto& vertex : source.vertices) {
         for (const float component : vertex.position) append_f32(payload, component);
         for (const float component : vertex.color) append_f32(payload, component);
+        for (const float component : vertex.normal) append_f32(payload, component);
+        for (const float component : vertex.uv) append_f32(payload, component);
     }
     for (const std::uint32_t index : source.indices) append_u32(payload, index);
 

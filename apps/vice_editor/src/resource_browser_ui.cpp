@@ -51,6 +51,7 @@ constexpr const char* inspector_window_name = "Inspector###VICE.Inspector";
 [[nodiscard]] const char* resource_role_name(const world::ResourceRole role) noexcept {
     switch (role) {
     case world::ResourceRole::render_mesh: return "Render mesh";
+    case world::ResourceRole::render_material: return "Render material";
     }
     return "Resource";
 }
@@ -122,24 +123,36 @@ void ResourceBrowserUi::draw(AssetIndex& assets) {
     ImGui::InputTextWithHint("##ResourceFilter", "Search assets", state_->filter.data(), state_->filter.size());
     ImGui::SameLine();
 
-    static constexpr std::array<const char*, 7> kind_names{
-        "All",
-        "World",
-        "Mesh",
-        "Collision",
-        "Rigid Material",
-        "Shader",
-        "Shader Manifest",
+    struct KindChoice {
+        const char* name;
+        AssetKind kind;
+    };
+    static constexpr std::array kind_choices{
+        KindChoice{"World", AssetKind::world},
+        KindChoice{"Mesh", AssetKind::mesh},
+        KindChoice{"Collision", AssetKind::collision},
+        KindChoice{"Rigid Material", AssetKind::rigid_material},
+        KindChoice{"Shader", AssetKind::shader_source},
+        KindChoice{"Shader Manifest", AssetKind::shader_manifest},
+        KindChoice{"Render Material", AssetKind::render_material},
+        KindChoice{"Texture", AssetKind::texture},
     };
     ImGui::SetNextItemWidth(150.0F);
-    const char* preview = state_->kind_filter < 0
-        ? kind_names[0]
-        : kind_names[static_cast<std::size_t>(state_->kind_filter + 1)];
+    const char* preview = "All";
+    if (state_->kind_filter >= 0) {
+        for (const auto& choice : kind_choices) {
+            if (static_cast<int>(choice.kind) == state_->kind_filter) {
+                preview = choice.name;
+                break;
+            }
+        }
+    }
     if (ImGui::BeginCombo("##ResourceKind", preview)) {
         if (ImGui::Selectable("All", state_->kind_filter < 0)) state_->kind_filter = -1;
-        for (int index = 0; index < 6; ++index) {
-            if (ImGui::Selectable(kind_names[static_cast<std::size_t>(index + 1)], state_->kind_filter == index)) {
-                state_->kind_filter = index;
+        for (const auto& choice : kind_choices) {
+            const int value = static_cast<int>(choice.kind);
+            if (ImGui::Selectable(choice.name, state_->kind_filter == value)) {
+                state_->kind_filter = value;
             }
         }
         ImGui::EndCombo();

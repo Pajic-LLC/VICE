@@ -47,7 +47,7 @@ struct LabInputState {
     bool jump_queued = false;
 };
 
-static_assert(sizeof(LabVertex) == 24U);
+static_assert(sizeof(LabVertex) == 44U);
 static_assert(sizeof(vice::math::Mat4) == 64U);
 
 constexpr std::string_view player_persistent_id_text =
