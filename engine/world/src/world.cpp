@@ -35,6 +35,7 @@ EntityId World::allocate(const PersistentId persistent_id) {
     slot.spatial_state.reset();
     slot.authored_transform.reset();
     slot.camera.reset();
+    slot.light.reset();
     slot.resource_references.clear();
     slot.alive = true;
 
@@ -55,6 +56,7 @@ bool World::destroy_entity(const EntityId entity) {
     slot.spatial_state.reset();
     slot.authored_transform.reset();
     slot.camera.reset();
+    slot.light.reset();
     slot.resource_references.clear();
     slot.alive = false;
 
@@ -271,6 +273,7 @@ bool World::clear_spatial_state(const EntityId entity) {
     slots_[entity.index].spatial_state.reset();
     slots_[entity.index].authored_transform.reset();
     slots_[entity.index].camera.reset();
+    slots_[entity.index].light.reset();
     return true;
 }
 
@@ -368,6 +371,25 @@ std::optional<EntityId> World::primary_camera() const noexcept {
         }
     }
     return std::nullopt;
+}
+
+bool World::set_light(const EntityId entity, const Light light_value) {
+    if (!alive(entity) || !slots_[entity.index].spatial_state.has_value() || !valid(light_value)) {
+        return false;
+    }
+    slots_[entity.index].light = light_value;
+    return true;
+}
+
+bool World::clear_light(const EntityId entity) {
+    if (!alive(entity) || !slots_[entity.index].light.has_value()) return false;
+    slots_[entity.index].light.reset();
+    return true;
+}
+
+std::optional<Light> World::light(const EntityId entity) const noexcept {
+    if (!alive(entity)) return std::nullopt;
+    return slots_[entity.index].light;
 }
 
 std::optional<SpatialState> World::spatial_state(const EntityId entity) const noexcept {

@@ -97,15 +97,22 @@ constexpr render::ShaderBindingKey material_sampler_binding{
     .array_element = 0,
 };
 
+struct SceneLightConstants {
+    float position_or_direction[4]{};
+    float color_intensity[4]{};
+    float parameters[4]{};
+};
+
 struct SceneConstants {
     math::Mat4 view_projection{};
     math::Mat4 model{};
     float camera_position[4]{};
-    float light_direction[4]{};
-    float light_color[4]{};
+    float light_metadata[4]{};
+    std::array<SceneLightConstants, max_runtime_lights> lights{};
 };
 
-static_assert(sizeof(SceneConstants) == 176U);
+static_assert(sizeof(SceneLightConstants) == 48U);
+static_assert(sizeof(SceneConstants) == 544U);
 
 constexpr std::string_view hlsl_source = R"(
 cbuffer SceneFrame : register(b0) {
@@ -421,6 +428,36 @@ std::vector<RenderMeshInstance> collect_render_mesh_instances(const world::World
     return instances;
 }
 
+std::vector<RuntimeLight> collect_runtime_lights(const world::World& world) {
+    std::vector<RuntimeLight> lights;
+    lights.reserve(max_runtime_lights);
+    const auto snapshot = world.snapshot();
+    for (const auto& entity : snapshot.entities) {
+        if (lights.size() >= max_runtime_lights) break;
+        if (!entity.spatial_state.has_value() || !entity.light.has_value() || !entity.light->enabled) {
+            continue;
+        }
+
+        const auto authored = entity.authored_transform.value_or(world::AuthoredTransform{});
+        RuntimeLight light{
+            .entity = entity.persistent_id,
+            .light = *entity.light,
+            .position = {
+                static_cast<float>(entity.spatial_state->global_position.x),
+                static_cast<float>(entity.spatial_state->global_position.y),
+                static_cast<float>(entity.spatial_state->global_position.z),
+            },
+        };
+        if (light.light.type == world::LightType::directional) {
+            light.direction = math::normalize(
+                rotate_vector(authored.rotation, {0.0F, 0.0F, -1.0F})
+            );
+        }
+        lights.push_back(light);
+    }
+    return lights;
+}
+
 math::Mat4 runtime_model_matrix(const RenderMeshInstance& instance) noexcept {
     auto result = math::translation({
         static_cast<float>(instance.spatial.global_position.x),
@@ -724,13 +761,46 @@ bool RuntimeSceneRenderer::render(
             constants_iterator = state_->constants.emplace(instance.entity, std::move(constants)).first;
         }
 
-        const SceneConstants constants{
+        auto runtime_lights = collect_runtime_lights(world);
+        if (runtime_lights.empty()) {
+            runtime_lights.push_back(RuntimeLight{
+                .light = world::Light{
+                    .type = world::LightType::directional,
+                    .color = {1.0F, 0.952381F, 0.880952F},
+                    .intensity = 4.2F,
+                    .range = 0.0F,
+                    .enabled = true,
+                },
+                .direction = {-0.431934F, -0.863868F, -0.259161F},
+            });
+        }
+
+        SceneConstants constants{
             .view_projection = view_projection,
             .model = runtime_model_matrix(instance),
             .camera_position = {camera_position.x, camera_position.y, camera_position.z, 1.0F},
-            .light_direction = {0.431934F, 0.863868F, 0.259161F, 0.0F},
-            .light_color = {4.2F, 4.0F, 3.7F, 1.0F},
         };
+        constants.light_metadata[0] = static_cast<float>(runtime_lights.size());
+        for (std::size_t light_index = 0; light_index < runtime_lights.size(); ++light_index) {
+            const auto& source = runtime_lights[light_index];
+            auto& destination = constants.lights[light_index];
+            if (source.light.type == world::LightType::directional) {
+                destination.position_or_direction[0] = source.direction.x;
+                destination.position_or_direction[1] = source.direction.y;
+                destination.position_or_direction[2] = source.direction.z;
+                destination.position_or_direction[3] = 0.0F;
+            } else {
+                destination.position_or_direction[0] = source.position.x;
+                destination.position_or_direction[1] = source.position.y;
+                destination.position_or_direction[2] = source.position.z;
+                destination.position_or_direction[3] = 1.0F;
+            }
+            destination.color_intensity[0] = source.light.color.red;
+            destination.color_intensity[1] = source.light.color.green;
+            destination.color_intensity[2] = source.light.color.blue;
+            destination.color_intensity[3] = source.light.intensity;
+            destination.parameters[0] = source.light.range;
+        }
         if (!constants_iterator->second->write(0, std::as_bytes(std::span{&constants, 1}))) {
             set_diagnostics(diagnostics, "VICE Runtime could not update scene constants.");
             return false;

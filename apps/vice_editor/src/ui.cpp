@@ -317,6 +317,9 @@ struct EditorUi::State {
     std::optional<world::PersistentId> inspector_camera_edit_id;
     std::optional<world::Camera> inspector_camera_edit_before;
     std::string inspector_camera_edit_label;
+    std::optional<world::PersistentId> inspector_light_edit_id;
+    std::optional<world::Light> inspector_light_edit_before;
+    std::string inspector_light_edit_label;
 };
 
 EditorUi::EditorUi(std::filesystem::path layout_path)
@@ -609,6 +612,11 @@ void EditorUi::draw(
                 }
                 if (entry.camera.has_value()) {
                     label += entry.camera->primary ? "   Primary Camera" : "   Camera";
+                }
+                if (entry.light.has_value()) {
+                    label += entry.light->type == world::LightType::directional
+                        ? "   Directional Light"
+                        : "   Point Light";
                 }
                 label += "###" + full_id;
 
@@ -1017,6 +1025,145 @@ void EditorUi::draw(
                             } else {
                                 core::log(core::LogLevel::error, "VICE Editor could not change the primary camera.");
                             }
+                        }
+                    }
+                }
+
+                if (inspector->light.has_value() &&
+                    ImGui::CollapsingHeader("Light", ImGuiTreeNodeFlags_DefaultOpen)) {
+                    const auto begin_light_transaction = [&](const char* label) {
+                        if (ImGui::IsItemActivated()) {
+                            state_->inspector_light_edit_id = inspector->persistent_id;
+                            state_->inspector_light_edit_before = world.light(*inspector->entity);
+                            state_->inspector_light_edit_label = label;
+                        }
+                    };
+                    const auto finish_light_transaction = [&]() {
+                        if (!ImGui::IsItemDeactivatedAfterEdit() ||
+                            !state_->inspector_light_edit_id.has_value() ||
+                            !state_->inspector_light_edit_before.has_value() ||
+                            *state_->inspector_light_edit_id != inspector->persistent_id) {
+                            return;
+                        }
+                        const auto after = capture_entity_light(world, inspector->persistent_id);
+                        if (after.has_value()) {
+                            history.record(CommandHistory::LightEntry{
+                                .before = {
+                                    .persistent_id = inspector->persistent_id,
+                                    .light = *state_->inspector_light_edit_before,
+                                },
+                                .after = *after,
+                                .label = state_->inspector_light_edit_label,
+                            });
+                        }
+                        state_->inspector_light_edit_id.reset();
+                        state_->inspector_light_edit_before.reset();
+                        state_->inspector_light_edit_label.clear();
+                    };
+                    const auto apply_light = [&](const world::Light& light, const char* error) {
+                        if (!world.set_light(*inspector->entity, light)) {
+                            core::log(core::LogLevel::error, error);
+                            return false;
+                        }
+                        return true;
+                    };
+
+                    auto current_light = world.light(*inspector->entity);
+                    if (current_light.has_value()) {
+                        const auto before_type = capture_entity_light(world, inspector->persistent_id);
+                        int type = current_light->type == world::LightType::directional ? 0 : 1;
+                        const char* type_names[] = {"Directional", "Point"};
+                        if (ImGui::Combo("Type", &type, type_names, 2)) {
+                            auto changed = *current_light;
+                            changed.type = type == 0 ? world::LightType::directional : world::LightType::point;
+                            changed.range = changed.type == world::LightType::point
+                                ? std::max(changed.range, 10.0F)
+                                : 0.0F;
+                            if (before_type.has_value() && apply_light(changed, "VICE Editor could not change light type.")) {
+                                const auto after = capture_entity_light(world, inspector->persistent_id);
+                                if (after.has_value()) {
+                                    history.record(CommandHistory::LightEntry{
+                                        .before = *before_type,
+                                        .after = *after,
+                                        .label = "Change Light Type",
+                                    });
+                                }
+                            }
+                        }
+
+                        current_light = world.light(*inspector->entity);
+                        const auto before_enabled = capture_entity_light(world, inspector->persistent_id);
+                        bool enabled = current_light->enabled;
+                        if (ImGui::Checkbox("Enabled", &enabled)) {
+                            auto changed = *current_light;
+                            changed.enabled = enabled;
+                            if (before_enabled.has_value() && apply_light(changed, "VICE Editor could not change light enabled state.")) {
+                                const auto after = capture_entity_light(world, inspector->persistent_id);
+                                if (after.has_value()) {
+                                    history.record(CommandHistory::LightEntry{
+                                        .before = *before_enabled,
+                                        .after = *after,
+                                        .label = enabled ? "Enable Light" : "Disable Light",
+                                    });
+                                }
+                            }
+                        }
+
+                        current_light = world.light(*inspector->entity);
+                        float color[3]{
+                            current_light->color.red,
+                            current_light->color.green,
+                            current_light->color.blue,
+                        };
+                        const bool color_changed = ImGui::ColorEdit3("Color", color);
+                        begin_light_transaction("Edit Light Color");
+                        if (color_changed) {
+                            auto changed = *current_light;
+                            changed.color = {color[0], color[1], color[2]};
+                            (void)apply_light(changed, "VICE Editor could not apply light color edit.");
+                        }
+                        finish_light_transaction();
+
+                        current_light = world.light(*inspector->entity);
+                        float intensity = current_light->intensity;
+                        const bool intensity_changed = ImGui::DragFloat(
+                            "Intensity",
+                            &intensity,
+                            0.05F,
+                            0.0F,
+                            100000.0F,
+                            "%.2f",
+                            ImGuiSliderFlags_AlwaysClamp
+                        );
+                        begin_light_transaction("Edit Light Intensity");
+                        if (intensity_changed) {
+                            auto changed = *current_light;
+                            changed.intensity = intensity;
+                            (void)apply_light(changed, "VICE Editor could not apply light intensity edit.");
+                        }
+                        finish_light_transaction();
+
+                        current_light = world.light(*inspector->entity);
+                        if (current_light->type == world::LightType::point) {
+                            float range = current_light->range;
+                            const bool range_changed = ImGui::DragFloat(
+                                "Range",
+                                &range,
+                                0.1F,
+                                0.01F,
+                                100000.0F,
+                                "%.2f",
+                                ImGuiSliderFlags_AlwaysClamp
+                            );
+                            begin_light_transaction("Edit Light Range");
+                            if (range_changed) {
+                                auto changed = *current_light;
+                                changed.range = range;
+                                (void)apply_light(changed, "VICE Editor could not apply light range edit.");
+                            }
+                            finish_light_transaction();
+                        } else {
+                            ImGui::TextDisabled("Direction follows the entity rotation (-Z forward).");
                         }
                     }
                 }

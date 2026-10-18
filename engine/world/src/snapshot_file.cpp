@@ -269,6 +269,16 @@ WorldSnapshotEncodeResult encode_world_snapshot(const WorldSnapshot& snapshot_da
             append_f32(payload, entity.camera->far_plane);
             append_u8(payload, entity.camera->primary ? 1U : 0U);
         }
+        append_u8(payload, entity.light.has_value() ? 1U : 0U);
+        if (entity.light.has_value()) {
+            append_u8(payload, static_cast<std::uint8_t>(entity.light->type));
+            append_f32(payload, entity.light->color.red);
+            append_f32(payload, entity.light->color.green);
+            append_f32(payload, entity.light->color.blue);
+            append_f32(payload, entity.light->intensity);
+            append_f32(payload, entity.light->range);
+            append_u8(payload, entity.light->enabled ? 1U : 0U);
+        }
         append_u32(payload, static_cast<std::uint32_t>(entity.resource_references.size()));
         for (const auto reference : entity.resource_references) {
             append_u8(payload, static_cast<std::uint8_t>(reference.role));
@@ -478,6 +488,40 @@ WorldSnapshotDecodeResult decode_world_snapshot(const std::span<const std::byte>
                     return result;
                 }
                 entity.camera = camera;
+            }
+        }
+
+        if (version >= 5U) {
+            std::uint8_t has_light = 0;
+            if (!reader.read_u8(has_light)) {
+                result.diagnostics = "World snapshot ended inside entity light metadata.";
+                return result;
+            }
+            if (has_light > 1U) {
+                result.diagnostics = "World snapshot contains invalid entity light metadata.";
+                return result;
+            }
+            if (has_light != 0U) {
+                std::uint8_t type = 0;
+                std::uint8_t enabled = 0;
+                Light light;
+                if (!reader.read_u8(type) ||
+                    !reader.read_f32(light.color.red) ||
+                    !reader.read_f32(light.color.green) ||
+                    !reader.read_f32(light.color.blue) ||
+                    !reader.read_f32(light.intensity) ||
+                    !reader.read_f32(light.range) ||
+                    !reader.read_u8(enabled)) {
+                    result.diagnostics = "World snapshot ended inside entity light record.";
+                    return result;
+                }
+                light.type = static_cast<LightType>(type);
+                light.enabled = enabled != 0U;
+                if (enabled > 1U || !valid(light)) {
+                    result.diagnostics = "World snapshot contains an invalid entity light record.";
+                    return result;
+                }
+                entity.light = light;
             }
         }
 
