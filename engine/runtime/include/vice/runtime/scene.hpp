@@ -63,6 +63,7 @@ struct RenderMeshInstance {
 struct RuntimeCameraView {
     world::PersistentId entity{};
     world::Camera camera{};
+    math::Vec3 position{};
     math::Mat4 view_projection{};
 };
 
