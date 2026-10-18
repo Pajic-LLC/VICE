@@ -185,6 +185,13 @@ int main() {
         "primary camera authored"
     );
 
+    require(
+        !runtime::directional_shadow_view(
+            instances, catalog, runtime::collect_runtime_lights(world_state)
+        ).has_value(),
+        "World without directional light has no shadow view"
+    );
+
     const auto first_camera = runtime::primary_camera_view(world_state, 16.0F / 9.0F);
     require(first_camera.has_value(), "runtime resolves authored primary camera");
     require(first_camera->entity == *camera_id, "runtime camera identity");
@@ -222,6 +229,60 @@ int main() {
     require(
         matrix_differs(moved_camera->view_projection, rotated_camera->view_projection),
         "current authored camera rotation drives view matrix"
+    );
+
+    const auto light_id = world::PersistentId::parse("52000000-0000-4000-8000-000000000004");
+    require(light_id.has_value(), "shadow light ID parse");
+    const auto light_entity = world_state.create_entity(*light_id);
+    require(light_entity.has_value(), "shadow light entity creates");
+    require(
+        world_state.set_spatial_state(
+            *light_entity,
+            world::SpatialState{
+                .global_position = {0.0, 10.0, 0.0},
+                .region = region.id,
+            }
+        ),
+        "shadow light spatial state"
+    );
+    require(
+        world_state.set_light(
+            *light_entity,
+            world::Light{
+                .type = world::LightType::directional,
+                .color = {1.0F, 1.0F, 1.0F},
+                .intensity = 3.0F,
+                .range = 0.0F,
+                .enabled = true,
+            }
+        ),
+        "directional shadow light authored"
+    );
+    auto shadow_lights = runtime::collect_runtime_lights(world_state);
+    const auto first_shadow = runtime::directional_shadow_view(instances, catalog, shadow_lights);
+    require(first_shadow.has_value(), "directional shadow view resolves");
+    require(first_shadow->light_entity == *light_id, "shadow view keeps light identity");
+    require(first_shadow->light_index == 0U, "first directional light is selected deterministically");
+    for (const float value : first_shadow->view_projection.values) {
+        require(std::isfinite(value), "shadow matrix is finite");
+    }
+
+    require(
+        world_state.set_authored_transform(
+            *light_entity,
+            world::AuthoredTransform{
+                .rotation = {0.0F, 0.70710678F, 0.0F, 0.70710678F},
+                .scale = {1.0F, 1.0F, 1.0F},
+            }
+        ),
+        "shadow light rotation updates"
+    );
+    shadow_lights = runtime::collect_runtime_lights(world_state);
+    const auto rotated_shadow = runtime::directional_shadow_view(instances, catalog, shadow_lights);
+    require(rotated_shadow.has_value(), "rotated directional shadow view resolves");
+    require(
+        matrix_differs(first_shadow->view_projection, rotated_shadow->view_projection),
+        "authored directional rotation drives shadow view"
     );
 
     std::filesystem::remove_all(root, error);

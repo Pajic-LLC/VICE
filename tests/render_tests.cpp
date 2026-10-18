@@ -4,6 +4,19 @@
 #include <cassert>
 #include <cstddef>
 
+namespace {
+
+class TestShaderModule final : public vice::render::ShaderModule {
+public:
+    explicit TestShaderModule(const vice::render::ShaderStage stage) : stage_{stage} {}
+    [[nodiscard]] vice::render::ShaderStage stage() const noexcept override { return stage_; }
+
+private:
+    vice::render::ShaderStage stage_;
+};
+
+} // namespace
+
 int main() {
     using namespace vice::render;
 
@@ -345,6 +358,31 @@ int main() {
 
     constexpr GraphicsPipelineDesc invalid_pipeline{};
     static_assert(!is_valid(invalid_pipeline));
+
+    TestShaderModule vertex_shader{ShaderStage::vertex};
+    TestShaderModule fragment_shader{ShaderStage::fragment};
+    GraphicsPipelineDesc depth_only_pipeline;
+    depth_only_pipeline.vertex_shader = &vertex_shader;
+    depth_only_pipeline.fragment_shader = nullptr;
+    depth_only_pipeline.color_format = TextureFormat::undefined;
+    depth_only_pipeline.depth.format = TextureFormat::depth32_float;
+    depth_only_pipeline.depth.test_enabled = true;
+    depth_only_pipeline.depth.write_enabled = true;
+    assert(is_valid(depth_only_pipeline));
+
+    auto invalid_depth_only = depth_only_pipeline;
+    invalid_depth_only.depth.write_enabled = false;
+    assert(!is_valid(invalid_depth_only));
+
+    auto invalid_color_without_fragment = depth_only_pipeline;
+    invalid_color_without_fragment.color_format = TextureFormat::bgra8_unorm;
+    assert(!is_valid(invalid_color_without_fragment));
+
+    GraphicsPipelineDesc color_pipeline;
+    color_pipeline.vertex_shader = &vertex_shader;
+    color_pipeline.fragment_shader = &fragment_shader;
+    color_pipeline.color_format = TextureFormat::bgra8_unorm;
+    assert(is_valid(color_pipeline));
 
     constexpr RenderPassDesc render_pass{};
     static_assert(render_pass.clear_color_attachment);

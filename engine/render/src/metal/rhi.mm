@@ -778,6 +778,39 @@ public:
         return render_encoder_ != nil;
     }
 
+    bool begin_depth_render_pass(
+        Texture& depth_attachment,
+        const float clear_depth,
+        const bool clear_depth_attachment
+    ) override {
+        if (render_encoder_ != nil || drawable_ != nil || command_buffer_ == nil ||
+            clear_depth < 0.0F || clear_depth > 1.0F) {
+            return false;
+        }
+        auto* depth_texture = dynamic_cast<MetalTexture*>(&depth_attachment);
+        if (depth_texture == nullptr || depth_texture->native() == nil ||
+            depth_texture->format() != TextureFormat::depth32_float ||
+            !has_usage(depth_texture->usage(), TextureUsage::depth_attachment)) {
+            return false;
+        }
+
+        MTLRenderPassDescriptor* pass = [MTLRenderPassDescriptor renderPassDescriptor];
+        pass.depthAttachment.texture = depth_texture->native();
+        pass.depthAttachment.loadAction = clear_depth_attachment
+            ? MTLLoadActionClear
+            : MTLLoadActionLoad;
+        pass.depthAttachment.storeAction = MTLStoreActionStore;
+        pass.depthAttachment.clearDepth = clear_depth;
+        render_encoder_ = [command_buffer_ renderCommandEncoderWithDescriptor:pass];
+        active_swapchain_ = nullptr;
+        active_depth_texture_ = depth_texture;
+        reset_mesh_state();
+        active_pipeline_ = nullptr;
+        bound_resources_.clear();
+        pipeline_bound_ = false;
+        return render_encoder_ != nil;
+    }
+
     bool set_viewport(const Viewport& viewport) override {
         if (render_encoder_ == nil || !is_valid(viewport)) {
             return false;
@@ -1747,19 +1780,25 @@ public:
         const GraphicsPipelineDesc& desc
     ) override {
         if (!is_valid(desc) || desc.vertex_shader->stage() != ShaderStage::vertex ||
-            desc.fragment_shader->stage() != ShaderStage::fragment) {
+            (desc.fragment_shader != nullptr &&
+                desc.fragment_shader->stage() != ShaderStage::fragment)) {
             core::log(core::LogLevel::error, "VICE rejected an invalid graphics pipeline description.");
             return nullptr;
         }
         auto* vertex = dynamic_cast<MetalShaderModule*>(desc.vertex_shader);
-        auto* fragment = dynamic_cast<MetalShaderModule*>(desc.fragment_shader);
-        if (vertex == nullptr || fragment == nullptr) {
+        auto* fragment = desc.fragment_shader != nullptr
+            ? dynamic_cast<MetalShaderModule*>(desc.fragment_shader)
+            : nullptr;
+        if (vertex == nullptr || (desc.fragment_shader != nullptr && fragment == nullptr)) {
             return nullptr;
         }
+        const std::span<const ShaderResourceBindingDesc> fragment_resources = fragment != nullptr
+            ? fragment->resources()
+            : std::span<const ShaderResourceBindingDesc>{};
 
         PipelineLayout layout = compile_graphics_pipeline_layout(
             vertex->resources(),
-            fragment->resources()
+            fragment_resources
         );
         if (!layout.valid) {
             core::log(
@@ -1820,18 +1859,20 @@ public:
 
         MTLRenderPipelineDescriptor* native_desc = [[MTLRenderPipelineDescriptor alloc] init];
         native_desc.vertexFunction = vertex->function();
-        native_desc.fragmentFunction = fragment->function();
+        native_desc.fragmentFunction = fragment != nullptr ? fragment->function() : nil;
         native_desc.vertexDescriptor = vertex_descriptor;
-        auto* color_attachment = native_desc.colorAttachments[0];
-        color_attachment.pixelFormat = pixel_format(desc.color_format);
-        if (desc.blend == BlendMode::alpha) {
-            color_attachment.blendingEnabled = YES;
-            color_attachment.sourceRGBBlendFactor = MTLBlendFactorSourceAlpha;
-            color_attachment.destinationRGBBlendFactor = MTLBlendFactorOneMinusSourceAlpha;
-            color_attachment.rgbBlendOperation = MTLBlendOperationAdd;
-            color_attachment.sourceAlphaBlendFactor = MTLBlendFactorOne;
-            color_attachment.destinationAlphaBlendFactor = MTLBlendFactorOneMinusSourceAlpha;
-            color_attachment.alphaBlendOperation = MTLBlendOperationAdd;
+        if (desc.color_format != TextureFormat::undefined) {
+            auto* color_attachment = native_desc.colorAttachments[0];
+            color_attachment.pixelFormat = pixel_format(desc.color_format);
+            if (desc.blend == BlendMode::alpha) {
+                color_attachment.blendingEnabled = YES;
+                color_attachment.sourceRGBBlendFactor = MTLBlendFactorSourceAlpha;
+                color_attachment.destinationRGBBlendFactor = MTLBlendFactorOneMinusSourceAlpha;
+                color_attachment.rgbBlendOperation = MTLBlendOperationAdd;
+                color_attachment.sourceAlphaBlendFactor = MTLBlendFactorOne;
+                color_attachment.destinationAlphaBlendFactor = MTLBlendFactorOneMinusSourceAlpha;
+                color_attachment.alphaBlendOperation = MTLBlendOperationAdd;
+            }
         }
         native_desc.depthAttachmentPixelFormat = pixel_format(desc.depth.format);
         if (NSString* label = make_label(desc.debug_name)) {
@@ -1870,10 +1911,12 @@ public:
                 vertex->locations().begin(),
                 vertex->locations().end()
             },
-            std::vector<MetalShaderResourceLocationDesc>{
-                fragment->locations().begin(),
-                fragment->locations().end()
-            },
+            fragment != nullptr
+                ? std::vector<MetalShaderResourceLocationDesc>{
+                    fragment->locations().begin(),
+                    fragment->locations().end()
+                }
+                : std::vector<MetalShaderResourceLocationDesc>{},
             std::move(vertex_streams)
         );
     }

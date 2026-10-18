@@ -12,6 +12,8 @@ cbuffer SceneFrame : register(b0, space0) {
     float4 camera_position;
     float4 light_metadata;
     ViceLight lights[VICE_MAX_LIGHTS];
+    column_major float4x4 shadow_view_projection;
+    float4 shadow_metadata;
 };
 
 cbuffer MaterialParams : register(b1, space0) {
@@ -22,7 +24,9 @@ cbuffer MaterialParams : register(b1, space0) {
 };
 
 Texture2D<float4> base_color_texture : register(t0, space0);
+Texture2D<float> directional_shadow_map : register(t1, space0);
 SamplerState base_color_sampler : register(s0, space0);
+SamplerState directional_shadow_sampler : register(s1, space0);
 
 struct VertexIn {
     float3 position : POSITION0;
@@ -37,6 +41,7 @@ struct VertexOut {
     float3 world_normal : TEXCOORD1;
     float3 color : COLOR0;
     float2 uv : TEXCOORD2;
+    float4 shadow_position : TEXCOORD3;
 };
 
 VertexOut vice_surface_vs(VertexIn input) {
@@ -47,6 +52,7 @@ VertexOut vice_surface_vs(VertexIn input) {
     output.world_normal = normalize(mul((float3x3)model, input.normal));
     output.color = input.color;
     output.uv = input.uv;
+    output.shadow_position = mul(shadow_view_projection, world_position);
     return output;
 }
 
@@ -63,6 +69,35 @@ float geometry_schlick_ggx(float normal_view, float k) {
 
 float3 fresnel_schlick(float cosine, float3 f0) {
     return f0 + (1.0 - f0) * pow(1.0 - saturate(cosine), 5.0);
+}
+
+float directional_shadow_visibility(float4 shadow_position) {
+    if (shadow_metadata.x < 0.5 || abs(shadow_position.w) < 0.000001) return 1.0;
+
+    const float3 projected = shadow_position.xyz / shadow_position.w;
+    if (projected.z < 0.0 || projected.z > 1.0) return 1.0;
+
+    const float2 uv = float2(
+        projected.x * 0.5 + 0.5,
+        projected.y * -0.5 + 0.5
+    );
+    if (uv.x <= 0.0 || uv.x >= 1.0 || uv.y <= 0.0 || uv.y >= 1.0) return 1.0;
+
+    const float texel = shadow_metadata.z;
+    const float compare_depth = projected.z - shadow_metadata.w;
+    float visibility = 0.0;
+    [unroll]
+    for (int y = -1; y <= 1; ++y) {
+        [unroll]
+        for (int x = -1; x <= 1; ++x) {
+            const float stored_depth = directional_shadow_map.Sample(
+                directional_shadow_sampler,
+                uv + float2((float)x, (float)y) * texel
+            );
+            visibility += compare_depth <= stored_depth ? 1.0 : 0.0;
+        }
+    }
+    return visibility / 9.0;
 }
 
 float3 evaluate_light(
@@ -118,8 +153,14 @@ float4 vice_surface_fs(VertexOut input) : SV_Target0 {
 
     float3 direct = float3(0.0, 0.0, 0.0);
     const uint light_count = min((uint)light_metadata.x, VICE_MAX_LIGHTS);
+    const uint shadow_light_index = (uint)shadow_metadata.y;
     for (uint index = 0; index < light_count; ++index) {
-        direct += evaluate_light(
+        float visibility = 1.0;
+        if (shadow_metadata.x >= 0.5 && index == shadow_light_index &&
+            lights[index].position_or_direction.w < 0.5) {
+            visibility = directional_shadow_visibility(input.shadow_position);
+        }
+        direct += visibility * evaluate_light(
             lights[index],
             input.world_position,
             normal,

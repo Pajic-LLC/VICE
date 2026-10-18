@@ -46,30 +46,45 @@ static_assert(sizeof(MaterialConstants) == 32U);
     return valid_v1_resources(module, 0U);
 }
 
-[[nodiscard]] bool valid_v2_fragment_resources(const render::ShaderModule& module) noexcept {
+struct V2FragmentResourceContract {
+    bool valid = false;
+    bool supports_directional_shadow = false;
+};
+
+[[nodiscard]] V2FragmentResourceContract v2_fragment_resource_contract(
+    const render::ShaderModule& module
+) noexcept {
     bool material_constants = false;
     bool base_color_texture = false;
-    bool sampler = false;
+    bool base_color_sampler = false;
+    bool shadow_texture = false;
+    bool shadow_sampler = false;
     for (const auto& resource : module.resources()) {
-        if (resource.space != 0U || resource.count != 1U || resource.unbounded) return false;
+        if (resource.space != 0U || resource.count != 1U || resource.unbounded) return {};
         switch (resource.register_class) {
         case render::ShaderRegisterClass::constant_buffer:
-            if (resource.binding != 0U && resource.binding != 1U) return false;
+            if (resource.binding != 0U && resource.binding != 1U) return {};
             if (resource.binding == 1U) material_constants = true;
             break;
         case render::ShaderRegisterClass::shader_resource:
-            if (resource.binding != 0U) return false;
-            base_color_texture = true;
+            if (resource.binding == 0U) base_color_texture = true;
+            else if (resource.binding == 1U) shadow_texture = true;
+            else return {};
             break;
         case render::ShaderRegisterClass::sampler:
-            if (resource.binding != 0U) return false;
-            sampler = true;
+            if (resource.binding == 0U) base_color_sampler = true;
+            else if (resource.binding == 1U) shadow_sampler = true;
+            else return {};
             break;
         case render::ShaderRegisterClass::unordered_access:
-            return false;
+            return {};
         }
     }
-    return material_constants && base_color_texture && sampler;
+    return V2FragmentResourceContract{
+        .valid = material_constants && base_color_texture && base_color_sampler &&
+            shadow_texture == shadow_sampler,
+        .supports_directional_shadow = shadow_texture && shadow_sampler,
+    };
 }
 
 [[nodiscard]] std::unique_ptr<render::Buffer> create_material_constants(
@@ -204,6 +219,7 @@ struct RuntimeMaterialLibrary::State {
         std::unique_ptr<render::Buffer> constants;
         render::Texture* base_color_texture = nullptr;
         std::unique_ptr<render::Sampler> sampler;
+        bool supports_directional_shadow = false;
     };
 
     CookedRenderMaterialCatalog catalog;
@@ -255,9 +271,16 @@ bool RuntimeMaterialLibrary::initialize(
         }
 
         const bool textured = record.asset.version >= render::render_material_asset_format_version_v2;
-        const bool resources_valid = textured
-            ? valid_v2_vertex_resources(*vertex.module) && valid_v2_fragment_resources(*fragment.module)
-            : valid_v1_resources(*vertex.module, 0U) && valid_v1_resources(*fragment.module, 1U);
+        bool supports_directional_shadow = false;
+        bool resources_valid = false;
+        if (textured) {
+            const auto fragment_contract = v2_fragment_resource_contract(*fragment.module);
+            resources_valid = valid_v2_vertex_resources(*vertex.module) && fragment_contract.valid;
+            supports_directional_shadow = fragment_contract.supports_directional_shadow;
+        } else {
+            resources_valid = valid_v1_resources(*vertex.module, 0U) &&
+                valid_v1_resources(*fragment.module, 1U);
+        }
         if (vertex.module->stage() != render::ShaderStage::vertex ||
             fragment.module->stage() != render::ShaderStage::fragment || !resources_valid) {
             set_diagnostics(diagnostics, "Render material `" + record.resource_id.value.to_string() +
@@ -314,6 +337,7 @@ bool RuntimeMaterialLibrary::initialize(
             .constants = std::move(constants),
             .base_color_texture = base_color_texture,
             .sampler = std::move(sampler),
+            .supports_directional_shadow = supports_directional_shadow,
         });
     }
 
@@ -332,6 +356,7 @@ RuntimeMaterialBinding RuntimeMaterialLibrary::find(
         .constants = found->second.constants.get(),
         .base_color_texture = found->second.base_color_texture,
         .sampler = found->second.sampler.get(),
+        .supports_directional_shadow = found->second.supports_directional_shadow,
     };
 }
 

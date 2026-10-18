@@ -8,6 +8,7 @@
 #include <vice/world/world.hpp>
 
 #include <cstddef>
+#include <cstdint>
 #include <filesystem>
 #include <memory>
 #include <optional>
@@ -69,6 +70,7 @@ struct RuntimeCameraView {
 };
 
 inline constexpr std::size_t max_runtime_lights = 8U;
+inline constexpr std::uint32_t runtime_shadow_map_size = 2048U;
 
 struct RuntimeLight {
     world::PersistentId entity{};
@@ -77,7 +79,23 @@ struct RuntimeLight {
     math::Vec3 direction{};
 };
 
+struct RuntimeShadowView {
+    world::PersistentId light_entity{};
+    std::size_t light_index = 0;
+    math::Mat4 view_projection{};
+};
+
 [[nodiscard]] std::vector<RuntimeLight> collect_runtime_lights(const world::World& world);
+
+[[nodiscard]] std::optional<std::size_t> select_runtime_shadow_light(
+    std::span<const RuntimeLight> lights
+) noexcept;
+
+[[nodiscard]] std::optional<RuntimeShadowView> directional_shadow_view(
+    std::span<const RenderMeshInstance> instances,
+    const CookedMeshCatalog& catalog,
+    std::span<const RuntimeLight> lights
+) noexcept;
 
 [[nodiscard]] std::vector<RenderMeshInstance> collect_render_mesh_instances(
     const world::World& world

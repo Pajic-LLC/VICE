@@ -4,6 +4,7 @@
 #include <array>
 #include <cassert>
 #include <cmath>
+#include <optional>
 
 namespace {
 
@@ -59,6 +60,7 @@ int main() {
     assert(lights.front().entity == id(0));
     assert(lights.back().entity == id(7));
     assert(lights.front().light.type == world::LightType::directional);
+    assert(runtime::select_runtime_shadow_light(lights) == std::optional<std::size_t>{0U});
     assert(std::abs(lights.front().direction.x) < 0.0001F);
     assert(std::abs(lights.front().direction.y) < 0.0001F);
     assert(std::abs(lights.front().direction.z + 1.0F) < 0.0001F);
@@ -89,5 +91,6 @@ int main() {
     lights = runtime::collect_runtime_lights(scene);
     assert(lights.front().entity == id(1));
     assert(lights.back().entity == id(8));
+    assert(!runtime::select_runtime_shadow_light(lights).has_value());
     return 0;
 }

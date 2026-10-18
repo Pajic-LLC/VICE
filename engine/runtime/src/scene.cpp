@@ -97,6 +97,20 @@ constexpr render::ShaderBindingKey material_sampler_binding{
     .array_element = 0,
 };
 
+constexpr render::ShaderBindingKey shadow_texture_binding{
+    .register_class = render::ShaderRegisterClass::shader_resource,
+    .binding = 1,
+    .space = 0,
+    .array_element = 0,
+};
+
+constexpr render::ShaderBindingKey shadow_sampler_binding{
+    .register_class = render::ShaderRegisterClass::sampler,
+    .binding = 1,
+    .space = 0,
+    .array_element = 0,
+};
+
 struct SceneLightConstants {
     float position_or_direction[4]{};
     float color_intensity[4]{};
@@ -109,10 +123,18 @@ struct SceneConstants {
     float camera_position[4]{};
     float light_metadata[4]{};
     std::array<SceneLightConstants, max_runtime_lights> lights{};
+    math::Mat4 shadow_view_projection{};
+    float shadow_metadata[4]{};
+};
+
+struct ShadowConstants {
+    math::Mat4 view_projection{};
+    math::Mat4 model{};
 };
 
 static_assert(sizeof(SceneLightConstants) == 48U);
-static_assert(sizeof(SceneConstants) == 544U);
+static_assert(sizeof(SceneConstants) == 624U);
+static_assert(sizeof(ShadowConstants) == 128U);
 
 constexpr std::string_view hlsl_source = R"(
 cbuffer SceneFrame : register(b0) {
@@ -165,6 +187,37 @@ vertex VertexOut vice_runtime_mesh_vs(
 }
 fragment float4 vice_runtime_mesh_fs(VertexOut input [[stage_in]]) {
     return float4(input.color, 1.0);
+}
+)";
+
+constexpr std::string_view shadow_hlsl_source = R"(
+cbuffer ShadowFrame : register(b0) {
+    float4x4 view_projection;
+    float4x4 model;
+};
+struct VertexIn {
+    float3 position : POSITION0;
+};
+float4 vice_runtime_shadow_vs(VertexIn input) : SV_Position {
+    const float4 world_position = mul(model, float4(input.position, 1.0));
+    return mul(view_projection, world_position);
+}
+)";
+
+constexpr std::string_view shadow_metal_source = R"(
+#include <metal_stdlib>
+using namespace metal;
+struct ShadowFrame {
+    float4x4 view_projection;
+    float4x4 model;
+};
+struct VertexIn {
+    float3 position [[attribute(11)]];
+};
+vertex float4 vice_runtime_shadow_vs(
+    VertexIn input [[stage_in]],
+    constant ShadowFrame& frame [[buffer(0)]]) {
+    return frame.view_projection * frame.model * float4(input.position, 1.0);
 }
 )";
 
@@ -232,6 +285,17 @@ fragment float4 vice_runtime_mesh_fs(VertexOut input [[stage_in]]) {
     return device.create_buffer(desc);
 }
 
+[[nodiscard]] std::unique_ptr<render::Buffer> create_shadow_constant_buffer(
+    render::Device& device
+) {
+    render::BufferDesc desc;
+    desc.size = sizeof(ShadowConstants);
+    desc.usage = render::BufferUsage::uniform;
+    desc.memory = render::MemoryLocation::cpu_to_gpu;
+    desc.debug_name = "VICE Runtime shadow constants";
+    return device.create_buffer(desc);
+}
+
 [[nodiscard]] float mesh_radius(const render::MeshAsset& mesh) noexcept {
     float radius_squared = 0.0F;
     for (const auto& vertex : mesh.vertices) {
@@ -241,6 +305,62 @@ fragment float4 vice_runtime_mesh_fs(VertexOut input [[stage_in]]) {
         radius_squared = std::max(radius_squared, x * x + y * y + z * z);
     }
     return std::sqrt(radius_squared);
+}
+
+struct SceneBounds {
+    math::Vec3 center{};
+    float radius = 1.0F;
+};
+
+[[nodiscard]] std::optional<SceneBounds> scene_bounds(
+    const std::span<const RenderMeshInstance> instances,
+    const CookedMeshCatalog& catalog
+) noexcept {
+    if (instances.empty()) return std::nullopt;
+
+    math::Vec3 minimum{
+        static_cast<float>(instances.front().spatial.global_position.x),
+        static_cast<float>(instances.front().spatial.global_position.y),
+        static_cast<float>(instances.front().spatial.global_position.z),
+    };
+    math::Vec3 maximum = minimum;
+    for (const auto& instance : instances) {
+        const math::Vec3 position{
+            static_cast<float>(instance.spatial.global_position.x),
+            static_cast<float>(instance.spatial.global_position.y),
+            static_cast<float>(instance.spatial.global_position.z),
+        };
+        float radius = 0.5F;
+        if (const auto* record = catalog.find(instance.mesh); record != nullptr) {
+            const float scale = std::max({
+                std::abs(instance.authored.scale.x),
+                std::abs(instance.authored.scale.y),
+                std::abs(instance.authored.scale.z),
+            });
+            radius = std::max(radius, mesh_radius(record->asset) * scale);
+        }
+        minimum.x = std::min(minimum.x, position.x - radius);
+        minimum.y = std::min(minimum.y, position.y - radius);
+        minimum.z = std::min(minimum.z, position.z - radius);
+        maximum.x = std::max(maximum.x, position.x + radius);
+        maximum.y = std::max(maximum.y, position.y + radius);
+        maximum.z = std::max(maximum.z, position.z + radius);
+    }
+
+    const math::Vec3 center{
+        (minimum.x + maximum.x) * 0.5F,
+        (minimum.y + maximum.y) * 0.5F,
+        (minimum.z + maximum.z) * 0.5F,
+    };
+    const math::Vec3 extent{
+        maximum.x - minimum.x,
+        maximum.y - minimum.y,
+        maximum.z - minimum.z,
+    };
+    return SceneBounds{
+        .center = center,
+        .radius = std::max(1.0F, 0.5F * std::sqrt(math::dot(extent, extent))),
+    };
 }
 
 struct FallbackCamera {
@@ -458,6 +578,53 @@ std::vector<RuntimeLight> collect_runtime_lights(const world::World& world) {
     return lights;
 }
 
+std::optional<std::size_t> select_runtime_shadow_light(
+    const std::span<const RuntimeLight> lights
+) noexcept {
+    for (std::size_t index = 0; index < lights.size(); ++index) {
+        if (lights[index].light.enabled &&
+            lights[index].light.type == world::LightType::directional) {
+            return index;
+        }
+    }
+    return std::nullopt;
+}
+
+std::optional<RuntimeShadowView> directional_shadow_view(
+    const std::span<const RenderMeshInstance> instances,
+    const CookedMeshCatalog& catalog,
+    const std::span<const RuntimeLight> lights
+) noexcept {
+    const auto light_index = select_runtime_shadow_light(lights);
+    const auto bounds = scene_bounds(instances, catalog);
+    if (!light_index.has_value() || !bounds.has_value()) return std::nullopt;
+
+    const auto& light = lights[*light_index];
+    const math::Vec3 direction = math::normalize(light.direction);
+    if (math::dot(direction, direction) < 0.99F) return std::nullopt;
+
+    const float radius = std::max(1.0F, bounds->radius);
+    const float distance = radius * 2.0F + 1.0F;
+    const math::Vec3 eye = add(bounds->center, scaled(direction, -distance));
+    math::Vec3 up{0.0F, 1.0F, 0.0F};
+    if (std::abs(math::dot(direction, up)) > 0.95F) {
+        up = {0.0F, 0.0F, 1.0F};
+    }
+    const float extent = radius * 1.15F;
+    const float near_plane = 0.1F;
+    const float far_plane = distance + radius * 2.0F + 1.0F;
+    return RuntimeShadowView{
+        .light_entity = light.entity,
+        .light_index = *light_index,
+        .view_projection = math::multiply(
+            math::orthographic_rh_zo(
+                -extent, extent, -extent, extent, near_plane, far_plane
+            ),
+            math::look_at_rh(eye, bounds->center, up)
+        ),
+    };
+}
+
 math::Mat4 runtime_model_matrix(const RenderMeshInstance& instance) noexcept {
     auto result = math::translation({
         static_cast<float>(instance.spatial.global_position.x),
@@ -533,9 +700,14 @@ struct RuntimeSceneRenderer::State {
     std::unique_ptr<render::ShaderModule> vertex_shader;
     std::unique_ptr<render::ShaderModule> fragment_shader;
     std::unique_ptr<render::GraphicsPipeline> pipeline;
+    std::unique_ptr<render::ShaderModule> shadow_vertex_shader;
+    std::unique_ptr<render::GraphicsPipeline> shadow_pipeline;
+    std::unique_ptr<render::Texture> shadow_map;
+    std::unique_ptr<render::Sampler> shadow_sampler;
     std::unique_ptr<render::Texture> depth;
     std::unordered_map<world::ResourceId, MeshGpu, world::ResourceIdHash> meshes;
     std::unordered_map<world::PersistentId, std::unique_ptr<render::Buffer>, world::PersistentIdHash> constants;
+    std::unordered_map<world::PersistentId, std::unique_ptr<render::Buffer>, world::PersistentIdHash> shadow_constants;
     std::uint32_t depth_width = 0;
     std::uint32_t depth_height = 0;
     bool initialized = false;
@@ -602,6 +774,62 @@ bool RuntimeSceneRenderer::initialize(
     state_->pipeline = device.create_graphics_pipeline(pipeline_desc);
     if (!state_->pipeline) {
         set_diagnostics(diagnostics, "VICE Runtime could not create the fallback scene graphics pipeline.");
+        return false;
+    }
+
+    render::ShaderModuleDesc shadow_vertex_desc;
+    shadow_vertex_desc.stage = render::ShaderStage::vertex;
+    shadow_vertex_desc.language = vertex_desc.language;
+    shadow_vertex_desc.source = metal ? shadow_metal_source : shadow_hlsl_source;
+    shadow_vertex_desc.resources = vertex_resources;
+    shadow_vertex_desc.entry_point = "vice_runtime_shadow_vs";
+    shadow_vertex_desc.debug_name = "VICE Runtime directional shadow vertex";
+    state_->shadow_vertex_shader = device.create_shader_module(shadow_vertex_desc);
+    if (!state_->shadow_vertex_shader) {
+        set_diagnostics(diagnostics, "VICE Runtime could not create the directional shadow shader.");
+        return false;
+    }
+
+    render::GraphicsPipelineDesc shadow_pipeline_desc;
+    shadow_pipeline_desc.vertex_shader = state_->shadow_vertex_shader.get();
+    shadow_pipeline_desc.fragment_shader = nullptr;
+    shadow_pipeline_desc.color_format = render::TextureFormat::undefined;
+    shadow_pipeline_desc.cull_mode = render::CullMode::none;
+    shadow_pipeline_desc.depth.format = render::TextureFormat::depth32_float;
+    shadow_pipeline_desc.depth.test_enabled = true;
+    shadow_pipeline_desc.depth.write_enabled = true;
+    shadow_pipeline_desc.depth.compare = render::CompareOp::less;
+    shadow_pipeline_desc.vertex_buffers = mesh_layouts;
+    shadow_pipeline_desc.debug_name = "VICE Runtime directional shadow pipeline";
+    state_->shadow_pipeline = device.create_graphics_pipeline(shadow_pipeline_desc);
+    if (!state_->shadow_pipeline) {
+        set_diagnostics(diagnostics, "VICE Runtime could not create the directional shadow pipeline.");
+        return false;
+    }
+
+    render::TextureDesc shadow_desc;
+    shadow_desc.width = runtime_shadow_map_size;
+    shadow_desc.height = runtime_shadow_map_size;
+    shadow_desc.format = render::TextureFormat::depth32_float;
+    shadow_desc.usage = render::TextureUsage::depth_attachment | render::TextureUsage::sampled;
+    shadow_desc.debug_name = "VICE Runtime directional shadow map";
+    state_->shadow_map = device.create_texture(shadow_desc);
+    if (!state_->shadow_map) {
+        set_diagnostics(diagnostics, "VICE Runtime could not create the directional shadow map.");
+        return false;
+    }
+
+    render::SamplerDesc shadow_sampler_desc;
+    shadow_sampler_desc.min_filter = render::Filter::nearest;
+    shadow_sampler_desc.mag_filter = render::Filter::nearest;
+    shadow_sampler_desc.mip_filter = render::Filter::nearest;
+    shadow_sampler_desc.address_u = render::AddressMode::clamp_to_edge;
+    shadow_sampler_desc.address_v = render::AddressMode::clamp_to_edge;
+    shadow_sampler_desc.address_w = render::AddressMode::clamp_to_edge;
+    shadow_sampler_desc.debug_name = "VICE Runtime directional shadow sampler";
+    state_->shadow_sampler = device.create_sampler(shadow_sampler_desc);
+    if (!state_->shadow_sampler) {
+        set_diagnostics(diagnostics, "VICE Runtime could not create the directional shadow sampler.");
         return false;
     }
 
@@ -727,10 +955,89 @@ bool RuntimeSceneRenderer::render(
         ? authored_camera->position
         : fallback.position;
 
+    const auto authored_lights = collect_runtime_lights(world);
+    const auto shadow_view = directional_shadow_view(instances, state_->catalog, authored_lights);
+    auto runtime_lights = authored_lights;
+    if (runtime_lights.empty()) {
+        runtime_lights.push_back(RuntimeLight{
+            .light = world::Light{
+                .type = world::LightType::directional,
+                .color = {1.0F, 0.952381F, 0.880952F},
+                .intensity = 4.2F,
+                .range = 0.0F,
+                .enabled = true,
+            },
+            .direction = {-0.431934F, -0.863868F, -0.259161F},
+        });
+    }
+
     auto commands = state_->device->create_command_list();
     if (!commands) {
         set_diagnostics(diagnostics, "VICE Runtime could not create scene commands.");
         return false;
+    }
+
+    if (shadow_view.has_value()) {
+        if (!commands->begin_depth_render_pass(*state_->shadow_map, 1.0F, true) ||
+            !commands->set_viewport(render::Viewport{
+                .width = static_cast<float>(runtime_shadow_map_size),
+                .height = static_cast<float>(runtime_shadow_map_size),
+            }) ||
+            !commands->set_scissor_rect(render::ScissorRect{
+                .width = runtime_shadow_map_size,
+                .height = runtime_shadow_map_size,
+            }) ||
+            !commands->set_graphics_pipeline(*state_->shadow_pipeline)) {
+            set_diagnostics(diagnostics, "VICE Runtime could not begin the directional shadow pass.");
+            return false;
+        }
+
+        for (const auto& instance : instances) {
+            auto shadow_iterator = state_->shadow_constants.find(instance.entity);
+            if (shadow_iterator == state_->shadow_constants.end()) {
+                auto constants = create_shadow_constant_buffer(*state_->device);
+                if (!constants) {
+                    set_diagnostics(diagnostics, "VICE Runtime could not create shadow constants.");
+                    return false;
+                }
+                shadow_iterator = state_->shadow_constants.emplace(
+                    instance.entity, std::move(constants)
+                ).first;
+            }
+
+            const ShadowConstants shadow_constants{
+                .view_projection = shadow_view->view_projection,
+                .model = runtime_model_matrix(instance),
+            };
+            if (!shadow_iterator->second->write(
+                    0, std::as_bytes(std::span{&shadow_constants, 1})
+                )) {
+                set_diagnostics(diagnostics, "VICE Runtime could not update shadow constants.");
+                return false;
+            }
+
+            auto& mesh = state_->meshes.at(instance.mesh);
+            if (!commands->set_vertex_buffer(0U, *mesh.vertices) ||
+                !commands->set_index_buffer(*mesh.indices, render::IndexFormat::uint32) ||
+                !commands->set_graphics_constant_buffer(
+                    frame_binding,
+                    *shadow_iterator->second,
+                    0,
+                    sizeof(ShadowConstants)
+                ) ||
+                !commands->draw_indexed(mesh.index_count)) {
+                set_diagnostics(
+                    diagnostics,
+                    "VICE Runtime could not encode directional shadow mesh `" +
+                        instance.mesh.value.to_string() + "`."
+                );
+                return false;
+            }
+        }
+        if (!commands->end_render_pass()) {
+            set_diagnostics(diagnostics, "VICE Runtime could not finish the directional shadow pass.");
+            return false;
+        }
     }
 
     render::RenderPassDesc pass;
@@ -761,20 +1068,6 @@ bool RuntimeSceneRenderer::render(
             constants_iterator = state_->constants.emplace(instance.entity, std::move(constants)).first;
         }
 
-        auto runtime_lights = collect_runtime_lights(world);
-        if (runtime_lights.empty()) {
-            runtime_lights.push_back(RuntimeLight{
-                .light = world::Light{
-                    .type = world::LightType::directional,
-                    .color = {1.0F, 0.952381F, 0.880952F},
-                    .intensity = 4.2F,
-                    .range = 0.0F,
-                    .enabled = true,
-                },
-                .direction = {-0.431934F, -0.863868F, -0.259161F},
-            });
-        }
-
         SceneConstants constants{
             .view_projection = view_projection,
             .model = runtime_model_matrix(instance),
@@ -800,6 +1093,13 @@ bool RuntimeSceneRenderer::render(
             destination.color_intensity[2] = source.light.color.blue;
             destination.color_intensity[3] = source.light.intensity;
             destination.parameters[0] = source.light.range;
+        }
+        if (shadow_view.has_value()) {
+            constants.shadow_view_projection = shadow_view->view_projection;
+            constants.shadow_metadata[0] = 1.0F;
+            constants.shadow_metadata[1] = static_cast<float>(shadow_view->light_index);
+            constants.shadow_metadata[2] = 1.0F / static_cast<float>(runtime_shadow_map_size);
+            constants.shadow_metadata[3] = 0.0015F;
         }
         if (!constants_iterator->second->write(0, std::as_bytes(std::span{&constants, 1}))) {
             set_diagnostics(diagnostics, "VICE Runtime could not update scene constants.");
@@ -855,6 +1155,16 @@ bool RuntimeSceneRenderer::render(
             set_diagnostics(
                 diagnostics,
                 "VICE Runtime could not bind the PBR texture and sampler for mesh `" +
+                    instance.mesh.value.to_string() + "`."
+            );
+            return false;
+        }
+        if (material_state.supports_directional_shadow &&
+            (!commands->set_graphics_texture(shadow_texture_binding, *state_->shadow_map) ||
+                !commands->set_graphics_sampler(shadow_sampler_binding, *state_->shadow_sampler))) {
+            set_diagnostics(
+                diagnostics,
+                "VICE Runtime could not bind the directional shadow map for mesh `" +
                     instance.mesh.value.to_string() + "`."
             );
             return false;
