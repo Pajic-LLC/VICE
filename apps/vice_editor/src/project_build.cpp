@@ -1,4 +1,5 @@
 #include <vice/editor/project_build.hpp>
+#include <vice/editor/project_material_cook.hpp>
 #include <vice/editor/project_mesh_cook.hpp>
 
 #include <vice/platform/dynamic_library.hpp>
@@ -235,6 +236,10 @@ struct GameModuleBuild {
     if (!mesh_cook) {
         return fail_build(mesh_cook.diagnostics);
     }
+    const auto material_cook = cook_project_render_materials(session);
+    if (!material_cook) {
+        return fail_build(material_cook.diagnostics);
+    }
 
     ProjectBuildResult result;
     result.success = true;
@@ -243,6 +248,7 @@ struct GameModuleBuild {
     result.entity_count = parsed.snapshot->entities.size();
     result.region_count = parsed.snapshot->regions.size();
     result.mesh_count = mesh_cook.meshes.size();
+    result.material_count = material_cook.materials.size();
     return result;
 }
 
@@ -292,6 +298,88 @@ struct GameModuleBuild {
         );
         if (error) {
             diagnostics = "Could not stage cooked mesh `" + path_text(source) + "`: " + error.message();
+            return false;
+        }
+    }
+
+    diagnostics.clear();
+    return true;
+}
+
+[[nodiscard]] bool stage_project_render_materials(
+    const ProjectSession& session,
+    const std::filesystem::path& staged_project_content_root,
+    std::string& diagnostics
+) {
+    std::error_code error;
+    std::filesystem::recursive_directory_iterator iterator{
+        session.asset_root(),
+        std::filesystem::directory_options::skip_permission_denied,
+        error,
+    };
+    const std::filesystem::recursive_directory_iterator end;
+    if (error) {
+        diagnostics = "Could not enumerate project render materials for staging: " + error.message();
+        return false;
+    }
+
+    for (; iterator != end; iterator.increment(error)) {
+        if (error) {
+            diagnostics = "Could not enumerate project render materials for staging: " + error.message();
+            return false;
+        }
+        if (!iterator->is_regular_file() || iterator->path().extension() != ".vmat") continue;
+
+        auto relative = std::filesystem::relative(iterator->path(), session.asset_root(), error);
+        if (error) {
+            diagnostics = "Could not resolve project render material path for staging: " + error.message();
+            return false;
+        }
+        const auto material_stem = iterator->path().stem().string();
+        auto cooked_relative = relative;
+        cooked_relative.replace_extension(".vmatc");
+        const auto cooked_material = (session.cooked_root() / cooked_relative).lexically_normal();
+        const auto staged_material = (staged_project_content_root / cooked_relative).lexically_normal();
+        std::filesystem::create_directories(staged_material.parent_path(), error);
+        if (error) {
+            diagnostics = "Could not create staged render material directory: " + error.message();
+            return false;
+        }
+        std::filesystem::copy_file(
+            cooked_material,
+            staged_material,
+            std::filesystem::copy_options::overwrite_existing,
+            error
+        );
+        if (error) {
+            diagnostics = "Could not stage cooked render material `" + path_text(cooked_material) +
+                "`: " + error.message();
+            return false;
+        }
+
+        const auto cooked_shader_root = cooked_material.parent_path() / (material_stem + ".shaders");
+        const auto staged_shader_root = staged_material.parent_path() / (material_stem + ".shaders");
+        if (!std::filesystem::is_directory(cooked_shader_root, error) || error) {
+            diagnostics = error
+                ? "Could not inspect cooked render material shaders: " + error.message()
+                : "Cooked render material shader directory is missing: " + path_text(cooked_shader_root);
+            return false;
+        }
+        std::filesystem::create_directories(staged_shader_root, error);
+        if (error) {
+            diagnostics = "Could not create staged shader directory: " + error.message();
+            return false;
+        }
+        std::filesystem::copy(
+            cooked_shader_root,
+            staged_shader_root,
+            std::filesystem::copy_options::recursive |
+                std::filesystem::copy_options::overwrite_existing,
+            error
+        );
+        if (error) {
+            diagnostics = "Could not stage cooked render material shaders `" +
+                path_text(cooked_shader_root) + "`: " + error.message();
             return false;
         }
     }
@@ -437,6 +525,15 @@ ProjectBuildResult build_game_target(
     if (!stage_project_meshes(session, staged_project_content_root, mesh_stage_diagnostics)) {
         cleanup_staging();
         return fail_build(std::move(mesh_stage_diagnostics));
+    }
+    std::string material_stage_diagnostics;
+    if (!stage_project_render_materials(
+            session,
+            staged_project_content_root,
+            material_stage_diagnostics
+        )) {
+        cleanup_staging();
+        return fail_build(std::move(material_stage_diagnostics));
     }
 
     if (module_build.source_present) {
