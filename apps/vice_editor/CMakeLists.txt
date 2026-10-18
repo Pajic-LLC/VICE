@@ -34,11 +34,15 @@ target_link_libraries(
 target_compile_features(vice_editor_state PUBLIC cxx_std_23)
 vice_enable_warnings(vice_editor_state)
 
-if(TARGET vice_world_cooker_lib AND TARGET vice_mesh_cooker_lib)
+if(TARGET vice_world_cooker_lib AND
+   TARGET vice_mesh_cooker_lib AND
+   TARGET vice_render_material_cooker_lib AND
+   TARGET vice_shader_cooker_lib)
   add_library(
     vice_editor_project_build
     STATIC
       src/project_build.cpp
+      src/project_material_cook.cpp
       src/project_mesh_cook.cpp
   )
 
@@ -56,6 +60,8 @@ if(TARGET vice_world_cooker_lib AND TARGET vice_mesh_cooker_lib)
       VICE::EditorState
       VICE::MeshCooker
       VICE::Platform
+      VICE::RenderMaterialCooker
+      VICE::ShaderCooker
       VICE::World
       VICE::WorldCooker
   )
@@ -67,6 +73,24 @@ if(TARGET vice_world_cooker_lib AND TARGET vice_mesh_cooker_lib)
       VICE_EDITOR_GAME_MODULE_CMAKE_SOURCE="${PROJECT_SOURCE_DIR}/cmake/game_module"
       VICE_EDITOR_GAME_MODULE_INCLUDE="${PROJECT_SOURCE_DIR}/engine/runtime/include"
   )
+
+  include(ViceShaders)
+  vice_find_dxc(_vice_editor_dxc)
+  vice_find_metal_shader_converter(_vice_editor_metal_shader_converter)
+  if(_vice_editor_dxc)
+    target_compile_definitions(
+      vice_editor_project_build
+      PRIVATE
+        VICE_EDITOR_DXC_EXECUTABLE="${_vice_editor_dxc}"
+    )
+  endif()
+  if(_vice_editor_metal_shader_converter)
+    target_compile_definitions(
+      vice_editor_project_build
+      PRIVATE
+        VICE_EDITOR_METAL_SHADER_CONVERTER_EXECUTABLE="${_vice_editor_metal_shader_converter}"
+    )
+  endif()
   vice_enable_warnings(vice_editor_project_build)
 endif()
 

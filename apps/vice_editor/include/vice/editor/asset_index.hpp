@@ -20,6 +20,7 @@ enum class AssetKind : std::uint8_t {
     rigid_material,
     shader_source,
     shader_manifest,
+    render_material,
     unknown,
 };
 

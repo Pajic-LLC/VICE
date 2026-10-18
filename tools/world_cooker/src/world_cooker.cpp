@@ -40,6 +40,7 @@ constexpr float degrees_to_radians = 0.01745329251994329577F;
     const std::string_view text
 ) noexcept {
     if (text == "render_mesh") return world::ResourceRole::render_mesh;
+    if (text == "render_material") return world::ResourceRole::render_material;
     return std::nullopt;
 }
 

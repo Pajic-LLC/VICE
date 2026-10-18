@@ -2,6 +2,7 @@
 
 #include <vice/math/math.hpp>
 #include <vice/platform/window.hpp>
+#include <vice/render/material_asset.hpp>
 #include <vice/render/mesh_asset.hpp>
 #include <vice/render/rhi.hpp>
 #include <vice/world/world.hpp>
@@ -33,9 +34,28 @@ private:
     std::string diagnostics_;
 };
 
+struct CookedRenderMaterialRecord {
+    world::ResourceId resource_id{};
+    std::filesystem::path path;
+    render::RenderMaterialAsset asset;
+};
+
+class CookedRenderMaterialCatalog final {
+public:
+    [[nodiscard]] bool load(const std::filesystem::path& content_root);
+    [[nodiscard]] const CookedRenderMaterialRecord* find(world::ResourceId resource_id) const noexcept;
+    [[nodiscard]] std::span<const CookedRenderMaterialRecord> records() const noexcept;
+    [[nodiscard]] const std::string& diagnostics() const noexcept;
+
+private:
+    std::vector<CookedRenderMaterialRecord> records_;
+    std::string diagnostics_;
+};
+
 struct RenderMeshInstance {
     world::PersistentId entity{};
     world::ResourceId mesh{};
+    std::optional<world::ResourceId> material;
     world::SpatialState spatial{};
     world::AuthoredTransform authored{};
 };
