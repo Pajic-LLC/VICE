@@ -61,6 +61,14 @@ int main() {
     assert(near(view(2, 2), 1.0F));
     assert(near(view(2, 3), -3.0F));
 
+    const Mat4 orthographic = orthographic_rh_zo(-2.0F, 2.0F, -1.0F, 3.0F, 0.5F, 10.5F);
+    assert(near(orthographic(0, 0), 0.5F));
+    assert(near(orthographic(1, 1), 0.5F));
+    assert(near(orthographic(2, 2), -0.1F));
+    assert(near(orthographic(1, 3), -0.5F));
+    assert(near(orthographic(2, 3), -0.05F));
+    assert(near(orthographic(3, 3), 1.0F));
+
     const Mat4 projection = perspective_rh_zo(
         1.0471975512F,
         16.0F / 9.0F,

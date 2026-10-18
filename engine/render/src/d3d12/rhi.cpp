@@ -1047,6 +1047,41 @@ public:
         return true;
     }
 
+    bool begin_depth_render_pass(
+        Texture& depth_attachment,
+        const float clear_depth,
+        const bool clear_depth_attachment
+    ) override {
+        if (!valid() || render_pass_active_ || clear_depth < 0.0F || clear_depth > 1.0F) {
+            return false;
+        }
+        auto* depth_texture = dynamic_cast<D3D12Texture*>(&depth_attachment);
+        if (depth_texture == nullptr || depth_texture->format() != TextureFormat::depth32_float ||
+            !has_usage(depth_texture->usage(), TextureUsage::depth_attachment) ||
+            !depth_texture->has_dsv()) {
+            return false;
+        }
+
+        transition(*depth_texture, D3D12_RESOURCE_STATE_DEPTH_WRITE);
+        const auto depth_handle = depth_texture->dsv();
+        command_list_->OMSetRenderTargets(0, nullptr, FALSE, &depth_handle);
+        if (clear_depth_attachment) {
+            command_list_->ClearDepthStencilView(
+                depth_handle,
+                D3D12_CLEAR_FLAG_DEPTH,
+                clear_depth,
+                0,
+                0,
+                nullptr
+            );
+        }
+        active_swapchain_ = nullptr;
+        active_depth_texture_ = depth_texture;
+        render_pass_active_ = true;
+        reset_graphics_bindings();
+        return true;
+    }
+
     bool set_viewport(const Viewport& viewport) override {
         if (!render_pass_active_ || !is_valid(viewport)) {
             return false;
@@ -2313,19 +2348,25 @@ public:
         const GraphicsPipelineDesc& desc
     ) override {
         if (!is_valid(desc) || desc.vertex_shader->stage() != ShaderStage::vertex ||
-            desc.fragment_shader->stage() != ShaderStage::fragment) {
+            (desc.fragment_shader != nullptr &&
+                desc.fragment_shader->stage() != ShaderStage::fragment)) {
             core::log(core::LogLevel::error, "VICE rejected an invalid graphics pipeline description.");
             return nullptr;
         }
         auto* vertex = dynamic_cast<D3D12ShaderModule*>(desc.vertex_shader);
-        auto* fragment = dynamic_cast<D3D12ShaderModule*>(desc.fragment_shader);
-        if (vertex == nullptr || fragment == nullptr) {
+        auto* fragment = desc.fragment_shader != nullptr
+            ? dynamic_cast<D3D12ShaderModule*>(desc.fragment_shader)
+            : nullptr;
+        if (vertex == nullptr || (desc.fragment_shader != nullptr && fragment == nullptr)) {
             return nullptr;
         }
+        const std::span<const ShaderResourceBindingDesc> fragment_resources = fragment != nullptr
+            ? fragment->resources()
+            : std::span<const ShaderResourceBindingDesc>{};
 
         const PipelineLayout layout = compile_graphics_pipeline_layout(
             vertex->resources(),
-            fragment->resources()
+            fragment_resources
         );
         if (!layout.valid) {
             core::log(
@@ -2421,7 +2462,9 @@ public:
         D3D12_GRAPHICS_PIPELINE_STATE_DESC pipeline_desc{};
         pipeline_desc.pRootSignature = root_signature.Get();
         pipeline_desc.VS = vertex->native_bytecode();
-        pipeline_desc.PS = fragment->native_bytecode();
+        if (fragment != nullptr) {
+            pipeline_desc.PS = fragment->native_bytecode();
+        }
         pipeline_desc.BlendState.AlphaToCoverageEnable = FALSE;
         pipeline_desc.BlendState.IndependentBlendEnable = FALSE;
         pipeline_desc.BlendState.RenderTarget[0] = blend;
@@ -2449,8 +2492,11 @@ public:
             static_cast<UINT>(input_elements.size())
         };
         pipeline_desc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
-        pipeline_desc.NumRenderTargets = 1;
-        pipeline_desc.RTVFormats[0] = pixel_format(desc.color_format);
+        const bool has_color_attachment = desc.color_format != TextureFormat::undefined;
+        pipeline_desc.NumRenderTargets = has_color_attachment ? 1U : 0U;
+        if (has_color_attachment) {
+            pipeline_desc.RTVFormats[0] = pixel_format(desc.color_format);
+        }
         pipeline_desc.DSVFormat = pixel_format(desc.depth.format);
         pipeline_desc.SampleDesc.Count = 1;
 

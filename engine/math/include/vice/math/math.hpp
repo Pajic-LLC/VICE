@@ -169,6 +169,29 @@ struct Mat4 {
     return result;
 }
 
+[[nodiscard]] inline Mat4 orthographic_rh_zo(
+    const float left,
+    const float right,
+    const float bottom,
+    const float top,
+    const float near_plane,
+    const float far_plane
+) noexcept {
+    Mat4 result{};
+    if (right <= left || top <= bottom || near_plane < 0.0F || far_plane <= near_plane) {
+        return result;
+    }
+
+    result(0, 0) = 2.0F / (right - left);
+    result(1, 1) = 2.0F / (top - bottom);
+    result(2, 2) = 1.0F / (near_plane - far_plane);
+    result(0, 3) = -(right + left) / (right - left);
+    result(1, 3) = -(top + bottom) / (top - bottom);
+    result(2, 3) = near_plane / (near_plane - far_plane);
+    result(3, 3) = 1.0F;
+    return result;
+}
+
 [[nodiscard]] inline Mat4 look_at_rh(
     const Vec3 eye,
     const Vec3 target,

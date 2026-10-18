@@ -488,10 +488,19 @@ struct GraphicsPipelineDesc {
 };
 
 [[nodiscard]] constexpr bool is_valid(const GraphicsPipelineDesc& desc) noexcept {
-    return desc.vertex_shader != nullptr && desc.fragment_shader != nullptr &&
-        desc.color_format != TextureFormat::undefined &&
-        desc.color_format != TextureFormat::depth32_float &&
-        is_valid(desc.depth) && is_valid(desc.vertex_buffers);
+    if (desc.vertex_shader == nullptr || !is_valid(desc.depth) || !is_valid(desc.vertex_buffers)) {
+        return false;
+    }
+    const bool has_color_attachment = desc.color_format != TextureFormat::undefined;
+    const bool has_fragment_shader = desc.fragment_shader != nullptr;
+    if (has_color_attachment != has_fragment_shader) {
+        return false;
+    }
+    if (has_color_attachment) {
+        return desc.color_format != TextureFormat::depth32_float;
+    }
+    return desc.depth.format == TextureFormat::depth32_float &&
+        desc.depth.test_enabled && desc.depth.write_enabled;
 }
 
 struct RenderPassDesc {
@@ -577,6 +586,11 @@ public:
     ) = 0;
 
     virtual bool begin_render_pass(Swapchain& swapchain, const RenderPassDesc& desc) = 0;
+    virtual bool begin_depth_render_pass(
+        Texture& depth_attachment,
+        float clear_depth = 1.0F,
+        bool clear_depth_attachment = true
+    ) = 0;
     virtual bool set_viewport(const Viewport& viewport) = 0;
     virtual bool set_scissor_rect(const ScissorRect& scissor) = 0;
     virtual bool set_graphics_pipeline(GraphicsPipeline& pipeline) = 0;
