@@ -8,8 +8,8 @@ int main() {
 
     auto device = Device::create();
     if (!device) {
-        // Some hosted CI machines expose no native graphics adapter. Descriptor and
-        // pipeline validation remains covered by vice_render_tests on those hosts.
+        // Hosted runners are not guaranteed to expose a native graphics adapter.
+        // Descriptor and pipeline validation still runs in vice_render_tests.
         return 0;
     }
 
