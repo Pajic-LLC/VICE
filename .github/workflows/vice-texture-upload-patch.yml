@@ -1,0 +1,30 @@
+name: VICE texture upload patch
+
+on:
+  push:
+    branches:
+      - render/pbr-textures
+    paths:
+      - .github/vice_texture_upload_patch.py
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: render/pbr-textures
+      - name: Apply backend patch
+        run: python3 .github/vice_texture_upload_patch.py
+      - name: Commit backend patch
+        run: |
+          rm .github/vice_texture_upload_patch.py
+          rm .github/workflows/vice-texture-upload-patch.yml
+          git config user.name "VICE Build Bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add -A
+          git commit -m "Implement backend texture uploads"
+          git push origin HEAD:render/pbr-textures
