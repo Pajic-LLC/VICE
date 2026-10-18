@@ -7,6 +7,7 @@
 #include <vice/render/rhi.hpp>
 #include <vice/world/world.hpp>
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
@@ -66,11 +67,17 @@ struct RuntimeCameraView {
     world::PersistentId entity{};
     world::Camera camera{};
     math::Vec3 position{};
+    math::Vec3 forward{0.0F, 0.0F, -1.0F};
+    math::Vec3 up{0.0F, 1.0F, 0.0F};
+    float aspect_ratio = 1.0F;
     math::Mat4 view_projection{};
 };
 
 inline constexpr std::size_t max_runtime_lights = 8U;
+inline constexpr std::size_t runtime_shadow_cascade_count = 4U;
 inline constexpr std::uint32_t runtime_shadow_map_size = 2048U;
+inline constexpr float runtime_shadow_distance = 250.0F;
+inline constexpr float runtime_shadow_split_lambda = 0.65F;
 
 struct RuntimeLight {
     world::PersistentId entity{};
@@ -79,10 +86,16 @@ struct RuntimeLight {
     math::Vec3 direction{};
 };
 
+struct RuntimeShadowCascade {
+    float split_near = 0.0F;
+    float split_far = 0.0F;
+    math::Mat4 view_projection{};
+};
+
 struct RuntimeShadowView {
     world::PersistentId light_entity{};
     std::size_t light_index = 0;
-    math::Mat4 view_projection{};
+    std::array<RuntimeShadowCascade, runtime_shadow_cascade_count> cascades{};
 };
 
 [[nodiscard]] std::vector<RuntimeLight> collect_runtime_lights(const world::World& world);
@@ -91,9 +104,12 @@ struct RuntimeShadowView {
     std::span<const RuntimeLight> lights
 ) noexcept;
 
+[[nodiscard]] std::array<float, runtime_shadow_cascade_count> runtime_shadow_cascade_splits(
+    const RuntimeCameraView& camera
+) noexcept;
+
 [[nodiscard]] std::optional<RuntimeShadowView> directional_shadow_view(
-    std::span<const RenderMeshInstance> instances,
-    const CookedMeshCatalog& catalog,
+    const RuntimeCameraView& camera,
     std::span<const RuntimeLight> lights
 ) noexcept;
 
