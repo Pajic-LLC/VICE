@@ -1,0 +1,6 @@
+vice-render-material 1
+id 70000000-0000-4000-8000-000000000001
+shader "shaders/vice_project_surface.hlsl"
+vertex vice_surface_vs
+fragment vice_surface_fs
+base_color 0.92 0.58 0.22 1.0
