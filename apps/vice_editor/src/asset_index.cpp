@@ -3,6 +3,7 @@
 #include <vice/render/material_asset.hpp>
 #include <vice/render/mesh_asset.hpp>
 #include <vice/render/shader_asset.hpp>
+#include <vice/render/texture_asset.hpp>
 #include <vice/rigid_body/collision_asset.hpp>
 #include <vice/rigid_body/material_asset.hpp>
 #include <vice/world/snapshot_file.hpp>
@@ -22,6 +23,7 @@ namespace {
     if (extension == ".vworld") return AssetKind::world;
     if (extension == ".vmesh") return AssetKind::mesh;
     if (extension == ".vmat") return AssetKind::render_material;
+    if (extension == ".vtex") return AssetKind::texture;
     if (extension == ".vcollision") return AssetKind::collision;
     if (extension == ".vrigmat") return AssetKind::rigid_material;
     if (extension == ".hlsl") return AssetKind::shader_source;
@@ -33,6 +35,7 @@ namespace {
     if (extension == ".vworldc") return AssetKind::world;
     if (extension == ".vmeshc") return AssetKind::mesh;
     if (extension == ".vmatc") return AssetKind::render_material;
+    if (extension == ".vtexc") return AssetKind::texture;
     if (extension == ".vcollisionc") return AssetKind::collision;
     if (extension == ".vrigmatc") return AssetKind::rigid_material;
     if (path.filename().string().ends_with(".vice.json")) return AssetKind::shader_manifest;
@@ -47,6 +50,7 @@ namespace {
     case AssetKind::world: relative.replace_extension(".vworldc"); break;
     case AssetKind::mesh: relative.replace_extension(".vmeshc"); break;
     case AssetKind::render_material: relative.replace_extension(".vmatc"); break;
+    case AssetKind::texture: relative.replace_extension(".vtexc"); break;
     case AssetKind::collision: relative.replace_extension(".vcollisionc"); break;
     case AssetKind::rigid_material: relative.replace_extension(".vrigmatc"); break;
     default: return {};
@@ -127,8 +131,28 @@ void inspect_cooked_asset(AssetRecord& record) {
         if (loaded.asset.has_value()) {
             record.format_version = loaded.asset->version;
             record.source_fingerprint = loaded.asset->source_fingerprint;
-            record.summary = "Base color + project vertex/fragment shaders";
-            if (render::valid(loaded.asset->stable_id)) {
+            record.summary = loaded.asset->version >= render::render_material_asset_format_version_v2
+                ? "Textured PBR surface"
+                : "Base color + project vertex/fragment shaders";
+            if (render::valid_render_material_id(loaded.asset->stable_id)) {
+                record.resource_id = world::ResourceId{
+                    world::PersistentId{loaded.asset->stable_id},
+                };
+            }
+        }
+        break;
+    }
+    case AssetKind::texture: {
+        const auto loaded = render::load_texture_asset(record.cooked_path);
+        record.cooked_valid = loaded.asset.has_value();
+        record.diagnostics = loaded.diagnostics;
+        if (loaded.asset.has_value()) {
+            record.format_version = loaded.asset->version;
+            record.source_fingerprint = loaded.asset->source_fingerprint;
+            record.summary = std::to_string(loaded.asset->width) + " x " +
+                std::to_string(loaded.asset->height) +
+                (loaded.asset->color_space == render::TextureColorSpace::srgb ? " sRGB" : " linear");
+            if (render::valid_texture_id(loaded.asset->stable_id)) {
                 record.resource_id = world::ResourceId{
                     world::PersistentId{loaded.asset->stable_id},
                 };
@@ -192,6 +216,7 @@ const char* asset_kind_name(const AssetKind kind) noexcept {
     case AssetKind::world: return "World";
     case AssetKind::mesh: return "Mesh";
     case AssetKind::render_material: return "Render Material";
+    case AssetKind::texture: return "Texture";
     case AssetKind::collision: return "Collision";
     case AssetKind::rigid_material: return "Rigid Material";
     case AssetKind::shader_source: return "Shader";
