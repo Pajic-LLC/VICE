@@ -13,6 +13,8 @@ namespace vice::runtime::detail {
 struct RuntimeMaterialBinding {
     render::GraphicsPipeline* pipeline = nullptr;
     render::Buffer* constants = nullptr;
+    render::Texture* base_color_texture = nullptr;
+    render::Sampler* sampler = nullptr;
 };
 
 class RuntimeMaterialLibrary final {
