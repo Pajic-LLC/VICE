@@ -17,6 +17,7 @@ if(APPLE)
   target_sources(
     vice_platform
     PRIVATE
+      src/macos/dynamic_library.cpp
       src/macos/platform.mm
       src/macos/process.mm
   )
@@ -40,6 +41,7 @@ elseif(WIN32)
   target_sources(
     vice_platform
     PRIVATE
+      src/windows/dynamic_library.cpp
       src/windows/platform.cpp
       src/windows/process.cpp
   )
