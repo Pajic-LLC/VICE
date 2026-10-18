@@ -10,6 +10,7 @@ target_include_directories(
 target_sources(
   vice_render
   PRIVATE
+    src/material_asset.cpp
     src/mesh_asset.cpp
     src/pipeline_layout.cpp
     src/shader_asset.cpp
