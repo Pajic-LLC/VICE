@@ -72,17 +72,14 @@ cbuffer SceneFrame : register(b0) {
     float4x4 view_projection;
     float4x4 model;
 };
-
 struct VertexIn {
     float3 position : POSITION0;
     float3 color : COLOR0;
 };
-
 struct VertexOut {
     float4 position : SV_Position;
     float3 color : COLOR0;
 };
-
 VertexOut vice_runtime_mesh_vs(VertexIn input) {
     VertexOut output;
     float4 world_position = mul(model, float4(input.position, 1.0));
@@ -90,7 +87,6 @@ VertexOut vice_runtime_mesh_vs(VertexIn input) {
     output.color = input.color;
     return output;
 }
-
 float4 vice_runtime_mesh_fs(VertexOut input) : SV_Target0 {
     return float4(input.color, 1.0);
 }
@@ -99,37 +95,45 @@ float4 vice_runtime_mesh_fs(VertexOut input) : SV_Target0 {
 constexpr std::string_view metal_source = R"(
 #include <metal_stdlib>
 using namespace metal;
-
 struct SceneFrame {
     float4x4 view_projection;
     float4x4 model;
 };
-
 struct VertexIn {
     float3 position [[attribute(11)]];
     float3 color [[attribute(12)]];
 };
-
 struct VertexOut {
     float4 position [[position]];
     float3 color;
 };
-
 vertex VertexOut vice_runtime_mesh_vs(
     VertexIn input [[stage_in]],
-    constant SceneFrame& frame [[buffer(0)]]
-) {
+    constant SceneFrame& frame [[buffer(0)]]) {
     VertexOut output;
     float4 world_position = frame.model * float4(input.position, 1.0);
     output.position = frame.view_projection * world_position;
     output.color = input.color;
     return output;
 }
-
 fragment float4 vice_runtime_mesh_fs(VertexOut input [[stage_in]]) {
     return float4(input.color, 1.0);
 }
 )";
+
+[[nodiscard]] constexpr math::Vec3 add(
+    const math::Vec3 left,
+    const math::Vec3 right
+) noexcept {
+    return {left.x + right.x, left.y + right.y, left.z + right.z};
+}
+
+[[nodiscard]] constexpr math::Vec3 scaled(
+    const math::Vec3 value,
+    const float scale
+) noexcept {
+    return {value.x * scale, value.y * scale, value.z * scale};
+}
 
 [[nodiscard]] math::Mat4 scale_matrix(const world::AuthoredScale scale) noexcept {
     math::Mat4 result = math::identity();
@@ -182,7 +186,7 @@ fragment float4 vice_runtime_mesh_fs(VertexOut input [[stage_in]]) {
     const float aspect
 ) noexcept {
     if (instances.empty()) {
-        const math::Vec3 target{0.0F, 0.0F, 0.0F};
+        const math::Vec3 target{};
         const math::Vec3 eye{6.0F, 4.5F, 8.0F};
         return math::multiply(
             math::perspective_rh_zo(runtime_fov, aspect, 0.05F, 250.0F),
@@ -232,8 +236,8 @@ fragment float4 vice_runtime_mesh_fs(VertexOut input [[stage_in]]) {
     };
     const float radius = std::max(1.0F, 0.5F * std::sqrt(math::dot(extent, extent)));
     const float distance = std::max(5.0F, radius / std::tan(runtime_fov * 0.5F) * 1.35F);
-    const math::Vec3 direction = math::normalize(math::Vec3{1.0F, 0.7F, 1.0F});
-    const math::Vec3 eye = target + direction * distance;
+    const math::Vec3 direction = math::normalize({1.0F, 0.7F, 1.0F});
+    const math::Vec3 eye = add(target, scaled(direction, distance));
     const float far_plane = std::max(250.0F, distance + radius * 6.0F);
 
     return math::multiply(
@@ -291,9 +295,7 @@ bool CookedMeshCatalog::load(const std::filesystem::path& content_root) {
             return false;
         }
 
-        const world::ResourceId resource{
-            world::PersistentId{loaded.asset->stable_id},
-        };
+        const world::ResourceId resource{world::PersistentId{loaded.asset->stable_id}};
         if (!seen.insert(resource).second) {
             diagnostics_ = "Duplicate cooked runtime mesh stable ID `" +
                 resource.value.to_string() + "`.";
