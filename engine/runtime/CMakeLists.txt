@@ -1,6 +1,7 @@
 add_library(
   vice_runtime
   STATIC
+    src/module_loader.cpp
     src/runtime.cpp
 )
 
