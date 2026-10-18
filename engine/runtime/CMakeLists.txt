@@ -1,6 +1,7 @@
 add_library(
   vice_runtime
   STATIC
+    src/material_pipeline.cpp
     src/module_loader.cpp
     src/module_paths.cpp
     src/runtime.cpp
