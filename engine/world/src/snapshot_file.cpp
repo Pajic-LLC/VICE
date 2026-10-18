@@ -261,6 +261,14 @@ WorldSnapshotEncodeResult encode_world_snapshot(const WorldSnapshot& snapshot_da
             append_f32(payload, entity.authored_transform->scale.y);
             append_f32(payload, entity.authored_transform->scale.z);
         }
+        append_u8(payload, entity.camera.has_value() ? 1U : 0U);
+        if (entity.camera.has_value()) {
+            append_u8(payload, static_cast<std::uint8_t>(entity.camera->projection));
+            append_f32(payload, entity.camera->vertical_fov_radians);
+            append_f32(payload, entity.camera->near_plane);
+            append_f32(payload, entity.camera->far_plane);
+            append_u8(payload, entity.camera->primary ? 1U : 0U);
+        }
         append_u32(payload, static_cast<std::uint32_t>(entity.resource_references.size()));
         for (const auto reference : entity.resource_references) {
             append_u8(payload, static_cast<std::uint8_t>(reference.role));
@@ -438,6 +446,38 @@ WorldSnapshotDecodeResult decode_world_snapshot(const std::span<const std::byte>
                     return result;
                 }
                 entity.authored_transform = transform;
+            }
+        }
+
+        if (version >= 4U) {
+            std::uint8_t has_camera = 0;
+            if (!reader.read_u8(has_camera)) {
+                result.diagnostics = "World snapshot ended inside entity camera metadata.";
+                return result;
+            }
+            if (has_camera > 1U) {
+                result.diagnostics = "World snapshot contains invalid entity camera metadata.";
+                return result;
+            }
+            if (has_camera != 0U) {
+                std::uint8_t projection = 0;
+                std::uint8_t primary = 0;
+                Camera camera;
+                if (!reader.read_u8(projection) ||
+                    !reader.read_f32(camera.vertical_fov_radians) ||
+                    !reader.read_f32(camera.near_plane) ||
+                    !reader.read_f32(camera.far_plane) ||
+                    !reader.read_u8(primary)) {
+                    result.diagnostics = "World snapshot ended inside entity camera record.";
+                    return result;
+                }
+                camera.projection = static_cast<CameraProjection>(projection);
+                camera.primary = primary != 0U;
+                if (primary > 1U || !valid(camera)) {
+                    result.diagnostics = "World snapshot contains an invalid entity camera record.";
+                    return result;
+                }
+                entity.camera = camera;
             }
         }
 
