@@ -4,6 +4,7 @@
 #include <vice/core/platform.hpp>
 #include <vice/core/time.hpp>
 #include <vice/platform/services.hpp>
+#include <vice/runtime/scene.hpp>
 #include <vice/world/snapshot_file.hpp>
 
 #include <algorithm>
@@ -138,6 +139,7 @@ LoadResult load_project(const LaunchPaths& launch) {
     result.project = LoadedProject{
         .manifest = *loaded_manifest.manifest,
         .manifest_path = launch.manifest,
+        .cooked_content_root = launch.cooked_cache_root,
         .startup_world_path = startup_world,
         .world = std::move(runtime_world),
     };
@@ -248,6 +250,18 @@ int run_native_game(
         return 1;
     }
 
+    RuntimeSceneRenderer scene_renderer;
+    std::string scene_diagnostics;
+    if (!scene_renderer.initialize(
+            *render_device,
+            swapchain->color_format(),
+            runtime_project.cooked_content_root,
+            &scene_diagnostics
+        )) {
+        log(LogLevel::error, "VICE Runtime could not initialize the scene: " + scene_diagnostics);
+        return 1;
+    }
+
     log(
         LogLevel::info,
         "Game: " + runtime_project.manifest.game_name +
@@ -274,6 +288,11 @@ int run_native_game(
     bool running = true;
     auto metrics = window->metrics();
     bool drawable = metrics.drawable_width > 0U && metrics.drawable_height > 0U;
+    if (drawable && !scene_renderer.resize(metrics, &scene_diagnostics)) {
+        log(LogLevel::error, "VICE Runtime could not size the scene: " + scene_diagnostics);
+        return 1;
+    }
+
     core::FrameClock clock;
     int exit_code = 0;
 
@@ -286,8 +305,14 @@ int run_native_game(
             if (decision.resize.has_value()) {
                 metrics = *decision.resize;
                 drawable = metrics.drawable_width > 0U && metrics.drawable_height > 0U;
-                if (drawable && (!render_device->wait_idle() || !swapchain->resize(metrics))) {
-                    log(LogLevel::error, "VICE Runtime could not resize the game swapchain.");
+                if (drawable && (!render_device->wait_idle() || !swapchain->resize(metrics) ||
+                    !scene_renderer.resize(metrics, &scene_diagnostics))) {
+                    log(
+                        LogLevel::error,
+                        scene_diagnostics.empty()
+                            ? "VICE Runtime could not resize the game scene."
+                            : "VICE Runtime could not resize the game scene: " + scene_diagnostics
+                    );
                     running = false;
                     exit_code = 1;
                 }
@@ -301,8 +326,14 @@ int run_native_game(
 
         render::Color clear_color = config.clear_color;
         lifecycle.frame(clear_color);
-        if (drawable && !swapchain->clear_and_present(clear_color)) {
-            log(LogLevel::error, "VICE Runtime could not present the game frame.");
+        if (drawable && !scene_renderer.render(
+                *runtime_project.world,
+                *swapchain,
+                metrics,
+                clear_color,
+                &scene_diagnostics
+            )) {
+            log(LogLevel::error, "VICE Runtime could not render the game frame: " + scene_diagnostics);
             running = false;
             exit_code = 1;
         }
