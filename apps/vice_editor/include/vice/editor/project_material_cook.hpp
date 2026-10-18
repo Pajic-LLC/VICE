@@ -1,9 +1,11 @@
 #pragma once
 
 #include <vice/editor/project_session.hpp>
+#include <vice/world/resource.hpp>
 
 #include <cstddef>
 #include <filesystem>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -22,13 +24,12 @@ struct ProjectMaterialCookResult {
     std::vector<CookedProjectRenderMaterial> materials;
     std::string diagnostics;
 
-    [[nodiscard]] explicit operator bool() const noexcept {
-        return success;
-    }
+    [[nodiscard]] explicit operator bool() const noexcept { return success; }
 };
 
 [[nodiscard]] ProjectMaterialCookResult cook_project_render_materials(
-    const ProjectSession& session
+    const ProjectSession& session,
+    std::span<const world::ResourceId> available_textures = {}
 );
 
 } // namespace vice::editor
