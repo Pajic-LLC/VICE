@@ -6,8 +6,7 @@ add_executable(
 target_link_libraries(
   vice_player
   PRIVATE
-    VICE::Project
-    VICE::World
+    VICE::Runtime
 )
 
 target_compile_features(vice_player PRIVATE cxx_std_23)
