@@ -39,8 +39,8 @@ int main() {
         "temporal resolve is enabled by default"
     );
     require(
-        plan[1].pass == runtime::RuntimePostProcessPass::bloom && !plan[1].enabled,
-        "bloom slot remains reserved but disabled"
+        plan[1].pass == runtime::RuntimePostProcessPass::bloom && plan[1].enabled,
+        "HDR bloom is enabled between temporal resolve and tone mapping"
     );
     require(
         plan[2].pass == runtime::RuntimePostProcessPass::tone_map && plan[2].enabled,
@@ -242,9 +242,40 @@ int main() {
     std::string diagnostics;
     require(
         renderer.initialize(*device, render::TextureFormat::bgra8_unorm, root, &diagnostics),
-        "Runtime renderer initializes TAA pipelines"
+        "Runtime renderer initializes TAA and bloom pipelines"
     );
     require(diagnostics.empty(), "Runtime renderer initialization diagnostics");
+
+    require(
+        renderer.set_bloom(1.1F, 0.45F, 0.10F, &diagnostics),
+        "Runtime accepts finite bloom parameters"
+    );
+    require(diagnostics.empty(), "valid bloom parameters clear diagnostics");
+    require(
+        !renderer.set_bloom(-0.1F, 0.45F, 0.10F, &diagnostics),
+        "Runtime rejects negative bloom threshold"
+    );
+    require(
+        !renderer.set_bloom(1.0F, 1.1F, 0.10F, &diagnostics),
+        "Runtime rejects bloom soft knee outside unit range"
+    );
+    require(
+        !renderer.set_bloom(1.0F, 0.5F, -0.01F, &diagnostics),
+        "Runtime rejects negative bloom strength"
+    );
+    require(
+        renderer.set_bloom(1.0F, 0.5F, 0.08F, &diagnostics),
+        "Runtime restores default bloom parameters"
+    );
+    require(diagnostics.empty(), "restored bloom parameters clear diagnostics");
+
+    require(renderer.set_vignette(0.15F, &diagnostics), "Runtime accepts restrained vignette intensity");
+    require(diagnostics.empty(), "valid vignette clears diagnostics");
+    require(!renderer.set_vignette(-0.1F, &diagnostics), "Runtime rejects negative vignette intensity");
+    require(!renderer.set_vignette(1.1F, &diagnostics), "Runtime rejects vignette above one");
+    require(renderer.set_vignette(0.12F, &diagnostics), "Runtime restores default vignette intensity");
+    require(diagnostics.empty(), "restored vignette clears diagnostics");
+
     require(
         renderer.resize(
             platform::WindowMetrics{
@@ -256,7 +287,7 @@ int main() {
             },
             &diagnostics
         ),
-        "Runtime renderer allocates raw color, temporal color history, depth history, and motion targets"
+        "Runtime renderer allocates TAA and bloom frame targets"
     );
     require(diagnostics.empty(), "Runtime renderer resize diagnostics");
 

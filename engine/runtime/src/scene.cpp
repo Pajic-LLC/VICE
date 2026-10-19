@@ -2,6 +2,7 @@
 
 #include <vice/runtime/post_process.hpp>
 
+#include "bloom_shaders.hpp"
 #include "material_pipeline.hpp"
 #include "taa_shaders.hpp"
 
@@ -181,7 +182,18 @@ static constexpr std::array tone_map_fragment_resources{
 
 struct ToneMapConstants {
     float exposure = 1.0F;
-    float padding[3]{};
+    float vignette_intensity = 0.12F;
+    float vignette_inner = 0.35F;
+    float vignette_outer = 1.50F;
+};
+
+struct BloomConstants {
+    float texel_size[2]{1.0F, 1.0F};
+    float threshold = 1.0F;
+    float soft_knee = 0.5F;
+    float strength = 0.08F;
+    float direction[2]{};
+    float padding = 0.0F;
 };
 
 struct SceneLightConstants {
@@ -225,6 +237,7 @@ struct TaaConstants {
 };
 
 static_assert(sizeof(ToneMapConstants) == 16U);
+static_assert(sizeof(BloomConstants) == 32U);
 static_assert(sizeof(SceneLightConstants) == 48U);
 static_assert(sizeof(SceneConstants) == 848U);
 static_assert(sizeof(ShadowConstants) == 128U);
@@ -437,7 +450,12 @@ float vice_linear_to_srgb_channel(float value) {
         : 1.055 * pow(value, 1.0 / 2.4) - 0.055;
 }
 float4 vice_runtime_tonemap_fs(ToneMapVertexOut input) : SV_Target0 {
-    const float3 hdr = max(scene_color.Sample(scene_sampler, input.uv).rgb * tone_map_data.x, 0.0);
+    float3 hdr = max(scene_color.Sample(scene_sampler, input.uv).rgb * tone_map_data.x, 0.0);
+    const float2 centered = input.uv * 2.0 - 1.0;
+    const float radius_squared = dot(centered, centered);
+    const float vignette = 1.0 - saturate(tone_map_data.y) *
+        smoothstep(tone_map_data.z, tone_map_data.w, radius_squared);
+    hdr *= vignette;
     const float3 mapped = vice_aces_fitted(hdr);
     return float4(
         vice_linear_to_srgb_channel(mapped.r),
@@ -493,7 +511,12 @@ fragment float4 vice_runtime_tonemap_fs(
     constant ToneMapFrame& frame [[buffer(0)]],
     texture2d<float> scene_color [[texture(0)]],
     sampler scene_sampler [[sampler(0)]]) {
-    const float3 hdr = max(scene_color.sample(scene_sampler, input.uv).rgb * frame.tone_map_data.x, 0.0);
+    float3 hdr = max(scene_color.sample(scene_sampler, input.uv).rgb * frame.tone_map_data.x, 0.0);
+    const float2 centered = input.uv * 2.0 - 1.0;
+    const float radius_squared = dot(centered, centered);
+    const float vignette = 1.0 - clamp(frame.tone_map_data.y, 0.0, 1.0) *
+        smoothstep(frame.tone_map_data.z, frame.tone_map_data.w, radius_squared);
+    hdr *= vignette;
     const float3 mapped = vice_aces_fitted(hdr);
     return float4(
         vice_linear_to_srgb_channel(mapped.r),
@@ -599,6 +622,40 @@ fragment float4 vice_runtime_tonemap_fs(
     desc.memory = render::MemoryLocation::cpu_to_gpu;
     desc.debug_name = "VICE Runtime TAA constants";
     return device.create_buffer(desc);
+}
+
+[[nodiscard]] std::unique_ptr<render::Buffer> create_bloom_constant_buffer(
+    render::Device& device
+) {
+    render::BufferDesc desc;
+    desc.size = sizeof(BloomConstants);
+    desc.usage = render::BufferUsage::uniform;
+    desc.memory = render::MemoryLocation::cpu_to_gpu;
+    desc.debug_name = "VICE Runtime bloom constants";
+    return device.create_buffer(desc);
+}
+
+[[nodiscard]] bool write_bloom_constants(
+    render::Buffer& buffer,
+    const std::uint32_t width,
+    const std::uint32_t height,
+    const float threshold,
+    const float soft_knee,
+    const float strength,
+    const float direction_x,
+    const float direction_y
+) {
+    const BloomConstants constants{
+        .texel_size = {
+            1.0F / static_cast<float>(std::max(1U, width)),
+            1.0F / static_cast<float>(std::max(1U, height)),
+        },
+        .threshold = threshold,
+        .soft_knee = soft_knee,
+        .strength = strength,
+        .direction = {direction_x, direction_y},
+    };
+    return buffer.write(0U, std::as_bytes(std::span{&constants, 1}));
 }
 
 [[nodiscard]] std::unique_ptr<render::Buffer> create_tone_map_constant_buffer(
@@ -1124,6 +1181,15 @@ struct RuntimeSceneRenderer::State {
     std::unique_ptr<render::Sampler> taa_linear_sampler;
     std::unique_ptr<render::Sampler> taa_point_sampler;
     std::unique_ptr<render::Buffer> taa_constants;
+    std::unique_ptr<render::ShaderModule> bloom_vertex_shader;
+    std::unique_ptr<render::ShaderModule> bloom_extract_fragment_shader;
+    std::unique_ptr<render::ShaderModule> bloom_blur_fragment_shader;
+    std::unique_ptr<render::ShaderModule> bloom_composite_fragment_shader;
+    std::unique_ptr<render::GraphicsPipeline> bloom_extract_pipeline;
+    std::unique_ptr<render::GraphicsPipeline> bloom_blur_pipeline;
+    std::unique_ptr<render::GraphicsPipeline> bloom_composite_pipeline;
+    std::unique_ptr<render::Sampler> bloom_sampler;
+    std::array<std::unique_ptr<render::Buffer>, 4U> bloom_constants;
     std::unique_ptr<render::ShaderModule> tone_map_vertex_shader;
     std::unique_ptr<render::ShaderModule> tone_map_fragment_shader;
     std::unique_ptr<render::GraphicsPipeline> tone_map_pipeline;
@@ -1137,6 +1203,9 @@ struct RuntimeSceneRenderer::State {
     std::array<std::unique_ptr<render::Texture>, 2U> temporal_color_history;
     std::array<std::unique_ptr<render::Texture>, 2U> depth_history;
     std::unique_ptr<render::Texture> motion_vectors;
+    std::unique_ptr<render::Texture> bloom_extract;
+    std::unique_ptr<render::Texture> bloom_blur;
+    std::unique_ptr<render::Texture> bloom_composite;
     std::unordered_map<world::ResourceId, MeshGpu, world::ResourceIdHash> meshes;
     std::unordered_map<world::PersistentId, std::unique_ptr<render::Buffer>, world::PersistentIdHash> constants;
     std::unordered_map<world::PersistentId, std::unique_ptr<render::Buffer>, world::PersistentIdHash> motion_constants;
@@ -1147,10 +1216,16 @@ struct RuntimeSceneRenderer::State {
     > shadow_constants;
     std::uint32_t depth_width = 0;
     std::uint32_t depth_height = 0;
+    std::uint32_t bloom_width = 0;
+    std::uint32_t bloom_height = 0;
     RuntimeTemporalHistory temporal_history;
     RuntimePostProcessPlan post_process_plan = default_runtime_post_process_plan();
     std::size_t history_write_index = 0U;
     float exposure = 1.0F;
+    float bloom_threshold = 1.0F;
+    float bloom_soft_knee = 0.5F;
+    float bloom_strength = 0.08F;
+    float vignette_intensity = 0.12F;
     bool initialized = false;
 };
 
@@ -1319,6 +1394,93 @@ bool RuntimeSceneRenderer::initialize(
         return false;
     }
 
+    render::ShaderModuleDesc bloom_vertex_desc;
+    bloom_vertex_desc.stage = render::ShaderStage::vertex;
+    bloom_vertex_desc.language = vertex_desc.language;
+    bloom_vertex_desc.source = metal ? detail::bloom_metal_source : detail::bloom_hlsl_source;
+    bloom_vertex_desc.entry_point = "vice_runtime_bloom_vs";
+    bloom_vertex_desc.debug_name = "VICE Runtime bloom vertex";
+
+    render::ShaderModuleDesc bloom_extract_fragment_desc;
+    bloom_extract_fragment_desc.stage = render::ShaderStage::fragment;
+    bloom_extract_fragment_desc.language = vertex_desc.language;
+    bloom_extract_fragment_desc.source = bloom_vertex_desc.source;
+    bloom_extract_fragment_desc.resources = detail::bloom_single_fragment_resources;
+    bloom_extract_fragment_desc.entry_point = "vice_runtime_bloom_extract_fs";
+    bloom_extract_fragment_desc.debug_name = "VICE Runtime bloom extract fragment";
+
+    render::ShaderModuleDesc bloom_blur_fragment_desc = bloom_extract_fragment_desc;
+    bloom_blur_fragment_desc.entry_point = "vice_runtime_bloom_blur_fs";
+    bloom_blur_fragment_desc.debug_name = "VICE Runtime bloom blur fragment";
+
+    render::ShaderModuleDesc bloom_composite_fragment_desc = bloom_extract_fragment_desc;
+    bloom_composite_fragment_desc.resources = detail::bloom_composite_fragment_resources;
+    bloom_composite_fragment_desc.entry_point = "vice_runtime_bloom_composite_fs";
+    bloom_composite_fragment_desc.debug_name = "VICE Runtime bloom composite fragment";
+
+    state_->bloom_vertex_shader = device.create_shader_module(bloom_vertex_desc);
+    state_->bloom_extract_fragment_shader = device.create_shader_module(bloom_extract_fragment_desc);
+    state_->bloom_blur_fragment_shader = device.create_shader_module(bloom_blur_fragment_desc);
+    state_->bloom_composite_fragment_shader = device.create_shader_module(bloom_composite_fragment_desc);
+    if (!state_->bloom_vertex_shader || !state_->bloom_extract_fragment_shader ||
+        !state_->bloom_blur_fragment_shader || !state_->bloom_composite_fragment_shader) {
+        set_diagnostics(diagnostics, "VICE Runtime could not create bloom shaders.");
+        return false;
+    }
+
+    render::GraphicsPipelineDesc bloom_pipeline_desc;
+    bloom_pipeline_desc.vertex_shader = state_->bloom_vertex_shader.get();
+    bloom_pipeline_desc.fragment_shader = state_->bloom_extract_fragment_shader.get();
+    bloom_pipeline_desc.color_format = render::TextureFormat::rgba16_float;
+    bloom_pipeline_desc.cull_mode = render::CullMode::none;
+    bloom_pipeline_desc.debug_name = "VICE Runtime bloom extract pipeline";
+    state_->bloom_extract_pipeline = device.create_graphics_pipeline(bloom_pipeline_desc);
+
+    bloom_pipeline_desc.fragment_shader = state_->bloom_blur_fragment_shader.get();
+    bloom_pipeline_desc.debug_name = "VICE Runtime bloom blur pipeline";
+    state_->bloom_blur_pipeline = device.create_graphics_pipeline(bloom_pipeline_desc);
+
+    bloom_pipeline_desc.fragment_shader = state_->bloom_composite_fragment_shader.get();
+    bloom_pipeline_desc.debug_name = "VICE Runtime bloom composite pipeline";
+    state_->bloom_composite_pipeline = device.create_graphics_pipeline(bloom_pipeline_desc);
+    if (!state_->bloom_extract_pipeline || !state_->bloom_blur_pipeline ||
+        !state_->bloom_composite_pipeline) {
+        set_diagnostics(diagnostics, "VICE Runtime could not create bloom pipelines.");
+        return false;
+    }
+
+    render::SamplerDesc bloom_sampler_desc;
+    bloom_sampler_desc.min_filter = render::Filter::linear;
+    bloom_sampler_desc.mag_filter = render::Filter::linear;
+    bloom_sampler_desc.mip_filter = render::Filter::linear;
+    bloom_sampler_desc.address_u = render::AddressMode::clamp_to_edge;
+    bloom_sampler_desc.address_v = render::AddressMode::clamp_to_edge;
+    bloom_sampler_desc.address_w = render::AddressMode::clamp_to_edge;
+    bloom_sampler_desc.debug_name = "VICE Runtime bloom sampler";
+    state_->bloom_sampler = device.create_sampler(bloom_sampler_desc);
+    if (!state_->bloom_sampler) {
+        set_diagnostics(diagnostics, "VICE Runtime could not create the bloom sampler.");
+        return false;
+    }
+    for (auto& constants : state_->bloom_constants) {
+        constants = create_bloom_constant_buffer(device);
+        if (!constants) {
+            set_diagnostics(diagnostics, "VICE Runtime could not create bloom constants.");
+            return false;
+        }
+    }
+    if (!write_bloom_constants(*state_->bloom_constants[0], 1U, 1U,
+            state_->bloom_threshold, state_->bloom_soft_knee, state_->bloom_strength, 0.0F, 0.0F) ||
+        !write_bloom_constants(*state_->bloom_constants[1], 1U, 1U,
+            state_->bloom_threshold, state_->bloom_soft_knee, state_->bloom_strength, 1.0F, 0.0F) ||
+        !write_bloom_constants(*state_->bloom_constants[2], 1U, 1U,
+            state_->bloom_threshold, state_->bloom_soft_knee, state_->bloom_strength, 0.0F, 1.0F) ||
+        !write_bloom_constants(*state_->bloom_constants[3], 1U, 1U,
+            state_->bloom_threshold, state_->bloom_soft_knee, state_->bloom_strength, 0.0F, 0.0F)) {
+        set_diagnostics(diagnostics, "VICE Runtime could not initialize bloom constants.");
+        return false;
+    }
+
     render::ShaderModuleDesc tone_vertex_desc;
     tone_vertex_desc.stage = render::ShaderStage::vertex;
     tone_vertex_desc.language = vertex_desc.language;
@@ -1367,7 +1529,10 @@ bool RuntimeSceneRenderer::initialize(
         set_diagnostics(diagnostics, "VICE Runtime could not create tone-map resources.");
         return false;
     }
-    const ToneMapConstants default_tone_map_constants{};
+    const ToneMapConstants default_tone_map_constants{
+        .exposure = state_->exposure,
+        .vignette_intensity = state_->vignette_intensity,
+    };
     if (!state_->tone_map_constants->write(
             0U,
             std::as_bytes(std::span{&default_tone_map_constants, 1})
@@ -1482,17 +1647,23 @@ bool RuntimeSceneRenderer::resize(
         for (auto& color : state_->temporal_color_history) color.reset();
         for (auto& depth : state_->depth_history) depth.reset();
         state_->motion_vectors.reset();
+        state_->bloom_extract.reset();
+        state_->bloom_blur.reset();
+        state_->bloom_composite.reset();
         state_->previous_models.clear();
         state_->temporal_history.reset();
         state_->history_write_index = 0U;
         state_->depth_width = 0;
         state_->depth_height = 0;
+        state_->bloom_width = 0;
+        state_->bloom_height = 0;
         if (diagnostics != nullptr) diagnostics->clear();
         return true;
     }
     if (state_->scene_color && state_->temporal_color_history[0] &&
         state_->temporal_color_history[1] && state_->depth_history[0] &&
-        state_->depth_history[1] && state_->motion_vectors &&
+        state_->depth_history[1] && state_->motion_vectors && state_->bloom_extract &&
+        state_->bloom_blur && state_->bloom_composite &&
         state_->depth_width == metrics.drawable_width &&
         state_->depth_height == metrics.drawable_height) {
         if (diagnostics != nullptr) diagnostics->clear();
@@ -1548,15 +1719,52 @@ bool RuntimeSceneRenderer::resize(
         return false;
     }
 
+    const std::uint32_t bloom_width = std::max(1U, (metrics.drawable_width + 1U) / 2U);
+    const std::uint32_t bloom_height = std::max(1U, (metrics.drawable_height + 1U) / 2U);
+    render::TextureDesc bloom_desc;
+    bloom_desc.width = bloom_width;
+    bloom_desc.height = bloom_height;
+    bloom_desc.format = render::TextureFormat::rgba16_float;
+    bloom_desc.usage = render::TextureUsage::color_attachment | render::TextureUsage::sampled;
+    bloom_desc.debug_name = "VICE Runtime bloom extract";
+    auto bloom_extract = state_->device->create_texture(bloom_desc);
+    bloom_desc.debug_name = "VICE Runtime bloom blur";
+    auto bloom_blur = state_->device->create_texture(bloom_desc);
+
+    render::TextureDesc bloom_composite_desc = scene_color_desc;
+    bloom_composite_desc.debug_name = "VICE Runtime bloom composite";
+    auto bloom_composite = state_->device->create_texture(bloom_composite_desc);
+    if (!bloom_extract || !bloom_blur || !bloom_composite) {
+        set_diagnostics(diagnostics, "VICE Runtime could not create bloom frame targets.");
+        return false;
+    }
+
+    if (!write_bloom_constants(*state_->bloom_constants[0], bloom_width, bloom_height,
+            state_->bloom_threshold, state_->bloom_soft_knee, state_->bloom_strength, 0.0F, 0.0F) ||
+        !write_bloom_constants(*state_->bloom_constants[1], bloom_width, bloom_height,
+            state_->bloom_threshold, state_->bloom_soft_knee, state_->bloom_strength, 1.0F, 0.0F) ||
+        !write_bloom_constants(*state_->bloom_constants[2], bloom_width, bloom_height,
+            state_->bloom_threshold, state_->bloom_soft_knee, state_->bloom_strength, 0.0F, 1.0F) ||
+        !write_bloom_constants(*state_->bloom_constants[3], bloom_width, bloom_height,
+            state_->bloom_threshold, state_->bloom_soft_knee, state_->bloom_strength, 0.0F, 0.0F)) {
+        set_diagnostics(diagnostics, "VICE Runtime could not update bloom constants for the drawable size.");
+        return false;
+    }
+
     state_->scene_color = std::move(scene_color);
     state_->temporal_color_history = std::move(temporal_color_history);
     state_->depth_history = std::move(depth_history);
     state_->motion_vectors = std::move(motion_vectors);
+    state_->bloom_extract = std::move(bloom_extract);
+    state_->bloom_blur = std::move(bloom_blur);
+    state_->bloom_composite = std::move(bloom_composite);
     state_->previous_models.clear();
     state_->temporal_history.reset();
     state_->history_write_index = 0U;
     state_->depth_width = metrics.drawable_width;
     state_->depth_height = metrics.drawable_height;
+    state_->bloom_width = bloom_width;
+    state_->bloom_height = bloom_height;
     if (diagnostics != nullptr) diagnostics->clear();
     return true;
 }
@@ -1573,12 +1781,84 @@ bool RuntimeSceneRenderer::set_exposure(
         set_diagnostics(diagnostics, "Runtime exposure must be finite and greater than zero.");
         return false;
     }
-    const ToneMapConstants constants{.exposure = exposure};
+    const ToneMapConstants constants{
+        .exposure = exposure,
+        .vignette_intensity = state_->vignette_intensity,
+    };
     if (!state_->tone_map_constants->write(0U, std::as_bytes(std::span{&constants, 1}))) {
         set_diagnostics(diagnostics, "VICE Runtime could not update tone-map exposure.");
         return false;
     }
     state_->exposure = exposure;
+    if (diagnostics != nullptr) diagnostics->clear();
+    return true;
+}
+
+
+bool RuntimeSceneRenderer::set_bloom(
+    const float threshold,
+    const float soft_knee,
+    const float strength,
+    std::string* const diagnostics
+) {
+    if (state_ == nullptr || !state_->initialized ||
+        !state_->bloom_constants[0] || !state_->bloom_constants[1] ||
+        !state_->bloom_constants[2] || !state_->bloom_constants[3]) {
+        set_diagnostics(diagnostics, "Runtime scene renderer is not initialized.");
+        return false;
+    }
+    if (!std::isfinite(threshold) || threshold < 0.0F ||
+        !std::isfinite(soft_knee) || soft_knee < 0.0F || soft_knee > 1.0F ||
+        !std::isfinite(strength) || strength < 0.0F) {
+        set_diagnostics(
+            diagnostics,
+            "Runtime bloom requires a non-negative finite threshold/strength and soft knee in [0, 1]."
+        );
+        return false;
+    }
+
+    const std::uint32_t width = std::max(1U, state_->bloom_width);
+    const std::uint32_t height = std::max(1U, state_->bloom_height);
+    if (!write_bloom_constants(*state_->bloom_constants[0], width, height,
+            threshold, soft_knee, strength, 0.0F, 0.0F) ||
+        !write_bloom_constants(*state_->bloom_constants[1], width, height,
+            threshold, soft_knee, strength, 1.0F, 0.0F) ||
+        !write_bloom_constants(*state_->bloom_constants[2], width, height,
+            threshold, soft_knee, strength, 0.0F, 1.0F) ||
+        !write_bloom_constants(*state_->bloom_constants[3], width, height,
+            threshold, soft_knee, strength, 0.0F, 0.0F)) {
+        set_diagnostics(diagnostics, "VICE Runtime could not update bloom parameters.");
+        return false;
+    }
+
+    state_->bloom_threshold = threshold;
+    state_->bloom_soft_knee = soft_knee;
+    state_->bloom_strength = strength;
+    if (diagnostics != nullptr) diagnostics->clear();
+    return true;
+}
+
+bool RuntimeSceneRenderer::set_vignette(
+    const float intensity,
+    std::string* const diagnostics
+) {
+    if (state_ == nullptr || !state_->initialized || state_->tone_map_constants == nullptr) {
+        set_diagnostics(diagnostics, "Runtime scene renderer is not initialized.");
+        return false;
+    }
+    if (!std::isfinite(intensity) || intensity < 0.0F || intensity > 1.0F) {
+        set_diagnostics(diagnostics, "Runtime vignette intensity must be finite and in [0, 1].");
+        return false;
+    }
+    const ToneMapConstants constants{
+        .exposure = state_->exposure,
+        .vignette_intensity = intensity,
+    };
+    if (!state_->tone_map_constants->write(0U, std::as_bytes(std::span{&constants, 1}))) {
+        set_diagnostics(diagnostics, "VICE Runtime could not update vignette intensity.");
+        return false;
+    }
+    state_->vignette_intensity = intensity;
     if (diagnostics != nullptr) diagnostics->clear();
     return true;
 }
@@ -1593,6 +1873,8 @@ bool RuntimeSceneRenderer::render(
     if (state_ == nullptr || !state_->initialized || state_->device == nullptr ||
         !state_->pipeline || !state_->motion_pipeline || !state_->taa_pipeline ||
         !state_->taa_linear_sampler || !state_->taa_point_sampler || !state_->taa_constants ||
+        !state_->bloom_extract_pipeline || !state_->bloom_blur_pipeline ||
+        !state_->bloom_composite_pipeline || !state_->bloom_sampler ||
         !state_->tone_map_pipeline || !state_->tone_map_sampler || !state_->tone_map_constants) {
         set_diagnostics(diagnostics, "Runtime scene renderer is not initialized.");
         return false;
@@ -1604,8 +1886,9 @@ bool RuntimeSceneRenderer::render(
     if (!resize(metrics, diagnostics)) return false;
     if (!state_->scene_color || !state_->temporal_color_history[0] ||
         !state_->temporal_color_history[1] || !state_->depth_history[0] ||
-        !state_->depth_history[1] || !state_->motion_vectors) {
-        set_diagnostics(diagnostics, "VICE Runtime TAA frame targets are unavailable.");
+        !state_->depth_history[1] || !state_->motion_vectors || !state_->bloom_extract ||
+        !state_->bloom_blur || !state_->bloom_composite) {
+        set_diagnostics(diagnostics, "VICE Runtime post-process frame targets are unavailable.");
         return false;
     }
 
@@ -2094,12 +2377,102 @@ bool RuntimeSceneRenderer::render(
             temporal_resolved = true;
             break;
         }
-        case RuntimePostProcessPass::bloom:
-            set_diagnostics(
-                diagnostics,
-                "VICE Runtime bloom is present in the pass plan but not implemented."
-            );
-            return false;
+        case RuntimePostProcessPass::bloom: {
+            if (working_color == nullptr || state_->bloom_width == 0U || state_->bloom_height == 0U) {
+                set_diagnostics(diagnostics, "VICE Runtime bloom inputs are unavailable.");
+                return false;
+            }
+
+            render::RenderPassDesc bloom_pass;
+            bloom_pass.clear_color = render::Color{0.0F, 0.0F, 0.0F, 1.0F};
+            const render::Viewport bloom_viewport{
+                .width = static_cast<float>(state_->bloom_width),
+                .height = static_cast<float>(state_->bloom_height),
+            };
+            const render::ScissorRect bloom_scissor{
+                .width = state_->bloom_width,
+                .height = state_->bloom_height,
+            };
+
+            if (!commands->begin_render_pass(*state_->bloom_extract, bloom_pass) ||
+                !commands->set_viewport(bloom_viewport) ||
+                !commands->set_scissor_rect(bloom_scissor) ||
+                !commands->set_graphics_pipeline(*state_->bloom_extract_pipeline) ||
+                !commands->set_graphics_constant_buffer(
+                    detail::bloom_constants_binding,
+                    *state_->bloom_constants[0],
+                    0U,
+                    sizeof(BloomConstants)
+                ) ||
+                !commands->set_graphics_texture(detail::bloom_source_binding, *working_color) ||
+                !commands->set_graphics_sampler(detail::bloom_sampler_binding, *state_->bloom_sampler) ||
+                !commands->draw(3U) || !commands->end_render_pass()) {
+                set_diagnostics(diagnostics, "VICE Runtime could not execute bloom highlight extraction.");
+                return false;
+            }
+
+            if (!commands->begin_render_pass(*state_->bloom_blur, bloom_pass) ||
+                !commands->set_viewport(bloom_viewport) ||
+                !commands->set_scissor_rect(bloom_scissor) ||
+                !commands->set_graphics_pipeline(*state_->bloom_blur_pipeline) ||
+                !commands->set_graphics_constant_buffer(
+                    detail::bloom_constants_binding,
+                    *state_->bloom_constants[1],
+                    0U,
+                    sizeof(BloomConstants)
+                ) ||
+                !commands->set_graphics_texture(detail::bloom_source_binding, *state_->bloom_extract) ||
+                !commands->set_graphics_sampler(detail::bloom_sampler_binding, *state_->bloom_sampler) ||
+                !commands->draw(3U) || !commands->end_render_pass()) {
+                set_diagnostics(diagnostics, "VICE Runtime could not execute horizontal bloom blur.");
+                return false;
+            }
+
+            if (!commands->begin_render_pass(*state_->bloom_extract, bloom_pass) ||
+                !commands->set_viewport(bloom_viewport) ||
+                !commands->set_scissor_rect(bloom_scissor) ||
+                !commands->set_graphics_pipeline(*state_->bloom_blur_pipeline) ||
+                !commands->set_graphics_constant_buffer(
+                    detail::bloom_constants_binding,
+                    *state_->bloom_constants[2],
+                    0U,
+                    sizeof(BloomConstants)
+                ) ||
+                !commands->set_graphics_texture(detail::bloom_source_binding, *state_->bloom_blur) ||
+                !commands->set_graphics_sampler(detail::bloom_sampler_binding, *state_->bloom_sampler) ||
+                !commands->draw(3U) || !commands->end_render_pass()) {
+                set_diagnostics(diagnostics, "VICE Runtime could not execute vertical bloom blur.");
+                return false;
+            }
+
+            render::RenderPassDesc composite_pass;
+            composite_pass.clear_color = render::Color{0.0F, 0.0F, 0.0F, 1.0F};
+            if (!commands->begin_render_pass(*state_->bloom_composite, composite_pass) ||
+                !commands->set_viewport(render::Viewport{
+                    .width = static_cast<float>(metrics.drawable_width),
+                    .height = static_cast<float>(metrics.drawable_height),
+                }) ||
+                !commands->set_scissor_rect(render::ScissorRect{
+                    .width = metrics.drawable_width,
+                    .height = metrics.drawable_height,
+                }) ||
+                !commands->set_graphics_pipeline(*state_->bloom_composite_pipeline) ||
+                !commands->set_graphics_constant_buffer(
+                    detail::bloom_constants_binding,
+                    *state_->bloom_constants[3],
+                    0U,
+                    sizeof(BloomConstants)
+                ) ||
+                !commands->set_graphics_texture(detail::bloom_source_binding, *working_color) ||
+                !commands->set_graphics_texture(detail::bloom_texture_binding, *state_->bloom_extract) ||
+                !commands->set_graphics_sampler(detail::bloom_sampler_binding, *state_->bloom_sampler) ||
+                !commands->draw(3U) || !commands->end_render_pass()) {
+                set_diagnostics(diagnostics, "VICE Runtime could not composite HDR bloom.");
+                return false;
+            }
+            working_color = state_->bloom_composite.get();
+            break;
+        }
         case RuntimePostProcessPass::tone_map: {
             if (presented || working_color == nullptr) {
                 set_diagnostics(diagnostics, "VICE Runtime post-process plan has an invalid tone-map pass.");

@@ -30,7 +30,7 @@ using RuntimePostProcessPlan = std::array<RuntimePostProcessPassDesc, 3U>;
         },
         RuntimePostProcessPassDesc{
             .pass = RuntimePostProcessPass::bloom,
-            .enabled = false,
+            .enabled = true,
         },
         RuntimePostProcessPassDesc{
             .pass = RuntimePostProcessPass::tone_map,

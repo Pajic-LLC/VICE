@@ -151,6 +151,18 @@ public:
         std::string* diagnostics = nullptr
     );
 
+    [[nodiscard]] bool set_bloom(
+        float threshold,
+        float soft_knee,
+        float strength,
+        std::string* diagnostics = nullptr
+    );
+
+    [[nodiscard]] bool set_vignette(
+        float intensity,
+        std::string* diagnostics = nullptr
+    );
+
     [[nodiscard]] bool render(
         const world::World& world,
         render::Swapchain& swapchain,
