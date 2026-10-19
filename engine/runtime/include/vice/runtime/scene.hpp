@@ -87,6 +87,23 @@ struct RuntimeLight {
     math::Vec3 direction{};
 };
 
+struct RuntimeAtmosphereSettings {
+    float rayleigh_strength = 1.0F;
+    float mie_strength = 0.35F;
+    float mie_anisotropy = 0.76F;
+    float sun_angular_radius = 0.004675F;
+    float aerial_density = 0.00045F;
+    float horizon_falloff = 0.18F;
+    math::Vec3 ground_albedo{0.025F, 0.03F, 0.04F};
+};
+
+struct RuntimeAtmosphereFrame {
+    math::Vec3 sun_direction{0.431934F, 0.863868F, 0.259161F};
+    math::Vec3 sun_color{1.0F, 0.952381F, 0.880952F};
+    float sun_intensity = 4.2F;
+    RuntimeAtmosphereSettings settings{};
+};
+
 struct RuntimeReflectionProbe {
     world::PersistentId entity{};
     world::ReflectionProbe probe{};
@@ -115,6 +132,20 @@ struct RuntimeShadowView {
 };
 
 [[nodiscard]] std::vector<RuntimeLight> collect_runtime_lights(const world::World& world);
+
+[[nodiscard]] RuntimeAtmosphereFrame runtime_atmosphere_frame(
+    std::span<const RuntimeLight> lights
+) noexcept;
+
+[[nodiscard]] math::Vec3 evaluate_runtime_sky_radiance(
+    math::Vec3 view_direction,
+    const RuntimeAtmosphereFrame& atmosphere
+) noexcept;
+
+[[nodiscard]] float runtime_atmosphere_transmittance(
+    float distance,
+    const RuntimeAtmosphereSettings& settings
+) noexcept;
 
 [[nodiscard]] std::vector<RuntimeReflectionProbe> collect_runtime_reflection_probes(
     const world::World& world
@@ -149,6 +180,11 @@ struct RuntimeShadowView {
 );
 
 [[nodiscard]] math::Mat4 runtime_model_matrix(const RenderMeshInstance& instance) noexcept;
+
+[[nodiscard]] math::Mat4 runtime_model_matrix_relative_to(
+    const RenderMeshInstance& instance,
+    world::GlobalPosition origin
+) noexcept;
 
 [[nodiscard]] std::optional<RuntimeCameraView> primary_camera_view(
     const world::World& world,
