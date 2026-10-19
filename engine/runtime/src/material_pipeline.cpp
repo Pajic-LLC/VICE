@@ -52,7 +52,7 @@ struct FragmentResourceContract {
     bool valid = false;
     std::uint32_t directional_shadow_cascade_count = 0;
     std::uint32_t shadow_texture_binding_base = 1U;
-    bool uses_environment = false;
+    std::uint32_t environment_source_count = 0U;
 };
 
 [[nodiscard]] FragmentResourceContract v2_fragment_resource_contract(
@@ -123,7 +123,7 @@ struct FragmentResourceContract {
     bool material_sampler = false;
     std::array<bool, runtime_shadow_cascade_count> shadow_textures{};
     bool shadow_sampler = false;
-    std::array<bool, 3U> environment_textures{};
+    std::array<bool, 9U> environment_textures{};
     bool environment_sampler = false;
     for (const auto& resource : module.resources()) {
         if (resource.space != 0U || resource.count != 1U || resource.unbounded) return {};
@@ -137,7 +137,7 @@ struct FragmentResourceContract {
                 material_textures[resource.binding] = true;
             } else if (resource.binding >= 4U && resource.binding < 4U + runtime_shadow_cascade_count) {
                 shadow_textures[resource.binding - 4U] = true;
-            } else if (resource.binding >= 8U && resource.binding <= 10U) {
+            } else if (resource.binding >= 8U && resource.binding <= 16U) {
                 environment_textures[resource.binding - 8U] = true;
             } else {
                 return {};
@@ -174,20 +174,30 @@ struct FragmentResourceContract {
     const bool any_environment_texture = std::any_of(
         environment_textures.begin(), environment_textures.end(), [](const bool value) { return value; }
     );
-    const bool all_environment_textures = std::all_of(
-        environment_textures.begin(), environment_textures.end(), [](const bool value) { return value; }
+    const bool primary_environment = std::all_of(
+        environment_textures.begin(), environment_textures.begin() + 3,
+        [](const bool value) { return value; }
     );
-    const bool environment_set = all_environment_textures && environment_sampler;
+    const bool additional_environment = std::all_of(
+        environment_textures.begin() + 3, environment_textures.end(),
+        [](const bool value) { return value; }
+    );
+    const bool no_additional_environment = std::none_of(
+        environment_textures.begin() + 3, environment_textures.end(),
+        [](const bool value) { return value; }
+    );
     const bool no_environment_set = !any_environment_texture && !environment_sampler;
+    const bool legacy_environment_set = primary_environment && no_additional_environment && environment_sampler;
+    const bool probe_environment_set = primary_environment && additional_environment && environment_sampler;
 
     return FragmentResourceContract{
         .valid = material_constants && all_material_textures && material_sampler && shadow_set_valid &&
-            (environment_set || no_environment_set),
+            (no_environment_set || legacy_environment_set || probe_environment_set),
         .directional_shadow_cascade_count = cascaded_shadow_set
             ? static_cast<std::uint32_t>(runtime_shadow_cascade_count)
             : legacy_shadow_set ? 1U : 0U,
         .shadow_texture_binding_base = 4U,
-        .uses_environment = environment_set,
+        .environment_source_count = probe_environment_set ? 3U : legacy_environment_set ? 1U : 0U,
     };
 }
 
@@ -336,7 +346,7 @@ struct RuntimeMaterialLibrary::State {
         std::unique_ptr<render::Sampler> sampler;
         std::uint32_t directional_shadow_cascade_count = 0;
         std::uint32_t shadow_texture_binding_base = 1U;
-        bool uses_environment = false;
+        std::uint32_t environment_source_count = 0U;
     };
 
     CookedRenderMaterialCatalog catalog;
@@ -391,14 +401,14 @@ bool RuntimeMaterialLibrary::initialize(
         const bool extended_pbr = record.asset.version >= render::render_material_asset_format_version_v3;
         std::uint32_t directional_shadow_cascade_count = 0;
         std::uint32_t shadow_texture_binding_base = 1U;
-        bool uses_environment = false;
+        std::uint32_t environment_source_count = 0U;
         bool resources_valid = false;
         if (extended_pbr) {
             const auto fragment_contract = v3_fragment_resource_contract(*fragment.module);
             resources_valid = valid_v2_vertex_resources(*vertex.module) && fragment_contract.valid;
             directional_shadow_cascade_count = fragment_contract.directional_shadow_cascade_count;
             shadow_texture_binding_base = fragment_contract.shadow_texture_binding_base;
-            uses_environment = fragment_contract.uses_environment;
+            environment_source_count = fragment_contract.environment_source_count;
         } else if (textured) {
             const auto fragment_contract = v2_fragment_resource_contract(*fragment.module);
             resources_valid = valid_v2_vertex_resources(*vertex.module) && fragment_contract.valid;
@@ -485,7 +495,7 @@ bool RuntimeMaterialLibrary::initialize(
             .sampler = std::move(sampler),
             .directional_shadow_cascade_count = directional_shadow_cascade_count,
             .shadow_texture_binding_base = shadow_texture_binding_base,
-            .uses_environment = uses_environment,
+            .environment_source_count = environment_source_count,
         });
     }
 
@@ -510,7 +520,7 @@ RuntimeMaterialBinding RuntimeMaterialLibrary::find(
         .constants_size = sizeof(MaterialConstants),
         .directional_shadow_cascade_count = found->second.directional_shadow_cascade_count,
         .shadow_texture_binding_base = found->second.shadow_texture_binding_base,
-        .uses_environment = found->second.uses_environment,
+        .environment_source_count = found->second.environment_source_count,
     };
 }
 

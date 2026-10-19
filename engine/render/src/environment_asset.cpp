@@ -20,9 +20,10 @@ constexpr std::array<std::byte, environment_asset_magic_size> environment_magic{
     std::byte{'V'}, std::byte{'I'}, std::byte{'C'}, std::byte{'E'},
     std::byte{'E'}, std::byte{'N'}, std::byte{'V'}, std::byte{'R'},
 };
-constexpr std::size_t header_size = environment_asset_magic_size + sizeof(std::uint32_t) +
+constexpr std::size_t header_size_v1 = environment_asset_magic_size + sizeof(std::uint32_t) +
     environment_stable_id_size + sizeof(std::uint64_t) * 2U + sizeof(float) * 2U +
     sizeof(std::uint32_t) * 6U;
+constexpr std::size_t header_size_v2 = header_size_v1 + sizeof(std::uint8_t);
 constexpr std::uint32_t max_dimension = 16'384U;
 constexpr std::uint32_t max_mip_levels = 16U;
 constexpr std::uint64_t max_payload_bytes = 1024ULL * 1024ULL * 1024ULL;
@@ -38,10 +39,7 @@ constexpr std::uint64_t fnv_prime = 1'099'511'628'211ULL;
     return hash;
 }
 
-[[nodiscard]] constexpr std::uint32_t mip_extent(
-    std::uint32_t extent,
-    std::uint32_t level
-) noexcept {
+[[nodiscard]] constexpr std::uint32_t mip_extent(std::uint32_t extent, std::uint32_t level) noexcept {
     while (level-- > 0U && extent > 1U) extent /= 2U;
     return extent == 0U ? 1U : extent;
 }
@@ -70,15 +68,11 @@ constexpr std::uint64_t fnv_prime = 1'099'511'628'211ULL;
         asset.brdf_lut_size == 0U || asset.brdf_lut_size > max_dimension) {
         return false;
     }
-
     specular = 0U;
     for (std::uint32_t level = 0U; level < asset.specular_mip_levels; ++level) {
         std::uint64_t level_bytes = 0U;
-        if (!image_bytes(
-                mip_extent(asset.specular_width, level),
-                mip_extent(asset.specular_height, level),
-                level_bytes
-            ) || specular > max_payload_bytes - level_bytes) {
+        if (!image_bytes(mip_extent(asset.specular_width, level), mip_extent(asset.specular_height, level), level_bytes) ||
+            specular > max_payload_bytes - level_bytes) {
             return false;
         }
         specular += level_bytes;
@@ -117,38 +111,32 @@ public:
         value = std::to_integer<std::uint8_t>(bytes_[position_++]);
         return true;
     }
-
     bool read_u32(std::uint32_t& value) noexcept {
         if (remaining() < sizeof(value)) return false;
         value = 0U;
         for (std::size_t index = 0U; index < sizeof(value); ++index) {
-            value |= static_cast<std::uint32_t>(
-                std::to_integer<std::uint8_t>(bytes_[position_ + index])
-            ) << (index * 8U);
+            value |= static_cast<std::uint32_t>(std::to_integer<std::uint8_t>(bytes_[position_ + index])) <<
+                (index * 8U);
         }
         position_ += sizeof(value);
         return true;
     }
-
     bool read_u64(std::uint64_t& value) noexcept {
         if (remaining() < sizeof(value)) return false;
         value = 0U;
         for (std::size_t index = 0U; index < sizeof(value); ++index) {
-            value |= static_cast<std::uint64_t>(
-                std::to_integer<std::uint8_t>(bytes_[position_ + index])
-            ) << (index * 8U);
+            value |= static_cast<std::uint64_t>(std::to_integer<std::uint8_t>(bytes_[position_ + index])) <<
+                (index * 8U);
         }
         position_ += sizeof(value);
         return true;
     }
-
     bool read_f32(float& value) noexcept {
         std::uint32_t bits = 0U;
         if (!read_u32(bits)) return false;
         value = std::bit_cast<float>(bits);
         return true;
     }
-
     [[nodiscard]] std::size_t position() const noexcept { return position_; }
     [[nodiscard]] std::size_t remaining() const noexcept { return bytes_.size() - position_; }
 
@@ -165,7 +153,8 @@ EnvironmentAssetEncodeResult encode_environment_asset(const EnvironmentAsset& as
     std::uint64_t specular_bytes = 0U;
     std::uint64_t brdf_bytes = 0U;
     if (asset.version != environment_asset_format_version || !valid_environment_id(asset.stable_id) ||
-        asset.source_fingerprint == 0U || !std::isfinite(asset.intensity) || asset.intensity < 0.0F ||
+        !valid(asset.scope) || asset.source_fingerprint == 0U ||
+        !std::isfinite(asset.intensity) || asset.intensity < 0.0F ||
         !std::isfinite(asset.rotation_radians) ||
         !expected_sizes(asset, irradiance_bytes, specular_bytes, brdf_bytes) ||
         asset.irradiance_rgba16f.size() != irradiance_bytes ||
@@ -181,7 +170,7 @@ EnvironmentAssetEncodeResult encode_environment_asset(const EnvironmentAsset& as
     payload.insert(payload.end(), asset.specular_rgba16f.begin(), asset.specular_rgba16f.end());
     payload.insert(payload.end(), asset.brdf_lut_rgba16f.begin(), asset.brdf_lut_rgba16f.end());
 
-    result.bytes.reserve(header_size + payload.size());
+    result.bytes.reserve(header_size_v2 + payload.size());
     result.bytes.insert(result.bytes.end(), environment_magic.begin(), environment_magic.end());
     append_u32(result.bytes, asset.version);
     for (const std::uint8_t value : asset.stable_id) append_u8(result.bytes, value);
@@ -195,14 +184,14 @@ EnvironmentAssetEncodeResult encode_environment_asset(const EnvironmentAsset& as
     append_u32(result.bytes, asset.specular_height);
     append_u32(result.bytes, asset.specular_mip_levels);
     append_u32(result.bytes, asset.brdf_lut_size);
+    append_u8(result.bytes, static_cast<std::uint8_t>(asset.scope));
     result.bytes.insert(result.bytes.end(), payload.begin(), payload.end());
     return result;
 }
 
 EnvironmentAssetDecodeResult decode_environment_asset(const std::span<const std::byte> bytes) {
     EnvironmentAssetDecodeResult result;
-    if (bytes.size() < header_size ||
-        !std::equal(environment_magic.begin(), environment_magic.end(), bytes.begin())) {
+    if (bytes.size() < header_size_v1 || !std::equal(environment_magic.begin(), environment_magic.end(), bytes.begin())) {
         result.diagnostics = "Environment asset header is invalid.";
         return result;
     }
@@ -214,14 +203,17 @@ EnvironmentAssetDecodeResult decode_environment_asset(const std::span<const std:
         result.diagnostics = "Environment asset version is incomplete.";
         return result;
     }
+    if (asset.version < environment_asset_min_supported_version || asset.version > environment_asset_format_version) {
+        result.diagnostics = "Environment asset version is not supported.";
+        return result;
+    }
     for (std::uint8_t& value : asset.stable_id) {
         if (!reader.read_u8(value)) {
             result.diagnostics = "Environment asset stable identity is incomplete.";
             return result;
         }
     }
-    if (!reader.read_u64(asset.source_fingerprint) ||
-        !reader.read_u64(stored_payload_fingerprint) ||
+    if (!reader.read_u64(asset.source_fingerprint) || !reader.read_u64(stored_payload_fingerprint) ||
         !reader.read_f32(asset.intensity) || !reader.read_f32(asset.rotation_radians) ||
         !reader.read_u32(asset.irradiance_width) || !reader.read_u32(asset.irradiance_height) ||
         !reader.read_u32(asset.specular_width) || !reader.read_u32(asset.specular_height) ||
@@ -229,13 +221,22 @@ EnvironmentAssetDecodeResult decode_environment_asset(const std::span<const std:
         result.diagnostics = "Environment asset metadata is incomplete.";
         return result;
     }
+    if (asset.version >= environment_asset_format_version_v2) {
+        std::uint8_t scope = 0U;
+        if (!reader.read_u8(scope)) {
+            result.diagnostics = "Environment asset scope is incomplete.";
+            return result;
+        }
+        asset.scope = static_cast<EnvironmentScope>(scope);
+    } else {
+        asset.scope = EnvironmentScope::global;
+    }
 
     std::uint64_t irradiance_bytes = 0U;
     std::uint64_t specular_bytes = 0U;
     std::uint64_t brdf_bytes = 0U;
-    if (asset.version != environment_asset_format_version || !valid_environment_id(asset.stable_id) ||
-        asset.source_fingerprint == 0U || !std::isfinite(asset.intensity) || asset.intensity < 0.0F ||
-        !std::isfinite(asset.rotation_radians) ||
+    if (!valid_environment_id(asset.stable_id) || !valid(asset.scope) || asset.source_fingerprint == 0U ||
+        !std::isfinite(asset.intensity) || asset.intensity < 0.0F || !std::isfinite(asset.rotation_radians) ||
         !expected_sizes(asset, irradiance_bytes, specular_bytes, brdf_bytes)) {
         result.diagnostics = "Environment asset metadata is invalid or unsupported.";
         return result;
@@ -246,7 +247,8 @@ EnvironmentAssetDecodeResult decode_environment_asset(const std::span<const std:
         result.diagnostics = "Environment asset payload size is invalid.";
         return result;
     }
-    const auto payload = bytes.subspan(header_size);
+    const std::size_t payload_offset = environment_asset_magic_size + reader.position();
+    const auto payload = bytes.subspan(payload_offset);
     if (fingerprint(payload) != stored_payload_fingerprint) {
         result.diagnostics = "Environment asset payload fingerprint does not match.";
         return result;

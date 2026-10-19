@@ -20,6 +20,7 @@ struct EnvironmentSource {
     render::EnvironmentStableId stable_id{};
     std::filesystem::path image_source;
     render::TextureColorSpace color_space = render::TextureColorSpace::srgb;
+    render::EnvironmentScope scope = render::EnvironmentScope::global;
     float intensity = 1.0F;
     float rotation_degrees = 0.0F;
     std::uint32_t irradiance_width = 32U;

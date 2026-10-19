@@ -1,5 +1,7 @@
 #include <vice/world/persistent_id.hpp>
 #include <vice/world/relation.hpp>
+#include <vice/world/reflection_probe.hpp>
+#include <vice/world/snapshot_file.hpp>
 #include <vice/world/spatial.hpp>
 #include <vice/world/world.hpp>
 
@@ -333,6 +335,59 @@ void test_authored_transform_state() {
     assert(!world.authored_transform(entity).has_value());
 }
 
+
+void test_reflection_probe_state_and_snapshot() {
+    using namespace vice::world;
+
+    World world;
+    const RegionDesc region{
+        .id = RegionId{9},
+        .simulation_island = SimulationIslandId{9},
+        .origin = GlobalPosition{},
+        .streaming_cell = StreamingCellId{},
+        .fidelity = RegionFidelity::full,
+    };
+    assert(world.register_region(region));
+
+    const ResourceId environment{fixed_id(110)};
+    assert(world.create_resource(environment).has_value());
+    const auto entity = world.create_entity(fixed_id(111));
+    assert(entity.has_value());
+    assert(world.set_spatial_state(*entity, SpatialState{
+        .global_position = {20.0, 3.0, -4.0},
+        .region = region.id,
+    }));
+
+    const ReflectionProbe probe{
+        .half_extents = {8.0F, 4.0F, 6.0F},
+        .blend_distance = 2.0F,
+        .priority = 7,
+        .enabled = true,
+    };
+    assert(world.set_reflection_probe(*entity, probe));
+    assert(world.set_resource_reference(*entity, ResourceReference{
+        .role = ResourceRole::reflection_environment,
+        .resource = environment,
+    }));
+    assert(world.reflection_probe(*entity) == std::optional{probe});
+
+    const auto encoded = encode_world_snapshot(world.snapshot());
+    assert(encoded);
+    const auto decoded = decode_world_snapshot(encoded.bytes);
+    assert(decoded.snapshot.has_value());
+
+    World restored;
+    assert(restored.restore(*decoded.snapshot));
+    const auto restored_entity = restored.find(fixed_id(111));
+    assert(restored_entity.has_value());
+    assert(restored.reflection_probe(*restored_entity) == std::optional{probe});
+    assert(restored.resource_reference(*restored_entity, ResourceRole::reflection_environment) ==
+        std::optional{environment});
+
+    assert(restored.clear_spatial_state(*restored_entity));
+    assert(!restored.reflection_probe(*restored_entity).has_value());
+}
+
 } // namespace
 
 int main() {
@@ -345,5 +400,6 @@ int main() {
     test_region_registration_and_island_handoff();
     test_small_world_uses_same_spatial_api();
     test_authored_transform_state();
+    test_reflection_probe_state_and_snapshot();
     return 0;
 }

@@ -40,10 +40,12 @@ struct ResourceHandle {
 enum class ResourceRole : std::uint8_t {
     render_mesh = 1,
     render_material = 2,
+    reflection_environment = 3,
 };
 
 [[nodiscard]] constexpr bool valid(const ResourceRole role) noexcept {
-    return role == ResourceRole::render_mesh || role == ResourceRole::render_material;
+    return role == ResourceRole::render_mesh || role == ResourceRole::render_material ||
+        role == ResourceRole::reflection_environment;
 }
 
 struct ResourceReference {

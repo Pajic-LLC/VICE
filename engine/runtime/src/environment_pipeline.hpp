@@ -1,6 +1,8 @@
 #pragma once
 
+#include <vice/render/environment_asset.hpp>
 #include <vice/render/rhi.hpp>
+#include <vice/world/resource.hpp>
 
 #include <filesystem>
 #include <memory>
@@ -9,6 +11,8 @@
 namespace vice::runtime::detail {
 
 struct RuntimeEnvironmentBinding {
+    world::ResourceId resource_id{};
+    render::EnvironmentScope scope = render::EnvironmentScope::global;
     render::Texture* irradiance = nullptr;
     render::Texture* specular = nullptr;
     render::Texture* brdf_lut = nullptr;
@@ -36,6 +40,7 @@ public:
     );
 
     [[nodiscard]] RuntimeEnvironmentBinding binding() const noexcept;
+    [[nodiscard]] RuntimeEnvironmentBinding binding(world::ResourceId resource_id) const noexcept;
 
 private:
     struct State;

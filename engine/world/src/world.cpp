@@ -36,6 +36,7 @@ EntityId World::allocate(const PersistentId persistent_id) {
     slot.authored_transform.reset();
     slot.camera.reset();
     slot.light.reset();
+    slot.reflection_probe.reset();
     slot.resource_references.clear();
     slot.alive = true;
 
@@ -57,6 +58,7 @@ bool World::destroy_entity(const EntityId entity) {
     slot.authored_transform.reset();
     slot.camera.reset();
     slot.light.reset();
+    slot.reflection_probe.reset();
     slot.resource_references.clear();
     slot.alive = false;
 
@@ -274,6 +276,7 @@ bool World::clear_spatial_state(const EntityId entity) {
     slots_[entity.index].authored_transform.reset();
     slots_[entity.index].camera.reset();
     slots_[entity.index].light.reset();
+    slots_[entity.index].reflection_probe.reset();
     return true;
 }
 
@@ -390,6 +393,25 @@ bool World::clear_light(const EntityId entity) {
 std::optional<Light> World::light(const EntityId entity) const noexcept {
     if (!alive(entity)) return std::nullopt;
     return slots_[entity.index].light;
+}
+
+bool World::set_reflection_probe(const EntityId entity, const ReflectionProbe probe) {
+    if (!alive(entity) || !slots_[entity.index].spatial_state.has_value() || !valid(probe)) {
+        return false;
+    }
+    slots_[entity.index].reflection_probe = probe;
+    return true;
+}
+
+bool World::clear_reflection_probe(const EntityId entity) {
+    if (!alive(entity) || !slots_[entity.index].reflection_probe.has_value()) return false;
+    slots_[entity.index].reflection_probe.reset();
+    return true;
+}
+
+std::optional<ReflectionProbe> World::reflection_probe(const EntityId entity) const noexcept {
+    if (!alive(entity)) return std::nullopt;
+    return slots_[entity.index].reflection_probe;
 }
 
 std::optional<SpatialState> World::spatial_state(const EntityId entity) const noexcept {

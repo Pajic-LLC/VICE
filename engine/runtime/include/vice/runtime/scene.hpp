@@ -78,12 +78,27 @@ inline constexpr std::size_t runtime_shadow_cascade_count = 4U;
 inline constexpr std::uint32_t runtime_shadow_map_size = 2048U;
 inline constexpr float runtime_shadow_distance = 250.0F;
 inline constexpr float runtime_shadow_split_lambda = 0.65F;
+inline constexpr std::size_t runtime_local_reflection_probe_count = 2U;
 
 struct RuntimeLight {
     world::PersistentId entity{};
     world::Light light{};
     math::Vec3 position{};
     math::Vec3 direction{};
+};
+
+struct RuntimeReflectionProbe {
+    world::PersistentId entity{};
+    world::ReflectionProbe probe{};
+    world::ResourceId environment{};
+    world::GlobalPosition position{};
+    world::AuthoredTransform authored{};
+};
+
+struct RuntimeReflectionBlend {
+    std::array<std::optional<world::ResourceId>, runtime_local_reflection_probe_count> local_environments{};
+    std::array<float, runtime_local_reflection_probe_count> local_weights{};
+    float global_weight = 1.0F;
 };
 
 struct RuntimeShadowCascade {
@@ -99,6 +114,15 @@ struct RuntimeShadowView {
 };
 
 [[nodiscard]] std::vector<RuntimeLight> collect_runtime_lights(const world::World& world);
+
+[[nodiscard]] std::vector<RuntimeReflectionProbe> collect_runtime_reflection_probes(
+    const world::World& world
+);
+
+[[nodiscard]] RuntimeReflectionBlend select_runtime_reflection_probes(
+    world::GlobalPosition point,
+    std::span<const RuntimeReflectionProbe> probes
+) noexcept;
 
 [[nodiscard]] std::optional<std::size_t> select_runtime_shadow_light(
     std::span<const RuntimeLight> lights

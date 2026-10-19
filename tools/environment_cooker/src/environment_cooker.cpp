@@ -143,7 +143,7 @@ Vec3& operator+=(Vec3& left, const Vec3 right) noexcept {
 [[nodiscard]] bool valid_source(const EnvironmentSource& source) noexcept {
     const bool hdr_source = source.image_source.extension() == ".hdr";
     return render::valid_environment_id(source.stable_id) && source.manifest_fingerprint != 0U &&
-        safe_image_path(source.image_source) &&
+        safe_image_path(source.image_source) && render::valid(source.scope) &&
         (!hdr_source || source.color_space == render::TextureColorSpace::linear) &&
         std::isfinite(source.intensity) && source.intensity >= 0.0F &&
         std::isfinite(source.rotation_degrees) && source.irradiance_width > 0U &&
@@ -512,6 +512,7 @@ ParseResult parse_source_manifest(const std::string_view source_text) {
     bool id_seen = false;
     bool image_seen = false;
     bool color_space_seen = false;
+    bool scope_seen = false;
     bool intensity_seen = false;
     bool rotation_seen = false;
     bool irradiance_seen = false;
@@ -590,6 +591,20 @@ ParseResult parse_source_manifest(const std::string_view source_text) {
                 return result;
             }
             color_space_seen = true;
+        } else if (keyword == "scope") {
+            std::string value;
+            if (scope_seen || !(values >> value)) {
+                fail(scope_seen ? "scope is duplicated." : "scope is missing.");
+                return result;
+            }
+            if (value == "global") parsed.scope = render::EnvironmentScope::global;
+            else if (value == "local" || value == "local_probe") {
+                parsed.scope = render::EnvironmentScope::local_probe;
+            } else {
+                fail("scope must be `global` or `local`.");
+                return result;
+            }
+            scope_seen = true;
         } else if (keyword == "intensity") {
             if (intensity_seen || !(values >> parsed.intensity)) {
                 fail(intensity_seen ? "intensity is duplicated." : "intensity is invalid.");
@@ -693,6 +708,7 @@ CookResult cook(
     asset.source_fingerprint = hash_bytes(source.manifest_fingerprint, image_bytes);
     asset.intensity = source.intensity;
     asset.rotation_radians = source.rotation_degrees * pi / 180.0F;
+    asset.scope = source.scope;
     asset.irradiance_width = source.irradiance_width;
     asset.irradiance_height = source.irradiance_height;
     asset.specular_width = source.specular_width;

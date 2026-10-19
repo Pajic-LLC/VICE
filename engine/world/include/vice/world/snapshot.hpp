@@ -1,9 +1,10 @@
 #pragma once
 
 #include <vice/world/camera.hpp>
-#include <vice/world/light.hpp>
 #include <vice/world/component.hpp>
+#include <vice/world/light.hpp>
 #include <vice/world/persistent_id.hpp>
+#include <vice/world/reflection_probe.hpp>
 #include <vice/world/resource.hpp>
 #include <vice/world/spatial.hpp>
 
@@ -18,6 +19,7 @@ struct SnapshotEntity {
     std::optional<AuthoredTransform> authored_transform;
     std::optional<Camera> camera;
     std::optional<Light> light;
+    std::optional<ReflectionProbe> reflection_probe;
     std::vector<ResourceReference> resource_references;
 };
 

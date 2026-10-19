@@ -279,6 +279,15 @@ WorldSnapshotEncodeResult encode_world_snapshot(const WorldSnapshot& snapshot_da
             append_f32(payload, entity.light->range);
             append_u8(payload, entity.light->enabled ? 1U : 0U);
         }
+        append_u8(payload, entity.reflection_probe.has_value() ? 1U : 0U);
+        if (entity.reflection_probe.has_value()) {
+            append_f32(payload, entity.reflection_probe->half_extents.x);
+            append_f32(payload, entity.reflection_probe->half_extents.y);
+            append_f32(payload, entity.reflection_probe->half_extents.z);
+            append_f32(payload, entity.reflection_probe->blend_distance);
+            append_u32(payload, std::bit_cast<std::uint32_t>(entity.reflection_probe->priority));
+            append_u8(payload, entity.reflection_probe->enabled ? 1U : 0U);
+        }
         append_u32(payload, static_cast<std::uint32_t>(entity.resource_references.size()));
         for (const auto reference : entity.resource_references) {
             append_u8(payload, static_cast<std::uint8_t>(reference.role));
@@ -522,6 +531,34 @@ WorldSnapshotDecodeResult decode_world_snapshot(const std::span<const std::byte>
                     return result;
                 }
                 entity.light = light;
+            }
+        }
+
+        if (version >= 6U) {
+            std::uint8_t has_probe = 0U;
+            if (!reader.read_u8(has_probe) || has_probe > 1U) {
+                result.diagnostics = "World snapshot contains invalid reflection probe metadata.";
+                return result;
+            }
+            if (has_probe != 0U) {
+                ReflectionProbe probe;
+                std::uint32_t priority_bits = 0U;
+                std::uint8_t enabled = 0U;
+                if (!reader.read_f32(probe.half_extents.x) ||
+                    !reader.read_f32(probe.half_extents.y) ||
+                    !reader.read_f32(probe.half_extents.z) ||
+                    !reader.read_f32(probe.blend_distance) ||
+                    !reader.read_u32(priority_bits) || !reader.read_u8(enabled)) {
+                    result.diagnostics = "World snapshot ended inside entity reflection probe record.";
+                    return result;
+                }
+                probe.priority = std::bit_cast<std::int32_t>(priority_bits);
+                probe.enabled = enabled != 0U;
+                if (enabled > 1U || !valid(probe)) {
+                    result.diagnostics = "World snapshot contains an invalid reflection probe record.";
+                    return result;
+                }
+                entity.reflection_probe = probe;
             }
         }
 

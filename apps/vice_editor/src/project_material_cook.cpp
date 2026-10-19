@@ -119,7 +119,7 @@ namespace {
     if (!reflection.valid) return false;
     std::array<bool, 4U> shadows{};
     bool shadow_sampler = false;
-    std::array<bool, 3U> environment{};
+    std::array<bool, 9U> environment{};
     bool environment_sampler = false;
     for (const auto& resource : reflection.resources) {
         if (resource.space != 0U || resource.count != 1U || resource.unbounded) return false;
@@ -130,7 +130,7 @@ namespace {
             if (resource.binding >= shadow_texture_base &&
                 resource.binding < shadow_texture_base + static_cast<std::uint32_t>(shadows.size())) {
                 shadows[resource.binding - shadow_texture_base] = true;
-            } else if (allow_environment && resource.binding >= 8U && resource.binding <= 10U) {
+            } else if (allow_environment && resource.binding >= 8U && resource.binding <= 16U) {
                 environment[resource.binding - 8U] = true;
             } else {
                 return false;
@@ -153,11 +153,18 @@ namespace {
     const bool any_environment = std::any_of(
         environment.begin(), environment.end(), [](const bool value) { return value; }
     );
-    const bool all_environment = std::all_of(
-        environment.begin(), environment.end(), [](const bool value) { return value; }
+    const bool primary_environment = std::all_of(
+        environment.begin(), environment.begin() + 3, [](const bool value) { return value; }
+    );
+    const bool all_additional_environment = std::all_of(
+        environment.begin() + 3, environment.end(), [](const bool value) { return value; }
+    );
+    const bool no_additional_environment = std::none_of(
+        environment.begin() + 3, environment.end(), [](const bool value) { return value; }
     );
     const bool environment_valid = (!any_environment && !environment_sampler) ||
-        (all_environment && environment_sampler);
+        (primary_environment && no_additional_environment && environment_sampler) ||
+        (primary_environment && all_additional_environment && environment_sampler);
     return shadow_valid && environment_valid;
 }
 
