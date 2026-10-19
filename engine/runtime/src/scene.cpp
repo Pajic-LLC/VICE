@@ -142,26 +142,17 @@ constexpr render::ShaderBindingKey shadow_sampler_binding{
     .array_element = 0,
 };
 
-constexpr render::ShaderBindingKey environment_irradiance_binding{
-    .register_class = render::ShaderRegisterClass::shader_resource,
-    .binding = 8,
-    .space = 0,
-    .array_element = 0,
-};
-
-constexpr render::ShaderBindingKey environment_specular_binding{
-    .register_class = render::ShaderRegisterClass::shader_resource,
-    .binding = 9,
-    .space = 0,
-    .array_element = 0,
-};
-
-constexpr render::ShaderBindingKey environment_brdf_binding{
-    .register_class = render::ShaderRegisterClass::shader_resource,
-    .binding = 10,
-    .space = 0,
-    .array_element = 0,
-};
+[[nodiscard]] constexpr render::ShaderBindingKey environment_texture_binding(
+    const std::size_t source_index,
+    const std::uint32_t component
+) noexcept {
+    return render::ShaderBindingKey{
+        .register_class = render::ShaderRegisterClass::shader_resource,
+        .binding = 8U + static_cast<std::uint32_t>(source_index) * 3U + component,
+        .space = 0,
+        .array_element = 0,
+    };
+}
 
 constexpr render::ShaderBindingKey environment_sampler_binding{
     .register_class = render::ShaderRegisterClass::sampler,
@@ -249,6 +240,8 @@ struct SceneConstants {
     float shadow_cascade_splits[4]{};
     float shadow_camera_forward[4]{};
     float environment_metadata[4]{};
+    float environment_secondary_metadata[4]{};
+    float environment_tertiary_metadata[4]{};
 };
 
 struct ShadowConstants {
@@ -275,7 +268,7 @@ struct TaaConstants {
 static_assert(sizeof(ToneMapConstants) == 16U);
 static_assert(sizeof(BloomConstants) == 32U);
 static_assert(sizeof(SceneLightConstants) == 48U);
-static_assert(sizeof(SceneConstants) == 864U);
+static_assert(sizeof(SceneConstants) == 896U);
 static_assert(sizeof(ShadowConstants) == 128U);
 static_assert(sizeof(MotionConstants) == 256U);
 static_assert(sizeof(TaaConstants) == 32U);
@@ -960,6 +953,108 @@ std::vector<RuntimeLight> collect_runtime_lights(const world::World& world) {
         lights.push_back(light);
     }
     return lights;
+}
+
+
+std::vector<RuntimeReflectionProbe> collect_runtime_reflection_probes(const world::World& world) {
+    std::vector<RuntimeReflectionProbe> probes;
+    const auto snapshot = world.snapshot();
+    for (const auto& entity : snapshot.entities) {
+        if (!entity.spatial_state.has_value() || !entity.reflection_probe.has_value() ||
+            !entity.reflection_probe->enabled) continue;
+        std::optional<world::ResourceId> environment;
+        for (const auto& reference : entity.resource_references) {
+            if (reference.role == world::ResourceRole::reflection_environment && reference.resource.valid()) {
+                environment = reference.resource;
+                break;
+            }
+        }
+        if (!environment.has_value()) continue;
+        probes.push_back(RuntimeReflectionProbe{
+            .entity = entity.persistent_id,
+            .probe = *entity.reflection_probe,
+            .environment = *environment,
+            .position = entity.spatial_state->global_position,
+            .authored = entity.authored_transform.value_or(world::AuthoredTransform{}),
+        });
+    }
+    return probes;
+}
+
+RuntimeReflectionBlend select_runtime_reflection_probes(
+    const world::GlobalPosition point,
+    const std::span<const RuntimeReflectionProbe> probes
+) noexcept {
+    struct Candidate {
+        world::ResourceId environment{};
+        world::PersistentId entity{};
+        float weight = 0.0F;
+        std::int32_t priority = 0;
+    };
+    std::vector<Candidate> candidates;
+    for (const auto& probe : probes) {
+        if (!probe.probe.enabled || !world::valid(probe.probe) || !probe.environment.valid()) continue;
+        const math::Vec3 offset{
+            static_cast<float>(point.x - probe.position.x),
+            static_cast<float>(point.y - probe.position.y),
+            static_cast<float>(point.z - probe.position.z),
+        };
+        const world::AuthoredRotation inverse{
+            -probe.authored.rotation.x,
+            -probe.authored.rotation.y,
+            -probe.authored.rotation.z,
+            probe.authored.rotation.w,
+        };
+        const math::Vec3 local = rotate_vector(inverse, offset);
+        const math::Vec3 extent{
+            probe.probe.half_extents.x * probe.authored.scale.x,
+            probe.probe.half_extents.y * probe.authored.scale.y,
+            probe.probe.half_extents.z * probe.authored.scale.z,
+        };
+        if (std::abs(local.x) > extent.x || std::abs(local.y) > extent.y || std::abs(local.z) > extent.z) {
+            continue;
+        }
+        const float edge = std::min({
+            extent.x - std::abs(local.x),
+            extent.y - std::abs(local.y),
+            extent.z - std::abs(local.z),
+        });
+        const float weight = probe.probe.blend_distance <= 0.0F
+            ? 1.0F
+            : std::clamp(edge / probe.probe.blend_distance, 0.0F, 1.0F);
+        if (weight <= 0.0F) continue;
+        candidates.push_back(Candidate{probe.environment, probe.entity, weight, probe.probe.priority});
+    }
+
+    RuntimeReflectionBlend result;
+    if (candidates.empty()) return result;
+    const auto best_priority = std::max_element(candidates.begin(), candidates.end(),
+        [](const Candidate& left, const Candidate& right) { return left.priority < right.priority; })->priority;
+    std::erase_if(candidates, [best_priority](const Candidate& candidate) {
+        return candidate.priority != best_priority;
+    });
+    std::sort(candidates.begin(), candidates.end(), [](const Candidate& left, const Candidate& right) {
+        if (left.weight != right.weight) return left.weight > right.weight;
+        return std::lexicographical_compare(
+            left.entity.bytes().begin(), left.entity.bytes().end(),
+            right.entity.bytes().begin(), right.entity.bytes().end()
+        );
+    });
+
+    float local_sum = 0.0F;
+    for (std::size_t index = 0U; index < result.local_environments.size() && index < candidates.size(); ++index) {
+        result.local_environments[index] = candidates[index].environment;
+        result.local_weights[index] = candidates[index].weight;
+        local_sum += candidates[index].weight;
+    }
+    if (local_sum > 1.0F) {
+        const float inverse = 1.0F / local_sum;
+        for (float& weight : result.local_weights) weight *= inverse;
+        result.global_weight = 0.0F;
+    } else {
+        result.global_weight = 1.0F - local_sum;
+    }
+    return result;
 }
 
 std::optional<std::size_t> select_runtime_shadow_light(
@@ -2002,7 +2097,17 @@ bool RuntimeSceneRenderer::render(
             .direction = {-0.431934F, -0.863868F, -0.259161F},
         });
     }
-    const auto environment = state_->environment.binding();
+    const auto global_environment = state_->environment.binding();
+    const auto reflection_probes = collect_runtime_reflection_probes(world);
+    for (const auto& probe : reflection_probes) {
+        const auto binding = state_->environment.binding(probe.environment);
+        if (!binding.available || binding.scope != render::EnvironmentScope::local_probe) {
+            set_diagnostics(diagnostics,
+                "Runtime reflection probe references a missing or non-local environment `" +
+                probe.environment.value.to_string() + "`.");
+            return false;
+        }
+    }
 
     auto commands = state_->device->create_command_list();
     if (!commands) {
@@ -2104,6 +2209,62 @@ bool RuntimeSceneRenderer::render(
             constants_iterator = state_->constants.emplace(instance.entity, std::move(constants)).first;
         }
 
+        render::GraphicsPipeline* pipeline = state_->pipeline.get();
+        detail::RuntimeMaterialBinding material_state{};
+        if (instance.material.has_value()) {
+            material_state = state_->materials.find(*instance.material);
+            pipeline = material_state.pipeline;
+        }
+
+        std::array<detail::RuntimeEnvironmentBinding, 3U> environment_sources{};
+        std::array<float, 3U> environment_weights{};
+        if (material_state.environment_source_count > 0U) {
+            struct WeightedEnvironment {
+                detail::RuntimeEnvironmentBinding binding{};
+                float weight = 0.0F;
+            };
+            std::vector<WeightedEnvironment> weighted;
+            const auto blend = select_runtime_reflection_probes(
+                instance.spatial.global_position,
+                reflection_probes
+            );
+            for (std::size_t probe_index = 0U; probe_index < blend.local_environments.size(); ++probe_index) {
+                if (!blend.local_environments[probe_index].has_value() || blend.local_weights[probe_index] <= 0.0F) continue;
+                const auto local = state_->environment.binding(*blend.local_environments[probe_index]);
+                if (local.available) weighted.push_back({local, blend.local_weights[probe_index]});
+            }
+            if (global_environment.available && blend.global_weight > 0.0F) {
+                weighted.push_back({global_environment, blend.global_weight});
+            }
+            if (weighted.empty()) {
+                set_diagnostics(diagnostics,
+                    "Environment-aware material has no global or local environment for mesh `" +
+                    instance.mesh.value.to_string() + "`.");
+                return false;
+            }
+            float total_weight = 0.0F;
+            for (const auto& source : weighted) total_weight += source.weight;
+            if (total_weight <= 0.0F) total_weight = 1.0F;
+            for (auto& source : weighted) source.weight /= total_weight;
+            std::sort(weighted.begin(), weighted.end(), [](const auto& left, const auto& right) {
+                return left.weight > right.weight;
+            });
+            if (material_state.environment_source_count == 1U) {
+                environment_sources[0] = weighted.front().binding;
+                environment_weights[0] = 1.0F;
+            } else {
+                const std::size_t count = std::min<std::size_t>(3U, weighted.size());
+                for (std::size_t source_index = 0U; source_index < count; ++source_index) {
+                    environment_sources[source_index] = weighted[source_index].binding;
+                    environment_weights[source_index] = weighted[source_index].weight;
+                }
+                for (std::size_t source_index = count; source_index < 3U; ++source_index) {
+                    environment_sources[source_index] = environment_sources[0];
+                    environment_weights[source_index] = 0.0F;
+                }
+            }
+        }
+
         SceneConstants constants{
             .view_projection = view_projection,
             .model = runtime_model_matrix(instance),
@@ -2148,23 +2309,22 @@ bool RuntimeSceneRenderer::render(
             constants.shadow_metadata[2] = 1.0F / static_cast<float>(runtime_shadow_map_size);
             constants.shadow_metadata[3] = 0.0015F;
         }
-        if (environment.available) {
-            constants.environment_metadata[0] = environment.intensity;
-            constants.environment_metadata[1] = environment.rotation_radians;
-            constants.environment_metadata[2] = environment.max_specular_lod;
-            constants.environment_metadata[3] = 1.0F;
-        }
+        const auto write_environment_metadata = [](float (&metadata)[4],
+            const detail::RuntimeEnvironmentBinding& environment, const float weight) {
+            if (!environment.available) return;
+            metadata[0] = environment.intensity;
+            metadata[1] = environment.rotation_radians;
+            metadata[2] = environment.max_specular_lod;
+            metadata[3] = weight;
+        };
+        write_environment_metadata(constants.environment_metadata, environment_sources[0], environment_weights[0]);
+        write_environment_metadata(constants.environment_secondary_metadata, environment_sources[1], environment_weights[1]);
+        write_environment_metadata(constants.environment_tertiary_metadata, environment_sources[2], environment_weights[2]);
         if (!constants_iterator->second->write(0, std::as_bytes(std::span{&constants, 1}))) {
             set_diagnostics(diagnostics, "VICE Runtime could not update scene constants.");
             return false;
         }
 
-        render::GraphicsPipeline* pipeline = state_->pipeline.get();
-        detail::RuntimeMaterialBinding material_state{};
-        if (instance.material.has_value()) {
-            material_state = state_->materials.find(*instance.material);
-            pipeline = material_state.pipeline;
-        }
         if (pipeline == nullptr || !commands->set_graphics_pipeline(*pipeline)) {
             set_diagnostics(diagnostics, "VICE Runtime could not bind a scene material pipeline.");
             return false;
@@ -2250,19 +2410,24 @@ bool RuntimeSceneRenderer::render(
                 return false;
             }
         }
-        if (material_state.uses_environment) {
-            if (!environment.available || environment.irradiance == nullptr ||
-                environment.specular == nullptr || environment.brdf_lut == nullptr ||
-                environment.sampler == nullptr ||
-                !commands->set_graphics_texture(environment_irradiance_binding, *environment.irradiance) ||
-                !commands->set_graphics_texture(environment_specular_binding, *environment.specular) ||
-                !commands->set_graphics_texture(environment_brdf_binding, *environment.brdf_lut) ||
-                !commands->set_graphics_sampler(environment_sampler_binding, *environment.sampler)) {
-                set_diagnostics(
-                    diagnostics,
-                    "VICE Runtime could not bind the global IBL environment for mesh `" +
-                        instance.mesh.value.to_string() + "`."
-                );
+        if (material_state.environment_source_count > 0U) {
+            bool environment_bound = true;
+            for (std::size_t source_index = 0U;
+                 source_index < material_state.environment_source_count && environment_bound;
+                 ++source_index) {
+                const auto& environment = environment_sources[source_index];
+                environment_bound = environment.available && environment.irradiance != nullptr &&
+                    environment.specular != nullptr && environment.brdf_lut != nullptr &&
+                    commands->set_graphics_texture(environment_texture_binding(source_index, 0U), *environment.irradiance) &&
+                    commands->set_graphics_texture(environment_texture_binding(source_index, 1U), *environment.specular) &&
+                    commands->set_graphics_texture(environment_texture_binding(source_index, 2U), *environment.brdf_lut);
+            }
+            environment_bound = environment_bound && environment_sources[0].sampler != nullptr &&
+                commands->set_graphics_sampler(environment_sampler_binding, *environment_sources[0].sampler);
+            if (!environment_bound) {
+                set_diagnostics(diagnostics,
+                    "VICE Runtime could not bind reflection environments for mesh `" +
+                    instance.mesh.value.to_string() + "`.");
                 return false;
             }
         }

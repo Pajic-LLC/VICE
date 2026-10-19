@@ -209,6 +209,7 @@ WorldSnapshot World::snapshot() const {
             .authored_transform = slot.authored_transform,
             .camera = slot.camera,
             .light = slot.light,
+            .reflection_probe = slot.reflection_probe,
             .resource_references = slot.resource_references,
         };
         std::sort(
@@ -301,6 +302,10 @@ bool World::restore(const WorldSnapshot& snapshot_data) {
         }
         if (entity_record.light.has_value() &&
             !restored.set_light(*entity, *entity_record.light)) {
+            return false;
+        }
+        if (entity_record.reflection_probe.has_value() &&
+            !restored.set_reflection_probe(*entity, *entity_record.reflection_probe)) {
             return false;
         }
         for (const auto reference : entity_record.resource_references) {

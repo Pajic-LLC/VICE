@@ -82,16 +82,13 @@ ProjectEnvironmentCookResult cook_project_environments(const ProjectSession& ses
         return result;
     }
 
+    std::size_t global_environment_count = 0U;
     for (; iterator != end; iterator.increment(error)) {
         if (error) {
             result.diagnostics = "Could not enumerate project environments: " + error.message();
             return result;
         }
         if (!iterator->is_regular_file() || iterator->path().extension() != ".venv") continue;
-        if (!result.environments.empty()) {
-            result.diagnostics = "VICE currently supports one global environment source per project.";
-            return result;
-        }
 
         const auto source_path = iterator->path();
         const std::string source_text = read_text(source_path);
@@ -103,6 +100,12 @@ ProjectEnvironmentCookResult cook_project_environments(const ProjectSession& ses
         if (!parsed.source.has_value()) {
             result.diagnostics = "Could not parse project environment `" + path_text(source_path) + "`: " +
                 parsed.diagnostics;
+            return result;
+        }
+
+        if (parsed.source->scope == render::EnvironmentScope::global &&
+            ++global_environment_count > 1U) {
+            result.diagnostics = "VICE supports at most one global environment source per project.";
             return result;
         }
 

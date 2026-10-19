@@ -14,6 +14,7 @@ int main() {
         "id 72000000-0000-4000-8000-000000000001\n"
         "image \"textures/environment.ppm\"\n"
         "color_space srgb\n"
+        "scope local\n"
         "intensity 1.5\n"
         "rotation_degrees 25\n"
         "irradiance_size 4 2\n"
@@ -44,9 +45,23 @@ int main() {
     assert(decoded.asset->specular_height == 4U);
     assert(decoded.asset->specular_mip_levels == 4U);
     assert(decoded.asset->brdf_lut_size == 8U);
+    assert(decoded.asset->scope == render::EnvironmentScope::local_probe);
     assert(decoded.asset->irradiance_rgba16f.size() == 4U * 2U * 8U);
     assert(decoded.asset->specular_rgba16f.size() == (8U * 4U + 4U * 2U + 2U * 1U + 1U) * 8U);
     assert(decoded.asset->brdf_lut_rgba16f.size() == 8U * 8U * 8U);
+
+    auto legacy = cooked.bytes;
+    constexpr std::size_t v2_scope_offset = 76U;
+    assert(legacy.size() > v2_scope_offset);
+    legacy[8] = std::byte{1U};
+    legacy[9] = std::byte{0U};
+    legacy[10] = std::byte{0U};
+    legacy[11] = std::byte{0U};
+    legacy.erase(legacy.begin() + static_cast<std::ptrdiff_t>(v2_scope_offset));
+    const auto legacy_decoded = render::decode_environment_asset(legacy);
+    assert(legacy_decoded.asset.has_value());
+    assert(legacy_decoded.asset->version == render::environment_asset_format_version_v1);
+    assert(legacy_decoded.asset->scope == render::EnvironmentScope::global);
 
     const auto cooked_again = tools::environment_cooker::cook(*parsed.source, image_bytes);
     assert(cooked_again.success);

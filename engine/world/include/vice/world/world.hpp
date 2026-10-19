@@ -5,6 +5,7 @@
 #include <vice/world/entity.hpp>
 #include <vice/world/light.hpp>
 #include <vice/world/persistent_id.hpp>
+#include <vice/world/reflection_probe.hpp>
 #include <vice/world/relation.hpp>
 #include <vice/world/resource.hpp>
 #include <vice/world/snapshot.hpp>
@@ -77,6 +78,10 @@ public:
     bool clear_light(EntityId entity);
     [[nodiscard]] std::optional<Light> light(EntityId entity) const noexcept;
 
+    bool set_reflection_probe(EntityId entity, ReflectionProbe probe);
+    bool clear_reflection_probe(EntityId entity);
+    [[nodiscard]] std::optional<ReflectionProbe> reflection_probe(EntityId entity) const noexcept;
+
     [[nodiscard]] std::optional<SpatialState> spatial_state(EntityId entity) const noexcept;
     [[nodiscard]] std::optional<AuthoredTransform> authored_transform(EntityId entity) const noexcept;
     [[nodiscard]] std::optional<LocalPosition> local_position(EntityId entity) const noexcept;
@@ -93,6 +98,7 @@ private:
         std::optional<AuthoredTransform> authored_transform;
         std::optional<Camera> camera;
         std::optional<Light> light;
+        std::optional<ReflectionProbe> reflection_probe;
         std::vector<ResourceReference> resource_references;
         std::uint32_t generation = 1;
         bool alive = false;
