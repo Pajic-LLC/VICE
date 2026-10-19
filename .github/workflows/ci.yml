@@ -134,3 +134,36 @@ jobs:
           Assert-Resource "LinearSampler" "sampler" 3 1
           Assert-Resource "InputTexture" "shader_resource" 4 2
           Assert-Resource "OutputBuffer" "unordered_access" 7 3
+
+          foreach ($probeStage in @(
+            @{ Entry = "vice_probe_surface_vs"; Stage = "vertex"; Name = "vertex" },
+            @{ Entry = "vice_probe_surface_fs"; Stage = "fragment"; Name = "fragment" }
+          )) {
+            $output = "build/cooked/vice_probe_surface_$($probeStage.Name)"
+            & $cooker `
+              --input "assets/shaders/vice_probe_surface_v3.hlsl" `
+              --output $output `
+              --entry $probeStage.Entry `
+              --stage $probeStage.Stage `
+              --target d3d12 `
+              --dxc $dxc.FullName
+            if ($LASTEXITCODE -ne 0) {
+              exit $LASTEXITCODE
+            }
+          }
+
+          $probeFragment = Get-Content "build/cooked/vice_probe_surface_fragment/shader.vice.json" -Raw | ConvertFrom-Json
+          foreach ($binding in 8..16) {
+            $resource = $probeFragment.reflection.resources | Where-Object {
+              $_.class -eq "shader_resource" -and $_.binding -eq $binding -and $_.space -eq 0
+            }
+            if (-not $resource) {
+              throw "Probe-aware V3 shader is missing environment texture binding t$binding."
+            }
+          }
+          $environmentSampler = $probeFragment.reflection.resources | Where-Object {
+            $_.class -eq "sampler" -and $_.binding -eq 2 -and $_.space -eq 0
+          }
+          if (-not $environmentSampler) {
+            throw "Probe-aware V3 shader is missing environment sampler s2."
+          }

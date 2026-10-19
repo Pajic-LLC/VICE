@@ -97,6 +97,7 @@ struct RuntimeReflectionProbe {
 
 struct RuntimeReflectionBlend {
     std::array<std::optional<world::ResourceId>, runtime_local_reflection_probe_count> local_environments{};
+    std::array<std::optional<std::size_t>, runtime_local_reflection_probe_count> local_probe_indices{};
     std::array<float, runtime_local_reflection_probe_count> local_weights{};
     float global_weight = 1.0F;
 };
@@ -122,6 +123,12 @@ struct RuntimeShadowView {
 [[nodiscard]] RuntimeReflectionBlend select_runtime_reflection_probes(
     world::GlobalPosition point,
     std::span<const RuntimeReflectionProbe> probes
+) noexcept;
+
+[[nodiscard]] math::Vec3 parallax_correct_reflection_direction(
+    world::GlobalPosition point,
+    math::Vec3 world_direction,
+    const RuntimeReflectionProbe& probe
 ) noexcept;
 
 [[nodiscard]] std::optional<std::size_t> select_runtime_shadow_light(
