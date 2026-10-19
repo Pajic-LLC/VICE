@@ -46,6 +46,12 @@ target_compile_features(vice_offscreen_color_render_pass_tests PRIVATE cxx_std_2
 vice_enable_warnings(vice_offscreen_color_render_pass_tests)
 add_test(NAME vice_offscreen_color_render_pass_tests COMMAND vice_offscreen_color_render_pass_tests)
 
+add_executable(vice_texture_mip_upload_tests texture_mip_upload_tests.cpp)
+target_link_libraries(vice_texture_mip_upload_tests PRIVATE VICE::Render)
+target_compile_features(vice_texture_mip_upload_tests PRIVATE cxx_std_23)
+vice_enable_warnings(vice_texture_mip_upload_tests)
+add_test(NAME vice_texture_mip_upload_tests COMMAND vice_texture_mip_upload_tests)
+
 add_executable(vice_hdr_tone_map_tests hdr_tone_map_tests.cpp)
 target_link_libraries(vice_hdr_tone_map_tests PRIVATE VICE::Render)
 target_compile_features(vice_hdr_tone_map_tests PRIVATE cxx_std_23)
@@ -216,6 +222,12 @@ if(VICE_ENABLE_JOLT_RIGID_BODY)
 endif()
 
 if(VICE_BUILD_TOOLS)
+  add_executable(vice_environment_asset_tests environment_asset_tests.cpp)
+  target_link_libraries(vice_environment_asset_tests PRIVATE VICE::EnvironmentCooker VICE::Render)
+  target_compile_features(vice_environment_asset_tests PRIVATE cxx_std_23)
+  vice_enable_warnings(vice_environment_asset_tests)
+  add_test(NAME vice_environment_asset_tests COMMAND vice_environment_asset_tests)
+
   add_executable(vice_shader_cooker_tests shader_cooker_tests.cpp)
   target_link_libraries(vice_shader_cooker_tests PRIVATE VICE::ShaderCooker)
   target_compile_features(vice_shader_cooker_tests PRIVATE cxx_std_23)

@@ -353,31 +353,36 @@ public:
     [[nodiscard]] std::uint32_t width() const noexcept override { return desc_.width; }
     [[nodiscard]] std::uint32_t height() const noexcept override { return desc_.height; }
     [[nodiscard]] std::uint32_t depth() const noexcept override { return desc_.depth; }
+    [[nodiscard]] std::uint32_t mip_levels() const noexcept override { return desc_.mip_levels; }
 
     bool write_2d(
         const std::span<const std::byte> data,
-        const std::uint64_t bytes_per_row
+        const std::uint64_t bytes_per_row,
+        const std::uint32_t mip_level
     ) override {
         if (device_ == nil || command_queue_ == nil || texture_ == nil ||
             desc_.dimension != TextureDimension::d2 || desc_.depth != 1U ||
-            desc_.array_layers != 1U || desc_.mip_levels != 1U || desc_.sample_count != 1U ||
+            desc_.array_layers != 1U || desc_.sample_count != 1U ||
+            mip_level >= desc_.mip_levels ||
             !has_usage(desc_.usage, TextureUsage::copy_destination) ||
             desc_.format == TextureFormat::depth32_float) {
             return false;
         }
 
+        const std::uint32_t mip_width = std::max(1U, desc_.width >> mip_level);
+        const std::uint32_t mip_height = std::max(1U, desc_.height >> mip_level);
         const std::uint64_t bytes_per_pixel = texture_format_bytes_per_pixel(desc_.format);
         if (bytes_per_pixel == 0U ||
-            desc_.width > std::numeric_limits<std::uint64_t>::max() / bytes_per_pixel) {
+            mip_width > std::numeric_limits<std::uint64_t>::max() / bytes_per_pixel) {
             return false;
         }
-        const std::uint64_t minimum_row = static_cast<std::uint64_t>(desc_.width) * bytes_per_pixel;
+        const std::uint64_t minimum_row = static_cast<std::uint64_t>(mip_width) * bytes_per_pixel;
         if (bytes_per_row < minimum_row ||
-            desc_.height > 0U && bytes_per_row >
-                std::numeric_limits<std::uint64_t>::max() / desc_.height) {
+            mip_height > 0U && bytes_per_row >
+                std::numeric_limits<std::uint64_t>::max() / mip_height) {
             return false;
         }
-        const std::uint64_t required_source = bytes_per_row * desc_.height;
+        const std::uint64_t required_source = bytes_per_row * mip_height;
         if (required_source > data.size()) {
             return false;
         }
@@ -388,11 +393,11 @@ public:
         }
         const std::uint64_t staging_row =
             (minimum_row + row_alignment - 1U) / row_alignment * row_alignment;
-        if (desc_.height > 0U && staging_row >
-            std::numeric_limits<std::uint64_t>::max() / desc_.height) {
+        if (mip_height > 0U && staging_row >
+            std::numeric_limits<std::uint64_t>::max() / mip_height) {
             return false;
         }
-        const std::uint64_t staging_size = staging_row * desc_.height;
+        const std::uint64_t staging_size = staging_row * mip_height;
         if (staging_size == 0U || staging_size > std::numeric_limits<NSUInteger>::max()) {
             return false;
         }
@@ -403,7 +408,7 @@ public:
             return false;
         }
         auto* destination = static_cast<std::byte*>([staging contents]);
-        for (std::uint32_t row = 0U; row < desc_.height; ++row) {
+        for (std::uint32_t row = 0U; row < mip_height; ++row) {
             std::memcpy(
                 destination + static_cast<std::size_t>(row) * static_cast<std::size_t>(staging_row),
                 data.data() + static_cast<std::size_t>(row) * static_cast<std::size_t>(bytes_per_row),
@@ -420,10 +425,10 @@ public:
                 sourceOffset:0U
            sourceBytesPerRow:static_cast<NSUInteger>(staging_row)
          sourceBytesPerImage:static_cast<NSUInteger>(staging_size)
-                  sourceSize:MTLSizeMake(desc_.width, desc_.height, 1U)
+                  sourceSize:MTLSizeMake(mip_width, mip_height, 1U)
                    toTexture:texture_
             destinationSlice:0U
-            destinationLevel:0U
+            destinationLevel:static_cast<NSUInteger>(mip_level)
            destinationOrigin:MTLOriginMake(0U, 0U, 0U)];
         [blit endEncoding];
         [command_buffer commit];

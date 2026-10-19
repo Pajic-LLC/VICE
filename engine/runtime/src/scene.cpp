@@ -3,6 +3,7 @@
 #include <vice/runtime/post_process.hpp>
 
 #include "bloom_shaders.hpp"
+#include "environment_pipeline.hpp"
 #include "material_pipeline.hpp"
 #include "taa_shaders.hpp"
 
@@ -141,6 +142,34 @@ constexpr render::ShaderBindingKey shadow_sampler_binding{
     .array_element = 0,
 };
 
+constexpr render::ShaderBindingKey environment_irradiance_binding{
+    .register_class = render::ShaderRegisterClass::shader_resource,
+    .binding = 8,
+    .space = 0,
+    .array_element = 0,
+};
+
+constexpr render::ShaderBindingKey environment_specular_binding{
+    .register_class = render::ShaderRegisterClass::shader_resource,
+    .binding = 9,
+    .space = 0,
+    .array_element = 0,
+};
+
+constexpr render::ShaderBindingKey environment_brdf_binding{
+    .register_class = render::ShaderRegisterClass::shader_resource,
+    .binding = 10,
+    .space = 0,
+    .array_element = 0,
+};
+
+constexpr render::ShaderBindingKey environment_sampler_binding{
+    .register_class = render::ShaderRegisterClass::sampler,
+    .binding = 2,
+    .space = 0,
+    .array_element = 0,
+};
+
 constexpr render::ShaderBindingKey tone_map_constants_binding{
     .register_class = render::ShaderRegisterClass::constant_buffer,
     .binding = 0,
@@ -219,6 +248,7 @@ struct SceneConstants {
     std::array<math::Mat4, runtime_shadow_cascade_count - 1U> shadow_cascade_view_projections{};
     float shadow_cascade_splits[4]{};
     float shadow_camera_forward[4]{};
+    float environment_metadata[4]{};
 };
 
 struct ShadowConstants {
@@ -245,7 +275,7 @@ struct TaaConstants {
 static_assert(sizeof(ToneMapConstants) == 16U);
 static_assert(sizeof(BloomConstants) == 32U);
 static_assert(sizeof(SceneLightConstants) == 48U);
-static_assert(sizeof(SceneConstants) == 848U);
+static_assert(sizeof(SceneConstants) == 864U);
 static_assert(sizeof(ShadowConstants) == 128U);
 static_assert(sizeof(MotionConstants) == 256U);
 static_assert(sizeof(TaaConstants) == 32U);
@@ -1175,6 +1205,7 @@ struct RuntimeSceneRenderer::State {
     render::Device* device = nullptr;
     CookedMeshCatalog catalog;
     detail::RuntimeMaterialLibrary materials;
+    detail::RuntimeEnvironment environment;
     std::unique_ptr<render::ShaderModule> vertex_shader;
     std::unique_ptr<render::ShaderModule> fragment_shader;
     std::unique_ptr<render::GraphicsPipeline> pipeline;
@@ -1262,6 +1293,9 @@ bool RuntimeSceneRenderer::initialize(
             content_root,
             diagnostics
         )) {
+        return false;
+    }
+    if (!state_->environment.initialize(device, content_root, diagnostics)) {
         return false;
     }
 
@@ -1968,6 +2002,7 @@ bool RuntimeSceneRenderer::render(
             .direction = {-0.431934F, -0.863868F, -0.259161F},
         });
     }
+    const auto environment = state_->environment.binding();
 
     auto commands = state_->device->create_command_list();
     if (!commands) {
@@ -2113,6 +2148,12 @@ bool RuntimeSceneRenderer::render(
             constants.shadow_metadata[2] = 1.0F / static_cast<float>(runtime_shadow_map_size);
             constants.shadow_metadata[3] = 0.0015F;
         }
+        if (environment.available) {
+            constants.environment_metadata[0] = environment.intensity;
+            constants.environment_metadata[1] = environment.rotation_radians;
+            constants.environment_metadata[2] = environment.max_specular_lod;
+            constants.environment_metadata[3] = 1.0F;
+        }
         if (!constants_iterator->second->write(0, std::as_bytes(std::span{&constants, 1}))) {
             set_diagnostics(diagnostics, "VICE Runtime could not update scene constants.");
             return false;
@@ -2204,6 +2245,22 @@ bool RuntimeSceneRenderer::render(
                 set_diagnostics(
                     diagnostics,
                     "VICE Runtime could not bind directional shadow cascades for mesh `" +
+                        instance.mesh.value.to_string() + "`."
+                );
+                return false;
+            }
+        }
+        if (material_state.uses_environment) {
+            if (!environment.available || environment.irradiance == nullptr ||
+                environment.specular == nullptr || environment.brdf_lut == nullptr ||
+                environment.sampler == nullptr ||
+                !commands->set_graphics_texture(environment_irradiance_binding, *environment.irradiance) ||
+                !commands->set_graphics_texture(environment_specular_binding, *environment.specular) ||
+                !commands->set_graphics_texture(environment_brdf_binding, *environment.brdf_lut) ||
+                !commands->set_graphics_sampler(environment_sampler_binding, *environment.sampler)) {
+                set_diagnostics(
+                    diagnostics,
+                    "VICE Runtime could not bind the global IBL environment for mesh `" +
                         instance.mesh.value.to_string() + "`."
                 );
                 return false;

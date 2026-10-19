@@ -52,6 +52,7 @@ struct FragmentResourceContract {
     bool valid = false;
     std::uint32_t directional_shadow_cascade_count = 0;
     std::uint32_t shadow_texture_binding_base = 1U;
+    bool uses_environment = false;
 };
 
 [[nodiscard]] FragmentResourceContract v2_fragment_resource_contract(
@@ -122,6 +123,8 @@ struct FragmentResourceContract {
     bool material_sampler = false;
     std::array<bool, runtime_shadow_cascade_count> shadow_textures{};
     bool shadow_sampler = false;
+    std::array<bool, 3U> environment_textures{};
+    bool environment_sampler = false;
     for (const auto& resource : module.resources()) {
         if (resource.space != 0U || resource.count != 1U || resource.unbounded) return {};
         switch (resource.register_class) {
@@ -134,6 +137,8 @@ struct FragmentResourceContract {
                 material_textures[resource.binding] = true;
             } else if (resource.binding >= 4U && resource.binding < 4U + runtime_shadow_cascade_count) {
                 shadow_textures[resource.binding - 4U] = true;
+            } else if (resource.binding >= 8U && resource.binding <= 10U) {
+                environment_textures[resource.binding - 8U] = true;
             } else {
                 return {};
             }
@@ -141,6 +146,7 @@ struct FragmentResourceContract {
         case render::ShaderRegisterClass::sampler:
             if (resource.binding == 0U) material_sampler = true;
             else if (resource.binding == 1U) shadow_sampler = true;
+            else if (resource.binding == 2U) environment_sampler = true;
             else return {};
             break;
         case render::ShaderRegisterClass::unordered_access:
@@ -165,12 +171,23 @@ struct FragmentResourceContract {
     const bool no_shadow_set = !any_shadow_texture && !shadow_sampler;
     const bool shadow_set_valid = no_shadow_set || legacy_shadow_set || cascaded_shadow_set;
 
+    const bool any_environment_texture = std::any_of(
+        environment_textures.begin(), environment_textures.end(), [](const bool value) { return value; }
+    );
+    const bool all_environment_textures = std::all_of(
+        environment_textures.begin(), environment_textures.end(), [](const bool value) { return value; }
+    );
+    const bool environment_set = all_environment_textures && environment_sampler;
+    const bool no_environment_set = !any_environment_texture && !environment_sampler;
+
     return FragmentResourceContract{
-        .valid = material_constants && all_material_textures && material_sampler && shadow_set_valid,
+        .valid = material_constants && all_material_textures && material_sampler && shadow_set_valid &&
+            (environment_set || no_environment_set),
         .directional_shadow_cascade_count = cascaded_shadow_set
             ? static_cast<std::uint32_t>(runtime_shadow_cascade_count)
             : legacy_shadow_set ? 1U : 0U,
         .shadow_texture_binding_base = 4U,
+        .uses_environment = environment_set,
     };
 }
 
@@ -319,6 +336,7 @@ struct RuntimeMaterialLibrary::State {
         std::unique_ptr<render::Sampler> sampler;
         std::uint32_t directional_shadow_cascade_count = 0;
         std::uint32_t shadow_texture_binding_base = 1U;
+        bool uses_environment = false;
     };
 
     CookedRenderMaterialCatalog catalog;
@@ -373,12 +391,14 @@ bool RuntimeMaterialLibrary::initialize(
         const bool extended_pbr = record.asset.version >= render::render_material_asset_format_version_v3;
         std::uint32_t directional_shadow_cascade_count = 0;
         std::uint32_t shadow_texture_binding_base = 1U;
+        bool uses_environment = false;
         bool resources_valid = false;
         if (extended_pbr) {
             const auto fragment_contract = v3_fragment_resource_contract(*fragment.module);
             resources_valid = valid_v2_vertex_resources(*vertex.module) && fragment_contract.valid;
             directional_shadow_cascade_count = fragment_contract.directional_shadow_cascade_count;
             shadow_texture_binding_base = fragment_contract.shadow_texture_binding_base;
+            uses_environment = fragment_contract.uses_environment;
         } else if (textured) {
             const auto fragment_contract = v2_fragment_resource_contract(*fragment.module);
             resources_valid = valid_v2_vertex_resources(*vertex.module) && fragment_contract.valid;
@@ -465,6 +485,7 @@ bool RuntimeMaterialLibrary::initialize(
             .sampler = std::move(sampler),
             .directional_shadow_cascade_count = directional_shadow_cascade_count,
             .shadow_texture_binding_base = shadow_texture_binding_base,
+            .uses_environment = uses_environment,
         });
     }
 
@@ -489,6 +510,7 @@ RuntimeMaterialBinding RuntimeMaterialLibrary::find(
         .constants_size = sizeof(MaterialConstants),
         .directional_shadow_cascade_count = found->second.directional_shadow_cascade_count,
         .shadow_texture_binding_base = found->second.shadow_texture_binding_base,
+        .uses_environment = found->second.uses_environment,
     };
 }
 
