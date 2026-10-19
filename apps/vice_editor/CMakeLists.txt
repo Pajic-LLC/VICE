@@ -38,11 +38,13 @@ if(TARGET vice_world_cooker_lib AND
    TARGET vice_mesh_cooker_lib AND
    TARGET vice_render_material_cooker_lib AND
    TARGET vice_shader_cooker_lib AND
-   TARGET vice_texture_cooker_lib)
+   TARGET vice_texture_cooker_lib AND
+   TARGET vice_environment_cooker_lib)
   add_library(
     vice_editor_project_build
     STATIC
       src/project_build.cpp
+      src/project_environment_cook.cpp
       src/project_material_cook.cpp
       src/project_mesh_cook.cpp
       src/project_texture_cook.cpp
@@ -60,6 +62,7 @@ if(TARGET vice_world_cooker_lib AND
     vice_editor_project_build
     PUBLIC
       VICE::EditorState
+      VICE::EnvironmentCooker
       VICE::MeshCooker
       VICE::Platform
       VICE::RenderMaterialCooker

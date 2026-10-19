@@ -362,31 +362,36 @@ public:
     [[nodiscard]] std::uint32_t width() const noexcept override { return desc_.width; }
     [[nodiscard]] std::uint32_t height() const noexcept override { return desc_.height; }
     [[nodiscard]] std::uint32_t depth() const noexcept override { return desc_.depth; }
+    [[nodiscard]] std::uint32_t mip_levels() const noexcept override { return desc_.mip_levels; }
 
     bool write_2d(
         const std::span<const std::byte> data,
-        const std::uint64_t bytes_per_row
+        const std::uint64_t bytes_per_row,
+        const std::uint32_t mip_level
     ) override {
         if (device_ == nullptr || command_queue_ == nullptr || resource_ == nullptr ||
             desc_.dimension != TextureDimension::d2 || desc_.depth != 1U ||
-            desc_.array_layers != 1U || desc_.mip_levels != 1U || desc_.sample_count != 1U ||
+            desc_.array_layers != 1U || desc_.sample_count != 1U ||
+            mip_level >= desc_.mip_levels ||
             !has_usage(desc_.usage, TextureUsage::copy_destination) ||
             desc_.format == TextureFormat::depth32_float) {
             return false;
         }
 
+        const std::uint32_t mip_width = std::max(1U, desc_.width >> mip_level);
+        const std::uint32_t mip_height = std::max(1U, desc_.height >> mip_level);
         const std::uint64_t bytes_per_pixel = texture_format_bytes_per_pixel(desc_.format);
         if (bytes_per_pixel == 0U ||
-            desc_.width > std::numeric_limits<std::uint64_t>::max() / bytes_per_pixel) {
+            mip_width > std::numeric_limits<std::uint64_t>::max() / bytes_per_pixel) {
             return false;
         }
-        const std::uint64_t minimum_row = static_cast<std::uint64_t>(desc_.width) * bytes_per_pixel;
+        const std::uint64_t minimum_row = static_cast<std::uint64_t>(mip_width) * bytes_per_pixel;
         if (bytes_per_row < minimum_row ||
-            desc_.height > 0U && bytes_per_row >
-                std::numeric_limits<std::uint64_t>::max() / desc_.height) {
+            mip_height > 0U && bytes_per_row >
+                std::numeric_limits<std::uint64_t>::max() / mip_height) {
             return false;
         }
-        const std::uint64_t required_source = bytes_per_row * desc_.height;
+        const std::uint64_t required_source = bytes_per_row * mip_height;
         if (required_source > data.size()) {
             return false;
         }
@@ -398,7 +403,7 @@ public:
         UINT64 upload_size = 0U;
         device_->GetCopyableFootprints(
             &texture_desc,
-            0U,
+            mip_level,
             1U,
             0U,
             &footprint,
@@ -406,7 +411,7 @@ public:
             &row_size,
             &upload_size
         );
-        if (row_count != desc_.height || row_size < minimum_row || upload_size == 0U ||
+        if (row_count != mip_height || row_size < minimum_row || upload_size == 0U ||
             upload_size > std::numeric_limits<std::size_t>::max()) {
             return false;
         }
@@ -443,7 +448,7 @@ public:
         }
         auto* destination = static_cast<std::byte*>(mapped) +
             static_cast<std::size_t>(footprint.Offset);
-        for (std::uint32_t row = 0U; row < desc_.height; ++row) {
+        for (std::uint32_t row = 0U; row < mip_height; ++row) {
             std::memcpy(
                 destination + static_cast<std::size_t>(row) * footprint.Footprint.RowPitch,
                 data.data() + static_cast<std::size_t>(row) * static_cast<std::size_t>(bytes_per_row),
@@ -484,7 +489,7 @@ public:
         D3D12_TEXTURE_COPY_LOCATION destination_location{};
         destination_location.pResource = resource_.Get();
         destination_location.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
-        destination_location.SubresourceIndex = 0U;
+        destination_location.SubresourceIndex = mip_level;
         commands->CopyTextureRegion(&destination_location, 0U, 0U, 0U, &source, nullptr);
 
         D3D12_RESOURCE_BARRIER final_barrier{};

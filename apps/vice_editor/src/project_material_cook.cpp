@@ -113,11 +113,14 @@ namespace {
 [[nodiscard]] bool supported_textured_fragment_reflection(
     const tools::shader_cooker::ShaderReflection& reflection,
     const std::uint32_t material_texture_count,
-    const std::uint32_t shadow_texture_base
+    const std::uint32_t shadow_texture_base,
+    const bool allow_environment = false
 ) noexcept {
     if (!reflection.valid) return false;
     std::array<bool, 4U> shadows{};
     bool shadow_sampler = false;
+    std::array<bool, 3U> environment{};
+    bool environment_sampler = false;
     for (const auto& resource : reflection.resources) {
         if (resource.space != 0U || resource.count != 1U || resource.unbounded) return false;
         if (resource.register_class == tools::shader_cooker::ShaderRegisterClass::constant_buffer) {
@@ -127,12 +130,15 @@ namespace {
             if (resource.binding >= shadow_texture_base &&
                 resource.binding < shadow_texture_base + static_cast<std::uint32_t>(shadows.size())) {
                 shadows[resource.binding - shadow_texture_base] = true;
+            } else if (allow_environment && resource.binding >= 8U && resource.binding <= 10U) {
+                environment[resource.binding - 8U] = true;
             } else {
                 return false;
             }
         } else if (resource.register_class == tools::shader_cooker::ShaderRegisterClass::sampler) {
             if (resource.binding == 0U) continue;
             if (resource.binding == 1U) shadow_sampler = true;
+            else if (allow_environment && resource.binding == 2U) environment_sampler = true;
             else return false;
         } else {
             return false;
@@ -142,7 +148,17 @@ namespace {
     const bool all_shadows = std::all_of(shadows.begin(), shadows.end(), [](const bool value) { return value; });
     const bool legacy_shadow = shadows[0] && shadow_sampler &&
         std::none_of(shadows.begin() + 1, shadows.end(), [](const bool value) { return value; });
-    return (!any_shadow && !shadow_sampler) || legacy_shadow || (all_shadows && shadow_sampler);
+    const bool shadow_valid = (!any_shadow && !shadow_sampler) || legacy_shadow ||
+        (all_shadows && shadow_sampler);
+    const bool any_environment = std::any_of(
+        environment.begin(), environment.end(), [](const bool value) { return value; }
+    );
+    const bool all_environment = std::all_of(
+        environment.begin(), environment.end(), [](const bool value) { return value; }
+    );
+    const bool environment_valid = (!any_environment && !environment_sampler) ||
+        (all_environment && environment_sampler);
+    return shadow_valid && environment_valid;
 }
 
 [[nodiscard]] bool supported_v2_fragment_reflection(
@@ -154,7 +170,7 @@ namespace {
 [[nodiscard]] bool supported_v3_fragment_reflection(
     const tools::shader_cooker::ShaderReflection& reflection
 ) noexcept {
-    return supported_textured_fragment_reflection(reflection, 4U, 4U);
+    return supported_textured_fragment_reflection(reflection, 4U, 4U, true);
 }
 
 [[nodiscard]] bool texture_available(
@@ -326,7 +342,8 @@ ProjectMaterialCookResult cook_project_render_materials(
         if (!fragment_supported || !fragment_required) {
             result.diagnostics = extended_pbr
                 ? "Render material v3 fragment shader `" + path_text(shader_source) +
-                    "` must use b1 material constants, t0-t3 PBR textures, and s0 sampler in space0."
+                    "` must use b1 material constants, t0-t3 PBR textures, and s0 sampler in space0; "
+                    "optional IBL must provide the complete t8-t10/s2 set."
                 : textured
                     ? "Render material v2 fragment shader `" + path_text(shader_source) +
                         "` must use b1 material constants, t0 base-color texture, and s0 sampler in space0."

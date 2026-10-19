@@ -50,6 +50,7 @@ if(VICE_BUILD_EDITOR OR VICE_BUILD_TOOLS)
   add_subdirectory(tools/render_material_cooker)
   add_subdirectory(tools/shader_cooker)
   add_subdirectory(tools/texture_cooker)
+  add_subdirectory(tools/environment_cooker)
 endif()
 
 if(VICE_BUILD_TOOLS)

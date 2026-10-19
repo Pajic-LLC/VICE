@@ -544,10 +544,12 @@ public:
     [[nodiscard]] virtual std::uint32_t width() const noexcept = 0;
     [[nodiscard]] virtual std::uint32_t height() const noexcept = 0;
     [[nodiscard]] virtual std::uint32_t depth() const noexcept = 0;
+    [[nodiscard]] virtual std::uint32_t mip_levels() const noexcept = 0;
 
     virtual bool write_2d(
         std::span<const std::byte> data,
-        std::uint64_t bytes_per_row
+        std::uint64_t bytes_per_row,
+        std::uint32_t mip_level = 0U
     ) = 0;
 };
 
