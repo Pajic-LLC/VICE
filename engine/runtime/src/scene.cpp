@@ -3,6 +3,7 @@
 #include <vice/runtime/post_process.hpp>
 
 #include "material_pipeline.hpp"
+#include "taa_shaders.hpp"
 
 #include <algorithm>
 #include <array>
@@ -214,11 +215,21 @@ struct MotionConstants {
     math::Mat4 previous_model{};
 };
 
+struct TaaConstants {
+    float texel_size[2]{};
+    float history_weight = 0.9F;
+    float depth_threshold = 0.0025F;
+    float history_valid = 0.0F;
+    float motion_rejection = 32.0F;
+    float padding[2]{};
+};
+
 static_assert(sizeof(ToneMapConstants) == 16U);
 static_assert(sizeof(SceneLightConstants) == 48U);
 static_assert(sizeof(SceneConstants) == 848U);
 static_assert(sizeof(ShadowConstants) == 128U);
 static_assert(sizeof(MotionConstants) == 256U);
+static_assert(sizeof(TaaConstants) == 32U);
 
 constexpr std::string_view hlsl_source = R"(
 cbuffer SceneFrame : register(b0) {
@@ -576,6 +587,17 @@ fragment float4 vice_runtime_tonemap_fs(
     desc.usage = render::BufferUsage::uniform;
     desc.memory = render::MemoryLocation::cpu_to_gpu;
     desc.debug_name = "VICE Runtime motion-vector constants";
+    return device.create_buffer(desc);
+}
+
+[[nodiscard]] std::unique_ptr<render::Buffer> create_taa_constant_buffer(
+    render::Device& device
+) {
+    render::BufferDesc desc;
+    desc.size = sizeof(TaaConstants);
+    desc.usage = render::BufferUsage::uniform;
+    desc.memory = render::MemoryLocation::cpu_to_gpu;
+    desc.debug_name = "VICE Runtime TAA constants";
     return device.create_buffer(desc);
 }
 
@@ -1096,6 +1118,12 @@ struct RuntimeSceneRenderer::State {
     std::unique_ptr<render::ShaderModule> motion_vertex_shader;
     std::unique_ptr<render::ShaderModule> motion_fragment_shader;
     std::unique_ptr<render::GraphicsPipeline> motion_pipeline;
+    std::unique_ptr<render::ShaderModule> taa_vertex_shader;
+    std::unique_ptr<render::ShaderModule> taa_fragment_shader;
+    std::unique_ptr<render::GraphicsPipeline> taa_pipeline;
+    std::unique_ptr<render::Sampler> taa_linear_sampler;
+    std::unique_ptr<render::Sampler> taa_point_sampler;
+    std::unique_ptr<render::Buffer> taa_constants;
     std::unique_ptr<render::ShaderModule> tone_map_vertex_shader;
     std::unique_ptr<render::ShaderModule> tone_map_fragment_shader;
     std::unique_ptr<render::GraphicsPipeline> tone_map_pipeline;
@@ -1105,9 +1133,10 @@ struct RuntimeSceneRenderer::State {
     std::unique_ptr<render::GraphicsPipeline> shadow_pipeline;
     std::array<std::unique_ptr<render::Texture>, runtime_shadow_cascade_count> shadow_maps;
     std::unique_ptr<render::Sampler> shadow_sampler;
-    std::array<std::unique_ptr<render::Texture>, 2U> scene_history;
+    std::unique_ptr<render::Texture> scene_color;
+    std::array<std::unique_ptr<render::Texture>, 2U> temporal_color_history;
+    std::array<std::unique_ptr<render::Texture>, 2U> depth_history;
     std::unique_ptr<render::Texture> motion_vectors;
-    std::unique_ptr<render::Texture> depth;
     std::unordered_map<world::ResourceId, MeshGpu, world::ResourceIdHash> meshes;
     std::unordered_map<world::PersistentId, std::unique_ptr<render::Buffer>, world::PersistentIdHash> constants;
     std::unordered_map<world::PersistentId, std::unique_ptr<render::Buffer>, world::PersistentIdHash> motion_constants;
@@ -1120,7 +1149,7 @@ struct RuntimeSceneRenderer::State {
     std::uint32_t depth_height = 0;
     RuntimeTemporalHistory temporal_history;
     RuntimePostProcessPlan post_process_plan = default_runtime_post_process_plan();
-    std::size_t scene_write_index = 0U;
+    std::size_t history_write_index = 0U;
     float exposure = 1.0F;
     bool initialized = false;
 };
@@ -1231,6 +1260,62 @@ bool RuntimeSceneRenderer::initialize(
     state_->motion_pipeline = device.create_graphics_pipeline(motion_pipeline_desc);
     if (!state_->motion_pipeline) {
         set_diagnostics(diagnostics, "VICE Runtime could not create the motion-vector pipeline.");
+        return false;
+    }
+
+    render::ShaderModuleDesc taa_vertex_desc;
+    taa_vertex_desc.stage = render::ShaderStage::vertex;
+    taa_vertex_desc.language = vertex_desc.language;
+    taa_vertex_desc.source = metal ? detail::taa_metal_source : detail::taa_hlsl_source;
+    taa_vertex_desc.entry_point = "vice_runtime_taa_vs";
+    taa_vertex_desc.debug_name = "VICE Runtime TAA vertex";
+
+    render::ShaderModuleDesc taa_fragment_desc;
+    taa_fragment_desc.stage = render::ShaderStage::fragment;
+    taa_fragment_desc.language = vertex_desc.language;
+    taa_fragment_desc.source = taa_vertex_desc.source;
+    taa_fragment_desc.resources = detail::taa_fragment_resources;
+    taa_fragment_desc.entry_point = "vice_runtime_taa_fs";
+    taa_fragment_desc.debug_name = "VICE Runtime TAA fragment";
+
+    state_->taa_vertex_shader = device.create_shader_module(taa_vertex_desc);
+    state_->taa_fragment_shader = device.create_shader_module(taa_fragment_desc);
+    if (!state_->taa_vertex_shader || !state_->taa_fragment_shader) {
+        set_diagnostics(diagnostics, "VICE Runtime could not create TAA shaders.");
+        return false;
+    }
+
+    render::GraphicsPipelineDesc taa_pipeline_desc;
+    taa_pipeline_desc.vertex_shader = state_->taa_vertex_shader.get();
+    taa_pipeline_desc.fragment_shader = state_->taa_fragment_shader.get();
+    taa_pipeline_desc.color_format = render::TextureFormat::rgba16_float;
+    taa_pipeline_desc.cull_mode = render::CullMode::none;
+    taa_pipeline_desc.debug_name = "VICE Runtime TAA pipeline";
+    state_->taa_pipeline = device.create_graphics_pipeline(taa_pipeline_desc);
+    if (!state_->taa_pipeline) {
+        set_diagnostics(diagnostics, "VICE Runtime could not create the TAA pipeline.");
+        return false;
+    }
+
+    render::SamplerDesc taa_linear_sampler_desc;
+    taa_linear_sampler_desc.min_filter = render::Filter::linear;
+    taa_linear_sampler_desc.mag_filter = render::Filter::linear;
+    taa_linear_sampler_desc.mip_filter = render::Filter::linear;
+    taa_linear_sampler_desc.address_u = render::AddressMode::clamp_to_edge;
+    taa_linear_sampler_desc.address_v = render::AddressMode::clamp_to_edge;
+    taa_linear_sampler_desc.address_w = render::AddressMode::clamp_to_edge;
+    taa_linear_sampler_desc.debug_name = "VICE Runtime TAA linear sampler";
+    state_->taa_linear_sampler = device.create_sampler(taa_linear_sampler_desc);
+
+    render::SamplerDesc taa_point_sampler_desc = taa_linear_sampler_desc;
+    taa_point_sampler_desc.min_filter = render::Filter::nearest;
+    taa_point_sampler_desc.mag_filter = render::Filter::nearest;
+    taa_point_sampler_desc.mip_filter = render::Filter::nearest;
+    taa_point_sampler_desc.debug_name = "VICE Runtime TAA point sampler";
+    state_->taa_point_sampler = device.create_sampler(taa_point_sampler_desc);
+    state_->taa_constants = create_taa_constant_buffer(device);
+    if (!state_->taa_linear_sampler || !state_->taa_point_sampler || !state_->taa_constants) {
+        set_diagnostics(diagnostics, "VICE Runtime could not create TAA resources.");
         return false;
     }
 
@@ -1393,19 +1478,21 @@ bool RuntimeSceneRenderer::resize(
         return false;
     }
     if (metrics.drawable_width == 0U || metrics.drawable_height == 0U) {
-        for (auto& scene_color : state_->scene_history) scene_color.reset();
+        state_->scene_color.reset();
+        for (auto& color : state_->temporal_color_history) color.reset();
+        for (auto& depth : state_->depth_history) depth.reset();
         state_->motion_vectors.reset();
-        state_->depth.reset();
         state_->previous_models.clear();
         state_->temporal_history.reset();
-        state_->scene_write_index = 0U;
+        state_->history_write_index = 0U;
         state_->depth_width = 0;
         state_->depth_height = 0;
         if (diagnostics != nullptr) diagnostics->clear();
         return true;
     }
-    if (state_->scene_history[0] && state_->scene_history[1] &&
-        state_->motion_vectors && state_->depth &&
+    if (state_->scene_color && state_->temporal_color_history[0] &&
+        state_->temporal_color_history[1] && state_->depth_history[0] &&
+        state_->depth_history[1] && state_->motion_vectors &&
         state_->depth_width == metrics.drawable_width &&
         state_->depth_height == metrics.drawable_height) {
         if (diagnostics != nullptr) diagnostics->clear();
@@ -1416,12 +1503,15 @@ bool RuntimeSceneRenderer::resize(
     depth_desc.width = metrics.drawable_width;
     depth_desc.height = metrics.drawable_height;
     depth_desc.format = render::TextureFormat::depth32_float;
-    depth_desc.usage = render::TextureUsage::depth_attachment;
-    depth_desc.debug_name = "VICE Runtime scene depth";
-    auto depth = state_->device->create_texture(depth_desc);
-    if (!depth) {
-        set_diagnostics(diagnostics, "VICE Runtime could not create the scene depth buffer.");
-        return false;
+    depth_desc.usage = render::TextureUsage::depth_attachment | render::TextureUsage::sampled;
+    depth_desc.debug_name = "VICE Runtime TAA depth history";
+    std::array<std::unique_ptr<render::Texture>, 2U> depth_history;
+    for (auto& depth : depth_history) {
+        depth = state_->device->create_texture(depth_desc);
+        if (!depth) {
+            set_diagnostics(diagnostics, "VICE Runtime could not create TAA depth-history targets.");
+            return false;
+        }
     }
 
     render::TextureDesc scene_color_desc;
@@ -1429,12 +1519,19 @@ bool RuntimeSceneRenderer::resize(
     scene_color_desc.height = metrics.drawable_height;
     scene_color_desc.format = render::TextureFormat::rgba16_float;
     scene_color_desc.usage = render::TextureUsage::color_attachment | render::TextureUsage::sampled;
-    scene_color_desc.debug_name = "VICE Runtime HDR scene history";
-    std::array<std::unique_ptr<render::Texture>, 2U> scene_history;
-    for (auto& scene_color : scene_history) {
-        scene_color = state_->device->create_texture(scene_color_desc);
-        if (!scene_color) {
-            set_diagnostics(diagnostics, "VICE Runtime could not create HDR frame-history targets.");
+    scene_color_desc.debug_name = "VICE Runtime raw HDR scene color";
+    auto scene_color = state_->device->create_texture(scene_color_desc);
+    if (!scene_color) {
+        set_diagnostics(diagnostics, "VICE Runtime could not create the raw HDR scene target.");
+        return false;
+    }
+
+    scene_color_desc.debug_name = "VICE Runtime TAA color history";
+    std::array<std::unique_ptr<render::Texture>, 2U> temporal_color_history;
+    for (auto& history_color : temporal_color_history) {
+        history_color = state_->device->create_texture(scene_color_desc);
+        if (!history_color) {
+            set_diagnostics(diagnostics, "VICE Runtime could not create TAA color-history targets.");
             return false;
         }
     }
@@ -1451,12 +1548,13 @@ bool RuntimeSceneRenderer::resize(
         return false;
     }
 
-    state_->scene_history = std::move(scene_history);
+    state_->scene_color = std::move(scene_color);
+    state_->temporal_color_history = std::move(temporal_color_history);
+    state_->depth_history = std::move(depth_history);
     state_->motion_vectors = std::move(motion_vectors);
-    state_->depth = std::move(depth);
     state_->previous_models.clear();
     state_->temporal_history.reset();
-    state_->scene_write_index = 0U;
+    state_->history_write_index = 0U;
     state_->depth_width = metrics.drawable_width;
     state_->depth_height = metrics.drawable_height;
     if (diagnostics != nullptr) diagnostics->clear();
@@ -1493,8 +1591,9 @@ bool RuntimeSceneRenderer::render(
     std::string* const diagnostics
 ) {
     if (state_ == nullptr || !state_->initialized || state_->device == nullptr ||
-        !state_->pipeline || !state_->motion_pipeline || !state_->tone_map_pipeline ||
-        !state_->tone_map_sampler || !state_->tone_map_constants) {
+        !state_->pipeline || !state_->motion_pipeline || !state_->taa_pipeline ||
+        !state_->taa_linear_sampler || !state_->taa_point_sampler || !state_->taa_constants ||
+        !state_->tone_map_pipeline || !state_->tone_map_sampler || !state_->tone_map_constants) {
         set_diagnostics(diagnostics, "Runtime scene renderer is not initialized.");
         return false;
     }
@@ -1503,9 +1602,10 @@ bool RuntimeSceneRenderer::render(
         return true;
     }
     if (!resize(metrics, diagnostics)) return false;
-    if (!state_->scene_history[0] || !state_->scene_history[1] ||
-        !state_->motion_vectors || !state_->depth) {
-        set_diagnostics(diagnostics, "VICE Runtime temporal frame targets are unavailable.");
+    if (!state_->scene_color || !state_->temporal_color_history[0] ||
+        !state_->temporal_color_history[1] || !state_->depth_history[0] ||
+        !state_->depth_history[1] || !state_->motion_vectors) {
+        set_diagnostics(diagnostics, "VICE Runtime TAA frame targets are unavailable.");
         return false;
     }
 
@@ -1535,16 +1635,34 @@ bool RuntimeSceneRenderer::render(
     const RuntimeCameraView runtime_camera = authored_camera.has_value()
         ? *authored_camera
         : fallback_camera(instances, state_->catalog, aspect);
-    const math::Mat4 view_projection = runtime_camera.view_projection;
+    const math::Mat4 unjittered_view_projection = runtime_camera.view_projection;
+    const auto jitter = runtime_taa_jitter(
+        state_->temporal_history.completed_frames(),
+        metrics.drawable_width,
+        metrics.drawable_height
+    );
+    const math::Mat4 view_projection = runtime_apply_projection_jitter(
+        unjittered_view_projection,
+        jitter
+    );
     const math::Vec3 camera_position = runtime_camera.position;
     const auto temporal_frame = state_->temporal_history.begin_frame(
         runtime_camera.entity,
-        view_projection
+        unjittered_view_projection,
+        view_projection,
+        jitter,
+        runtime_camera.position,
+        runtime_camera.forward
     );
-    auto* const scene_color = state_->scene_history[state_->scene_write_index].get();
+    auto* const scene_color = state_->scene_color.get();
+    auto* const temporal_output = state_->temporal_color_history[state_->history_write_index].get();
     auto* const previous_scene_color = temporal_frame.history_valid
-        ? state_->scene_history[1U - state_->scene_write_index].get()
-        : nullptr;
+        ? state_->temporal_color_history[1U - state_->history_write_index].get()
+        : scene_color;
+    auto* const current_depth = state_->depth_history[state_->history_write_index].get();
+    auto* const previous_depth = temporal_frame.history_valid
+        ? state_->depth_history[1U - state_->history_write_index].get()
+        : current_depth;
 
     const auto authored_lights = collect_runtime_lights(world);
     const auto shadow_view = directional_shadow_view(runtime_camera, authored_lights);
@@ -1636,7 +1754,7 @@ bool RuntimeSceneRenderer::render(
 
     render::RenderPassDesc pass;
     pass.clear_color = clear_color;
-    pass.depth_attachment = state_->depth.get();
+    pass.depth_attachment = current_depth;
     pass.clear_depth = 1.0F;
     if (!commands->begin_render_pass(*scene_color, pass) ||
         !commands->set_viewport(render::Viewport{
@@ -1806,7 +1924,7 @@ bool RuntimeSceneRenderer::render(
 
     render::RenderPassDesc motion_pass;
     motion_pass.clear_color = render::Color{0.0F, 0.0F, 0.0F, 0.0F};
-    motion_pass.depth_attachment = state_->depth.get();
+    motion_pass.depth_attachment = current_depth;
     motion_pass.clear_depth = 1.0F;
     motion_pass.clear_depth_attachment = false;
     if (!commands->begin_render_pass(*state_->motion_vectors, motion_pass) ||
@@ -1884,20 +2002,98 @@ bool RuntimeSceneRenderer::render(
         .scene_color = scene_color,
         .previous_scene_color = previous_scene_color,
         .motion_vectors = state_->motion_vectors.get(),
-        .depth = state_->depth.get(),
+        .depth = current_depth,
+        .previous_depth = previous_depth,
         .temporal = temporal_frame,
     };
 
+    render::Texture* working_color = post_process_frame.scene_color;
+    bool temporal_resolved = false;
     bool presented = false;
     for (const auto& pass_desc : state_->post_process_plan) {
         if (!pass_desc.enabled) continue;
         switch (pass_desc.pass) {
-        case RuntimePostProcessPass::temporal_resolve:
-            set_diagnostics(
-                diagnostics,
-                "VICE Runtime temporal resolve is present in the pass plan but not implemented."
-            );
-            return false;
+        case RuntimePostProcessPass::temporal_resolve: {
+            if (post_process_frame.scene_color == nullptr ||
+                post_process_frame.previous_scene_color == nullptr ||
+                post_process_frame.motion_vectors == nullptr || post_process_frame.depth == nullptr ||
+                post_process_frame.previous_depth == nullptr || temporal_output == nullptr) {
+                set_diagnostics(diagnostics, "VICE Runtime TAA inputs are unavailable.");
+                return false;
+            }
+
+            const TaaConstants taa_constants{
+                .texel_size = {
+                    1.0F / static_cast<float>(metrics.drawable_width),
+                    1.0F / static_cast<float>(metrics.drawable_height),
+                },
+                .history_weight = 0.9F,
+                .depth_threshold = 0.0025F,
+                .history_valid = temporal_frame.history_valid ? 1.0F : 0.0F,
+                .motion_rejection = 32.0F,
+            };
+            if (!state_->taa_constants->write(
+                    0U,
+                    std::as_bytes(std::span{&taa_constants, 1})
+                )) {
+                set_diagnostics(diagnostics, "VICE Runtime could not update TAA constants.");
+                return false;
+            }
+
+            render::RenderPassDesc taa_pass;
+            taa_pass.clear_color = render::Color{0.0F, 0.0F, 0.0F, 1.0F};
+            if (!commands->begin_render_pass(*temporal_output, taa_pass) ||
+                !commands->set_viewport(render::Viewport{
+                    .width = static_cast<float>(metrics.drawable_width),
+                    .height = static_cast<float>(metrics.drawable_height),
+                }) ||
+                !commands->set_scissor_rect(render::ScissorRect{
+                    .width = metrics.drawable_width,
+                    .height = metrics.drawable_height,
+                }) ||
+                !commands->set_graphics_pipeline(*state_->taa_pipeline) ||
+                !commands->set_graphics_constant_buffer(
+                    detail::taa_constants_binding,
+                    *state_->taa_constants,
+                    0U,
+                    sizeof(TaaConstants)
+                ) ||
+                !commands->set_graphics_texture(
+                    detail::taa_current_color_binding,
+                    *post_process_frame.scene_color
+                ) ||
+                !commands->set_graphics_texture(
+                    detail::taa_history_color_binding,
+                    *post_process_frame.previous_scene_color
+                ) ||
+                !commands->set_graphics_texture(
+                    detail::taa_motion_binding,
+                    *post_process_frame.motion_vectors
+                ) ||
+                !commands->set_graphics_texture(
+                    detail::taa_current_depth_binding,
+                    *post_process_frame.depth
+                ) ||
+                !commands->set_graphics_texture(
+                    detail::taa_previous_depth_binding,
+                    *post_process_frame.previous_depth
+                ) ||
+                !commands->set_graphics_sampler(
+                    detail::taa_linear_sampler_binding,
+                    *state_->taa_linear_sampler
+                ) ||
+                !commands->set_graphics_sampler(
+                    detail::taa_point_sampler_binding,
+                    *state_->taa_point_sampler
+                ) ||
+                !commands->draw(3U) || !commands->end_render_pass()) {
+                set_diagnostics(diagnostics, "VICE Runtime could not execute the TAA resolve pass.");
+                return false;
+            }
+            working_color = temporal_output;
+            temporal_resolved = true;
+            break;
+        }
         case RuntimePostProcessPass::bloom:
             set_diagnostics(
                 diagnostics,
@@ -1905,7 +2101,7 @@ bool RuntimeSceneRenderer::render(
             );
             return false;
         case RuntimePostProcessPass::tone_map: {
-            if (presented || post_process_frame.scene_color == nullptr) {
+            if (presented || working_color == nullptr) {
                 set_diagnostics(diagnostics, "VICE Runtime post-process plan has an invalid tone-map pass.");
                 return false;
             }
@@ -1929,7 +2125,7 @@ bool RuntimeSceneRenderer::render(
                 ) ||
                 !commands->set_graphics_texture(
                     tone_map_scene_texture_binding,
-                    *post_process_frame.scene_color
+                    *working_color
                 ) ||
                 !commands->set_graphics_sampler(
                     tone_map_sampler_binding,
@@ -1957,12 +2153,23 @@ bool RuntimeSceneRenderer::render(
     }
 
     state_->previous_models.clear();
-    state_->previous_models.reserve(instances.size());
-    for (const auto& instance : instances) {
-        state_->previous_models.emplace(instance.entity, runtime_model_matrix(instance));
+    if (temporal_resolved) {
+        state_->previous_models.reserve(instances.size());
+        for (const auto& instance : instances) {
+            state_->previous_models.emplace(instance.entity, runtime_model_matrix(instance));
+        }
+        state_->temporal_history.commit_frame(
+            runtime_camera.entity,
+            unjittered_view_projection,
+            view_projection,
+            jitter,
+            runtime_camera.position,
+            runtime_camera.forward
+        );
+    } else {
+        state_->temporal_history.reset();
     }
-    state_->temporal_history.commit_frame(runtime_camera.entity, view_projection);
-    state_->scene_write_index = 1U - state_->scene_write_index;
+    state_->history_write_index = 1U - state_->history_write_index;
 
     if (diagnostics != nullptr) diagnostics->clear();
     return true;
