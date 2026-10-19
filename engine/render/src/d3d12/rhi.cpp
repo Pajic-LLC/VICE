@@ -348,9 +348,11 @@ public:
         ComPtr<ID3D12CommandQueue> command_queue,
         ComPtr<ID3D12Resource> resource,
         const D3D12_RESOURCE_STATES state,
-        ComPtr<ID3D12DescriptorHeap> dsv_heap = {}
+        ComPtr<ID3D12DescriptorHeap> dsv_heap = {},
+        ComPtr<ID3D12DescriptorHeap> rtv_heap = {}
     ) : desc_{desc}, device_{std::move(device)}, command_queue_{std::move(command_queue)},
-        resource_{std::move(resource)}, state_{state}, dsv_heap_{std::move(dsv_heap)} {
+        resource_{std::move(resource)}, state_{state}, dsv_heap_{std::move(dsv_heap)},
+        rtv_heap_{std::move(rtv_heap)} {
         desc_.debug_name = {};
     }
 
@@ -531,6 +533,12 @@ public:
             ? dsv_heap_->GetCPUDescriptorHandleForHeapStart()
             : D3D12_CPU_DESCRIPTOR_HANDLE{};
     }
+    [[nodiscard]] bool has_rtv() const noexcept { return rtv_heap_ != nullptr; }
+    [[nodiscard]] D3D12_CPU_DESCRIPTOR_HANDLE rtv() const noexcept {
+        return rtv_heap_ != nullptr
+            ? rtv_heap_->GetCPUDescriptorHandleForHeapStart()
+            : D3D12_CPU_DESCRIPTOR_HANDLE{};
+    }
 
 private:
     TextureDesc desc_{};
@@ -539,6 +547,7 @@ private:
     ComPtr<ID3D12Resource> resource_;
     D3D12_RESOURCE_STATES state_ = D3D12_RESOURCE_STATE_COMMON;
     ComPtr<ID3D12DescriptorHeap> dsv_heap_;
+    ComPtr<ID3D12DescriptorHeap> rtv_heap_;
 };
 
 class D3D12Sampler final : public Sampler {
@@ -582,14 +591,17 @@ public:
         const PrimitiveTopology topology,
         D3D12RootSignatureResult root_layout,
         std::vector<D3D12VertexStreamInfo> vertex_streams,
+        const TextureFormat color_format,
         const DepthStateDesc depth
     ) : root_signature_{std::move(root_signature)}, state_{std::move(state)}, topology_{topology},
-        root_layout_{std::move(root_layout)}, vertex_streams_{std::move(vertex_streams)}, depth_{depth} {}
+        root_layout_{std::move(root_layout)}, vertex_streams_{std::move(vertex_streams)},
+        color_format_{color_format}, depth_{depth} {}
 
     [[nodiscard]] PrimitiveTopology topology() const noexcept override { return topology_; }
     [[nodiscard]] ID3D12RootSignature* root_signature() const noexcept { return root_signature_.Get(); }
     [[nodiscard]] ID3D12PipelineState* state() const noexcept { return state_.Get(); }
     [[nodiscard]] const D3D12RootSignatureResult& root_layout() const noexcept { return root_layout_; }
+    [[nodiscard]] TextureFormat color_format() const noexcept { return color_format_; }
     [[nodiscard]] const DepthStateDesc& depth() const noexcept { return depth_; }
     [[nodiscard]] std::size_t vertex_stream_count() const noexcept { return vertex_streams_.size(); }
     [[nodiscard]] const D3D12VertexStreamInfo* vertex_stream(const std::uint32_t slot) const noexcept {
@@ -607,6 +619,7 @@ private:
     PrimitiveTopology topology_ = PrimitiveTopology::triangle_list;
     D3D12RootSignatureResult root_layout_;
     std::vector<D3D12VertexStreamInfo> vertex_streams_;
+    TextureFormat color_format_ = TextureFormat::undefined;
     DepthStateDesc depth_{};
 };
 
@@ -1041,6 +1054,84 @@ public:
         command_list_->RSSetViewports(1, &viewport);
         command_list_->RSSetScissorRects(1, &scissor);
         active_swapchain_ = d3d_swapchain;
+        active_color_texture_ = nullptr;
+        active_depth_texture_ = depth_texture;
+        render_pass_active_ = true;
+        reset_graphics_bindings();
+        return true;
+    }
+
+    bool begin_render_pass(Texture& color_attachment, const RenderPassDesc& desc) override {
+        if (!valid() || render_pass_active_ || desc.clear_depth < 0.0F || desc.clear_depth > 1.0F) {
+            return false;
+        }
+        auto* color_texture = dynamic_cast<D3D12Texture*>(&color_attachment);
+        if (color_texture == nullptr || color_texture->format() == TextureFormat::depth32_float ||
+            color_texture->dimension() != TextureDimension::d2 ||
+            !has_usage(color_texture->usage(), TextureUsage::color_attachment) ||
+            !color_texture->has_rtv()) {
+            return false;
+        }
+
+        D3D12Texture* depth_texture = nullptr;
+        D3D12_CPU_DESCRIPTOR_HANDLE depth_handle{};
+        if (desc.depth_attachment != nullptr) {
+            depth_texture = dynamic_cast<D3D12Texture*>(desc.depth_attachment);
+            if (depth_texture == nullptr || depth_texture->format() != TextureFormat::depth32_float ||
+                !has_usage(depth_texture->usage(), TextureUsage::depth_attachment) ||
+                !depth_texture->has_dsv() || depth_texture->width() != color_texture->width() ||
+                depth_texture->height() != color_texture->height()) {
+                return false;
+            }
+            transition(*depth_texture, D3D12_RESOURCE_STATE_DEPTH_WRITE);
+            depth_handle = depth_texture->dsv();
+        }
+
+        transition(*color_texture, D3D12_RESOURCE_STATE_RENDER_TARGET);
+        const auto rtv = color_texture->rtv();
+        command_list_->OMSetRenderTargets(
+            1,
+            &rtv,
+            FALSE,
+            depth_texture != nullptr ? &depth_handle : nullptr
+        );
+        if (desc.clear_color_attachment) {
+            const FLOAT clear_color[4] = {
+                desc.clear_color.red,
+                desc.clear_color.green,
+                desc.clear_color.blue,
+                desc.clear_color.alpha
+            };
+            command_list_->ClearRenderTargetView(rtv, clear_color, 0, nullptr);
+        }
+        if (depth_texture != nullptr && desc.clear_depth_attachment) {
+            command_list_->ClearDepthStencilView(
+                depth_handle,
+                D3D12_CLEAR_FLAG_DEPTH,
+                desc.clear_depth,
+                0,
+                0,
+                nullptr
+            );
+        }
+        const D3D12_VIEWPORT viewport{
+            0.0F,
+            0.0F,
+            static_cast<float>(color_texture->width()),
+            static_cast<float>(color_texture->height()),
+            0.0F,
+            1.0F
+        };
+        const D3D12_RECT scissor{
+            0,
+            0,
+            static_cast<LONG>(color_texture->width()),
+            static_cast<LONG>(color_texture->height())
+        };
+        command_list_->RSSetViewports(1, &viewport);
+        command_list_->RSSetScissorRects(1, &scissor);
+        active_swapchain_ = nullptr;
+        active_color_texture_ = color_texture;
         active_depth_texture_ = depth_texture;
         render_pass_active_ = true;
         reset_graphics_bindings();
@@ -1076,6 +1167,7 @@ public:
             );
         }
         active_swapchain_ = nullptr;
+        active_color_texture_ = nullptr;
         active_depth_texture_ = depth_texture;
         render_pass_active_ = true;
         reset_graphics_bindings();
@@ -1129,6 +1221,14 @@ public:
         auto* d3d_pipeline = dynamic_cast<D3D12GraphicsPipeline*>(&pipeline);
         if (d3d_pipeline == nullptr || d3d_pipeline->state() == nullptr ||
             d3d_pipeline->root_signature() == nullptr) {
+            return false;
+        }
+        const TextureFormat active_color_format = active_color_texture_ != nullptr
+            ? active_color_texture_->format()
+            : (active_swapchain_ != nullptr
+                ? active_swapchain_->color_format()
+                : TextureFormat::undefined);
+        if (d3d_pipeline->color_format() != active_color_format) {
             return false;
         }
         const auto& depth = d3d_pipeline->depth();
@@ -1364,6 +1464,7 @@ public:
             return false;
         }
         render_pass_active_ = false;
+        active_color_texture_ = nullptr;
         active_depth_texture_ = nullptr;
         reset_graphics_bindings();
         return true;
@@ -2053,6 +2154,7 @@ private:
     D3D12GraphicsPipeline* active_pipeline_ = nullptr;
     D3D12Swapchain* active_swapchain_ = nullptr;
     D3D12Swapchain* present_swapchain_ = nullptr;
+    D3D12Texture* active_color_texture_ = nullptr;
     D3D12Texture* active_depth_texture_ = nullptr;
     std::uint64_t index_capacity_ = 0U;
     UINT resource_descriptor_size_ = 0;
@@ -2175,6 +2277,12 @@ public:
             core::log(core::LogLevel::error, "Direct3D 12 depth attachments currently require one non-MSAA 2D layer.");
             return nullptr;
         }
+        if (has_usage(desc.usage, TextureUsage::color_attachment) &&
+            (desc.dimension != TextureDimension::d2 || desc.array_layers != 1U ||
+                desc.mip_levels != 1U || desc.sample_count != 1U)) {
+            core::log(core::LogLevel::error, "Direct3D 12 color attachments currently require one non-MSAA 2D mip and layer.");
+            return nullptr;
+        }
         const bool size_supported =
             (desc.dimension == TextureDimension::d1 &&
                 desc.width <= capabilities_.max_texture_dimension_1d &&
@@ -2257,13 +2365,39 @@ public:
             );
         }
 
+
+        ComPtr<ID3D12DescriptorHeap> rtv_heap;
+        if (has_usage(desc.usage, TextureUsage::color_attachment)) {
+            D3D12_DESCRIPTOR_HEAP_DESC heap_desc{};
+            heap_desc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_RTV;
+            heap_desc.NumDescriptors = 1;
+            heap_desc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
+            if (!succeeded(
+                device_->CreateDescriptorHeap(&heap_desc, IID_PPV_ARGS(&rtv_heap)),
+                "Direct3D 12 could not create a VICE color descriptor heap."
+            )) {
+                return nullptr;
+            }
+            D3D12_RENDER_TARGET_VIEW_DESC rtv_desc{};
+            rtv_desc.Format = pixel_format(desc.format);
+            rtv_desc.ViewDimension = D3D12_RTV_DIMENSION_TEXTURE2D;
+            rtv_desc.Texture2D.MipSlice = 0;
+            rtv_desc.Texture2D.PlaneSlice = 0;
+            device_->CreateRenderTargetView(
+                resource.Get(),
+                &rtv_desc,
+                rtv_heap->GetCPUDescriptorHandleForHeapStart()
+            );
+        }
+
         return std::make_unique<D3D12Texture>(
             desc,
             device_,
             command_queue_,
             std::move(resource),
             D3D12_RESOURCE_STATE_COMMON,
-            std::move(dsv_heap)
+            std::move(dsv_heap),
+            std::move(rtv_heap)
         );
     }
 
@@ -2516,6 +2650,7 @@ public:
             desc.topology,
             std::move(serialized_root),
             std::move(vertex_streams),
+            desc.color_format,
             desc.depth
         );
     }

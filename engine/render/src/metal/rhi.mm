@@ -485,13 +485,15 @@ public:
         const PrimitiveTopology topology,
         const CullMode cull,
         const FrontFace front,
+        const TextureFormat color_format,
         const DepthStateDesc depth,
         PipelineLayout layout,
         std::vector<MetalShaderResourceLocationDesc> vertex_locations,
         std::vector<MetalShaderResourceLocationDesc> fragment_locations,
         std::vector<MetalVertexStreamInfo> vertex_streams
     ) : state_{state}, depth_state_{depth_state}, topology_{topology}, cull_{cull}, front_{front},
-        depth_{depth}, layout_{std::move(layout)}, vertex_locations_{std::move(vertex_locations)},
+        color_format_{color_format}, depth_{depth}, layout_{std::move(layout)},
+        vertex_locations_{std::move(vertex_locations)},
         fragment_locations_{std::move(fragment_locations)},
         vertex_streams_{std::move(vertex_streams)} {}
 
@@ -500,6 +502,7 @@ public:
     [[nodiscard]] id<MTLDepthStencilState> depth_state() const noexcept { return depth_state_; }
     [[nodiscard]] CullMode cull() const noexcept { return cull_; }
     [[nodiscard]] FrontFace front() const noexcept { return front_; }
+    [[nodiscard]] TextureFormat color_format() const noexcept { return color_format_; }
     [[nodiscard]] const DepthStateDesc& depth() const noexcept { return depth_; }
     [[nodiscard]] const PipelineLayout& layout() const noexcept { return layout_; }
     [[nodiscard]] std::size_t vertex_stream_count() const noexcept { return vertex_streams_.size(); }
@@ -542,6 +545,7 @@ private:
     PrimitiveTopology topology_ = PrimitiveTopology::triangle_list;
     CullMode cull_ = CullMode::back;
     FrontFace front_ = FrontFace::counter_clockwise;
+    TextureFormat color_format_ = TextureFormat::undefined;
     DepthStateDesc depth_{};
     PipelineLayout layout_;
     std::vector<MetalShaderResourceLocationDesc> vertex_locations_;
@@ -770,12 +774,89 @@ public:
 
         render_encoder_ = [command_buffer_ renderCommandEncoderWithDescriptor:pass];
         active_swapchain_ = metal_swapchain;
+        active_color_texture_ = nullptr;
         active_depth_texture_ = depth_texture;
         reset_mesh_state();
         active_pipeline_ = nullptr;
         bound_resources_.clear();
         pipeline_bound_ = false;
         return render_encoder_ != nil;
+    }
+
+    bool begin_render_pass(Texture& color_attachment, const RenderPassDesc& desc) override {
+        if (render_encoder_ != nil || drawable_ != nil || command_buffer_ == nil ||
+            desc.clear_depth < 0.0F || desc.clear_depth > 1.0F) {
+            return false;
+        }
+        auto* color_texture = dynamic_cast<MetalTexture*>(&color_attachment);
+        if (color_texture == nullptr || color_texture->native() == nil ||
+            color_texture->format() == TextureFormat::depth32_float ||
+            color_texture->dimension() != TextureDimension::d2 ||
+            !has_usage(color_texture->usage(), TextureUsage::color_attachment)) {
+            return false;
+        }
+
+        MetalTexture* depth_texture = nullptr;
+        if (desc.depth_attachment != nullptr) {
+            depth_texture = dynamic_cast<MetalTexture*>(desc.depth_attachment);
+            if (depth_texture == nullptr || depth_texture->native() == nil ||
+                depth_texture->format() != TextureFormat::depth32_float ||
+                !has_usage(depth_texture->usage(), TextureUsage::depth_attachment) ||
+                depth_texture->width() != color_texture->width() ||
+                depth_texture->height() != color_texture->height()) {
+                return false;
+            }
+        }
+
+        MTLRenderPassDescriptor* pass = [MTLRenderPassDescriptor renderPassDescriptor];
+        pass.colorAttachments[0].texture = color_texture->native();
+        pass.colorAttachments[0].loadAction = desc.clear_color_attachment
+            ? MTLLoadActionClear
+            : MTLLoadActionLoad;
+        pass.colorAttachments[0].storeAction = MTLStoreActionStore;
+        pass.colorAttachments[0].clearColor = MTLClearColorMake(
+            desc.clear_color.red,
+            desc.clear_color.green,
+            desc.clear_color.blue,
+            desc.clear_color.alpha
+        );
+        if (depth_texture != nullptr) {
+            pass.depthAttachment.texture = depth_texture->native();
+            pass.depthAttachment.loadAction = desc.clear_depth_attachment
+                ? MTLLoadActionClear
+                : MTLLoadActionLoad;
+            pass.depthAttachment.storeAction = MTLStoreActionStore;
+            pass.depthAttachment.clearDepth = desc.clear_depth;
+        }
+
+        render_encoder_ = [command_buffer_ renderCommandEncoderWithDescriptor:pass];
+        if (render_encoder_ == nil) {
+            return false;
+        }
+        const MTLViewport viewport{
+            0.0,
+            0.0,
+            static_cast<double>(color_texture->width()),
+            static_cast<double>(color_texture->height()),
+            0.0,
+            1.0,
+        };
+        const MTLScissorRect scissor{
+            0U,
+            0U,
+            static_cast<NSUInteger>(color_texture->width()),
+            static_cast<NSUInteger>(color_texture->height()),
+        };
+        [render_encoder_ setViewport:viewport];
+        [render_encoder_ setScissorRect:scissor];
+        active_swapchain_ = nullptr;
+        active_color_texture_ = color_texture;
+        active_depth_texture_ = depth_texture;
+        reset_mesh_state();
+        active_pipeline_ = nullptr;
+        bound_resources_.clear();
+        pipeline_bound_ = false;
+        return true;
     }
 
     bool begin_depth_render_pass(
@@ -803,6 +884,7 @@ public:
         pass.depthAttachment.clearDepth = clear_depth;
         render_encoder_ = [command_buffer_ renderCommandEncoderWithDescriptor:pass];
         active_swapchain_ = nullptr;
+        active_color_texture_ = nullptr;
         active_depth_texture_ = depth_texture;
         reset_mesh_state();
         active_pipeline_ = nullptr;
@@ -857,13 +939,23 @@ public:
         if (metal_pipeline == nullptr || metal_pipeline->native() == nil) {
             return false;
         }
+        const TextureFormat active_color_format = active_color_texture_ != nullptr
+            ? active_color_texture_->format()
+            : (active_swapchain_ != nullptr
+                ? active_swapchain_->color_format()
+                : TextureFormat::undefined);
+        if (metal_pipeline->color_format() != active_color_format) {
+            return false;
+        }
         const auto& depth = metal_pipeline->depth();
         if (depth.format != TextureFormat::undefined &&
             (active_depth_texture_ == nullptr || active_depth_texture_->format() != depth.format)) {
             return false;
         }
         [render_encoder_ setRenderPipelineState:metal_pipeline->native()];
-        [render_encoder_ setDepthStencilState:metal_pipeline->depth_state()];
+        if (metal_pipeline->depth_state() != nil) {
+            [render_encoder_ setDepthStencilState:metal_pipeline->depth_state()];
+        }
         [render_encoder_ setCullMode:cull_mode(metal_pipeline->cull())];
         [render_encoder_ setFrontFacingWinding:front_winding(metal_pipeline->front())];
         active_pipeline_ = metal_pipeline;
@@ -1103,6 +1195,7 @@ public:
         [render_encoder_ endEncoding];
         render_encoder_ = nil;
         active_pipeline_ = nullptr;
+        active_color_texture_ = nullptr;
         active_depth_texture_ = nullptr;
         bound_resources_.clear();
         reset_mesh_state();
@@ -1551,6 +1644,7 @@ private:
     id<CAMetalDrawable> drawable_ = nil;
     MetalGraphicsPipeline* active_pipeline_ = nullptr;
     MetalSwapchain* active_swapchain_ = nullptr;
+    MetalTexture* active_color_texture_ = nullptr;
     MetalTexture* active_depth_texture_ = nullptr;
     std::vector<MetalBoundResource> bound_resources_;
     std::array<bool, max_vertex_buffers> vertex_buffers_bound_{};
@@ -1614,6 +1708,12 @@ public:
         if (has_usage(desc.usage, TextureUsage::depth_attachment) &&
             (desc.dimension != TextureDimension::d2 || desc.array_layers != 1U || desc.sample_count != 1U)) {
             core::log(core::LogLevel::error, "Metal depth attachments currently require one non-MSAA 2D layer.");
+            return nullptr;
+        }
+        if (has_usage(desc.usage, TextureUsage::color_attachment) &&
+            (desc.dimension != TextureDimension::d2 || desc.array_layers != 1U ||
+                desc.mip_levels != 1U || desc.sample_count != 1U)) {
+            core::log(core::LogLevel::error, "Metal color attachments currently require one non-MSAA 2D mip and layer.");
             return nullptr;
         }
         const bool size_supported =
@@ -1905,6 +2005,7 @@ public:
             desc.topology,
             desc.cull_mode,
             desc.front_face,
+            desc.color_format,
             desc.depth,
             std::move(layout),
             std::vector<MetalShaderResourceLocationDesc>{

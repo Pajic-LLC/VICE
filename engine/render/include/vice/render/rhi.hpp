@@ -586,6 +586,7 @@ public:
     ) = 0;
 
     virtual bool begin_render_pass(Swapchain& swapchain, const RenderPassDesc& desc) = 0;
+    virtual bool begin_render_pass(Texture& color_attachment, const RenderPassDesc& desc) = 0;
     virtual bool begin_depth_render_pass(
         Texture& depth_attachment,
         float clear_depth = 1.0F,
