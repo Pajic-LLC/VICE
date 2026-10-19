@@ -278,10 +278,37 @@ int main() {
     require(splits[0] > rotated_camera->camera.near_plane, "first cascade split follows camera near plane");
     require(splits[0] < splits[1] && splits[1] < splits[2] && splits[2] < splits[3], "cascade splits increase");
     require(splits[3] <= runtime::runtime_shadow_distance, "cascade distance is bounded");
+    const auto interior_blend = runtime::runtime_shadow_cascade_blend(splits[0] * 0.5F, splits);
+    require(interior_blend.primary == 0U, "interior depth selects first cascade");
+    require(interior_blend.secondary == 0U, "interior depth does not double-sample");
+    require(interior_blend.secondary_weight == 0.0F, "interior depth has zero blend weight");
+    const float first_transition_start = splits[0] * (1.0F - runtime::runtime_shadow_transition_fraction);
+    const auto transition_blend = runtime::runtime_shadow_cascade_blend(
+        first_transition_start + (splits[0] - first_transition_start) * 0.5F,
+        splits
+    );
+    require(transition_blend.primary == 0U && transition_blend.secondary == 1U,
+        "first cascade transition blends into second cascade");
+    require(std::abs(transition_blend.secondary_weight - 0.5F) < 0.001F,
+        "cascade transition weight is continuous");
+    const auto boundary_blend = runtime::runtime_shadow_cascade_blend(splits[0], splits);
+    require(boundary_blend.primary == 0U && boundary_blend.secondary == 1U,
+        "split boundary retains adjacent cascade pair");
+    require(std::abs(boundary_blend.secondary_weight - 1.0F) < 0.001F,
+        "split boundary resolves fully to next cascade");
+    const auto final_blend = runtime::runtime_shadow_cascade_blend(splits[3], splits);
+    require(final_blend.primary == 3U && final_blend.secondary == 3U,
+        "final cascade does not request a nonexistent neighbor");
     for (std::size_t cascade_index = 0; cascade_index < first_shadow->cascades.size(); ++cascade_index) {
         const auto& cascade = first_shadow->cascades[cascade_index];
         require(cascade.split_far == splits[cascade_index], "cascade stores split far distance");
         require(cascade.split_far > cascade.split_near, "cascade split range is valid");
+        if (cascade_index > 0U) {
+            require(
+                cascade.split_near < splits[cascade_index - 1U],
+                "adjacent cascade overlaps the transition band"
+            );
+        }
         for (const float value : cascade.view_projection.values) {
             require(std::isfinite(value), "cascade shadow matrix is finite");
         }

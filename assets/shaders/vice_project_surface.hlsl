@@ -1,5 +1,6 @@
 static const uint VICE_MAX_LIGHTS = 8;
 static const uint VICE_SHADOW_CASCADE_COUNT = 4;
+static const float VICE_SHADOW_TRANSITION_FRACTION = 0.10;
 
 struct ViceLight {
     float4 position_or_direction;
@@ -154,16 +155,18 @@ uint directional_shadow_cascade(float world_depth) {
     return 3;
 }
 
-float directional_shadow_visibility(float3 world_position) {
-    if (shadow_metadata.x < 0.5) return 1.0;
+float directional_shadow_split(uint cascade_index) {
+    if (cascade_index == 0) return shadow_cascade_splits.x;
+    if (cascade_index == 1) return shadow_cascade_splits.y;
+    if (cascade_index == 2) return shadow_cascade_splits.z;
+    return shadow_cascade_splits.w;
+}
 
-    const float world_depth = max(
-        dot(world_position - camera_position.xyz, shadow_camera_forward.xyz),
-        0.0
-    );
-    if (world_depth > shadow_cascade_splits.w) return 1.0;
-
-    const uint cascade_index = directional_shadow_cascade(world_depth);
+float directional_shadow_cascade_visibility(
+    uint cascade_index,
+    float3 world_position,
+    float3 world_normal
+) {
     const float4 shadow_position = directional_shadow_position(cascade_index, world_position);
     if (abs(shadow_position.w) < 0.000001) return 1.0;
 
@@ -176,8 +179,15 @@ float directional_shadow_visibility(float3 world_position) {
     );
     if (uv.x <= 0.0 || uv.x >= 1.0 || uv.y <= 0.0 || uv.y >= 1.0) return 1.0;
 
-    const float texel = shadow_metadata.z;
-    const float compare_depth = projected.z - shadow_metadata.w * (1.0 + 0.35 * cascade_index);
+    const uint shadow_light_index = (uint)shadow_metadata.y;
+    const float3 light_direction = normalize(-lights[shadow_light_index].position_or_direction.xyz);
+    const float normal_light = saturate(dot(normalize(world_normal), light_direction));
+    const float slope_bias = (1.0 - normal_light) * 1.25;
+    const float compare_depth = projected.z - shadow_metadata.w *
+        (1.0 + 0.35 * cascade_index + slope_bias);
+    const float filter_radius = 1.0 + 0.25 * cascade_index;
+    const float texel = shadow_metadata.z * filter_radius;
+
     float visibility = 0.0;
     [unroll]
     for (int y = -1; y <= 1; ++y) {
@@ -191,6 +201,38 @@ float directional_shadow_visibility(float3 world_position) {
         }
     }
     return visibility / 9.0;
+}
+
+float directional_shadow_visibility(float3 world_position, float3 world_normal) {
+    if (shadow_metadata.x < 0.5) return 1.0;
+
+    const float world_depth = max(
+        dot(world_position - camera_position.xyz, shadow_camera_forward.xyz),
+        0.0
+    );
+    if (world_depth > shadow_cascade_splits.w) return 1.0;
+
+    const uint cascade_index = directional_shadow_cascade(world_depth);
+    const float primary_visibility = directional_shadow_cascade_visibility(
+        cascade_index, world_position, world_normal
+    );
+    if (cascade_index + 1 >= VICE_SHADOW_CASCADE_COUNT) return primary_visibility;
+
+    const float split_far = directional_shadow_split(cascade_index);
+    const float split_near = cascade_index == 0 ? 0.0 : directional_shadow_split(cascade_index - 1);
+    const float transition_width = max(
+        (split_far - split_near) * VICE_SHADOW_TRANSITION_FRACTION,
+        0.0001
+    );
+    const float blend = saturate(
+        (world_depth - (split_far - transition_width)) / transition_width
+    );
+    if (blend <= 0.0) return primary_visibility;
+
+    const float secondary_visibility = directional_shadow_cascade_visibility(
+        cascade_index + 1, world_position, world_normal
+    );
+    return lerp(primary_visibility, secondary_visibility, blend);
 }
 
 uint point_shadow_face(float3 relative_position) {
@@ -331,7 +373,7 @@ float4 vice_surface_fs(VertexOut input) : SV_Target0 {
         float visibility = 1.0;
         if (shadow_metadata.x >= 0.5 && index == shadow_light_index &&
             lights[index].position_or_direction.w < 0.5) {
-            visibility = directional_shadow_visibility(input.world_position);
+            visibility = directional_shadow_visibility(input.world_position, input.world_normal);
         } else if (lights[index].position_or_direction.w >= 0.5) {
             if (point_shadow_metadata_0.x >= 0.5 && index == (uint)point_shadow_metadata_0.y) {
                 visibility = point_shadow_visibility(0, input.model_position);
