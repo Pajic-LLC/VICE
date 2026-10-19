@@ -12,6 +12,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <span>
 #include <string>
 #include <string_view>
@@ -228,6 +229,12 @@ struct SceneLightConstants {
     float parameters[4]{};
 };
 
+struct SceneReflectionProjectionConstants {
+    math::Mat4 probe_from_model{};
+    float half_extents_enabled[4]{};
+    float rotation[4]{};
+};
+
 struct SceneConstants {
     math::Mat4 view_projection{};
     math::Mat4 model{};
@@ -242,6 +249,7 @@ struct SceneConstants {
     float environment_metadata[4]{};
     float environment_secondary_metadata[4]{};
     float environment_tertiary_metadata[4]{};
+    std::array<SceneReflectionProjectionConstants, 3U> environment_projections{};
 };
 
 struct ShadowConstants {
@@ -268,7 +276,8 @@ struct TaaConstants {
 static_assert(sizeof(ToneMapConstants) == 16U);
 static_assert(sizeof(BloomConstants) == 32U);
 static_assert(sizeof(SceneLightConstants) == 48U);
-static_assert(sizeof(SceneConstants) == 896U);
+static_assert(sizeof(SceneReflectionProjectionConstants) == 96U);
+static_assert(sizeof(SceneConstants) == 1184U);
 static_assert(sizeof(ShadowConstants) == 128U);
 static_assert(sizeof(MotionConstants) == 256U);
 static_assert(sizeof(TaaConstants) == 32U);
@@ -592,6 +601,43 @@ fragment float4 vice_runtime_tonemap_fs(
     result(1, 1) = scale.y;
     result(2, 2) = scale.z;
     return result;
+}
+
+[[nodiscard]] math::Mat4 reflection_probe_from_model(
+    const RenderMeshInstance& instance,
+    const RuntimeReflectionProbe& probe
+) noexcept {
+    const math::Vec3 relative_origin{
+        static_cast<float>(instance.spatial.global_position.x - probe.position.x),
+        static_cast<float>(instance.spatial.global_position.y - probe.position.y),
+        static_cast<float>(instance.spatial.global_position.z - probe.position.z),
+    };
+    const world::AuthoredRotation inverse_probe{
+        -probe.authored.rotation.x,
+        -probe.authored.rotation.y,
+        -probe.authored.rotation.z,
+        probe.authored.rotation.w,
+    };
+    const auto inverse_probe_rotation = math::rotation({
+        inverse_probe.x,
+        inverse_probe.y,
+        inverse_probe.z,
+        inverse_probe.w,
+    });
+    const auto instance_rotation = math::rotation({
+        instance.authored.rotation.x,
+        instance.authored.rotation.y,
+        instance.authored.rotation.z,
+        instance.authored.rotation.w,
+    });
+    const auto instance_linear = math::multiply(
+        instance_rotation,
+        scale_matrix(instance.authored.scale)
+    );
+    return math::multiply(
+        inverse_probe_rotation,
+        math::multiply(math::translation(relative_origin), instance_linear)
+    );
 }
 
 [[nodiscard]] std::unique_ptr<render::Buffer> create_buffer_with_data(
@@ -988,11 +1034,13 @@ RuntimeReflectionBlend select_runtime_reflection_probes(
     struct Candidate {
         world::ResourceId environment{};
         world::PersistentId entity{};
+        std::size_t probe_index = 0U;
         float weight = 0.0F;
         std::int32_t priority = 0;
     };
     std::vector<Candidate> candidates;
-    for (const auto& probe : probes) {
+    for (std::size_t probe_index = 0U; probe_index < probes.size(); ++probe_index) {
+        const auto& probe = probes[probe_index];
         if (!probe.probe.enabled || !world::valid(probe.probe) || !probe.environment.valid()) continue;
         const math::Vec3 offset{
             static_cast<float>(point.x - probe.position.x),
@@ -1023,7 +1071,13 @@ RuntimeReflectionBlend select_runtime_reflection_probes(
             ? 1.0F
             : std::clamp(edge / probe.probe.blend_distance, 0.0F, 1.0F);
         if (weight <= 0.0F) continue;
-        candidates.push_back(Candidate{probe.environment, probe.entity, weight, probe.probe.priority});
+        candidates.push_back(Candidate{
+            probe.environment,
+            probe.entity,
+            probe_index,
+            weight,
+            probe.probe.priority,
+        });
     }
 
     RuntimeReflectionBlend result;
@@ -1044,6 +1098,7 @@ RuntimeReflectionBlend select_runtime_reflection_probes(
     float local_sum = 0.0F;
     for (std::size_t index = 0U; index < result.local_environments.size() && index < candidates.size(); ++index) {
         result.local_environments[index] = candidates[index].environment;
+        result.local_probe_indices[index] = candidates[index].probe_index;
         result.local_weights[index] = candidates[index].weight;
         local_sum += candidates[index].weight;
     }
@@ -1055,6 +1110,59 @@ RuntimeReflectionBlend select_runtime_reflection_probes(
         result.global_weight = 1.0F - local_sum;
     }
     return result;
+}
+
+math::Vec3 parallax_correct_reflection_direction(
+    const world::GlobalPosition point,
+    const math::Vec3 world_direction,
+    const RuntimeReflectionProbe& probe
+) noexcept {
+    const math::Vec3 direction = math::normalize(world_direction);
+    if (!probe.probe.enabled || !world::valid(probe.probe) ||
+        math::dot(direction, direction) <= 0.0F) {
+        return direction;
+    }
+
+    const math::Vec3 world_offset{
+        static_cast<float>(point.x - probe.position.x),
+        static_cast<float>(point.y - probe.position.y),
+        static_cast<float>(point.z - probe.position.z),
+    };
+    const world::AuthoredRotation inverse{
+        -probe.authored.rotation.x,
+        -probe.authored.rotation.y,
+        -probe.authored.rotation.z,
+        probe.authored.rotation.w,
+    };
+    const math::Vec3 local_position = rotate_vector(inverse, world_offset);
+    const math::Vec3 local_direction = math::normalize(rotate_vector(inverse, direction));
+    const math::Vec3 extent{
+        probe.probe.half_extents.x * probe.authored.scale.x,
+        probe.probe.half_extents.y * probe.authored.scale.y,
+        probe.probe.half_extents.z * probe.authored.scale.z,
+    };
+    if (extent.x <= 0.0F || extent.y <= 0.0F || extent.z <= 0.0F ||
+        std::abs(local_position.x) > extent.x ||
+        std::abs(local_position.y) > extent.y ||
+        std::abs(local_position.z) > extent.z) {
+        return direction;
+    }
+
+    float distance = std::numeric_limits<float>::infinity();
+    const auto intersect_axis = [&](const float position, const float ray, const float half_extent) {
+        if (std::abs(ray) <= 1.0e-6F) return std::numeric_limits<float>::infinity();
+        const float first = (-half_extent - position) / ray;
+        const float second = (half_extent - position) / ray;
+        return std::max(first, second);
+    };
+    distance = std::min(distance, intersect_axis(local_position.x, local_direction.x, extent.x));
+    distance = std::min(distance, intersect_axis(local_position.y, local_direction.y, extent.y));
+    distance = std::min(distance, intersect_axis(local_position.z, local_direction.z, extent.z));
+    if (!std::isfinite(distance) || distance <= 0.0F) return direction;
+
+    const math::Vec3 local_hit = add(local_position, scaled(local_direction, distance));
+    if (math::dot(local_hit, local_hit) <= 1.0e-10F) return direction;
+    return math::normalize(rotate_vector(probe.authored.rotation, math::normalize(local_hit)));
 }
 
 std::optional<std::size_t> select_runtime_shadow_light(
@@ -2217,10 +2325,12 @@ bool RuntimeSceneRenderer::render(
         }
 
         std::array<detail::RuntimeEnvironmentBinding, 3U> environment_sources{};
+        std::array<std::optional<std::size_t>, 3U> environment_probe_indices{};
         std::array<float, 3U> environment_weights{};
         if (material_state.environment_source_count > 0U) {
             struct WeightedEnvironment {
                 detail::RuntimeEnvironmentBinding binding{};
+                std::optional<std::size_t> probe_index;
                 float weight = 0.0F;
             };
             std::vector<WeightedEnvironment> weighted;
@@ -2231,10 +2341,13 @@ bool RuntimeSceneRenderer::render(
             for (std::size_t probe_index = 0U; probe_index < blend.local_environments.size(); ++probe_index) {
                 if (!blend.local_environments[probe_index].has_value() || blend.local_weights[probe_index] <= 0.0F) continue;
                 const auto local = state_->environment.binding(*blend.local_environments[probe_index]);
-                if (local.available) weighted.push_back({local, blend.local_weights[probe_index]});
+                const auto selected_probe = blend.local_probe_indices[probe_index];
+                if (local.available && selected_probe.has_value() && *selected_probe < reflection_probes.size()) {
+                    weighted.push_back({local, selected_probe, blend.local_weights[probe_index]});
+                }
             }
             if (global_environment.available && blend.global_weight > 0.0F) {
-                weighted.push_back({global_environment, blend.global_weight});
+                weighted.push_back({global_environment, std::nullopt, blend.global_weight});
             }
             if (weighted.empty()) {
                 set_diagnostics(diagnostics,
@@ -2251,15 +2364,18 @@ bool RuntimeSceneRenderer::render(
             });
             if (material_state.environment_source_count == 1U) {
                 environment_sources[0] = weighted.front().binding;
+                environment_probe_indices[0] = weighted.front().probe_index;
                 environment_weights[0] = 1.0F;
             } else {
                 const std::size_t count = std::min<std::size_t>(3U, weighted.size());
                 for (std::size_t source_index = 0U; source_index < count; ++source_index) {
                     environment_sources[source_index] = weighted[source_index].binding;
+                    environment_probe_indices[source_index] = weighted[source_index].probe_index;
                     environment_weights[source_index] = weighted[source_index].weight;
                 }
                 for (std::size_t source_index = count; source_index < 3U; ++source_index) {
                     environment_sources[source_index] = environment_sources[0];
+                    environment_probe_indices[source_index].reset();
                     environment_weights[source_index] = 0.0F;
                 }
             }
@@ -2320,6 +2436,21 @@ bool RuntimeSceneRenderer::render(
         write_environment_metadata(constants.environment_metadata, environment_sources[0], environment_weights[0]);
         write_environment_metadata(constants.environment_secondary_metadata, environment_sources[1], environment_weights[1]);
         write_environment_metadata(constants.environment_tertiary_metadata, environment_sources[2], environment_weights[2]);
+        for (std::size_t source_index = 0U; source_index < environment_probe_indices.size(); ++source_index) {
+            const auto probe_index = environment_probe_indices[source_index];
+            if (!probe_index.has_value() || *probe_index >= reflection_probes.size()) continue;
+            const auto& probe = reflection_probes[*probe_index];
+            auto& projection = constants.environment_projections[source_index];
+            projection.probe_from_model = reflection_probe_from_model(instance, probe);
+            projection.half_extents_enabled[0] = probe.probe.half_extents.x * probe.authored.scale.x;
+            projection.half_extents_enabled[1] = probe.probe.half_extents.y * probe.authored.scale.y;
+            projection.half_extents_enabled[2] = probe.probe.half_extents.z * probe.authored.scale.z;
+            projection.half_extents_enabled[3] = 1.0F;
+            projection.rotation[0] = probe.authored.rotation.x;
+            projection.rotation[1] = probe.authored.rotation.y;
+            projection.rotation[2] = probe.authored.rotation.z;
+            projection.rotation[3] = probe.authored.rotation.w;
+        }
         if (!constants_iterator->second->write(0, std::as_bytes(std::span{&constants, 1}))) {
             set_diagnostics(diagnostics, "VICE Runtime could not update scene constants.");
             return false;
