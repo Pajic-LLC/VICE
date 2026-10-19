@@ -108,6 +108,12 @@ target_compile_features(vice_runtime_atmosphere_tests PRIVATE cxx_std_23)
 vice_enable_warnings(vice_runtime_atmosphere_tests)
 add_test(NAME vice_runtime_atmosphere_tests COMMAND vice_runtime_atmosphere_tests)
 
+add_executable(vice_runtime_point_shadow_tests runtime_point_shadow_tests.cpp)
+target_link_libraries(vice_runtime_point_shadow_tests PRIVATE VICE::Runtime VICE::World)
+target_compile_features(vice_runtime_point_shadow_tests PRIVATE cxx_std_23)
+vice_enable_warnings(vice_runtime_point_shadow_tests)
+add_test(NAME vice_runtime_point_shadow_tests COMMAND vice_runtime_point_shadow_tests)
+
 add_executable(vice_world_light_tests world_light_tests.cpp)
 target_link_libraries(vice_world_light_tests PRIVATE VICE::World)
 target_compile_features(vice_world_light_tests PRIVATE cxx_std_23)

@@ -95,7 +95,24 @@ cbuffer MaterialParams : register(b1, space0) {
     float2 padding;
 };
 Texture2D<float4> base_color_texture : register(t0, space0);
+Texture2D<float> shadow_1 : register(t1, space0);
+Texture2D<float> shadow_2 : register(t2, space0);
+Texture2D<float> shadow_3 : register(t3, space0);
+Texture2D<float> shadow_4 : register(t4, space0);
+Texture2D<float> point_shadow_0 : register(t5, space0);
+Texture2D<float> point_shadow_1 : register(t6, space0);
+Texture2D<float> point_shadow_2 : register(t7, space0);
+Texture2D<float> point_shadow_3 : register(t8, space0);
+Texture2D<float> point_shadow_4 : register(t9, space0);
+Texture2D<float> point_shadow_5 : register(t10, space0);
+Texture2D<float> point_shadow_6 : register(t11, space0);
+Texture2D<float> point_shadow_7 : register(t12, space0);
+Texture2D<float> point_shadow_8 : register(t13, space0);
+Texture2D<float> point_shadow_9 : register(t14, space0);
+Texture2D<float> point_shadow_10 : register(t15, space0);
+Texture2D<float> point_shadow_11 : register(t16, space0);
 SamplerState base_color_sampler : register(s0, space0);
+SamplerState shadow_sampler : register(s1, space0);
 struct VertexIn {
     float3 position : POSITION0;
     float3 color : COLOR0;
@@ -114,7 +131,26 @@ VertexOut surface_vs(VertexIn input) {
 }
 float4 surface_fs(VertexOut input) : SV_Target0 {
     const float4 sampled = base_color_texture.Sample(base_color_sampler, input.uv);
-    return sampled * base_color * float4(1.0 - metallic * 0.1, roughness, 1.0, 1.0);
+    const float keep_shadow_resources =
+        shadow_1.Sample(shadow_sampler, input.uv) +
+        shadow_2.Sample(shadow_sampler, input.uv) +
+        shadow_3.Sample(shadow_sampler, input.uv) +
+        shadow_4.Sample(shadow_sampler, input.uv) +
+        point_shadow_0.Sample(shadow_sampler, input.uv) +
+        point_shadow_1.Sample(shadow_sampler, input.uv) +
+        point_shadow_2.Sample(shadow_sampler, input.uv) +
+        point_shadow_3.Sample(shadow_sampler, input.uv) +
+        point_shadow_4.Sample(shadow_sampler, input.uv) +
+        point_shadow_5.Sample(shadow_sampler, input.uv) +
+        point_shadow_6.Sample(shadow_sampler, input.uv) +
+        point_shadow_7.Sample(shadow_sampler, input.uv) +
+        point_shadow_8.Sample(shadow_sampler, input.uv) +
+        point_shadow_9.Sample(shadow_sampler, input.uv) +
+        point_shadow_10.Sample(shadow_sampler, input.uv) +
+        point_shadow_11.Sample(shadow_sampler, input.uv);
+    return sampled * base_color *
+        float4(1.0 - metallic * 0.1, roughness, 1.0, 1.0) *
+        (1.0 + keep_shadow_resources * 1.0e-7);
 }
 )"
     );

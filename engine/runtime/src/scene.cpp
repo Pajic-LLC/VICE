@@ -137,6 +137,21 @@ constexpr render::ShaderBindingKey material_sampler_binding{
     };
 }
 
+[[nodiscard]] constexpr render::ShaderBindingKey point_shadow_texture_binding(
+    const std::uint32_t base,
+    const std::size_t light_slot,
+    const std::size_t face_index
+) noexcept {
+    return render::ShaderBindingKey{
+        .register_class = render::ShaderRegisterClass::shader_resource,
+        .binding = base + static_cast<std::uint32_t>(
+            light_slot * runtime_point_shadow_face_count + face_index
+        ),
+        .space = 0,
+        .array_element = 0,
+    };
+}
+
 constexpr render::ShaderBindingKey shadow_sampler_binding{
     .register_class = render::ShaderRegisterClass::sampler,
     .binding = 1,
@@ -236,6 +251,12 @@ struct SceneReflectionProjectionConstants {
     float rotation[4]{};
 };
 
+struct ScenePointShadowConstants {
+    float metadata[4]{};
+    math::Mat4 model_to_light{};
+    std::array<math::Mat4, runtime_point_shadow_face_count> face_view_projections{};
+};
+
 struct SceneConstants {
     math::Mat4 view_projection{};
     math::Mat4 model{};
@@ -257,6 +278,7 @@ struct SceneConstants {
     float atmosphere_parameters[4]{};
     float atmosphere_secondary[4]{};
     float atmosphere_ground_albedo[4]{};
+    std::array<ScenePointShadowConstants, runtime_point_shadow_light_count> point_shadows{};
 };
 
 struct ShadowConstants {
@@ -284,7 +306,8 @@ static_assert(sizeof(ToneMapConstants) == 16U);
 static_assert(sizeof(BloomConstants) == 32U);
 static_assert(sizeof(SceneLightConstants) == 48U);
 static_assert(sizeof(SceneReflectionProjectionConstants) == 96U);
-static_assert(sizeof(SceneConstants) == 1328U);
+static_assert(sizeof(ScenePointShadowConstants) == 464U);
+static_assert(sizeof(SceneConstants) == 2256U);
 static_assert(sizeof(ShadowConstants) == 128U);
 static_assert(sizeof(MotionConstants) == 256U);
 static_assert(sizeof(TaaConstants) == 32U);
@@ -1008,6 +1031,7 @@ std::vector<RuntimeLight> collect_runtime_lights(const world::World& world) {
                 static_cast<float>(entity.spatial_state->global_position.y),
                 static_cast<float>(entity.spatial_state->global_position.z),
             },
+            .global_position = entity.spatial_state->global_position,
         };
         if (light.light.type == world::LightType::directional) {
             light.direction = math::normalize(
@@ -1459,6 +1483,109 @@ std::optional<RuntimeShadowView> directional_shadow_view(
     return result;
 }
 
+RuntimePointShadowFace runtime_point_shadow_face(const math::Vec3 light_to_point) noexcept {
+    const float ax = std::abs(light_to_point.x);
+    const float ay = std::abs(light_to_point.y);
+    const float az = std::abs(light_to_point.z);
+    if (ax >= ay && ax >= az) {
+        return light_to_point.x >= 0.0F
+            ? RuntimePointShadowFace::positive_x : RuntimePointShadowFace::negative_x;
+    }
+    if (ay >= az) {
+        return light_to_point.y >= 0.0F
+            ? RuntimePointShadowFace::positive_y : RuntimePointShadowFace::negative_y;
+    }
+    return light_to_point.z >= 0.0F
+        ? RuntimePointShadowFace::positive_z : RuntimePointShadowFace::negative_z;
+}
+
+math::Mat4 runtime_point_shadow_face_view_projection(
+    const RuntimePointShadowFace face,
+    const float range
+) noexcept {
+    if (!std::isfinite(range) || range <= 0.02F) return math::identity();
+    math::Vec3 direction{};
+    math::Vec3 up{0.0F, -1.0F, 0.0F};
+    switch (face) {
+    case RuntimePointShadowFace::positive_x: direction = {1.0F, 0.0F, 0.0F}; break;
+    case RuntimePointShadowFace::negative_x: direction = {-1.0F, 0.0F, 0.0F}; break;
+    case RuntimePointShadowFace::positive_y:
+        direction = {0.0F, 1.0F, 0.0F}; up = {0.0F, 0.0F, 1.0F}; break;
+    case RuntimePointShadowFace::negative_y:
+        direction = {0.0F, -1.0F, 0.0F}; up = {0.0F, 0.0F, -1.0F}; break;
+    case RuntimePointShadowFace::positive_z: direction = {0.0F, 0.0F, 1.0F}; break;
+    case RuntimePointShadowFace::negative_z: direction = {0.0F, 0.0F, -1.0F}; break;
+    }
+    const float near_plane = std::clamp(range * 0.002F, 0.02F, range * 0.25F);
+    constexpr float half_pi = 1.57079632679489661923F;
+    return math::multiply(
+        math::perspective_rh_zo(half_pi, 1.0F, near_plane, range),
+        math::look_at_rh({}, direction, up)
+    );
+}
+
+std::array<std::optional<RuntimePointShadowView>, runtime_point_shadow_light_count>
+runtime_point_shadow_views(
+    const world::GlobalPosition camera_position,
+    const std::span<const RuntimeLight> lights
+) noexcept {
+    struct Candidate {
+        std::size_t light_index = 0U;
+        double normalized_distance_squared = 0.0;
+        float intensity = 0.0F;
+    };
+    std::vector<Candidate> candidates;
+    for (std::size_t index = 0U; index < lights.size(); ++index) {
+        const auto& light = lights[index];
+        if (!light.light.enabled || light.light.type != world::LightType::point ||
+            !std::isfinite(light.light.range) || light.light.range <= 0.02F) continue;
+        const double dx = light.global_position.x - camera_position.x;
+        const double dy = light.global_position.y - camera_position.y;
+        const double dz = light.global_position.z - camera_position.z;
+        const double range = static_cast<double>(light.light.range);
+        candidates.push_back(Candidate{
+            .light_index = index,
+            .normalized_distance_squared = (dx * dx + dy * dy + dz * dz) / (range * range),
+            .intensity = light.light.intensity,
+        });
+    }
+    std::sort(candidates.begin(), candidates.end(), [&](const Candidate& left, const Candidate& right) {
+        if (left.normalized_distance_squared != right.normalized_distance_squared) {
+            return left.normalized_distance_squared < right.normalized_distance_squared;
+        }
+        if (left.intensity != right.intensity) return left.intensity > right.intensity;
+        const auto& left_id = lights[left.light_index].entity.bytes();
+        const auto& right_id = lights[right.light_index].entity.bytes();
+        if (left_id != right_id) {
+            return std::lexicographical_compare(
+                left_id.begin(), left_id.end(), right_id.begin(), right_id.end()
+            );
+        }
+        return left.light_index < right.light_index;
+    });
+
+    std::array<std::optional<RuntimePointShadowView>, runtime_point_shadow_light_count> result{};
+    const std::size_t count = std::min(result.size(), candidates.size());
+    for (std::size_t slot = 0U; slot < count; ++slot) {
+        const std::size_t light_index = candidates[slot].light_index;
+        const auto& light = lights[light_index];
+        RuntimePointShadowView view{
+            .light_entity = light.entity,
+            .light_index = light_index,
+            .global_position = light.global_position,
+            .range = light.light.range,
+        };
+        for (std::size_t face_index = 0U; face_index < runtime_point_shadow_face_count; ++face_index) {
+            view.face_view_projections[face_index] = runtime_point_shadow_face_view_projection(
+                static_cast<RuntimePointShadowFace>(face_index),
+                view.range
+            );
+        }
+        result[slot] = view;
+    }
+    return result;
+}
+
 math::Mat4 runtime_model_matrix_relative_to(
     const RenderMeshInstance& instance,
     const world::GlobalPosition origin
@@ -1575,6 +1702,10 @@ struct RuntimeSceneRenderer::State {
     std::unique_ptr<render::ShaderModule> shadow_vertex_shader;
     std::unique_ptr<render::GraphicsPipeline> shadow_pipeline;
     std::array<std::unique_ptr<render::Texture>, runtime_shadow_cascade_count> shadow_maps;
+    std::array<
+        std::array<std::unique_ptr<render::Texture>, runtime_point_shadow_face_count>,
+        runtime_point_shadow_light_count
+    > point_shadow_maps;
     std::unique_ptr<render::Sampler> shadow_sampler;
     std::unique_ptr<render::Texture> scene_color;
     std::array<std::unique_ptr<render::Texture>, 2U> temporal_color_history;
@@ -1591,6 +1722,13 @@ struct RuntimeSceneRenderer::State {
         std::unordered_map<world::PersistentId, std::unique_ptr<render::Buffer>, world::PersistentIdHash>,
         runtime_shadow_cascade_count
     > shadow_constants;
+    std::array<
+        std::array<
+            std::unordered_map<world::PersistentId, std::unique_ptr<render::Buffer>, world::PersistentIdHash>,
+            runtime_point_shadow_face_count
+        >,
+        runtime_point_shadow_light_count
+    > point_shadow_constants;
     std::uint32_t depth_width = 0;
     std::uint32_t depth_height = 0;
     std::uint32_t bloom_width = 0;
@@ -2000,6 +2138,20 @@ bool RuntimeSceneRenderer::initialize(
         }
     }
 
+    render::TextureDesc point_shadow_desc = shadow_desc;
+    point_shadow_desc.width = runtime_point_shadow_map_size;
+    point_shadow_desc.height = runtime_point_shadow_map_size;
+    point_shadow_desc.debug_name = "VICE Runtime point-light shadow face";
+    for (auto& point_light_maps : state_->point_shadow_maps) {
+        for (auto& shadow_face : point_light_maps) {
+            shadow_face = device.create_texture(point_shadow_desc);
+            if (!shadow_face) {
+                set_diagnostics(diagnostics, "VICE Runtime could not create a point-light shadow face.");
+                return false;
+            }
+        }
+    }
+
     render::SamplerDesc shadow_sampler_desc;
     shadow_sampler_desc.min_filter = render::Filter::nearest;
     shadow_sampler_desc.mag_filter = render::Filter::nearest;
@@ -2389,6 +2541,10 @@ bool RuntimeSceneRenderer::render(
             camera_global_position = spatial->global_position;
         }
     }
+    const auto point_shadow_views = runtime_point_shadow_views(
+        camera_global_position,
+        runtime_lights
+    );
     const auto global_environment = state_->environment.binding();
     const auto reflection_probes = collect_runtime_reflection_probes(world);
     for (const auto& probe : reflection_probes) {
@@ -2468,6 +2624,60 @@ bool RuntimeSceneRenderer::render(
             }
             if (!commands->end_render_pass()) {
                 set_diagnostics(diagnostics, "VICE Runtime could not finish a directional shadow cascade.");
+                return false;
+            }
+        }
+    }
+
+    for (std::size_t light_slot = 0U; light_slot < point_shadow_views.size(); ++light_slot) {
+        if (!point_shadow_views[light_slot].has_value()) continue;
+        const auto& point_view = *point_shadow_views[light_slot];
+        for (std::size_t face_index = 0U; face_index < runtime_point_shadow_face_count; ++face_index) {
+            if (!commands->begin_depth_render_pass(
+                    *state_->point_shadow_maps[light_slot][face_index], 1.0F, true
+                ) || !commands->set_viewport(render::Viewport{
+                    .width = static_cast<float>(runtime_point_shadow_map_size),
+                    .height = static_cast<float>(runtime_point_shadow_map_size),
+                }) || !commands->set_scissor_rect(render::ScissorRect{
+                    .width = runtime_point_shadow_map_size,
+                    .height = runtime_point_shadow_map_size,
+                }) || !commands->set_graphics_pipeline(*state_->shadow_pipeline)) {
+                set_diagnostics(diagnostics, "VICE Runtime could not begin a point-light shadow face.");
+                return false;
+            }
+            auto& face_constants = state_->point_shadow_constants[light_slot][face_index];
+            for (const auto& instance : instances) {
+                auto shadow_iterator = face_constants.find(instance.entity);
+                if (shadow_iterator == face_constants.end()) {
+                    auto constants = create_shadow_constant_buffer(*state_->device);
+                    if (!constants) {
+                        set_diagnostics(diagnostics, "VICE Runtime could not create point-shadow constants.");
+                        return false;
+                    }
+                    shadow_iterator = face_constants.emplace(instance.entity, std::move(constants)).first;
+                }
+                const ShadowConstants shadow_constants{
+                    .view_projection = point_view.face_view_projections[face_index],
+                    .model = runtime_model_matrix_relative_to(instance, point_view.global_position),
+                };
+                if (!shadow_iterator->second->write(
+                        0U, std::as_bytes(std::span{&shadow_constants, 1})
+                    )) {
+                    set_diagnostics(diagnostics, "VICE Runtime could not update point-shadow constants.");
+                    return false;
+                }
+                auto& mesh = state_->meshes.at(instance.mesh);
+                if (!commands->set_vertex_buffer(0U, *mesh.vertices) ||
+                    !commands->set_index_buffer(*mesh.indices, render::IndexFormat::uint32) ||
+                    !commands->set_graphics_constant_buffer(
+                        frame_binding, *shadow_iterator->second, 0U, sizeof(ShadowConstants)
+                    ) || !commands->draw_indexed(mesh.index_count)) {
+                    set_diagnostics(diagnostics, "VICE Runtime could not encode a point-light shadow caster.");
+                    return false;
+                }
+            }
+            if (!commands->end_render_pass()) {
+                set_diagnostics(diagnostics, "VICE Runtime could not finish a point-light shadow face.");
                 return false;
             }
         }
@@ -2717,6 +2927,19 @@ bool RuntimeSceneRenderer::render(
         constants.atmosphere_ground_albedo[1] = atmosphere.settings.ground_albedo.y;
         constants.atmosphere_ground_albedo[2] = atmosphere.settings.ground_albedo.z;
         constants.atmosphere_ground_albedo[3] = 1.0F;
+        for (std::size_t light_slot = 0U; light_slot < point_shadow_views.size(); ++light_slot) {
+            if (!point_shadow_views[light_slot].has_value()) continue;
+            const auto& point_view = *point_shadow_views[light_slot];
+            auto& point_constants = constants.point_shadows[light_slot];
+            point_constants.metadata[0] = 1.0F;
+            point_constants.metadata[1] = static_cast<float>(point_view.light_index);
+            point_constants.metadata[2] = point_view.range;
+            point_constants.metadata[3] = 1.0F / static_cast<float>(runtime_point_shadow_map_size);
+            point_constants.model_to_light = runtime_model_matrix_relative_to(
+                instance, point_view.global_position
+            );
+            point_constants.face_view_projections = point_view.face_view_projections;
+        }
         if (!constants_iterator->second->write(0, std::as_bytes(std::span{&constants, 1}))) {
             set_diagnostics(diagnostics, "VICE Runtime could not update scene constants.");
             return false;
@@ -2804,6 +3027,32 @@ bool RuntimeSceneRenderer::render(
                     "VICE Runtime could not bind directional shadow cascades for mesh `" +
                         instance.mesh.value.to_string() + "`."
                 );
+                return false;
+            }
+        }
+        if (material_state.point_shadow_light_capacity > 0U) {
+            const std::size_t point_light_count = std::min<std::size_t>(
+                material_state.point_shadow_light_capacity, runtime_point_shadow_light_count
+            );
+            bool point_shadows_bound = state_->shadow_sampler != nullptr;
+            for (std::size_t light_slot = 0U; light_slot < point_light_count && point_shadows_bound; ++light_slot) {
+                for (std::size_t face_index = 0U;
+                     face_index < runtime_point_shadow_face_count && point_shadows_bound; ++face_index) {
+                    point_shadows_bound = commands->set_graphics_texture(
+                        point_shadow_texture_binding(
+                            material_state.point_shadow_texture_binding_base, light_slot, face_index
+                        ),
+                        *state_->point_shadow_maps[light_slot][face_index]
+                    );
+                }
+            }
+            point_shadows_bound = point_shadows_bound && commands->set_graphics_sampler(
+                shadow_sampler_binding, *state_->shadow_sampler
+            );
+            if (!point_shadows_bound) {
+                set_diagnostics(diagnostics,
+                    "VICE Runtime could not bind point-light shadow faces for mesh `" +
+                    instance.mesh.value.to_string() + "`.");
                 return false;
             }
         }

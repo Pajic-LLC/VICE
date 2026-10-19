@@ -20,6 +20,40 @@ cbuffer SceneFrame : register(b0, space0) {
     column_major float4x4 shadow_view_projection_3;
     float4 shadow_cascade_splits;
     float4 shadow_camera_forward;
+    float4 environment_metadata;
+    float4 environment_secondary_metadata;
+    float4 environment_tertiary_metadata;
+    column_major float4x4 environment_probe_from_model_0;
+    float4 environment_probe_half_extents_0;
+    float4 environment_probe_rotation_0;
+    column_major float4x4 environment_probe_from_model_1;
+    float4 environment_probe_half_extents_1;
+    float4 environment_probe_rotation_1;
+    column_major float4x4 environment_probe_from_model_2;
+    float4 environment_probe_half_extents_2;
+    float4 environment_probe_rotation_2;
+    column_major float4x4 atmosphere_camera_from_model;
+    float4 atmosphere_sun_direction_intensity;
+    float4 atmosphere_sun_color;
+    float4 atmosphere_parameters;
+    float4 atmosphere_secondary;
+    float4 atmosphere_ground_albedo;
+    float4 point_shadow_metadata_0;
+    column_major float4x4 point_shadow_model_to_light_0;
+    column_major float4x4 point_shadow_face_0_0;
+    column_major float4x4 point_shadow_face_0_1;
+    column_major float4x4 point_shadow_face_0_2;
+    column_major float4x4 point_shadow_face_0_3;
+    column_major float4x4 point_shadow_face_0_4;
+    column_major float4x4 point_shadow_face_0_5;
+    float4 point_shadow_metadata_1;
+    column_major float4x4 point_shadow_model_to_light_1;
+    column_major float4x4 point_shadow_face_1_0;
+    column_major float4x4 point_shadow_face_1_1;
+    column_major float4x4 point_shadow_face_1_2;
+    column_major float4x4 point_shadow_face_1_3;
+    column_major float4x4 point_shadow_face_1_4;
+    column_major float4x4 point_shadow_face_1_5;
 };
 
 cbuffer MaterialParams : register(b1, space0) {
@@ -34,6 +68,18 @@ Texture2D<float> directional_shadow_map : register(t1, space0);
 Texture2D<float> directional_shadow_map_1 : register(t2, space0);
 Texture2D<float> directional_shadow_map_2 : register(t3, space0);
 Texture2D<float> directional_shadow_map_3 : register(t4, space0);
+Texture2D<float> point_shadow_map_0_0 : register(t5, space0);
+Texture2D<float> point_shadow_map_0_1 : register(t6, space0);
+Texture2D<float> point_shadow_map_0_2 : register(t7, space0);
+Texture2D<float> point_shadow_map_0_3 : register(t8, space0);
+Texture2D<float> point_shadow_map_0_4 : register(t9, space0);
+Texture2D<float> point_shadow_map_0_5 : register(t10, space0);
+Texture2D<float> point_shadow_map_1_0 : register(t11, space0);
+Texture2D<float> point_shadow_map_1_1 : register(t12, space0);
+Texture2D<float> point_shadow_map_1_2 : register(t13, space0);
+Texture2D<float> point_shadow_map_1_3 : register(t14, space0);
+Texture2D<float> point_shadow_map_1_4 : register(t15, space0);
+Texture2D<float> point_shadow_map_1_5 : register(t16, space0);
 SamplerState base_color_sampler : register(s0, space0);
 SamplerState directional_shadow_sampler : register(s1, space0);
 
@@ -50,6 +96,7 @@ struct VertexOut {
     float3 world_normal : TEXCOORD1;
     float3 color : COLOR0;
     float2 uv : TEXCOORD2;
+    float3 model_position : TEXCOORD3;
 };
 
 VertexOut vice_surface_vs(VertexIn input) {
@@ -60,6 +107,7 @@ VertexOut vice_surface_vs(VertexIn input) {
     output.world_normal = normalize(mul((float3x3)model, input.normal));
     output.color = input.color;
     output.uv = input.uv;
+    output.model_position = input.position;
     return output;
 }
 
@@ -145,6 +193,86 @@ float directional_shadow_visibility(float3 world_position) {
     return visibility / 9.0;
 }
 
+uint point_shadow_face(float3 relative_position) {
+    const float3 axis = abs(relative_position);
+    if (axis.x >= axis.y && axis.x >= axis.z) return relative_position.x >= 0.0 ? 0 : 1;
+    if (axis.y >= axis.z) return relative_position.y >= 0.0 ? 2 : 3;
+    return relative_position.z >= 0.0 ? 4 : 5;
+}
+
+float4 point_shadow_position(uint slot, uint face, float3 relative_position) {
+    const float4 position = float4(relative_position, 1.0);
+    if (slot == 0) {
+        if (face == 0) return mul(point_shadow_face_0_0, position);
+        if (face == 1) return mul(point_shadow_face_0_1, position);
+        if (face == 2) return mul(point_shadow_face_0_2, position);
+        if (face == 3) return mul(point_shadow_face_0_3, position);
+        if (face == 4) return mul(point_shadow_face_0_4, position);
+        return mul(point_shadow_face_0_5, position);
+    }
+    if (face == 0) return mul(point_shadow_face_1_0, position);
+    if (face == 1) return mul(point_shadow_face_1_1, position);
+    if (face == 2) return mul(point_shadow_face_1_2, position);
+    if (face == 3) return mul(point_shadow_face_1_3, position);
+    if (face == 4) return mul(point_shadow_face_1_4, position);
+    return mul(point_shadow_face_1_5, position);
+}
+
+float point_shadow_depth(uint slot, uint face, float2 uv) {
+    if (slot == 0) {
+        if (face == 0) return point_shadow_map_0_0.Sample(directional_shadow_sampler, uv);
+        if (face == 1) return point_shadow_map_0_1.Sample(directional_shadow_sampler, uv);
+        if (face == 2) return point_shadow_map_0_2.Sample(directional_shadow_sampler, uv);
+        if (face == 3) return point_shadow_map_0_3.Sample(directional_shadow_sampler, uv);
+        if (face == 4) return point_shadow_map_0_4.Sample(directional_shadow_sampler, uv);
+        return point_shadow_map_0_5.Sample(directional_shadow_sampler, uv);
+    }
+    if (face == 0) return point_shadow_map_1_0.Sample(directional_shadow_sampler, uv);
+    if (face == 1) return point_shadow_map_1_1.Sample(directional_shadow_sampler, uv);
+    if (face == 2) return point_shadow_map_1_2.Sample(directional_shadow_sampler, uv);
+    if (face == 3) return point_shadow_map_1_3.Sample(directional_shadow_sampler, uv);
+    if (face == 4) return point_shadow_map_1_4.Sample(directional_shadow_sampler, uv);
+    return point_shadow_map_1_5.Sample(directional_shadow_sampler, uv);
+}
+
+float4 point_shadow_metadata(uint slot) {
+    return slot == 0 ? point_shadow_metadata_0 : point_shadow_metadata_1;
+}
+
+float3 point_shadow_relative_position(uint slot, float3 model_position) {
+    return slot == 0
+        ? mul(point_shadow_model_to_light_0, float4(model_position, 1.0)).xyz
+        : mul(point_shadow_model_to_light_1, float4(model_position, 1.0)).xyz;
+}
+
+float point_shadow_visibility(uint slot, float3 model_position) {
+    const float4 metadata = point_shadow_metadata(slot);
+    if (metadata.x < 0.5 || metadata.z <= 0.0) return 1.0;
+    const float3 relative_position = point_shadow_relative_position(slot, model_position);
+    const float distance_to_light = length(relative_position);
+    if (distance_to_light <= 0.0001 || distance_to_light >= metadata.z) return 1.0;
+    const uint face = point_shadow_face(relative_position);
+    const float4 shadow_position = point_shadow_position(slot, face, relative_position);
+    if (abs(shadow_position.w) < 0.000001) return 1.0;
+    const float3 projected = shadow_position.xyz / shadow_position.w;
+    if (projected.z < 0.0 || projected.z > 1.0) return 1.0;
+    const float2 uv = float2(projected.x * 0.5 + 0.5, projected.y * -0.5 + 0.5);
+    if (uv.x <= 0.0 || uv.x >= 1.0 || uv.y <= 0.0 || uv.y >= 1.0) return 1.0;
+    const float compare_depth = projected.z - (0.0015 + 0.0010 * saturate(distance_to_light / metadata.z));
+    float visibility = 0.0;
+    [unroll]
+    for (int y = -1; y <= 1; ++y) {
+        [unroll]
+        for (int x = -1; x <= 1; ++x) {
+            const float stored_depth = point_shadow_depth(
+                slot, face, uv + float2((float)x, (float)y) * metadata.w
+            );
+            visibility += compare_depth <= stored_depth ? 1.0 : 0.0;
+        }
+    }
+    return visibility / 9.0;
+}
+
 float3 evaluate_light(
     ViceLight light,
     float3 world_position,
@@ -204,6 +332,13 @@ float4 vice_surface_fs(VertexOut input) : SV_Target0 {
         if (shadow_metadata.x >= 0.5 && index == shadow_light_index &&
             lights[index].position_or_direction.w < 0.5) {
             visibility = directional_shadow_visibility(input.world_position);
+        } else if (lights[index].position_or_direction.w >= 0.5) {
+            if (point_shadow_metadata_0.x >= 0.5 && index == (uint)point_shadow_metadata_0.y) {
+                visibility = point_shadow_visibility(0, input.model_position);
+            } else if (point_shadow_metadata_1.x >= 0.5 &&
+                index == (uint)point_shadow_metadata_1.y) {
+                visibility = point_shadow_visibility(1, input.model_position);
+            }
         }
         direct += visibility * evaluate_light(
             lights[index],
