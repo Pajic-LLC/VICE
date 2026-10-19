@@ -78,6 +78,7 @@ inline constexpr std::size_t runtime_shadow_cascade_count = 4U;
 inline constexpr std::uint32_t runtime_shadow_map_size = 2048U;
 inline constexpr float runtime_shadow_distance = 250.0F;
 inline constexpr float runtime_shadow_split_lambda = 0.65F;
+inline constexpr float runtime_shadow_transition_fraction = 0.10F;
 inline constexpr std::size_t runtime_point_shadow_light_count = 2U;
 inline constexpr std::size_t runtime_point_shadow_face_count = 6U;
 inline constexpr std::uint32_t runtime_point_shadow_map_size = 1024U;
@@ -135,6 +136,12 @@ struct RuntimeShadowView {
     std::array<RuntimeShadowCascade, runtime_shadow_cascade_count> cascades{};
 };
 
+struct RuntimeShadowCascadeBlend {
+    std::size_t primary = 0U;
+    std::size_t secondary = 0U;
+    float secondary_weight = 0.0F;
+};
+
 enum class RuntimePointShadowFace : std::uint8_t {
     positive_x = 0,
     negative_x = 1,
@@ -189,6 +196,11 @@ struct RuntimePointShadowView {
 
 [[nodiscard]] std::array<float, runtime_shadow_cascade_count> runtime_shadow_cascade_splits(
     const RuntimeCameraView& camera
+) noexcept;
+
+[[nodiscard]] RuntimeShadowCascadeBlend runtime_shadow_cascade_blend(
+    float world_depth,
+    const std::array<float, runtime_shadow_cascade_count>& splits
 ) noexcept;
 
 [[nodiscard]] std::optional<RuntimeShadowView> directional_shadow_view(

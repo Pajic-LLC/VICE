@@ -1450,6 +1450,36 @@ namespace {
 
 } // namespace
 
+RuntimeShadowCascadeBlend runtime_shadow_cascade_blend(
+    const float world_depth,
+    const std::array<float, runtime_shadow_cascade_count>& splits
+) noexcept {
+    RuntimeShadowCascadeBlend result{};
+    const float depth = std::isfinite(world_depth) ? std::max(world_depth, 0.0F) : 0.0F;
+    while (result.primary + 1U < splits.size() && depth > splits[result.primary]) {
+        ++result.primary;
+    }
+    result.secondary = result.primary;
+    if (result.primary + 1U >= splits.size()) return result;
+
+    const float split_near = result.primary == 0U ? 0.0F : splits[result.primary - 1U];
+    const float split_far = splits[result.primary];
+    const float span = split_far - split_near;
+    if (!std::isfinite(span) || span <= 0.0001F) return result;
+    const float width = span * runtime_shadow_transition_fraction;
+    if (width <= 0.0001F) return result;
+    const float transition_start = split_far - width;
+    if (depth <= transition_start) return result;
+
+    result.secondary = result.primary + 1U;
+    result.secondary_weight = std::clamp(
+        (depth - transition_start) / width,
+        0.0F,
+        1.0F
+    );
+    return result;
+}
+
 std::optional<RuntimeShadowView> directional_shadow_view(
     const RuntimeCameraView& camera,
     const std::span<const RuntimeLight> lights
@@ -1470,15 +1500,23 @@ std::optional<RuntimeShadowView> directional_shadow_view(
         .light_entity = light.entity,
         .light_index = *light_index,
     };
-    float split_near = std::max(0.001F, camera.camera.near_plane);
+    const float camera_near = std::max(0.001F, camera.camera.near_plane);
     for (std::size_t index = 0; index < result.cascades.size(); ++index) {
+        float fit_near = index == 0U ? camera_near : splits[index - 1U];
+        if (index > 0U) {
+            const float previous_near = index == 1U ? 0.0F : splits[index - 2U];
+            const float previous_span = splits[index - 1U] - previous_near;
+            fit_near = std::max(
+                camera_near,
+                splits[index - 1U] - previous_span * runtime_shadow_transition_fraction
+            );
+        }
         result.cascades[index] = fitted_shadow_cascade(
             camera,
             light,
-            split_near,
+            fit_near,
             splits[index]
         );
-        split_near = splits[index];
     }
     return result;
 }
