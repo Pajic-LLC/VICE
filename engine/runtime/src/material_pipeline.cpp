@@ -52,6 +52,8 @@ struct FragmentResourceContract {
     bool valid = false;
     std::uint32_t directional_shadow_cascade_count = 0;
     std::uint32_t shadow_texture_binding_base = 1U;
+    std::uint32_t point_shadow_light_capacity = 0U;
+    std::uint32_t point_shadow_texture_binding_base = 5U;
     std::uint32_t environment_source_count = 0U;
 };
 
@@ -62,6 +64,7 @@ struct FragmentResourceContract {
     bool base_color_texture = false;
     bool base_color_sampler = false;
     std::array<bool, runtime_shadow_cascade_count> shadow_textures{};
+    std::array<bool, runtime_point_shadow_light_count * runtime_point_shadow_face_count> point_shadow_textures{};
     bool shadow_sampler = false;
     for (const auto& resource : module.resources()) {
         if (resource.space != 0U || resource.count != 1U || resource.unbounded) return {};
@@ -76,6 +79,9 @@ struct FragmentResourceContract {
             } else if (resource.binding >= 1U &&
                 resource.binding <= runtime_shadow_cascade_count) {
                 shadow_textures[resource.binding - 1U] = true;
+            } else if (resource.binding >= 5U && resource.binding <
+                5U + runtime_point_shadow_light_count * runtime_point_shadow_face_count) {
+                point_shadow_textures[resource.binding - 5U] = true;
             } else {
                 return {};
             }
@@ -96,22 +102,34 @@ struct FragmentResourceContract {
     const bool all_shadow_textures = std::all_of(
         shadow_textures.begin(), shadow_textures.end(), [](const bool value) { return value; }
     );
-    const bool legacy_shadow_set = shadow_textures[0] && shadow_sampler &&
+    const bool legacy_shadow_set = shadow_textures[0] &&
         std::none_of(
             shadow_textures.begin() + 1,
             shadow_textures.end(),
             [](const bool value) { return value; }
         );
-    const bool cascaded_shadow_set = all_shadow_textures && shadow_sampler;
-    const bool no_shadow_set = !any_shadow_texture && !shadow_sampler;
-    const bool shadow_set_valid = no_shadow_set || legacy_shadow_set || cascaded_shadow_set;
+    const bool cascaded_shadow_set = all_shadow_textures;
+    const bool directional_shadow_set_valid = !any_shadow_texture || legacy_shadow_set || cascaded_shadow_set;
+    const bool any_point_shadow_texture = std::any_of(
+        point_shadow_textures.begin(), point_shadow_textures.end(), [](const bool value) { return value; }
+    );
+    const bool all_point_shadow_textures = std::all_of(
+        point_shadow_textures.begin(), point_shadow_textures.end(), [](const bool value) { return value; }
+    );
+    const bool point_shadow_set_valid = !any_point_shadow_texture || all_point_shadow_textures;
+    const bool any_shadow_resource = any_shadow_texture || any_point_shadow_texture;
+    const bool sampler_valid = shadow_sampler == any_shadow_resource;
 
     return FragmentResourceContract{
-        .valid = material_constants && base_color_texture && base_color_sampler && shadow_set_valid,
+        .valid = material_constants && base_color_texture && base_color_sampler &&
+            directional_shadow_set_valid && point_shadow_set_valid && sampler_valid,
         .directional_shadow_cascade_count = cascaded_shadow_set
             ? static_cast<std::uint32_t>(runtime_shadow_cascade_count)
             : legacy_shadow_set ? 1U : 0U,
         .shadow_texture_binding_base = 1U,
+        .point_shadow_light_capacity = all_point_shadow_textures
+            ? static_cast<std::uint32_t>(runtime_point_shadow_light_count) : 0U,
+        .point_shadow_texture_binding_base = 5U,
     };
 }
 
@@ -346,6 +364,8 @@ struct RuntimeMaterialLibrary::State {
         std::unique_ptr<render::Sampler> sampler;
         std::uint32_t directional_shadow_cascade_count = 0;
         std::uint32_t shadow_texture_binding_base = 1U;
+        std::uint32_t point_shadow_light_capacity = 0U;
+        std::uint32_t point_shadow_texture_binding_base = 5U;
         std::uint32_t environment_source_count = 0U;
     };
 
@@ -401,6 +421,8 @@ bool RuntimeMaterialLibrary::initialize(
         const bool extended_pbr = record.asset.version >= render::render_material_asset_format_version_v3;
         std::uint32_t directional_shadow_cascade_count = 0;
         std::uint32_t shadow_texture_binding_base = 1U;
+        std::uint32_t point_shadow_light_capacity = 0U;
+        std::uint32_t point_shadow_texture_binding_base = 5U;
         std::uint32_t environment_source_count = 0U;
         bool resources_valid = false;
         if (extended_pbr) {
@@ -414,6 +436,8 @@ bool RuntimeMaterialLibrary::initialize(
             resources_valid = valid_v2_vertex_resources(*vertex.module) && fragment_contract.valid;
             directional_shadow_cascade_count = fragment_contract.directional_shadow_cascade_count;
             shadow_texture_binding_base = fragment_contract.shadow_texture_binding_base;
+            point_shadow_light_capacity = fragment_contract.point_shadow_light_capacity;
+            point_shadow_texture_binding_base = fragment_contract.point_shadow_texture_binding_base;
         } else {
             resources_valid = valid_v1_resources(*vertex.module, 0U) &&
                 valid_v1_resources(*fragment.module, 1U);
@@ -495,6 +519,8 @@ bool RuntimeMaterialLibrary::initialize(
             .sampler = std::move(sampler),
             .directional_shadow_cascade_count = directional_shadow_cascade_count,
             .shadow_texture_binding_base = shadow_texture_binding_base,
+            .point_shadow_light_capacity = point_shadow_light_capacity,
+            .point_shadow_texture_binding_base = point_shadow_texture_binding_base,
             .environment_source_count = environment_source_count,
         });
     }
@@ -520,6 +546,8 @@ RuntimeMaterialBinding RuntimeMaterialLibrary::find(
         .constants_size = sizeof(MaterialConstants),
         .directional_shadow_cascade_count = found->second.directional_shadow_cascade_count,
         .shadow_texture_binding_base = found->second.shadow_texture_binding_base,
+        .point_shadow_light_capacity = found->second.point_shadow_light_capacity,
+        .point_shadow_texture_binding_base = found->second.point_shadow_texture_binding_base,
         .environment_source_count = found->second.environment_source_count,
     };
 }

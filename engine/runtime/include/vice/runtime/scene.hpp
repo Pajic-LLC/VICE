@@ -78,12 +78,16 @@ inline constexpr std::size_t runtime_shadow_cascade_count = 4U;
 inline constexpr std::uint32_t runtime_shadow_map_size = 2048U;
 inline constexpr float runtime_shadow_distance = 250.0F;
 inline constexpr float runtime_shadow_split_lambda = 0.65F;
+inline constexpr std::size_t runtime_point_shadow_light_count = 2U;
+inline constexpr std::size_t runtime_point_shadow_face_count = 6U;
+inline constexpr std::uint32_t runtime_point_shadow_map_size = 1024U;
 inline constexpr std::size_t runtime_local_reflection_probe_count = 2U;
 
 struct RuntimeLight {
     world::PersistentId entity{};
     world::Light light{};
     math::Vec3 position{};
+    world::GlobalPosition global_position{};
     math::Vec3 direction{};
 };
 
@@ -131,6 +135,23 @@ struct RuntimeShadowView {
     std::array<RuntimeShadowCascade, runtime_shadow_cascade_count> cascades{};
 };
 
+enum class RuntimePointShadowFace : std::uint8_t {
+    positive_x = 0,
+    negative_x = 1,
+    positive_y = 2,
+    negative_y = 3,
+    positive_z = 4,
+    negative_z = 5,
+};
+
+struct RuntimePointShadowView {
+    world::PersistentId light_entity{};
+    std::size_t light_index = 0U;
+    world::GlobalPosition global_position{};
+    float range = 0.0F;
+    std::array<math::Mat4, runtime_point_shadow_face_count> face_view_projections{};
+};
+
 [[nodiscard]] std::vector<RuntimeLight> collect_runtime_lights(const world::World& world);
 
 [[nodiscard]] RuntimeAtmosphereFrame runtime_atmosphere_frame(
@@ -172,6 +193,19 @@ struct RuntimeShadowView {
 
 [[nodiscard]] std::optional<RuntimeShadowView> directional_shadow_view(
     const RuntimeCameraView& camera,
+    std::span<const RuntimeLight> lights
+) noexcept;
+
+[[nodiscard]] RuntimePointShadowFace runtime_point_shadow_face(math::Vec3 light_to_point) noexcept;
+
+[[nodiscard]] math::Mat4 runtime_point_shadow_face_view_projection(
+    RuntimePointShadowFace face,
+    float range
+) noexcept;
+
+[[nodiscard]] std::array<std::optional<RuntimePointShadowView>, runtime_point_shadow_light_count>
+runtime_point_shadow_views(
+    world::GlobalPosition camera_position,
     std::span<const RuntimeLight> lights
 ) noexcept;
 

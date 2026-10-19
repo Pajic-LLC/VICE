@@ -23,6 +23,8 @@ struct RuntimeMaterialBinding {
     std::size_t constants_size = 0U;
     std::uint32_t directional_shadow_cascade_count = 0;
     std::uint32_t shadow_texture_binding_base = 1U;
+    std::uint32_t point_shadow_light_capacity = 0U;
+    std::uint32_t point_shadow_texture_binding_base = 5U;
     std::uint32_t environment_source_count = 0U;
 };
 

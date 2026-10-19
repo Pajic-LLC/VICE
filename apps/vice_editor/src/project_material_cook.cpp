@@ -114,10 +114,12 @@ namespace {
     const tools::shader_cooker::ShaderReflection& reflection,
     const std::uint32_t material_texture_count,
     const std::uint32_t shadow_texture_base,
-    const bool allow_environment = false
+    const bool allow_environment = false,
+    const bool allow_point_shadows = false
 ) noexcept {
     if (!reflection.valid) return false;
     std::array<bool, 4U> shadows{};
+    std::array<bool, 12U> point_shadows{};
     bool shadow_sampler = false;
     std::array<bool, 9U> environment{};
     bool environment_sampler = false;
@@ -130,6 +132,8 @@ namespace {
             if (resource.binding >= shadow_texture_base &&
                 resource.binding < shadow_texture_base + static_cast<std::uint32_t>(shadows.size())) {
                 shadows[resource.binding - shadow_texture_base] = true;
+            } else if (allow_point_shadows && resource.binding >= 5U && resource.binding <= 16U) {
+                point_shadows[resource.binding - 5U] = true;
             } else if (allow_environment && resource.binding >= 8U && resource.binding <= 16U) {
                 environment[resource.binding - 8U] = true;
             } else {
@@ -146,10 +150,19 @@ namespace {
     }
     const bool any_shadow = std::any_of(shadows.begin(), shadows.end(), [](const bool value) { return value; });
     const bool all_shadows = std::all_of(shadows.begin(), shadows.end(), [](const bool value) { return value; });
-    const bool legacy_shadow = shadows[0] && shadow_sampler &&
+    const bool legacy_shadow = shadows[0] &&
         std::none_of(shadows.begin() + 1, shadows.end(), [](const bool value) { return value; });
-    const bool shadow_valid = (!any_shadow && !shadow_sampler) || legacy_shadow ||
-        (all_shadows && shadow_sampler);
+    const bool directional_shadow_valid = !any_shadow || legacy_shadow || all_shadows;
+    const bool any_point_shadow = std::any_of(
+        point_shadows.begin(), point_shadows.end(), [](const bool value) { return value; }
+    );
+    const bool all_point_shadows = std::all_of(
+        point_shadows.begin(), point_shadows.end(), [](const bool value) { return value; }
+    );
+    const bool point_shadow_valid = !any_point_shadow || all_point_shadows;
+    const bool shadow_sampler_required = any_shadow || any_point_shadow;
+    const bool shadow_valid = directional_shadow_valid && point_shadow_valid &&
+        shadow_sampler == shadow_sampler_required;
     const bool any_environment = std::any_of(
         environment.begin(), environment.end(), [](const bool value) { return value; }
     );
@@ -171,13 +184,13 @@ namespace {
 [[nodiscard]] bool supported_v2_fragment_reflection(
     const tools::shader_cooker::ShaderReflection& reflection
 ) noexcept {
-    return supported_textured_fragment_reflection(reflection, 1U, 1U);
+    return supported_textured_fragment_reflection(reflection, 1U, 1U, false, true);
 }
 
 [[nodiscard]] bool supported_v3_fragment_reflection(
     const tools::shader_cooker::ShaderReflection& reflection
 ) noexcept {
-    return supported_textured_fragment_reflection(reflection, 4U, 4U, true);
+    return supported_textured_fragment_reflection(reflection, 4U, 4U, true, false);
 }
 
 [[nodiscard]] bool texture_available(
@@ -353,7 +366,8 @@ ProjectMaterialCookResult cook_project_render_materials(
                     "optional IBL must provide the complete t8-t10/s2 set."
                 : textured
                     ? "Render material v2 fragment shader `" + path_text(shader_source) +
-                        "` must use b1 material constants, t0 base-color texture, and s0 sampler in space0."
+                        "` must use b1 material constants, t0 base-color texture, and s0 sampler in space0; "
+                        "optional directional shadows use t1-t4/s1 and optional point shadows require the complete t5-t16/s1 set."
                     : "Render material fragment shader `" + path_text(shader_source) +
                     "` must use the VICE material constant buffer at b1, space0.";
             return result;
