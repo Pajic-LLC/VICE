@@ -228,6 +228,12 @@ if(VICE_BUILD_TOOLS)
   vice_enable_warnings(vice_environment_asset_tests)
   add_test(NAME vice_environment_asset_tests COMMAND vice_environment_asset_tests)
 
+  add_executable(vice_environment_hdr_source_tests environment_hdr_source_tests.cpp)
+  target_link_libraries(vice_environment_hdr_source_tests PRIVATE VICE::EnvironmentCooker VICE::Render)
+  target_compile_features(vice_environment_hdr_source_tests PRIVATE cxx_std_23)
+  vice_enable_warnings(vice_environment_hdr_source_tests)
+  add_test(NAME vice_environment_hdr_source_tests COMMAND vice_environment_hdr_source_tests)
+
   add_executable(vice_shader_cooker_tests shader_cooker_tests.cpp)
   target_link_libraries(vice_shader_cooker_tests PRIVATE VICE::ShaderCooker)
   target_compile_features(vice_shader_cooker_tests PRIVATE cxx_std_23)

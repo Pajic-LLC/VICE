@@ -1,5 +1,7 @@
 #include <vice/tools/environment_cooker.hpp>
 
+#include "radiance_hdr.hpp"
+
 #include <vice/tools/texture_cooker.hpp>
 #include <vice/world/persistent_id.hpp>
 
@@ -106,8 +108,9 @@ Vec3& operator+=(Vec3& left, const Vec3 right) noexcept {
 }
 
 [[nodiscard]] bool safe_image_path(const std::filesystem::path& path) {
+    const auto extension = path.extension();
     if (path.empty() || path.is_absolute() || path.has_root_name() || path.has_root_directory() ||
-        path.extension() != ".ppm") {
+        (extension != ".ppm" && extension != ".hdr")) {
         return false;
     }
     for (const auto& part : path) {
@@ -138,8 +141,11 @@ Vec3& operator+=(Vec3& left, const Vec3 right) noexcept {
 }
 
 [[nodiscard]] bool valid_source(const EnvironmentSource& source) noexcept {
+    const bool hdr_source = source.image_source.extension() == ".hdr";
     return render::valid_environment_id(source.stable_id) && source.manifest_fingerprint != 0U &&
-        safe_image_path(source.image_source) && std::isfinite(source.intensity) && source.intensity >= 0.0F &&
+        safe_image_path(source.image_source) &&
+        (!hdr_source || source.color_space == render::TextureColorSpace::linear) &&
+        std::isfinite(source.intensity) && source.intensity >= 0.0F &&
         std::isfinite(source.rotation_degrees) && source.irradiance_width > 0U &&
         source.irradiance_height > 0U && source.irradiance_width <= max_irradiance_dimension &&
         source.irradiance_height <= max_irradiance_dimension && source.specular_width > 0U &&
@@ -174,6 +180,21 @@ Vec3& operator+=(Vec3& left, const Vec3 right) noexcept {
             return color_space == render::TextureColorSpace::srgb ? srgb_to_linear(value) : value;
         };
         result.pixels[index] = {component(0U), component(1U), component(2U)};
+    }
+    return result;
+}
+
+[[nodiscard]] FloatImage make_float_image(const detail::RadianceHdrImage& image) {
+    FloatImage result;
+    result.width = image.width;
+    result.height = image.height;
+    result.pixels.resize(static_cast<std::size_t>(image.width) * image.height);
+    for (std::size_t index = 0U; index < result.pixels.size(); ++index) {
+        result.pixels[index] = {
+            image.rgb[index * 3U + 0U],
+            image.rgb[index * 3U + 1U],
+            image.rgb[index * 3U + 2U],
+        };
     }
     return result;
 }
@@ -552,7 +573,7 @@ ParseResult parse_source_manifest(const std::string_view source_text) {
             }
             parsed.image_source = std::filesystem::path{image}.lexically_normal();
             if (!safe_image_path(parsed.image_source)) {
-                fail("image must be a project-relative .ppm path without traversal.");
+                fail("image must be a project-relative .ppm or .hdr path without traversal.");
                 return result;
             }
             image_seen = true;
@@ -627,6 +648,11 @@ ParseResult parse_source_manifest(const std::string_view source_text) {
         result.diagnostics = "Environment source is missing one or more required fields.";
         return result;
     }
+    if (parsed.image_source.extension() == ".hdr" &&
+        parsed.color_space != render::TextureColorSpace::linear) {
+        result.diagnostics = "Radiance .hdr environment sources must use color_space linear.";
+        return result;
+    }
     parsed.manifest_fingerprint = hash_text(source_text);
     if (parsed.manifest_fingerprint == 0U) parsed.manifest_fingerprint = 1U;
     if (!valid_source(parsed)) {
@@ -646,13 +672,22 @@ CookResult cook(
         result.diagnostics = "Environment source is invalid.";
         return result;
     }
-    const auto decoded = texture_cooker::decode_ppm(image_bytes);
-    if (!decoded.image.has_value()) {
-        result.diagnostics = decoded.diagnostics;
-        return result;
+    FloatImage source_image;
+    if (source.image_source.extension() == ".hdr") {
+        const auto decoded = detail::decode_radiance_hdr(image_bytes);
+        if (!decoded.image.has_value()) {
+            result.diagnostics = decoded.diagnostics;
+            return result;
+        }
+        source_image = make_float_image(*decoded.image);
+    } else {
+        const auto decoded = texture_cooker::decode_ppm(image_bytes);
+        if (!decoded.image.has_value()) {
+            result.diagnostics = decoded.diagnostics;
+            return result;
+        }
+        source_image = make_float_image(*decoded.image, source.color_space);
     }
-
-    const FloatImage source_image = make_float_image(*decoded.image, source.color_space);
     render::EnvironmentAsset asset;
     asset.stable_id = source.stable_id;
     asset.source_fingerprint = hash_bytes(source.manifest_fingerprint, image_bytes);

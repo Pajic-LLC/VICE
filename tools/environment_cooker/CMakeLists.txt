@@ -1,6 +1,7 @@
 add_library(
   vice_environment_cooker_lib STATIC
   src/environment_cooker.cpp
+  src/radiance_hdr.cpp
 )
 add_library(VICE::EnvironmentCooker ALIAS vice_environment_cooker_lib)
 
