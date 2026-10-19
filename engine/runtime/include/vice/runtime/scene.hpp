@@ -146,6 +146,11 @@ public:
         std::string* diagnostics = nullptr
     );
 
+    [[nodiscard]] bool set_exposure(
+        float exposure,
+        std::string* diagnostics = nullptr
+    );
+
     [[nodiscard]] bool render(
         const world::World& world,
         render::Swapchain& swapchain,

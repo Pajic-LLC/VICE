@@ -46,6 +46,12 @@ target_compile_features(vice_offscreen_color_render_pass_tests PRIVATE cxx_std_2
 vice_enable_warnings(vice_offscreen_color_render_pass_tests)
 add_test(NAME vice_offscreen_color_render_pass_tests COMMAND vice_offscreen_color_render_pass_tests)
 
+add_executable(vice_hdr_tone_map_tests hdr_tone_map_tests.cpp)
+target_link_libraries(vice_hdr_tone_map_tests PRIVATE VICE::Render)
+target_compile_features(vice_hdr_tone_map_tests PRIVATE cxx_std_23)
+vice_enable_warnings(vice_hdr_tone_map_tests)
+add_test(NAME vice_hdr_tone_map_tests COMMAND vice_hdr_tone_map_tests)
+
 add_executable(vice_mesh_input_tests mesh_input_tests.cpp)
 target_link_libraries(vice_mesh_input_tests PRIVATE VICE::Render)
 target_compile_features(vice_mesh_input_tests PRIVATE cxx_std_23)
