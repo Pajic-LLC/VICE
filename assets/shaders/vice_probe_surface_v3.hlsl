@@ -33,6 +33,13 @@ cbuffer SceneFrame : register(b0, space0) {
     column_major float4x4 environment_probe_from_model_2;
     float4 environment_probe_half_extents_2;
     float4 environment_probe_rotation_2;
+
+    column_major float4x4 atmosphere_camera_from_model;
+    float4 atmosphere_sun_direction_intensity;
+    float4 atmosphere_sun_color;
+    float4 atmosphere_parameters;
+    float4 atmosphere_secondary;
+    float4 atmosphere_ground_albedo;
 };
 
 cbuffer MaterialParams : register(b1, space0) {
@@ -98,6 +105,38 @@ float2 vice_environment_uv(float3 direction, float rotation_radians) {
     const float longitude = atan2(direction.z, direction.x) + rotation_radians;
     const float latitude = acos(clamp(direction.y, -1.0, 1.0));
     return float2(frac(longitude / (2.0 * VICE_PI) + 0.5), latitude / VICE_PI);
+}
+
+float3 vice_atmosphere_radiance(float3 view_direction) {
+    view_direction = normalize(view_direction);
+    const float3 sun_direction = normalize(atmosphere_sun_direction_intensity.xyz);
+    const float sun_intensity = max(atmosphere_sun_direction_intensity.w, 0.0);
+    const float3 sun_color = max(atmosphere_sun_color.rgb, 0.0);
+    const float rayleigh_strength = max(atmosphere_parameters.x, 0.0);
+    const float mie_strength = max(atmosphere_parameters.y, 0.0);
+    const float g = clamp(atmosphere_parameters.z, 0.0, 0.98);
+    const float sun_radius = max(atmosphere_secondary.x, 0.0001);
+    const float horizon_falloff = max(atmosphere_secondary.y, 0.01);
+    const float mu = clamp(dot(view_direction, sun_direction), -1.0, 1.0);
+    const float rayleigh_phase = (3.0 / (16.0 * VICE_PI)) * (1.0 + mu * mu);
+    const float mie_denominator = max(1.0 + g * g - 2.0 * g * mu, 0.0001);
+    const float mie_phase = ((1.0 - g * g) / (4.0 * VICE_PI)) / pow(mie_denominator, 1.5);
+    const float altitude = max(view_direction.y, 0.0);
+    const float air_mass = 1.0 / max(0.10 + altitude * 0.90, 0.10);
+    const float3 beta_rayleigh = float3(0.0058, 0.0135, 0.0331) * rayleigh_strength;
+    const float3 beta_mie = float3(0.021, 0.021, 0.021) * mie_strength;
+    const float3 extinction = exp(-(beta_rayleigh + beta_mie) * air_mass * 1.35);
+    float3 sky = sun_color * sun_intensity *
+        (beta_rayleigh * rayleigh_phase + beta_mie * mie_phase) * air_mass * 24.0;
+    sky *= 0.35 + 0.65 * (1.0 - extinction);
+    const float horizon = exp(-altitude / horizon_falloff);
+    sky += sun_color * sun_intensity * horizon * float3(0.018, 0.011, 0.006);
+    const float sun_disk = smoothstep(cos(sun_radius * 2.2), cos(sun_radius * 0.55), mu);
+    sky += sun_color * sun_intensity * sun_disk * 7.5;
+    const float sun_height = saturate(sun_direction.y * 0.5 + 0.5);
+    const float3 ground = max(atmosphere_ground_albedo.rgb, 0.0) *
+        sun_color * (0.12 + sun_intensity * 0.07 * sun_height);
+    return max(lerp(ground, sky, smoothstep(-0.08, 0.025, view_direction.y)), 0.0);
 }
 
 float3 vice_box_project_direction(
@@ -261,5 +300,21 @@ float4 vice_probe_surface_fs(VertexOut input) : SV_Target0 {
     );
 
     const float3 emissive = emissive_sample * emissive_color.rgb * emissive_intensity;
-    return float4(environment * base_sample.rgb + emissive, base_sample.a);
+    float3 surface = environment * base_sample.rgb + emissive;
+    if (atmosphere_secondary.z >= 0.5) {
+        const float3 camera_relative = mul(
+            atmosphere_camera_from_model,
+            float4(input.model_position, 1.0)
+        ).xyz;
+        const float distance_to_camera = length(camera_relative);
+        if (distance_to_camera > 0.0001) {
+            const float density = max(atmosphere_parameters.w, 0.0);
+            const float transmittance = exp(-density * distance_to_camera);
+            const float3 aerial_radiance = vice_atmosphere_radiance(
+                normalize(camera_relative)
+            );
+            surface = surface * transmittance + aerial_radiance * (1.0 - transmittance);
+        }
+    }
+    return float4(surface, base_sample.a);
 }

@@ -5,6 +5,7 @@
 #include "bloom_shaders.hpp"
 #include "environment_pipeline.hpp"
 #include "material_pipeline.hpp"
+#include "sky_shaders.hpp"
 #include "taa_shaders.hpp"
 
 #include <algorithm>
@@ -250,6 +251,12 @@ struct SceneConstants {
     float environment_secondary_metadata[4]{};
     float environment_tertiary_metadata[4]{};
     std::array<SceneReflectionProjectionConstants, 3U> environment_projections{};
+    math::Mat4 atmosphere_camera_from_model{};
+    float atmosphere_sun_direction_intensity[4]{};
+    float atmosphere_sun_color[4]{};
+    float atmosphere_parameters[4]{};
+    float atmosphere_secondary[4]{};
+    float atmosphere_ground_albedo[4]{};
 };
 
 struct ShadowConstants {
@@ -277,7 +284,7 @@ static_assert(sizeof(ToneMapConstants) == 16U);
 static_assert(sizeof(BloomConstants) == 32U);
 static_assert(sizeof(SceneLightConstants) == 48U);
 static_assert(sizeof(SceneReflectionProjectionConstants) == 96U);
-static_assert(sizeof(SceneConstants) == 1184U);
+static_assert(sizeof(SceneConstants) == 1328U);
 static_assert(sizeof(ShadowConstants) == 128U);
 static_assert(sizeof(MotionConstants) == 256U);
 static_assert(sizeof(TaaConstants) == 32U);
@@ -733,6 +740,17 @@ fragment float4 vice_runtime_tonemap_fs(
     return buffer.write(0U, std::as_bytes(std::span{&constants, 1}));
 }
 
+[[nodiscard]] std::unique_ptr<render::Buffer> create_sky_constant_buffer(
+    render::Device& device
+) {
+    render::BufferDesc desc;
+    desc.size = sizeof(detail::SkyConstants);
+    desc.usage = render::BufferUsage::uniform;
+    desc.memory = render::MemoryLocation::cpu_to_gpu;
+    desc.debug_name = "VICE Runtime sky constants";
+    return device.create_buffer(desc);
+}
+
 [[nodiscard]] std::unique_ptr<render::Buffer> create_tone_map_constant_buffer(
     render::Device& device
 ) {
@@ -1001,6 +1019,114 @@ std::vector<RuntimeLight> collect_runtime_lights(const world::World& world) {
     return lights;
 }
 
+
+RuntimeAtmosphereFrame runtime_atmosphere_frame(
+    const std::span<const RuntimeLight> lights
+) noexcept {
+    RuntimeAtmosphereFrame frame;
+    for (const auto& source : lights) {
+        if (!source.light.enabled || source.light.type != world::LightType::directional) continue;
+        const math::Vec3 direction = math::normalize(source.direction);
+        if (math::dot(direction, direction) < 0.99F) continue;
+        frame.sun_direction = {-direction.x, -direction.y, -direction.z};
+        frame.sun_color = {
+            source.light.color.red,
+            source.light.color.green,
+            source.light.color.blue,
+        };
+        frame.sun_intensity = source.light.intensity;
+        break;
+    }
+    return frame;
+}
+
+float runtime_atmosphere_transmittance(
+    const float distance,
+    const RuntimeAtmosphereSettings& settings
+) noexcept {
+    if (!std::isfinite(distance) || distance <= 0.0F) return 1.0F;
+    const float density = std::isfinite(settings.aerial_density)
+        ? std::max(settings.aerial_density, 0.0F)
+        : 0.0F;
+    return std::clamp(std::exp(-density * distance), 0.0F, 1.0F);
+}
+
+math::Vec3 evaluate_runtime_sky_radiance(
+    math::Vec3 view_direction,
+    const RuntimeAtmosphereFrame& atmosphere
+) noexcept {
+    constexpr float pi = 3.14159265358979323846F;
+    view_direction = math::normalize(view_direction);
+    if (math::dot(view_direction, view_direction) < 0.99F) return {};
+    math::Vec3 sun_direction = math::normalize(atmosphere.sun_direction);
+    if (math::dot(sun_direction, sun_direction) < 0.99F) {
+        sun_direction = {0.431934F, 0.863868F, 0.259161F};
+    }
+
+    const float sun_intensity = std::max(atmosphere.sun_intensity, 0.0F);
+    const auto& settings = atmosphere.settings;
+    const float rayleigh_strength = std::max(settings.rayleigh_strength, 0.0F);
+    const float mie_strength = std::max(settings.mie_strength, 0.0F);
+    const float g = std::clamp(settings.mie_anisotropy, 0.0F, 0.98F);
+    const float sun_radius = std::max(settings.sun_angular_radius, 0.0001F);
+    const float horizon_falloff = std::max(settings.horizon_falloff, 0.01F);
+    const float mu = std::clamp(math::dot(view_direction, sun_direction), -1.0F, 1.0F);
+    const float rayleigh_phase = (3.0F / (16.0F * pi)) * (1.0F + mu * mu);
+    const float mie_denominator = std::max(1.0F + g * g - 2.0F * g * mu, 0.0001F);
+    const float mie_phase = ((1.0F - g * g) / (4.0F * pi)) /
+        std::pow(mie_denominator, 1.5F);
+    const float altitude = std::max(view_direction.y, 0.0F);
+    const float air_mass = 1.0F / std::max(0.10F + altitude * 0.90F, 0.10F);
+    const float beta_mie = 0.021F * mie_strength;
+    const float horizon = std::exp(-altitude / horizon_falloff);
+    const float disk_inner = std::cos(sun_radius * 0.55F);
+    const float disk_outer = std::cos(sun_radius * 2.2F);
+    const float disk_t = std::clamp(
+        (mu - disk_outer) / std::max(disk_inner - disk_outer, 0.000001F),
+        0.0F,
+        1.0F
+    );
+    const float sun_disk = disk_t * disk_t * (3.0F - 2.0F * disk_t);
+    const float sky_t = std::clamp((view_direction.y + 0.08F) / 0.105F, 0.0F, 1.0F);
+    const float sky_weight = sky_t * sky_t * (3.0F - 2.0F * sky_t);
+    const float sun_height = std::clamp(sun_direction.y * 0.5F + 0.5F, 0.0F, 1.0F);
+
+    const float beta_rayleigh[3]{
+        0.0058F * rayleigh_strength,
+        0.0135F * rayleigh_strength,
+        0.0331F * rayleigh_strength,
+    };
+    const float sun_color[3]{
+        std::max(atmosphere.sun_color.x, 0.0F),
+        std::max(atmosphere.sun_color.y, 0.0F),
+        std::max(atmosphere.sun_color.z, 0.0F),
+    };
+    const float ground[3]{
+        std::max(settings.ground_albedo.x, 0.0F),
+        std::max(settings.ground_albedo.y, 0.0F),
+        std::max(settings.ground_albedo.z, 0.0F),
+    };
+    float output[3]{};
+    for (std::size_t channel = 0U; channel < 3U; ++channel) {
+        const float extinction = std::exp(
+            -(beta_rayleigh[channel] + beta_mie) * air_mass * 1.35F
+        );
+        const float scatter =
+            (beta_rayleigh[channel] * rayleigh_phase + beta_mie * mie_phase) *
+            air_mass * 24.0F * (0.35F + 0.65F * (1.0F - extinction));
+        float sky = sun_color[channel] * sun_intensity * scatter;
+        const float horizon_tint = channel == 0U ? 0.018F : (channel == 1U ? 0.011F : 0.006F);
+        sky += sun_color[channel] * sun_intensity * horizon * horizon_tint;
+        sky += sun_color[channel] * sun_intensity * sun_disk * 7.5F;
+        const float ground_radiance = ground[channel] * sun_color[channel] *
+            (0.12F + sun_intensity * 0.07F * sun_height);
+        output[channel] = std::max(
+            ground_radiance + (sky - ground_radiance) * sky_weight,
+            0.0F
+        );
+    }
+    return {output[0], output[1], output[2]};
+}
 
 std::vector<RuntimeReflectionProbe> collect_runtime_reflection_probes(const world::World& world) {
     std::vector<RuntimeReflectionProbe> probes;
@@ -1333,11 +1459,14 @@ std::optional<RuntimeShadowView> directional_shadow_view(
     return result;
 }
 
-math::Mat4 runtime_model_matrix(const RenderMeshInstance& instance) noexcept {
+math::Mat4 runtime_model_matrix_relative_to(
+    const RenderMeshInstance& instance,
+    const world::GlobalPosition origin
+) noexcept {
     auto result = math::translation({
-        static_cast<float>(instance.spatial.global_position.x),
-        static_cast<float>(instance.spatial.global_position.y),
-        static_cast<float>(instance.spatial.global_position.z),
+        static_cast<float>(instance.spatial.global_position.x - origin.x),
+        static_cast<float>(instance.spatial.global_position.y - origin.y),
+        static_cast<float>(instance.spatial.global_position.z - origin.z),
     });
     result = math::multiply(
         result,
@@ -1349,6 +1478,10 @@ math::Mat4 runtime_model_matrix(const RenderMeshInstance& instance) noexcept {
         })
     );
     return math::multiply(result, scale_matrix(instance.authored.scale));
+}
+
+math::Mat4 runtime_model_matrix(const RenderMeshInstance& instance) noexcept {
+    return runtime_model_matrix_relative_to(instance, {});
 }
 
 std::optional<RuntimeCameraView> primary_camera_view(
@@ -1412,6 +1545,10 @@ struct RuntimeSceneRenderer::State {
     std::unique_ptr<render::ShaderModule> vertex_shader;
     std::unique_ptr<render::ShaderModule> fragment_shader;
     std::unique_ptr<render::GraphicsPipeline> pipeline;
+    std::unique_ptr<render::ShaderModule> sky_vertex_shader;
+    std::unique_ptr<render::ShaderModule> sky_fragment_shader;
+    std::unique_ptr<render::GraphicsPipeline> sky_pipeline;
+    std::unique_ptr<render::Buffer> sky_constants;
     std::unique_ptr<render::ShaderModule> motion_vertex_shader;
     std::unique_ptr<render::ShaderModule> motion_fragment_shader;
     std::unique_ptr<render::GraphicsPipeline> motion_pipeline;
@@ -1539,6 +1676,41 @@ bool RuntimeSceneRenderer::initialize(
     state_->pipeline = device.create_graphics_pipeline(pipeline_desc);
     if (!state_->pipeline) {
         set_diagnostics(diagnostics, "VICE Runtime could not create the fallback scene graphics pipeline.");
+        return false;
+    }
+
+    render::ShaderModuleDesc sky_vertex_desc;
+    sky_vertex_desc.stage = render::ShaderStage::vertex;
+    sky_vertex_desc.language = vertex_desc.language;
+    sky_vertex_desc.source = metal ? detail::sky_metal_source : detail::sky_hlsl_source;
+    sky_vertex_desc.entry_point = "vice_runtime_sky_vs";
+    sky_vertex_desc.debug_name = "VICE Runtime sky vertex";
+
+    render::ShaderModuleDesc sky_fragment_desc;
+    sky_fragment_desc.stage = render::ShaderStage::fragment;
+    sky_fragment_desc.language = vertex_desc.language;
+    sky_fragment_desc.source = sky_vertex_desc.source;
+    sky_fragment_desc.resources = detail::sky_fragment_resources;
+    sky_fragment_desc.entry_point = "vice_runtime_sky_fs";
+    sky_fragment_desc.debug_name = "VICE Runtime sky fragment";
+
+    state_->sky_vertex_shader = device.create_shader_module(sky_vertex_desc);
+    state_->sky_fragment_shader = device.create_shader_module(sky_fragment_desc);
+    if (!state_->sky_vertex_shader || !state_->sky_fragment_shader) {
+        set_diagnostics(diagnostics, "VICE Runtime could not create sky/atmosphere shaders.");
+        return false;
+    }
+
+    render::GraphicsPipelineDesc sky_pipeline_desc;
+    sky_pipeline_desc.vertex_shader = state_->sky_vertex_shader.get();
+    sky_pipeline_desc.fragment_shader = state_->sky_fragment_shader.get();
+    sky_pipeline_desc.color_format = render::TextureFormat::rgba16_float;
+    sky_pipeline_desc.cull_mode = render::CullMode::none;
+    sky_pipeline_desc.debug_name = "VICE Runtime sky/atmosphere pipeline";
+    state_->sky_pipeline = device.create_graphics_pipeline(sky_pipeline_desc);
+    state_->sky_constants = create_sky_constant_buffer(device);
+    if (!state_->sky_pipeline || !state_->sky_constants) {
+        set_diagnostics(diagnostics, "VICE Runtime could not create sky/atmosphere resources.");
         return false;
     }
 
@@ -2114,7 +2286,8 @@ bool RuntimeSceneRenderer::render(
     std::string* const diagnostics
 ) {
     if (state_ == nullptr || !state_->initialized || state_->device == nullptr ||
-        !state_->pipeline || !state_->motion_pipeline || !state_->taa_pipeline ||
+        !state_->pipeline || !state_->sky_pipeline || !state_->sky_constants ||
+        !state_->motion_pipeline || !state_->taa_pipeline ||
         !state_->taa_linear_sampler || !state_->taa_point_sampler || !state_->taa_constants ||
         !state_->bloom_extract_pipeline || !state_->bloom_blur_pipeline ||
         !state_->bloom_composite_pipeline || !state_->bloom_sampler ||
@@ -2205,6 +2378,17 @@ bool RuntimeSceneRenderer::render(
             .direction = {-0.431934F, -0.863868F, -0.259161F},
         });
     }
+    const RuntimeAtmosphereFrame atmosphere = runtime_atmosphere_frame(runtime_lights);
+    world::GlobalPosition camera_global_position{
+        static_cast<double>(camera_position.x),
+        static_cast<double>(camera_position.y),
+        static_cast<double>(camera_position.z),
+    };
+    if (const auto camera_entity = world.primary_camera(); camera_entity.has_value()) {
+        if (const auto spatial = world.spatial_state(*camera_entity); spatial.has_value()) {
+            camera_global_position = spatial->global_position;
+        }
+    }
     const auto global_environment = state_->environment.binding();
     const auto reflection_probes = collect_runtime_reflection_probes(world);
     for (const auto& probe : reflection_probes) {
@@ -2289,10 +2473,69 @@ bool RuntimeSceneRenderer::render(
         }
     }
 
+    const math::Vec3 camera_right = math::normalize(math::cross(runtime_camera.forward, runtime_camera.up));
+    detail::SkyConstants sky_constants{};
+    sky_constants.camera_forward_tan_half_fov[0] = runtime_camera.forward.x;
+    sky_constants.camera_forward_tan_half_fov[1] = runtime_camera.forward.y;
+    sky_constants.camera_forward_tan_half_fov[2] = runtime_camera.forward.z;
+    sky_constants.camera_forward_tan_half_fov[3] = std::tan(runtime_camera.camera.vertical_fov_radians * 0.5F);
+    sky_constants.camera_right_aspect[0] = camera_right.x;
+    sky_constants.camera_right_aspect[1] = camera_right.y;
+    sky_constants.camera_right_aspect[2] = camera_right.z;
+    sky_constants.camera_right_aspect[3] = runtime_camera.aspect_ratio;
+    sky_constants.camera_up_rayleigh[0] = runtime_camera.up.x;
+    sky_constants.camera_up_rayleigh[1] = runtime_camera.up.y;
+    sky_constants.camera_up_rayleigh[2] = runtime_camera.up.z;
+    sky_constants.camera_up_rayleigh[3] = atmosphere.settings.rayleigh_strength;
+    sky_constants.sun_direction_mie[0] = atmosphere.sun_direction.x;
+    sky_constants.sun_direction_mie[1] = atmosphere.sun_direction.y;
+    sky_constants.sun_direction_mie[2] = atmosphere.sun_direction.z;
+    sky_constants.sun_direction_mie[3] = atmosphere.settings.mie_strength;
+    sky_constants.sun_color_intensity[0] = atmosphere.sun_color.x;
+    sky_constants.sun_color_intensity[1] = atmosphere.sun_color.y;
+    sky_constants.sun_color_intensity[2] = atmosphere.sun_color.z;
+    sky_constants.sun_color_intensity[3] = atmosphere.sun_intensity;
+    sky_constants.atmosphere_parameters[0] = atmosphere.settings.mie_anisotropy;
+    sky_constants.atmosphere_parameters[1] = atmosphere.settings.sun_angular_radius;
+    sky_constants.atmosphere_parameters[2] = atmosphere.settings.aerial_density;
+    sky_constants.atmosphere_parameters[3] = atmosphere.settings.horizon_falloff;
+    sky_constants.ground_albedo[0] = atmosphere.settings.ground_albedo.x;
+    sky_constants.ground_albedo[1] = atmosphere.settings.ground_albedo.y;
+    sky_constants.ground_albedo[2] = atmosphere.settings.ground_albedo.z;
+    sky_constants.ground_albedo[3] = 1.0F;
+    if (!state_->sky_constants->write(0U, std::as_bytes(std::span{&sky_constants, 1}))) {
+        set_diagnostics(diagnostics, "VICE Runtime could not update sky/atmosphere constants.");
+        return false;
+    }
+
+    render::RenderPassDesc sky_pass;
+    sky_pass.clear_color = clear_color;
+    if (!commands->begin_render_pass(*scene_color, sky_pass) ||
+        !commands->set_viewport(render::Viewport{
+            .width = static_cast<float>(metrics.drawable_width),
+            .height = static_cast<float>(metrics.drawable_height),
+        }) ||
+        !commands->set_scissor_rect(render::ScissorRect{
+            .width = metrics.drawable_width,
+            .height = metrics.drawable_height,
+        }) ||
+        !commands->set_graphics_pipeline(*state_->sky_pipeline) ||
+        !commands->set_graphics_constant_buffer(
+            detail::sky_constants_binding,
+            *state_->sky_constants,
+            0U,
+            sizeof(detail::SkyConstants)
+        ) ||
+        !commands->draw(3U) || !commands->end_render_pass()) {
+        set_diagnostics(diagnostics, "VICE Runtime could not execute the HDR sky/atmosphere pass.");
+        return false;
+    }
+
     render::RenderPassDesc pass;
     pass.clear_color = clear_color;
     pass.depth_attachment = current_depth;
     pass.clear_depth = 1.0F;
+    pass.clear_color_attachment = false;
     if (!commands->begin_render_pass(*scene_color, pass) ||
         !commands->set_viewport(render::Viewport{
             .width = static_cast<float>(metrics.drawable_width),
@@ -2451,6 +2694,29 @@ bool RuntimeSceneRenderer::render(
             projection.rotation[2] = probe.authored.rotation.z;
             projection.rotation[3] = probe.authored.rotation.w;
         }
+        constants.atmosphere_camera_from_model = runtime_model_matrix_relative_to(
+            instance,
+            camera_global_position
+        );
+        constants.atmosphere_sun_direction_intensity[0] = atmosphere.sun_direction.x;
+        constants.atmosphere_sun_direction_intensity[1] = atmosphere.sun_direction.y;
+        constants.atmosphere_sun_direction_intensity[2] = atmosphere.sun_direction.z;
+        constants.atmosphere_sun_direction_intensity[3] = atmosphere.sun_intensity;
+        constants.atmosphere_sun_color[0] = atmosphere.sun_color.x;
+        constants.atmosphere_sun_color[1] = atmosphere.sun_color.y;
+        constants.atmosphere_sun_color[2] = atmosphere.sun_color.z;
+        constants.atmosphere_sun_color[3] = 1.0F;
+        constants.atmosphere_parameters[0] = atmosphere.settings.rayleigh_strength;
+        constants.atmosphere_parameters[1] = atmosphere.settings.mie_strength;
+        constants.atmosphere_parameters[2] = atmosphere.settings.mie_anisotropy;
+        constants.atmosphere_parameters[3] = atmosphere.settings.aerial_density;
+        constants.atmosphere_secondary[0] = atmosphere.settings.sun_angular_radius;
+        constants.atmosphere_secondary[1] = atmosphere.settings.horizon_falloff;
+        constants.atmosphere_secondary[2] = 1.0F;
+        constants.atmosphere_ground_albedo[0] = atmosphere.settings.ground_albedo.x;
+        constants.atmosphere_ground_albedo[1] = atmosphere.settings.ground_albedo.y;
+        constants.atmosphere_ground_albedo[2] = atmosphere.settings.ground_albedo.z;
+        constants.atmosphere_ground_albedo[3] = 1.0F;
         if (!constants_iterator->second->write(0, std::as_bytes(std::span{&constants, 1}))) {
             set_diagnostics(diagnostics, "VICE Runtime could not update scene constants.");
             return false;
