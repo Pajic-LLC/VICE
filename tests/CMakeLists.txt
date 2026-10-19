@@ -52,6 +52,12 @@ target_compile_features(vice_hdr_tone_map_tests PRIVATE cxx_std_23)
 vice_enable_warnings(vice_hdr_tone_map_tests)
 add_test(NAME vice_hdr_tone_map_tests COMMAND vice_hdr_tone_map_tests)
 
+add_executable(vice_runtime_post_process_tests runtime_post_process_tests.cpp)
+target_link_libraries(vice_runtime_post_process_tests PRIVATE VICE::Runtime)
+target_compile_features(vice_runtime_post_process_tests PRIVATE cxx_std_23)
+vice_enable_warnings(vice_runtime_post_process_tests)
+add_test(NAME vice_runtime_post_process_tests COMMAND vice_runtime_post_process_tests)
+
 add_executable(vice_mesh_input_tests mesh_input_tests.cpp)
 target_link_libraries(vice_mesh_input_tests PRIVATE VICE::Render)
 target_compile_features(vice_mesh_input_tests PRIVATE cxx_std_23)

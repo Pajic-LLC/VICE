@@ -4,6 +4,7 @@ add_library(
     src/material_pipeline.cpp
     src/module_loader.cpp
     src/module_paths.cpp
+    src/post_process.cpp
     src/runtime.cpp
     src/scene.cpp
     src/texture_pipeline.cpp

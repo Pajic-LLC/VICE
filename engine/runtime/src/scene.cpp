@@ -1,5 +1,7 @@
 #include <vice/runtime/scene.hpp>
 
+#include <vice/runtime/post_process.hpp>
+
 #include "material_pipeline.hpp"
 
 #include <algorithm>
@@ -205,10 +207,18 @@ struct ShadowConstants {
     math::Mat4 model{};
 };
 
+struct MotionConstants {
+    math::Mat4 current_view_projection{};
+    math::Mat4 previous_view_projection{};
+    math::Mat4 current_model{};
+    math::Mat4 previous_model{};
+};
+
 static_assert(sizeof(ToneMapConstants) == 16U);
 static_assert(sizeof(SceneLightConstants) == 48U);
 static_assert(sizeof(SceneConstants) == 848U);
 static_assert(sizeof(ShadowConstants) == 128U);
+static_assert(sizeof(MotionConstants) == 256U);
 
 constexpr std::string_view hlsl_source = R"(
 cbuffer SceneFrame : register(b0) {
@@ -292,6 +302,86 @@ vertex float4 vice_runtime_shadow_vs(
     VertexIn input [[stage_in]],
     constant ShadowFrame& frame [[buffer(0)]]) {
     return frame.view_projection * frame.model * float4(input.position, 1.0);
+}
+)";
+
+constexpr std::string_view motion_hlsl_source = R"(
+cbuffer MotionFrame : register(b0) {
+    float4x4 current_view_projection;
+    float4x4 previous_view_projection;
+    float4x4 current_model;
+    float4x4 previous_model;
+};
+struct VertexIn {
+    float3 position : POSITION0;
+};
+struct MotionVertexOut {
+    float4 position : SV_Position;
+    float4 current_clip : TEXCOORD0;
+    float4 previous_clip : TEXCOORD1;
+};
+MotionVertexOut vice_runtime_motion_vs(VertexIn input) {
+    MotionVertexOut output;
+    const float4 current_world = mul(current_model, float4(input.position, 1.0));
+    const float4 previous_world = mul(previous_model, float4(input.position, 1.0));
+    output.current_clip = mul(current_view_projection, current_world);
+    output.previous_clip = mul(previous_view_projection, previous_world);
+    output.position = output.current_clip;
+    return output;
+}
+float4 vice_runtime_motion_fs(MotionVertexOut input) : SV_Target0 {
+    const float current_w = abs(input.current_clip.w) > 0.000001
+        ? input.current_clip.w
+        : (input.current_clip.w < 0.0 ? -0.000001 : 0.000001);
+    const float previous_w = abs(input.previous_clip.w) > 0.000001
+        ? input.previous_clip.w
+        : (input.previous_clip.w < 0.0 ? -0.000001 : 0.000001);
+    const float2 current_ndc = input.current_clip.xy / current_w;
+    const float2 previous_ndc = input.previous_clip.xy / previous_w;
+    const float2 velocity = (current_ndc - previous_ndc) * float2(0.5, -0.5);
+    return float4(velocity, 0.0, 1.0);
+}
+)";
+
+constexpr std::string_view motion_metal_source = R"(
+#include <metal_stdlib>
+using namespace metal;
+struct MotionFrame {
+    float4x4 current_view_projection;
+    float4x4 previous_view_projection;
+    float4x4 current_model;
+    float4x4 previous_model;
+};
+struct VertexIn {
+    float3 position [[attribute(11)]];
+};
+struct MotionVertexOut {
+    float4 position [[position]];
+    float4 current_clip;
+    float4 previous_clip;
+};
+vertex MotionVertexOut vice_runtime_motion_vs(
+    VertexIn input [[stage_in]],
+    constant MotionFrame& frame [[buffer(0)]]) {
+    MotionVertexOut output;
+    const float4 current_world = frame.current_model * float4(input.position, 1.0);
+    const float4 previous_world = frame.previous_model * float4(input.position, 1.0);
+    output.current_clip = frame.current_view_projection * current_world;
+    output.previous_clip = frame.previous_view_projection * previous_world;
+    output.position = output.current_clip;
+    return output;
+}
+fragment float4 vice_runtime_motion_fs(MotionVertexOut input [[stage_in]]) {
+    const float current_w = abs(input.current_clip.w) > 0.000001
+        ? input.current_clip.w
+        : (input.current_clip.w < 0.0 ? -0.000001 : 0.000001);
+    const float previous_w = abs(input.previous_clip.w) > 0.000001
+        ? input.previous_clip.w
+        : (input.previous_clip.w < 0.0 ? -0.000001 : 0.000001);
+    const float2 current_ndc = input.current_clip.xy / current_w;
+    const float2 previous_ndc = input.previous_clip.xy / previous_w;
+    const float2 velocity = (current_ndc - previous_ndc) * float2(0.5, -0.5);
+    return float4(velocity, 0.0, 1.0);
 }
 )";
 
@@ -475,6 +565,17 @@ fragment float4 vice_runtime_tonemap_fs(
     desc.usage = render::BufferUsage::uniform;
     desc.memory = render::MemoryLocation::cpu_to_gpu;
     desc.debug_name = "VICE Runtime shadow constants";
+    return device.create_buffer(desc);
+}
+
+[[nodiscard]] std::unique_ptr<render::Buffer> create_motion_constant_buffer(
+    render::Device& device
+) {
+    render::BufferDesc desc;
+    desc.size = sizeof(MotionConstants);
+    desc.usage = render::BufferUsage::uniform;
+    desc.memory = render::MemoryLocation::cpu_to_gpu;
+    desc.debug_name = "VICE Runtime motion-vector constants";
     return device.create_buffer(desc);
 }
 
@@ -992,6 +1093,9 @@ struct RuntimeSceneRenderer::State {
     std::unique_ptr<render::ShaderModule> vertex_shader;
     std::unique_ptr<render::ShaderModule> fragment_shader;
     std::unique_ptr<render::GraphicsPipeline> pipeline;
+    std::unique_ptr<render::ShaderModule> motion_vertex_shader;
+    std::unique_ptr<render::ShaderModule> motion_fragment_shader;
+    std::unique_ptr<render::GraphicsPipeline> motion_pipeline;
     std::unique_ptr<render::ShaderModule> tone_map_vertex_shader;
     std::unique_ptr<render::ShaderModule> tone_map_fragment_shader;
     std::unique_ptr<render::GraphicsPipeline> tone_map_pipeline;
@@ -1001,16 +1105,22 @@ struct RuntimeSceneRenderer::State {
     std::unique_ptr<render::GraphicsPipeline> shadow_pipeline;
     std::array<std::unique_ptr<render::Texture>, runtime_shadow_cascade_count> shadow_maps;
     std::unique_ptr<render::Sampler> shadow_sampler;
-    std::unique_ptr<render::Texture> scene_color;
+    std::array<std::unique_ptr<render::Texture>, 2U> scene_history;
+    std::unique_ptr<render::Texture> motion_vectors;
     std::unique_ptr<render::Texture> depth;
     std::unordered_map<world::ResourceId, MeshGpu, world::ResourceIdHash> meshes;
     std::unordered_map<world::PersistentId, std::unique_ptr<render::Buffer>, world::PersistentIdHash> constants;
+    std::unordered_map<world::PersistentId, std::unique_ptr<render::Buffer>, world::PersistentIdHash> motion_constants;
+    std::unordered_map<world::PersistentId, math::Mat4, world::PersistentIdHash> previous_models;
     std::array<
         std::unordered_map<world::PersistentId, std::unique_ptr<render::Buffer>, world::PersistentIdHash>,
         runtime_shadow_cascade_count
     > shadow_constants;
     std::uint32_t depth_width = 0;
     std::uint32_t depth_height = 0;
+    RuntimeTemporalHistory temporal_history;
+    RuntimePostProcessPlan post_process_plan = default_runtime_post_process_plan();
+    std::size_t scene_write_index = 0U;
     float exposure = 1.0F;
     bool initialized = false;
 };
@@ -1082,6 +1192,45 @@ bool RuntimeSceneRenderer::initialize(
     state_->pipeline = device.create_graphics_pipeline(pipeline_desc);
     if (!state_->pipeline) {
         set_diagnostics(diagnostics, "VICE Runtime could not create the fallback scene graphics pipeline.");
+        return false;
+    }
+
+    render::ShaderModuleDesc motion_vertex_desc;
+    motion_vertex_desc.stage = render::ShaderStage::vertex;
+    motion_vertex_desc.language = vertex_desc.language;
+    motion_vertex_desc.source = metal ? motion_metal_source : motion_hlsl_source;
+    motion_vertex_desc.resources = vertex_resources;
+    motion_vertex_desc.entry_point = "vice_runtime_motion_vs";
+    motion_vertex_desc.debug_name = "VICE Runtime motion-vector vertex";
+
+    render::ShaderModuleDesc motion_fragment_desc;
+    motion_fragment_desc.stage = render::ShaderStage::fragment;
+    motion_fragment_desc.language = vertex_desc.language;
+    motion_fragment_desc.source = motion_vertex_desc.source;
+    motion_fragment_desc.entry_point = "vice_runtime_motion_fs";
+    motion_fragment_desc.debug_name = "VICE Runtime motion-vector fragment";
+
+    state_->motion_vertex_shader = device.create_shader_module(motion_vertex_desc);
+    state_->motion_fragment_shader = device.create_shader_module(motion_fragment_desc);
+    if (!state_->motion_vertex_shader || !state_->motion_fragment_shader) {
+        set_diagnostics(diagnostics, "VICE Runtime could not create motion-vector shaders.");
+        return false;
+    }
+
+    render::GraphicsPipelineDesc motion_pipeline_desc;
+    motion_pipeline_desc.vertex_shader = state_->motion_vertex_shader.get();
+    motion_pipeline_desc.fragment_shader = state_->motion_fragment_shader.get();
+    motion_pipeline_desc.color_format = render::TextureFormat::rgba16_float;
+    motion_pipeline_desc.cull_mode = render::CullMode::none;
+    motion_pipeline_desc.depth.format = render::TextureFormat::depth32_float;
+    motion_pipeline_desc.depth.test_enabled = true;
+    motion_pipeline_desc.depth.write_enabled = false;
+    motion_pipeline_desc.depth.compare = render::CompareOp::less_equal;
+    motion_pipeline_desc.vertex_buffers = mesh_layouts;
+    motion_pipeline_desc.debug_name = "VICE Runtime motion-vector pipeline";
+    state_->motion_pipeline = device.create_graphics_pipeline(motion_pipeline_desc);
+    if (!state_->motion_pipeline) {
+        set_diagnostics(diagnostics, "VICE Runtime could not create the motion-vector pipeline.");
         return false;
     }
 
@@ -1244,14 +1393,19 @@ bool RuntimeSceneRenderer::resize(
         return false;
     }
     if (metrics.drawable_width == 0U || metrics.drawable_height == 0U) {
-        state_->scene_color.reset();
+        for (auto& scene_color : state_->scene_history) scene_color.reset();
+        state_->motion_vectors.reset();
         state_->depth.reset();
+        state_->previous_models.clear();
+        state_->temporal_history.reset();
+        state_->scene_write_index = 0U;
         state_->depth_width = 0;
         state_->depth_height = 0;
         if (diagnostics != nullptr) diagnostics->clear();
         return true;
     }
-    if (state_->scene_color && state_->depth &&
+    if (state_->scene_history[0] && state_->scene_history[1] &&
+        state_->motion_vectors && state_->depth &&
         state_->depth_width == metrics.drawable_width &&
         state_->depth_height == metrics.drawable_height) {
         if (diagnostics != nullptr) diagnostics->clear();
@@ -1275,15 +1429,34 @@ bool RuntimeSceneRenderer::resize(
     scene_color_desc.height = metrics.drawable_height;
     scene_color_desc.format = render::TextureFormat::rgba16_float;
     scene_color_desc.usage = render::TextureUsage::color_attachment | render::TextureUsage::sampled;
-    scene_color_desc.debug_name = "VICE Runtime HDR scene color";
-    auto scene_color = state_->device->create_texture(scene_color_desc);
-    if (!scene_color) {
-        set_diagnostics(diagnostics, "VICE Runtime could not create the HDR scene color target.");
+    scene_color_desc.debug_name = "VICE Runtime HDR scene history";
+    std::array<std::unique_ptr<render::Texture>, 2U> scene_history;
+    for (auto& scene_color : scene_history) {
+        scene_color = state_->device->create_texture(scene_color_desc);
+        if (!scene_color) {
+            set_diagnostics(diagnostics, "VICE Runtime could not create HDR frame-history targets.");
+            return false;
+        }
+    }
+
+    render::TextureDesc motion_desc;
+    motion_desc.width = metrics.drawable_width;
+    motion_desc.height = metrics.drawable_height;
+    motion_desc.format = render::TextureFormat::rgba16_float;
+    motion_desc.usage = render::TextureUsage::color_attachment | render::TextureUsage::sampled;
+    motion_desc.debug_name = "VICE Runtime motion vectors";
+    auto motion_vectors = state_->device->create_texture(motion_desc);
+    if (!motion_vectors) {
+        set_diagnostics(diagnostics, "VICE Runtime could not create the motion-vector target.");
         return false;
     }
 
-    state_->scene_color = std::move(scene_color);
+    state_->scene_history = std::move(scene_history);
+    state_->motion_vectors = std::move(motion_vectors);
     state_->depth = std::move(depth);
+    state_->previous_models.clear();
+    state_->temporal_history.reset();
+    state_->scene_write_index = 0U;
     state_->depth_width = metrics.drawable_width;
     state_->depth_height = metrics.drawable_height;
     if (diagnostics != nullptr) diagnostics->clear();
@@ -1320,8 +1493,8 @@ bool RuntimeSceneRenderer::render(
     std::string* const diagnostics
 ) {
     if (state_ == nullptr || !state_->initialized || state_->device == nullptr ||
-        !state_->pipeline || !state_->tone_map_pipeline || !state_->tone_map_sampler ||
-        !state_->tone_map_constants) {
+        !state_->pipeline || !state_->motion_pipeline || !state_->tone_map_pipeline ||
+        !state_->tone_map_sampler || !state_->tone_map_constants) {
         set_diagnostics(diagnostics, "Runtime scene renderer is not initialized.");
         return false;
     }
@@ -1330,8 +1503,9 @@ bool RuntimeSceneRenderer::render(
         return true;
     }
     if (!resize(metrics, diagnostics)) return false;
-    if (!state_->scene_color) {
-        set_diagnostics(diagnostics, "VICE Runtime HDR scene color is unavailable.");
+    if (!state_->scene_history[0] || !state_->scene_history[1] ||
+        !state_->motion_vectors || !state_->depth) {
+        set_diagnostics(diagnostics, "VICE Runtime temporal frame targets are unavailable.");
         return false;
     }
 
@@ -1363,6 +1537,14 @@ bool RuntimeSceneRenderer::render(
         : fallback_camera(instances, state_->catalog, aspect);
     const math::Mat4 view_projection = runtime_camera.view_projection;
     const math::Vec3 camera_position = runtime_camera.position;
+    const auto temporal_frame = state_->temporal_history.begin_frame(
+        runtime_camera.entity,
+        view_projection
+    );
+    auto* const scene_color = state_->scene_history[state_->scene_write_index].get();
+    auto* const previous_scene_color = temporal_frame.history_valid
+        ? state_->scene_history[1U - state_->scene_write_index].get()
+        : nullptr;
 
     const auto authored_lights = collect_runtime_lights(world);
     const auto shadow_view = directional_shadow_view(runtime_camera, authored_lights);
@@ -1456,7 +1638,7 @@ bool RuntimeSceneRenderer::render(
     pass.clear_color = clear_color;
     pass.depth_attachment = state_->depth.get();
     pass.clear_depth = 1.0F;
-    if (!commands->begin_render_pass(*state_->scene_color, pass) ||
+    if (!commands->begin_render_pass(*scene_color, pass) ||
         !commands->set_viewport(render::Viewport{
             .width = static_cast<float>(metrics.drawable_width),
             .height = static_cast<float>(metrics.drawable_height),
@@ -1621,9 +1803,13 @@ bool RuntimeSceneRenderer::render(
         return false;
     }
 
-    render::RenderPassDesc presentation_pass;
-    presentation_pass.clear_color = render::Color{0.0F, 0.0F, 0.0F, 1.0F};
-    if (!commands->begin_render_pass(swapchain, presentation_pass) ||
+
+    render::RenderPassDesc motion_pass;
+    motion_pass.clear_color = render::Color{0.0F, 0.0F, 0.0F, 0.0F};
+    motion_pass.depth_attachment = state_->depth.get();
+    motion_pass.clear_depth = 1.0F;
+    motion_pass.clear_depth_attachment = false;
+    if (!commands->begin_render_pass(*state_->motion_vectors, motion_pass) ||
         !commands->set_viewport(render::Viewport{
             .width = static_cast<float>(metrics.drawable_width),
             .height = static_cast<float>(metrics.drawable_height),
@@ -1632,19 +1818,136 @@ bool RuntimeSceneRenderer::render(
             .width = metrics.drawable_width,
             .height = metrics.drawable_height,
         }) ||
-        !commands->set_graphics_pipeline(*state_->tone_map_pipeline) ||
-        !commands->set_graphics_constant_buffer(
-            tone_map_constants_binding,
-            *state_->tone_map_constants,
-            0U,
-            sizeof(ToneMapConstants)
-        ) ||
-        !commands->set_graphics_texture(tone_map_scene_texture_binding, *state_->scene_color) ||
-        !commands->set_graphics_sampler(tone_map_sampler_binding, *state_->tone_map_sampler) ||
-        !commands->draw(3U) ||
-        !commands->end_render_pass() ||
-        !commands->present(swapchain)) {
-        set_diagnostics(diagnostics, "VICE Runtime could not tone-map and present the HDR scene.");
+        !commands->set_graphics_pipeline(*state_->motion_pipeline)) {
+        set_diagnostics(diagnostics, "VICE Runtime could not begin the motion-vector render pass.");
+        return false;
+    }
+
+    for (const auto& instance : instances) {
+        auto motion_iterator = state_->motion_constants.find(instance.entity);
+        if (motion_iterator == state_->motion_constants.end()) {
+            auto constants = create_motion_constant_buffer(*state_->device);
+            if (!constants) {
+                set_diagnostics(diagnostics, "VICE Runtime could not create motion-vector constants.");
+                return false;
+            }
+            motion_iterator = state_->motion_constants.emplace(
+                instance.entity,
+                std::move(constants)
+            ).first;
+        }
+
+        const math::Mat4 current_model = runtime_model_matrix(instance);
+        math::Mat4 previous_model = current_model;
+        if (temporal_frame.history_valid) {
+            const auto previous = state_->previous_models.find(instance.entity);
+            if (previous != state_->previous_models.end()) previous_model = previous->second;
+        }
+        const MotionConstants motion_constants{
+            .current_view_projection = temporal_frame.current_view_projection,
+            .previous_view_projection = temporal_frame.previous_view_projection,
+            .current_model = current_model,
+            .previous_model = previous_model,
+        };
+        if (!motion_iterator->second->write(
+                0U,
+                std::as_bytes(std::span{&motion_constants, 1})
+            )) {
+            set_diagnostics(diagnostics, "VICE Runtime could not update motion-vector constants.");
+            return false;
+        }
+
+        auto& mesh = state_->meshes.at(instance.mesh);
+        if (!commands->set_vertex_buffer(0U, *mesh.vertices) ||
+            !commands->set_index_buffer(*mesh.indices, render::IndexFormat::uint32) ||
+            !commands->set_graphics_constant_buffer(
+                frame_binding,
+                *motion_iterator->second,
+                0U,
+                sizeof(MotionConstants)
+            ) ||
+            !commands->draw_indexed(mesh.index_count)) {
+            set_diagnostics(
+                diagnostics,
+                "VICE Runtime could not encode motion vectors for mesh `" +
+                    instance.mesh.value.to_string() + "`."
+            );
+            return false;
+        }
+    }
+    if (!commands->end_render_pass()) {
+        set_diagnostics(diagnostics, "VICE Runtime could not finish the motion-vector render pass.");
+        return false;
+    }
+
+    const RuntimePostProcessFrame post_process_frame{
+        .scene_color = scene_color,
+        .previous_scene_color = previous_scene_color,
+        .motion_vectors = state_->motion_vectors.get(),
+        .depth = state_->depth.get(),
+        .temporal = temporal_frame,
+    };
+
+    bool presented = false;
+    for (const auto& pass_desc : state_->post_process_plan) {
+        if (!pass_desc.enabled) continue;
+        switch (pass_desc.pass) {
+        case RuntimePostProcessPass::temporal_resolve:
+            set_diagnostics(
+                diagnostics,
+                "VICE Runtime temporal resolve is present in the pass plan but not implemented."
+            );
+            return false;
+        case RuntimePostProcessPass::bloom:
+            set_diagnostics(
+                diagnostics,
+                "VICE Runtime bloom is present in the pass plan but not implemented."
+            );
+            return false;
+        case RuntimePostProcessPass::tone_map: {
+            if (presented || post_process_frame.scene_color == nullptr) {
+                set_diagnostics(diagnostics, "VICE Runtime post-process plan has an invalid tone-map pass.");
+                return false;
+            }
+            render::RenderPassDesc presentation_pass;
+            presentation_pass.clear_color = render::Color{0.0F, 0.0F, 0.0F, 1.0F};
+            if (!commands->begin_render_pass(swapchain, presentation_pass) ||
+                !commands->set_viewport(render::Viewport{
+                    .width = static_cast<float>(metrics.drawable_width),
+                    .height = static_cast<float>(metrics.drawable_height),
+                }) ||
+                !commands->set_scissor_rect(render::ScissorRect{
+                    .width = metrics.drawable_width,
+                    .height = metrics.drawable_height,
+                }) ||
+                !commands->set_graphics_pipeline(*state_->tone_map_pipeline) ||
+                !commands->set_graphics_constant_buffer(
+                    tone_map_constants_binding,
+                    *state_->tone_map_constants,
+                    0U,
+                    sizeof(ToneMapConstants)
+                ) ||
+                !commands->set_graphics_texture(
+                    tone_map_scene_texture_binding,
+                    *post_process_frame.scene_color
+                ) ||
+                !commands->set_graphics_sampler(
+                    tone_map_sampler_binding,
+                    *state_->tone_map_sampler
+                ) ||
+                !commands->draw(3U) ||
+                !commands->end_render_pass() ||
+                !commands->present(swapchain)) {
+                set_diagnostics(diagnostics, "VICE Runtime could not execute the tone-map presentation pass.");
+                return false;
+            }
+            presented = true;
+            break;
+        }
+        }
+    }
+    if (!presented) {
+        set_diagnostics(diagnostics, "VICE Runtime post-process plan did not present the frame.");
         return false;
     }
     const auto submission = state_->device->submit(std::move(commands));
@@ -1652,6 +1955,14 @@ bool RuntimeSceneRenderer::render(
         set_diagnostics(diagnostics, "VICE Runtime scene submission failed.");
         return false;
     }
+
+    state_->previous_models.clear();
+    state_->previous_models.reserve(instances.size());
+    for (const auto& instance : instances) {
+        state_->previous_models.emplace(instance.entity, runtime_model_matrix(instance));
+    }
+    state_->temporal_history.commit_frame(runtime_camera.entity, view_projection);
+    state_->scene_write_index = 1U - state_->scene_write_index;
 
     if (diagnostics != nullptr) diagnostics->clear();
     return true;
