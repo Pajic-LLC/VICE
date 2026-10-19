@@ -264,6 +264,10 @@ int run_native_game(
         log(LogLevel::error, "VICE Runtime could not initialize the scene: " + scene_diagnostics);
         return 1;
     }
+    if (!scene_renderer.set_exposure(config.exposure, &scene_diagnostics)) {
+        log(LogLevel::error, "VICE Runtime could not configure exposure: " + scene_diagnostics);
+        return 1;
+    }
 
     log(
         LogLevel::info,

@@ -131,6 +131,56 @@ constexpr render::ShaderBindingKey shadow_sampler_binding{
     .array_element = 0,
 };
 
+constexpr render::ShaderBindingKey tone_map_constants_binding{
+    .register_class = render::ShaderRegisterClass::constant_buffer,
+    .binding = 0,
+    .space = 0,
+    .array_element = 0,
+};
+
+constexpr render::ShaderBindingKey tone_map_scene_texture_binding{
+    .register_class = render::ShaderRegisterClass::shader_resource,
+    .binding = 0,
+    .space = 0,
+    .array_element = 0,
+};
+
+constexpr render::ShaderBindingKey tone_map_sampler_binding{
+    .register_class = render::ShaderRegisterClass::sampler,
+    .binding = 0,
+    .space = 0,
+    .array_element = 0,
+};
+
+static constexpr std::array tone_map_fragment_resources{
+    render::ShaderResourceBindingDesc{
+        .register_class = render::ShaderRegisterClass::constant_buffer,
+        .binding = 0,
+        .space = 0,
+        .count = 1,
+        .unbounded = false,
+    },
+    render::ShaderResourceBindingDesc{
+        .register_class = render::ShaderRegisterClass::shader_resource,
+        .binding = 0,
+        .space = 0,
+        .count = 1,
+        .unbounded = false,
+    },
+    render::ShaderResourceBindingDesc{
+        .register_class = render::ShaderRegisterClass::sampler,
+        .binding = 0,
+        .space = 0,
+        .count = 1,
+        .unbounded = false,
+    },
+};
+
+struct ToneMapConstants {
+    float exposure = 1.0F;
+    float padding[3]{};
+};
+
 struct SceneLightConstants {
     float position_or_direction[4]{};
     float color_intensity[4]{};
@@ -155,6 +205,7 @@ struct ShadowConstants {
     math::Mat4 model{};
 };
 
+static_assert(sizeof(ToneMapConstants) == 16U);
 static_assert(sizeof(SceneLightConstants) == 48U);
 static_assert(sizeof(SceneConstants) == 848U);
 static_assert(sizeof(ShadowConstants) == 128U);
@@ -244,6 +295,114 @@ vertex float4 vice_runtime_shadow_vs(
 }
 )";
 
+constexpr std::string_view tone_map_hlsl_source = R"(
+cbuffer ToneMapFrame : register(b0) {
+    float4 tone_map_data;
+};
+Texture2D<float4> scene_color : register(t0);
+SamplerState scene_sampler : register(s0);
+struct ToneMapVertexOut {
+    float4 position : SV_Position;
+    float2 uv : TEXCOORD0;
+};
+ToneMapVertexOut vice_runtime_tonemap_vs(uint vertex_id : SV_VertexID) {
+    const float2 uvs[3] = {
+        float2(0.0, 0.0),
+        float2(2.0, 0.0),
+        float2(0.0, 2.0)
+    };
+    ToneMapVertexOut output;
+    output.uv = uvs[vertex_id];
+    output.position = float4(
+        output.uv.x * 2.0 - 1.0,
+        1.0 - output.uv.y * 2.0,
+        0.0,
+        1.0
+    );
+    return output;
+}
+float3 vice_aces_fitted(float3 color) {
+    const float a = 2.51;
+    const float b = 0.03;
+    const float c = 2.43;
+    const float d = 0.59;
+    const float e = 0.14;
+    return saturate((color * (a * color + b)) / (color * (c * color + d) + e));
+}
+float vice_linear_to_srgb_channel(float value) {
+    value = saturate(value);
+    return value <= 0.0031308
+        ? value * 12.92
+        : 1.055 * pow(value, 1.0 / 2.4) - 0.055;
+}
+float4 vice_runtime_tonemap_fs(ToneMapVertexOut input) : SV_Target0 {
+    const float3 hdr = max(scene_color.Sample(scene_sampler, input.uv).rgb * tone_map_data.x, 0.0);
+    const float3 mapped = vice_aces_fitted(hdr);
+    return float4(
+        vice_linear_to_srgb_channel(mapped.r),
+        vice_linear_to_srgb_channel(mapped.g),
+        vice_linear_to_srgb_channel(mapped.b),
+        1.0
+    );
+}
+)";
+
+constexpr std::string_view tone_map_metal_source = R"(
+#include <metal_stdlib>
+using namespace metal;
+struct ToneMapFrame {
+    float4 tone_map_data;
+};
+struct ToneMapVertexOut {
+    float4 position [[position]];
+    float2 uv;
+};
+vertex ToneMapVertexOut vice_runtime_tonemap_vs(uint vertex_id [[vertex_id]]) {
+    constexpr float2 uvs[3] = {
+        float2(0.0, 0.0),
+        float2(2.0, 0.0),
+        float2(0.0, 2.0)
+    };
+    ToneMapVertexOut output;
+    output.uv = uvs[vertex_id];
+    output.position = float4(
+        output.uv.x * 2.0 - 1.0,
+        1.0 - output.uv.y * 2.0,
+        0.0,
+        1.0
+    );
+    return output;
+}
+float3 vice_aces_fitted(float3 color) {
+    constexpr float a = 2.51;
+    constexpr float b = 0.03;
+    constexpr float c = 2.43;
+    constexpr float d = 0.59;
+    constexpr float e = 0.14;
+    return clamp((color * (a * color + b)) / (color * (c * color + d) + e), 0.0, 1.0);
+}
+float vice_linear_to_srgb_channel(float value) {
+    value = clamp(value, 0.0, 1.0);
+    return value <= 0.0031308
+        ? value * 12.92
+        : 1.055 * pow(value, 1.0 / 2.4) - 0.055;
+}
+fragment float4 vice_runtime_tonemap_fs(
+    ToneMapVertexOut input [[stage_in]],
+    constant ToneMapFrame& frame [[buffer(0)]],
+    texture2d<float> scene_color [[texture(0)]],
+    sampler scene_sampler [[sampler(0)]]) {
+    const float3 hdr = max(scene_color.sample(scene_sampler, input.uv).rgb * frame.tone_map_data.x, 0.0);
+    const float3 mapped = vice_aces_fitted(hdr);
+    return float4(
+        vice_linear_to_srgb_channel(mapped.r),
+        vice_linear_to_srgb_channel(mapped.g),
+        vice_linear_to_srgb_channel(mapped.b),
+        1.0
+    );
+}
+)";
+
 [[nodiscard]] constexpr math::Vec3 add(
     const math::Vec3 left,
     const math::Vec3 right
@@ -316,6 +475,17 @@ vertex float4 vice_runtime_shadow_vs(
     desc.usage = render::BufferUsage::uniform;
     desc.memory = render::MemoryLocation::cpu_to_gpu;
     desc.debug_name = "VICE Runtime shadow constants";
+    return device.create_buffer(desc);
+}
+
+[[nodiscard]] std::unique_ptr<render::Buffer> create_tone_map_constant_buffer(
+    render::Device& device
+) {
+    render::BufferDesc desc;
+    desc.size = sizeof(ToneMapConstants);
+    desc.usage = render::BufferUsage::uniform;
+    desc.memory = render::MemoryLocation::cpu_to_gpu;
+    desc.debug_name = "VICE Runtime tone-map constants";
     return device.create_buffer(desc);
 }
 
@@ -822,10 +992,16 @@ struct RuntimeSceneRenderer::State {
     std::unique_ptr<render::ShaderModule> vertex_shader;
     std::unique_ptr<render::ShaderModule> fragment_shader;
     std::unique_ptr<render::GraphicsPipeline> pipeline;
+    std::unique_ptr<render::ShaderModule> tone_map_vertex_shader;
+    std::unique_ptr<render::ShaderModule> tone_map_fragment_shader;
+    std::unique_ptr<render::GraphicsPipeline> tone_map_pipeline;
+    std::unique_ptr<render::Sampler> tone_map_sampler;
+    std::unique_ptr<render::Buffer> tone_map_constants;
     std::unique_ptr<render::ShaderModule> shadow_vertex_shader;
     std::unique_ptr<render::GraphicsPipeline> shadow_pipeline;
     std::array<std::unique_ptr<render::Texture>, runtime_shadow_cascade_count> shadow_maps;
     std::unique_ptr<render::Sampler> shadow_sampler;
+    std::unique_ptr<render::Texture> scene_color;
     std::unique_ptr<render::Texture> depth;
     std::unordered_map<world::ResourceId, MeshGpu, world::ResourceIdHash> meshes;
     std::unordered_map<world::PersistentId, std::unique_ptr<render::Buffer>, world::PersistentIdHash> constants;
@@ -835,6 +1011,7 @@ struct RuntimeSceneRenderer::State {
     > shadow_constants;
     std::uint32_t depth_width = 0;
     std::uint32_t depth_height = 0;
+    float exposure = 1.0F;
     bool initialized = false;
 };
 
@@ -858,7 +1035,13 @@ bool RuntimeSceneRenderer::initialize(
         set_diagnostics(diagnostics, state_->catalog.diagnostics());
         return false;
     }
-    if (!state_->materials.initialize(device, color_format, mesh_layouts, content_root, diagnostics)) {
+    if (!state_->materials.initialize(
+            device,
+            render::TextureFormat::rgba16_float,
+            mesh_layouts,
+            content_root,
+            diagnostics
+        )) {
         return false;
     }
 
@@ -888,7 +1071,7 @@ bool RuntimeSceneRenderer::initialize(
     render::GraphicsPipelineDesc pipeline_desc;
     pipeline_desc.vertex_shader = state_->vertex_shader.get();
     pipeline_desc.fragment_shader = state_->fragment_shader.get();
-    pipeline_desc.color_format = color_format;
+    pipeline_desc.color_format = render::TextureFormat::rgba16_float;
     pipeline_desc.cull_mode = render::CullMode::none;
     pipeline_desc.depth.format = render::TextureFormat::depth32_float;
     pipeline_desc.depth.test_enabled = true;
@@ -899,6 +1082,63 @@ bool RuntimeSceneRenderer::initialize(
     state_->pipeline = device.create_graphics_pipeline(pipeline_desc);
     if (!state_->pipeline) {
         set_diagnostics(diagnostics, "VICE Runtime could not create the fallback scene graphics pipeline.");
+        return false;
+    }
+
+    render::ShaderModuleDesc tone_vertex_desc;
+    tone_vertex_desc.stage = render::ShaderStage::vertex;
+    tone_vertex_desc.language = vertex_desc.language;
+    tone_vertex_desc.source = metal ? tone_map_metal_source : tone_map_hlsl_source;
+    tone_vertex_desc.entry_point = "vice_runtime_tonemap_vs";
+    tone_vertex_desc.debug_name = "VICE Runtime tone-map vertex";
+
+    render::ShaderModuleDesc tone_fragment_desc;
+    tone_fragment_desc.stage = render::ShaderStage::fragment;
+    tone_fragment_desc.language = vertex_desc.language;
+    tone_fragment_desc.source = tone_vertex_desc.source;
+    tone_fragment_desc.resources = tone_map_fragment_resources;
+    tone_fragment_desc.entry_point = "vice_runtime_tonemap_fs";
+    tone_fragment_desc.debug_name = "VICE Runtime tone-map fragment";
+
+    state_->tone_map_vertex_shader = device.create_shader_module(tone_vertex_desc);
+    state_->tone_map_fragment_shader = device.create_shader_module(tone_fragment_desc);
+    if (!state_->tone_map_vertex_shader || !state_->tone_map_fragment_shader) {
+        set_diagnostics(diagnostics, "VICE Runtime could not create tone-map shaders.");
+        return false;
+    }
+
+    render::GraphicsPipelineDesc tone_pipeline_desc;
+    tone_pipeline_desc.vertex_shader = state_->tone_map_vertex_shader.get();
+    tone_pipeline_desc.fragment_shader = state_->tone_map_fragment_shader.get();
+    tone_pipeline_desc.color_format = color_format;
+    tone_pipeline_desc.cull_mode = render::CullMode::none;
+    tone_pipeline_desc.debug_name = "VICE Runtime tone-map pipeline";
+    state_->tone_map_pipeline = device.create_graphics_pipeline(tone_pipeline_desc);
+    if (!state_->tone_map_pipeline) {
+        set_diagnostics(diagnostics, "VICE Runtime could not create the tone-map pipeline.");
+        return false;
+    }
+
+    render::SamplerDesc tone_sampler_desc;
+    tone_sampler_desc.min_filter = render::Filter::linear;
+    tone_sampler_desc.mag_filter = render::Filter::linear;
+    tone_sampler_desc.mip_filter = render::Filter::linear;
+    tone_sampler_desc.address_u = render::AddressMode::clamp_to_edge;
+    tone_sampler_desc.address_v = render::AddressMode::clamp_to_edge;
+    tone_sampler_desc.address_w = render::AddressMode::clamp_to_edge;
+    tone_sampler_desc.debug_name = "VICE Runtime tone-map sampler";
+    state_->tone_map_sampler = device.create_sampler(tone_sampler_desc);
+    state_->tone_map_constants = create_tone_map_constant_buffer(device);
+    if (!state_->tone_map_sampler || !state_->tone_map_constants) {
+        set_diagnostics(diagnostics, "VICE Runtime could not create tone-map resources.");
+        return false;
+    }
+    const ToneMapConstants default_tone_map_constants{};
+    if (!state_->tone_map_constants->write(
+            0U,
+            std::as_bytes(std::span{&default_tone_map_constants, 1})
+        )) {
+        set_diagnostics(diagnostics, "VICE Runtime could not initialize tone-map exposure.");
         return false;
     }
 
@@ -1004,13 +1244,15 @@ bool RuntimeSceneRenderer::resize(
         return false;
     }
     if (metrics.drawable_width == 0U || metrics.drawable_height == 0U) {
+        state_->scene_color.reset();
         state_->depth.reset();
         state_->depth_width = 0;
         state_->depth_height = 0;
         if (diagnostics != nullptr) diagnostics->clear();
         return true;
     }
-    if (state_->depth && state_->depth_width == metrics.drawable_width &&
+    if (state_->scene_color && state_->depth &&
+        state_->depth_width == metrics.drawable_width &&
         state_->depth_height == metrics.drawable_height) {
         if (diagnostics != nullptr) diagnostics->clear();
         return true;
@@ -1027,9 +1269,45 @@ bool RuntimeSceneRenderer::resize(
         set_diagnostics(diagnostics, "VICE Runtime could not create the scene depth buffer.");
         return false;
     }
+
+    render::TextureDesc scene_color_desc;
+    scene_color_desc.width = metrics.drawable_width;
+    scene_color_desc.height = metrics.drawable_height;
+    scene_color_desc.format = render::TextureFormat::rgba16_float;
+    scene_color_desc.usage = render::TextureUsage::color_attachment | render::TextureUsage::sampled;
+    scene_color_desc.debug_name = "VICE Runtime HDR scene color";
+    auto scene_color = state_->device->create_texture(scene_color_desc);
+    if (!scene_color) {
+        set_diagnostics(diagnostics, "VICE Runtime could not create the HDR scene color target.");
+        return false;
+    }
+
+    state_->scene_color = std::move(scene_color);
     state_->depth = std::move(depth);
     state_->depth_width = metrics.drawable_width;
     state_->depth_height = metrics.drawable_height;
+    if (diagnostics != nullptr) diagnostics->clear();
+    return true;
+}
+
+bool RuntimeSceneRenderer::set_exposure(
+    const float exposure,
+    std::string* const diagnostics
+) {
+    if (state_ == nullptr || !state_->initialized || state_->tone_map_constants == nullptr) {
+        set_diagnostics(diagnostics, "Runtime scene renderer is not initialized.");
+        return false;
+    }
+    if (!std::isfinite(exposure) || exposure <= 0.0F) {
+        set_diagnostics(diagnostics, "Runtime exposure must be finite and greater than zero.");
+        return false;
+    }
+    const ToneMapConstants constants{.exposure = exposure};
+    if (!state_->tone_map_constants->write(0U, std::as_bytes(std::span{&constants, 1}))) {
+        set_diagnostics(diagnostics, "VICE Runtime could not update tone-map exposure.");
+        return false;
+    }
+    state_->exposure = exposure;
     if (diagnostics != nullptr) diagnostics->clear();
     return true;
 }
@@ -1041,7 +1319,9 @@ bool RuntimeSceneRenderer::render(
     const render::Color clear_color,
     std::string* const diagnostics
 ) {
-    if (state_ == nullptr || !state_->initialized || state_->device == nullptr || !state_->pipeline) {
+    if (state_ == nullptr || !state_->initialized || state_->device == nullptr ||
+        !state_->pipeline || !state_->tone_map_pipeline || !state_->tone_map_sampler ||
+        !state_->tone_map_constants) {
         set_diagnostics(diagnostics, "Runtime scene renderer is not initialized.");
         return false;
     }
@@ -1050,6 +1330,10 @@ bool RuntimeSceneRenderer::render(
         return true;
     }
     if (!resize(metrics, diagnostics)) return false;
+    if (!state_->scene_color) {
+        set_diagnostics(diagnostics, "VICE Runtime HDR scene color is unavailable.");
+        return false;
+    }
 
     const auto instances = collect_render_mesh_instances(world);
     for (const auto& instance : instances) {
@@ -1172,7 +1456,7 @@ bool RuntimeSceneRenderer::render(
     pass.clear_color = clear_color;
     pass.depth_attachment = state_->depth.get();
     pass.clear_depth = 1.0F;
-    if (!commands->begin_render_pass(swapchain, pass) ||
+    if (!commands->begin_render_pass(*state_->scene_color, pass) ||
         !commands->set_viewport(render::Viewport{
             .width = static_cast<float>(metrics.drawable_width),
             .height = static_cast<float>(metrics.drawable_height),
@@ -1181,7 +1465,7 @@ bool RuntimeSceneRenderer::render(
             .width = metrics.drawable_width,
             .height = metrics.drawable_height,
         })) {
-        set_diagnostics(diagnostics, "VICE Runtime could not begin the scene render pass.");
+        set_diagnostics(diagnostics, "VICE Runtime could not begin the HDR scene render pass.");
         return false;
     }
 
@@ -1332,8 +1616,35 @@ bool RuntimeSceneRenderer::render(
         }
     }
 
-    if (!commands->end_render_pass() || !commands->present(swapchain)) {
-        set_diagnostics(diagnostics, "VICE Runtime could not finish the scene render pass.");
+    if (!commands->end_render_pass()) {
+        set_diagnostics(diagnostics, "VICE Runtime could not finish the HDR scene render pass.");
+        return false;
+    }
+
+    render::RenderPassDesc presentation_pass;
+    presentation_pass.clear_color = render::Color{0.0F, 0.0F, 0.0F, 1.0F};
+    if (!commands->begin_render_pass(swapchain, presentation_pass) ||
+        !commands->set_viewport(render::Viewport{
+            .width = static_cast<float>(metrics.drawable_width),
+            .height = static_cast<float>(metrics.drawable_height),
+        }) ||
+        !commands->set_scissor_rect(render::ScissorRect{
+            .width = metrics.drawable_width,
+            .height = metrics.drawable_height,
+        }) ||
+        !commands->set_graphics_pipeline(*state_->tone_map_pipeline) ||
+        !commands->set_graphics_constant_buffer(
+            tone_map_constants_binding,
+            *state_->tone_map_constants,
+            0U,
+            sizeof(ToneMapConstants)
+        ) ||
+        !commands->set_graphics_texture(tone_map_scene_texture_binding, *state_->scene_color) ||
+        !commands->set_graphics_sampler(tone_map_sampler_binding, *state_->tone_map_sampler) ||
+        !commands->draw(3U) ||
+        !commands->end_render_pass() ||
+        !commands->present(swapchain)) {
+        set_diagnostics(diagnostics, "VICE Runtime could not tone-map and present the HDR scene.");
         return false;
     }
     const auto submission = state_->device->submit(std::move(commands));

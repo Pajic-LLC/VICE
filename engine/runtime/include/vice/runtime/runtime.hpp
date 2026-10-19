@@ -118,6 +118,7 @@ struct ApplicationConfig {
     std::uint32_t height = 720;
     bool resizable = true;
     render::Color clear_color{0.035F, 0.045F, 0.065F, 1.0F};
+    float exposure = 1.0F;
 };
 
 [[nodiscard]] int run_native_game(
