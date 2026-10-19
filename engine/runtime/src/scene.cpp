@@ -94,6 +94,27 @@ constexpr render::ShaderBindingKey base_color_texture_binding{
     .array_element = 0,
 };
 
+constexpr render::ShaderBindingKey normal_texture_binding{
+    .register_class = render::ShaderRegisterClass::shader_resource,
+    .binding = 1,
+    .space = 0,
+    .array_element = 0,
+};
+
+constexpr render::ShaderBindingKey orm_texture_binding{
+    .register_class = render::ShaderRegisterClass::shader_resource,
+    .binding = 2,
+    .space = 0,
+    .array_element = 0,
+};
+
+constexpr render::ShaderBindingKey emissive_texture_binding{
+    .register_class = render::ShaderRegisterClass::shader_resource,
+    .binding = 3,
+    .space = 0,
+    .array_element = 0,
+};
+
 constexpr render::ShaderBindingKey material_sampler_binding{
     .register_class = render::ShaderRegisterClass::sampler,
     .binding = 0,
@@ -101,32 +122,17 @@ constexpr render::ShaderBindingKey material_sampler_binding{
     .array_element = 0,
 };
 
-static constexpr std::array shadow_texture_bindings{
-    render::ShaderBindingKey{
+[[nodiscard]] constexpr render::ShaderBindingKey shadow_texture_binding(
+    const std::uint32_t base,
+    const std::size_t cascade_index
+) noexcept {
+    return render::ShaderBindingKey{
         .register_class = render::ShaderRegisterClass::shader_resource,
-        .binding = 1,
+        .binding = base + static_cast<std::uint32_t>(cascade_index),
         .space = 0,
         .array_element = 0,
-    },
-    render::ShaderBindingKey{
-        .register_class = render::ShaderRegisterClass::shader_resource,
-        .binding = 2,
-        .space = 0,
-        .array_element = 0,
-    },
-    render::ShaderBindingKey{
-        .register_class = render::ShaderRegisterClass::shader_resource,
-        .binding = 3,
-        .space = 0,
-        .array_element = 0,
-    },
-    render::ShaderBindingKey{
-        .register_class = render::ShaderRegisterClass::shader_resource,
-        .binding = 4,
-        .space = 0,
-        .array_element = 0,
-    },
-};
+    };
+}
 
 constexpr render::ShaderBindingKey shadow_sampler_binding{
     .register_class = render::ShaderRegisterClass::sampler,
@@ -2143,7 +2149,7 @@ bool RuntimeSceneRenderer::render(
                 material_binding,
                 *material_state.constants,
                 0,
-                sizeof(float) * 8U
+                material_state.constants_size
             )) {
             set_diagnostics(
                 diagnostics,
@@ -2165,6 +2171,19 @@ bool RuntimeSceneRenderer::render(
             );
             return false;
         }
+        if (material_state.normal_texture != nullptr &&
+            (!commands->set_graphics_texture(normal_texture_binding, *material_state.normal_texture) ||
+                material_state.orm_texture == nullptr ||
+                !commands->set_graphics_texture(orm_texture_binding, *material_state.orm_texture) ||
+                material_state.emissive_texture == nullptr ||
+                !commands->set_graphics_texture(emissive_texture_binding, *material_state.emissive_texture))) {
+            set_diagnostics(
+                diagnostics,
+                "VICE Runtime could not bind V3 normal/ORM/emissive textures for mesh `" +
+                    instance.mesh.value.to_string() + "`."
+            );
+            return false;
+        }
         if (material_state.directional_shadow_cascade_count > 0U) {
             const std::size_t cascade_count = std::min<std::size_t>(
                 material_state.directional_shadow_cascade_count,
@@ -2173,7 +2192,7 @@ bool RuntimeSceneRenderer::render(
             bool shadows_bound = state_->shadow_sampler != nullptr;
             for (std::size_t cascade_index = 0; cascade_index < cascade_count && shadows_bound; ++cascade_index) {
                 shadows_bound = commands->set_graphics_texture(
-                    shadow_texture_bindings[cascade_index],
+                    shadow_texture_binding(material_state.shadow_texture_binding_base, cascade_index),
                     *state_->shadow_maps[cascade_index]
                 );
             }

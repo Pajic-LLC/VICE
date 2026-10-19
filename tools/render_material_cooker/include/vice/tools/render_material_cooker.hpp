@@ -15,8 +15,9 @@ namespace vice::tools::render_material_cooker {
 
 inline constexpr std::uint32_t render_material_source_format_version_v1 = 1U;
 inline constexpr std::uint32_t render_material_source_format_version_v2 = 2U;
+inline constexpr std::uint32_t render_material_source_format_version_v3 = 3U;
 inline constexpr std::uint32_t render_material_source_format_version =
-    render_material_source_format_version_v2;
+    render_material_source_format_version_v3;
 
 struct MaterialSource {
     std::uint32_t version = render_material_source_format_version;
@@ -28,6 +29,12 @@ struct MaterialSource {
     float metallic = 0.0F;
     float roughness = 1.0F;
     render::TextureStableId base_color_texture{};
+    render::TextureStableId normal_texture{};
+    render::TextureStableId orm_texture{};
+    render::TextureStableId emissive_texture{};
+    render::Color emissive_color{0.0F, 0.0F, 0.0F, 1.0F};
+    float emissive_intensity = 0.0F;
+    float normal_scale = 1.0F;
     render::Filter min_filter = render::Filter::linear;
     render::Filter mag_filter = render::Filter::linear;
     render::Filter mip_filter = render::Filter::linear;
