@@ -79,7 +79,7 @@ constexpr std::uint64_t fnv_prime = 1'099'511'628'211ULL;
     return std::nullopt;
 }
 
-[[nodiscard]] bool valid_pbr(const MaterialSource& source) noexcept {
+[[nodiscard]] bool valid_v2_pbr(const MaterialSource& source) noexcept {
     if (!std::isfinite(source.metallic) || !std::isfinite(source.roughness) ||
         source.metallic < 0.0F || source.metallic > 1.0F ||
         source.roughness < 0.0F || source.roughness > 1.0F ||
@@ -95,6 +95,14 @@ constexpr std::uint64_t fnv_prime = 1'099'511'628'211ULL;
     sampler.address_w = source.address_w;
     sampler.max_anisotropy = source.max_anisotropy;
     return render::is_valid(sampler);
+}
+
+[[nodiscard]] bool valid_v3_pbr(const MaterialSource& source) noexcept {
+    return valid_v2_pbr(source) && render::valid_texture_id(source.normal_texture) &&
+        render::valid_texture_id(source.orm_texture) && render::valid_texture_id(source.emissive_texture) &&
+        valid_color(source.emissive_color) && std::isfinite(source.normal_scale) &&
+        source.normal_scale >= 0.0F && std::isfinite(source.emissive_intensity) &&
+        source.emissive_intensity >= 0.0F;
 }
 
 } // namespace
@@ -116,6 +124,12 @@ ParseResult parse_source_manifest(const std::string_view source_text) {
     bool metallic_seen = false;
     bool roughness_seen = false;
     bool texture_seen = false;
+    bool normal_texture_seen = false;
+    bool orm_texture_seen = false;
+    bool emissive_texture_seen = false;
+    bool normal_scale_seen = false;
+    bool emissive_color_seen = false;
+    bool emissive_intensity_seen = false;
     bool sampler_seen = false;
     std::istringstream source{std::string{source_text}};
     std::string line;
@@ -138,8 +152,9 @@ ParseResult parse_source_manifest(const std::string_view source_text) {
             std::uint32_t version = 0U;
             if (keyword != "vice-render-material" || !(values >> version) ||
                 (version != render_material_source_format_version_v1 &&
-                    version != render_material_source_format_version_v2)) {
-                fail("expected `vice-render-material 1` or `vice-render-material 2`.");
+                    version != render_material_source_format_version_v2 &&
+                    version != render_material_source_format_version_v3)) {
+                fail("expected `vice-render-material 1`, `vice-render-material 2`, or `vice-render-material 3`.");
                 return result;
             }
             std::string trailing;
@@ -223,6 +238,92 @@ ParseResult parse_source_manifest(const std::string_view source_text) {
             }
             std::copy(id->bytes().begin(), id->bytes().end(), parsed.base_color_texture.begin());
             texture_seen = true;
+        } else if (keyword == "normal_texture") {
+            std::string id_text;
+            if (parsed.version < render_material_source_format_version_v3) {
+                fail("normal_texture requires render material version 3.");
+                return result;
+            }
+            if (normal_texture_seen || !(values >> id_text)) {
+                fail(normal_texture_seen ? "normal texture is duplicated." : "normal texture ID is missing.");
+                return result;
+            }
+            const auto id = world::PersistentId::parse(id_text);
+            if (!id.has_value() || id->is_nil()) {
+                fail("normal texture ID is invalid.");
+                return result;
+            }
+            std::copy(id->bytes().begin(), id->bytes().end(), parsed.normal_texture.begin());
+            normal_texture_seen = true;
+        } else if (keyword == "orm_texture") {
+            std::string id_text;
+            if (parsed.version < render_material_source_format_version_v3) {
+                fail("orm_texture requires render material version 3.");
+                return result;
+            }
+            if (orm_texture_seen || !(values >> id_text)) {
+                fail(orm_texture_seen ? "ORM texture is duplicated." : "ORM texture ID is missing.");
+                return result;
+            }
+            const auto id = world::PersistentId::parse(id_text);
+            if (!id.has_value() || id->is_nil()) {
+                fail("ORM texture ID is invalid.");
+                return result;
+            }
+            std::copy(id->bytes().begin(), id->bytes().end(), parsed.orm_texture.begin());
+            orm_texture_seen = true;
+        } else if (keyword == "emissive_texture") {
+            std::string id_text;
+            if (parsed.version < render_material_source_format_version_v3) {
+                fail("emissive_texture requires render material version 3.");
+                return result;
+            }
+            if (emissive_texture_seen || !(values >> id_text)) {
+                fail(emissive_texture_seen ? "emissive texture is duplicated." : "emissive texture ID is missing.");
+                return result;
+            }
+            const auto id = world::PersistentId::parse(id_text);
+            if (!id.has_value() || id->is_nil()) {
+                fail("emissive texture ID is invalid.");
+                return result;
+            }
+            std::copy(id->bytes().begin(), id->bytes().end(), parsed.emissive_texture.begin());
+            emissive_texture_seen = true;
+        } else if (keyword == "normal_scale") {
+            if (parsed.version < render_material_source_format_version_v3) {
+                fail("normal_scale requires render material version 3.");
+                return result;
+            }
+            if (normal_scale_seen || !(values >> parsed.normal_scale) || !std::isfinite(parsed.normal_scale) ||
+                parsed.normal_scale < 0.0F) {
+                fail(normal_scale_seen ? "normal scale is duplicated." : "normal scale must be finite and non-negative.");
+                return result;
+            }
+            normal_scale_seen = true;
+        } else if (keyword == "emissive_color") {
+            if (parsed.version < render_material_source_format_version_v3) {
+                fail("emissive_color requires render material version 3.");
+                return result;
+            }
+            parsed.emissive_color.alpha = 1.0F;
+            if (emissive_color_seen || !(values >> parsed.emissive_color.red >> parsed.emissive_color.green >>
+                    parsed.emissive_color.blue) || !valid_color(parsed.emissive_color)) {
+                fail(emissive_color_seen ? "emissive color is duplicated." : "emissive color is invalid.");
+                return result;
+            }
+            emissive_color_seen = true;
+        } else if (keyword == "emissive_intensity") {
+            if (parsed.version < render_material_source_format_version_v3) {
+                fail("emissive_intensity requires render material version 3.");
+                return result;
+            }
+            if (emissive_intensity_seen || !(values >> parsed.emissive_intensity) ||
+                !std::isfinite(parsed.emissive_intensity) || parsed.emissive_intensity < 0.0F) {
+                fail(emissive_intensity_seen ? "emissive intensity is duplicated." :
+                    "emissive intensity must be finite and non-negative.");
+                return result;
+            }
+            emissive_intensity_seen = true;
         } else if (keyword == "sampler") {
             std::string min_filter;
             std::string mag_filter;
@@ -284,8 +385,14 @@ ParseResult parse_source_manifest(const std::string_view source_text) {
         return result;
     }
     if (parsed.version >= render_material_source_format_version_v2 &&
-        (!metallic_seen || !roughness_seen || !texture_seen || !sampler_seen || !valid_pbr(parsed))) {
-        result.diagnostics = "Render material v2 requires metallic, roughness, base_color_texture, and sampler.";
+        (!metallic_seen || !roughness_seen || !texture_seen || !sampler_seen || !valid_v2_pbr(parsed))) {
+        result.diagnostics = "Render material v2+ requires metallic, roughness, base_color_texture, and sampler.";
+        return result;
+    }
+    if (parsed.version >= render_material_source_format_version_v3 &&
+        (!normal_texture_seen || !orm_texture_seen || !emissive_texture_seen || !normal_scale_seen ||
+            !emissive_color_seen || !emissive_intensity_seen || !valid_v3_pbr(parsed))) {
+        result.diagnostics = "Render material v3 requires normal/ORM/emissive textures, normal scale, emissive color, and emissive intensity.";
         return result;
     }
 
@@ -302,11 +409,13 @@ CookResult cook(
 ) {
     CookResult result;
     if ((source.version != render_material_source_format_version_v1 &&
-            source.version != render_material_source_format_version_v2) ||
+            source.version != render_material_source_format_version_v2 &&
+            source.version != render_material_source_format_version_v3) ||
         !render::valid_render_material_id(source.stable_id) || source.source_fingerprint == 0U ||
         !safe_shader_source_path(source.shader_source) || !valid_entry_point(source.vertex_entry) ||
         !valid_entry_point(source.fragment_entry) || !valid_color(source.base_color) ||
-        (source.version >= render_material_source_format_version_v2 && !valid_pbr(source))) {
+        (source.version >= render_material_source_format_version_v2 && !valid_v2_pbr(source)) ||
+        (source.version >= render_material_source_format_version_v3 && !valid_v3_pbr(source))) {
         result.diagnostics = "Render material source is invalid.";
         return result;
     }
@@ -319,6 +428,12 @@ CookResult cook(
     asset.metallic = source.metallic;
     asset.roughness = source.roughness;
     asset.base_color_texture = source.base_color_texture;
+    asset.normal_texture = source.normal_texture;
+    asset.orm_texture = source.orm_texture;
+    asset.emissive_texture = source.emissive_texture;
+    asset.emissive_color = source.emissive_color;
+    asset.emissive_intensity = source.emissive_intensity;
+    asset.normal_scale = source.normal_scale;
     asset.min_filter = source.min_filter;
     asset.mag_filter = source.mag_filter;
     asset.mip_filter = source.mip_filter;

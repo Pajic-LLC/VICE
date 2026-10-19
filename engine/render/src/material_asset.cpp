@@ -82,6 +82,15 @@ constexpr std::uint64_t fnv_prime = 1'099'511'628'211ULL;
     return is_valid(sampler);
 }
 
+[[nodiscard]] bool valid_v3_surface(const RenderMaterialAsset& asset) noexcept {
+    return valid_v2_surface(asset) && valid_texture_id(asset.normal_texture) &&
+        valid_texture_id(asset.orm_texture) && valid_texture_id(asset.emissive_texture) &&
+        finite_color(asset.emissive_color) && asset.emissive_color.red >= 0.0F &&
+        asset.emissive_color.green >= 0.0F && asset.emissive_color.blue >= 0.0F &&
+        std::isfinite(asset.emissive_intensity) && asset.emissive_intensity >= 0.0F &&
+        std::isfinite(asset.normal_scale) && asset.normal_scale >= 0.0F;
+}
+
 void append_u8(std::vector<std::byte>& bytes, const std::uint8_t value) {
     bytes.push_back(static_cast<std::byte>(value));
 }
@@ -180,7 +189,8 @@ RenderMaterialEncodeResult encode_render_material_asset(const RenderMaterialAsse
         !valid_render_material_id(asset.stable_id) || asset.source_fingerprint == 0U ||
         !finite_color(asset.base_color) || !safe_relative_path(asset.vertex_shader_manifest) ||
         !safe_relative_path(asset.fragment_shader_manifest) ||
-        (asset.version >= render_material_asset_format_version_v2 && !valid_v2_surface(asset))) {
+        (asset.version >= render_material_asset_format_version_v2 && !valid_v2_surface(asset)) ||
+        (asset.version >= render_material_asset_format_version_v3 && !valid_v3_surface(asset))) {
         result.diagnostics = "Render material asset contains invalid identity, surface data, or shader paths.";
         return result;
     }
@@ -201,6 +211,17 @@ RenderMaterialEncodeResult encode_render_material_asset(const RenderMaterialAsse
         append_u8(payload, static_cast<std::uint8_t>(asset.address_v));
         append_u8(payload, static_cast<std::uint8_t>(asset.address_w));
         append_u32(payload, asset.max_anisotropy);
+    }
+    if (asset.version >= render_material_asset_format_version_v3) {
+        for (const std::uint8_t value : asset.normal_texture) append_u8(payload, value);
+        for (const std::uint8_t value : asset.orm_texture) append_u8(payload, value);
+        for (const std::uint8_t value : asset.emissive_texture) append_u8(payload, value);
+        append_f32(payload, asset.normal_scale);
+        append_f32(payload, asset.emissive_color.red);
+        append_f32(payload, asset.emissive_color.green);
+        append_f32(payload, asset.emissive_color.blue);
+        append_f32(payload, asset.emissive_color.alpha);
+        append_f32(payload, asset.emissive_intensity);
     }
     append_string(payload, asset.vertex_shader_manifest);
     append_string(payload, asset.fragment_shader_manifest);
@@ -289,6 +310,33 @@ RenderMaterialDecodeResult decode_render_material_asset(const std::span<const st
         asset.address_w = static_cast<AddressMode>(address_w);
     }
 
+    if (asset.version >= render_material_asset_format_version_v3) {
+        for (std::uint8_t& value : asset.normal_texture) {
+            if (!reader.read_u8(value)) {
+                result.diagnostics = "Render material normal texture identity is incomplete.";
+                return result;
+            }
+        }
+        for (std::uint8_t& value : asset.orm_texture) {
+            if (!reader.read_u8(value)) {
+                result.diagnostics = "Render material ORM texture identity is incomplete.";
+                return result;
+            }
+        }
+        for (std::uint8_t& value : asset.emissive_texture) {
+            if (!reader.read_u8(value)) {
+                result.diagnostics = "Render material emissive texture identity is incomplete.";
+                return result;
+            }
+        }
+        if (!reader.read_f32(asset.normal_scale) || !reader.read_f32(asset.emissive_color.red) ||
+            !reader.read_f32(asset.emissive_color.green) || !reader.read_f32(asset.emissive_color.blue) ||
+            !reader.read_f32(asset.emissive_color.alpha) || !reader.read_f32(asset.emissive_intensity)) {
+            result.diagnostics = "Render material V3 surface parameters are incomplete.";
+            return result;
+        }
+    }
+
     if (!reader.read_string(asset.vertex_shader_manifest) ||
         !reader.read_string(asset.fragment_shader_manifest) || !reader.finished()) {
         result.diagnostics = "Render material shader paths are incomplete or contain trailing data.";
@@ -296,7 +344,8 @@ RenderMaterialDecodeResult decode_render_material_asset(const std::span<const st
     }
     if (!finite_color(asset.base_color) || !safe_relative_path(asset.vertex_shader_manifest) ||
         !safe_relative_path(asset.fragment_shader_manifest) ||
-        (asset.version >= render_material_asset_format_version_v2 && !valid_v2_surface(asset))) {
+        (asset.version >= render_material_asset_format_version_v2 && !valid_v2_surface(asset)) ||
+        (asset.version >= render_material_asset_format_version_v3 && !valid_v3_surface(asset))) {
         result.diagnostics = "Render material asset payload contains invalid values.";
         return result;
     }

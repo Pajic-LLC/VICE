@@ -77,6 +77,61 @@ int main() {
     assert(decoded_v2.asset->address_w == render::AddressMode::clamp_to_edge);
     assert(decoded_v2.asset->max_anisotropy == 8U);
 
+    const std::string source_v3 =
+        "vice-render-material 3\n"
+        "id 70000000-0000-4000-8000-000000000004\n"
+        "shader \"shaders/pbr_v3.hlsl\"\n"
+        "vertex pbr_vs\n"
+        "fragment pbr_fs\n"
+        "base_color 0.8 0.7 0.6 1\n"
+        "metallic 0.2\n"
+        "roughness 0.45\n"
+        "base_color_texture 71000000-0000-4000-8000-000000000001\n"
+        "normal_texture 71000000-0000-4000-8000-000000000002\n"
+        "orm_texture 71000000-0000-4000-8000-000000000003\n"
+        "emissive_texture 71000000-0000-4000-8000-000000000004\n"
+        "normal_scale 0.75\n"
+        "emissive_color 1.5 0.4 0.2\n"
+        "emissive_intensity 3.0\n"
+        "sampler linear linear linear repeat repeat repeat 8\n";
+
+    const auto parsed_v3 = tools::render_material_cooker::parse_source_manifest(source_v3);
+    assert(parsed_v3.source.has_value());
+    assert(parsed_v3.source->version == tools::render_material_cooker::render_material_source_format_version_v3);
+    const auto cooked_v3 = tools::render_material_cooker::cook(
+        *parsed_v3.source,
+        "pbr_v3.shaders/vertex/shader.vice.json",
+        "pbr_v3.shaders/fragment/shader.vice.json"
+    );
+    assert(cooked_v3.success);
+    const auto decoded_v3 = render::decode_render_material_asset(cooked_v3.bytes);
+    assert(decoded_v3.asset.has_value());
+    assert(decoded_v3.asset->version == render::render_material_asset_format_version_v3);
+    assert(render::valid_texture_id(decoded_v3.asset->normal_texture));
+    assert(render::valid_texture_id(decoded_v3.asset->orm_texture));
+    assert(render::valid_texture_id(decoded_v3.asset->emissive_texture));
+    assert(nearly_equal(decoded_v3.asset->normal_scale, 0.75F));
+    assert(nearly_equal(decoded_v3.asset->emissive_color.red, 1.5F));
+    assert(nearly_equal(decoded_v3.asset->emissive_intensity, 3.0F));
+
+    const std::string incomplete_v3 =
+        "vice-render-material 3\n"
+        "id 70000000-0000-4000-8000-000000000005\n"
+        "shader \"shaders/pbr.hlsl\"\n"
+        "vertex pbr_vs\n"
+        "fragment pbr_fs\n"
+        "base_color 1 1 1 1\n"
+        "metallic 0\n"
+        "roughness 1\n"
+        "base_color_texture 71000000-0000-4000-8000-000000000001\n"
+        "normal_texture 71000000-0000-4000-8000-000000000002\n"
+        "orm_texture 71000000-0000-4000-8000-000000000003\n"
+        "normal_scale 1\n"
+        "emissive_color 1 1 1\n"
+        "emissive_intensity 1\n"
+        "sampler linear linear linear repeat repeat repeat 1\n";
+    assert(!tools::render_material_cooker::parse_source_manifest(incomplete_v3).source.has_value());
+
     const auto cooked_v2_again = tools::render_material_cooker::cook(
         *parsed_v2.source,
         "pbr.shaders/vertex/shader.vice.json",

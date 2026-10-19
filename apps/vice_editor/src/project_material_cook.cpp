@@ -4,6 +4,7 @@
 #include <vice/tools/shader_cooker.hpp>
 
 #include <algorithm>
+#include <array>
 #include <filesystem>
 #include <fstream>
 #include <optional>
@@ -109,26 +110,51 @@ namespace {
     return supported_v1_reflection(reflection);
 }
 
+[[nodiscard]] bool supported_textured_fragment_reflection(
+    const tools::shader_cooker::ShaderReflection& reflection,
+    const std::uint32_t material_texture_count,
+    const std::uint32_t shadow_texture_base
+) noexcept {
+    if (!reflection.valid) return false;
+    std::array<bool, 4U> shadows{};
+    bool shadow_sampler = false;
+    for (const auto& resource : reflection.resources) {
+        if (resource.space != 0U || resource.count != 1U || resource.unbounded) return false;
+        if (resource.register_class == tools::shader_cooker::ShaderRegisterClass::constant_buffer) {
+            if (resource.binding != 0U && resource.binding != 1U) return false;
+        } else if (resource.register_class == tools::shader_cooker::ShaderRegisterClass::shader_resource) {
+            if (resource.binding < material_texture_count) continue;
+            if (resource.binding >= shadow_texture_base &&
+                resource.binding < shadow_texture_base + static_cast<std::uint32_t>(shadows.size())) {
+                shadows[resource.binding - shadow_texture_base] = true;
+            } else {
+                return false;
+            }
+        } else if (resource.register_class == tools::shader_cooker::ShaderRegisterClass::sampler) {
+            if (resource.binding == 0U) continue;
+            if (resource.binding == 1U) shadow_sampler = true;
+            else return false;
+        } else {
+            return false;
+        }
+    }
+    const bool any_shadow = std::any_of(shadows.begin(), shadows.end(), [](const bool value) { return value; });
+    const bool all_shadows = std::all_of(shadows.begin(), shadows.end(), [](const bool value) { return value; });
+    const bool legacy_shadow = shadows[0] && shadow_sampler &&
+        std::none_of(shadows.begin() + 1, shadows.end(), [](const bool value) { return value; });
+    return (!any_shadow && !shadow_sampler) || legacy_shadow || (all_shadows && shadow_sampler);
+}
+
 [[nodiscard]] bool supported_v2_fragment_reflection(
     const tools::shader_cooker::ShaderReflection& reflection
 ) noexcept {
-    return reflection.valid && std::all_of(
-        reflection.resources.begin(),
-        reflection.resources.end(),
-        [](const tools::shader_cooker::ShaderResourceReflection& resource) {
-            if (resource.space != 0U || resource.count != 1U || resource.unbounded) return false;
-            if (resource.register_class == tools::shader_cooker::ShaderRegisterClass::constant_buffer) {
-                return resource.binding == 0U || resource.binding == 1U;
-            }
-            if (resource.register_class == tools::shader_cooker::ShaderRegisterClass::shader_resource) {
-                return resource.binding == 0U;
-            }
-            if (resource.register_class == tools::shader_cooker::ShaderRegisterClass::sampler) {
-                return resource.binding == 0U;
-            }
-            return false;
-        }
-    );
+    return supported_textured_fragment_reflection(reflection, 1U, 1U);
+}
+
+[[nodiscard]] bool supported_v3_fragment_reflection(
+    const tools::shader_cooker::ShaderReflection& reflection
+) noexcept {
+    return supported_textured_fragment_reflection(reflection, 4U, 4U);
 }
 
 [[nodiscard]] bool texture_available(
@@ -204,9 +230,19 @@ ProjectMaterialCookResult cook_project_render_materials(
         }
         const bool textured = parsed.source->version >=
             tools::render_material_cooker::render_material_source_format_version_v2;
+        const bool extended_pbr = parsed.source->version >=
+            tools::render_material_cooker::render_material_source_format_version_v3;
         if (textured && !texture_available(parsed.source->base_color_texture, available_textures)) {
             result.diagnostics = "Render material `" + path_text(iterator->path()) +
                 "` references a base-color texture that this project did not cook.";
+            return result;
+        }
+        if (extended_pbr &&
+            (!texture_available(parsed.source->normal_texture, available_textures) ||
+                !texture_available(parsed.source->orm_texture, available_textures) ||
+                !texture_available(parsed.source->emissive_texture, available_textures))) {
+            result.diagnostics = "Render material `" + path_text(iterator->path()) +
+                "` references a normal, ORM, or emissive texture that this project did not cook.";
             return result;
         }
 
@@ -264,29 +300,37 @@ ProjectMaterialCookResult cook_project_render_materials(
             result.diagnostics = shader_failure(iterator->path(), "fragment", fragment);
             return result;
         }
-        const bool fragment_supported = textured
-            ? supported_v2_fragment_reflection(fragment.reflection)
-            : supported_v1_reflection(fragment.reflection);
-        const bool fragment_required = has_binding(
+        const bool fragment_supported = extended_pbr
+            ? supported_v3_fragment_reflection(fragment.reflection)
+            : textured ? supported_v2_fragment_reflection(fragment.reflection)
+                       : supported_v1_reflection(fragment.reflection);
+        bool fragment_required = has_binding(
             fragment.reflection,
             tools::shader_cooker::ShaderRegisterClass::constant_buffer,
             1U
-        ) && (!textured || (
-            has_binding(
-                fragment.reflection,
-                tools::shader_cooker::ShaderRegisterClass::shader_resource,
-                0U
+        );
+        if (textured) {
+            fragment_required = fragment_required && has_binding(
+                fragment.reflection, tools::shader_cooker::ShaderRegisterClass::shader_resource, 0U
             ) && has_binding(
-                fragment.reflection,
-                tools::shader_cooker::ShaderRegisterClass::sampler,
-                0U
-            )
-        ));
+                fragment.reflection, tools::shader_cooker::ShaderRegisterClass::sampler, 0U
+            );
+        }
+        if (extended_pbr) {
+            for (std::uint32_t binding = 1U; binding <= 3U; ++binding) {
+                fragment_required = fragment_required && has_binding(
+                    fragment.reflection, tools::shader_cooker::ShaderRegisterClass::shader_resource, binding
+                );
+            }
+        }
         if (!fragment_supported || !fragment_required) {
-            result.diagnostics = textured
-                ? "Render material v2 fragment shader `" + path_text(shader_source) +
-                    "` must use b1 material constants, t0 base-color texture, and s0 sampler in space0."
-                : "Render material fragment shader `" + path_text(shader_source) +
+            result.diagnostics = extended_pbr
+                ? "Render material v3 fragment shader `" + path_text(shader_source) +
+                    "` must use b1 material constants, t0-t3 PBR textures, and s0 sampler in space0."
+                : textured
+                    ? "Render material v2 fragment shader `" + path_text(shader_source) +
+                        "` must use b1 material constants, t0 base-color texture, and s0 sampler in space0."
+                    : "Render material fragment shader `" + path_text(shader_source) +
                     "` must use the VICE material constant buffer at b1, space0.";
             return result;
         }

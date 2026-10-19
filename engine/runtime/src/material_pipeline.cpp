@@ -21,10 +21,12 @@ struct MaterialConstants {
     float base_color[4]{};
     float metallic = 0.0F;
     float roughness = 1.0F;
-    float padding[2]{};
+    float normal_scale = 1.0F;
+    float emissive_intensity = 0.0F;
+    float emissive_color[4]{};
 };
 
-static_assert(sizeof(MaterialConstants) == 32U);
+static_assert(sizeof(MaterialConstants) == 48U);
 
 [[nodiscard]] bool valid_v1_resources(
     const render::ShaderModule& module,
@@ -46,12 +48,13 @@ static_assert(sizeof(MaterialConstants) == 32U);
     return valid_v1_resources(module, 0U);
 }
 
-struct V2FragmentResourceContract {
+struct FragmentResourceContract {
     bool valid = false;
     std::uint32_t directional_shadow_cascade_count = 0;
+    std::uint32_t shadow_texture_binding_base = 1U;
 };
 
-[[nodiscard]] V2FragmentResourceContract v2_fragment_resource_contract(
+[[nodiscard]] FragmentResourceContract v2_fragment_resource_contract(
     const render::ShaderModule& module
 ) noexcept {
     bool material_constants = false;
@@ -102,11 +105,72 @@ struct V2FragmentResourceContract {
     const bool no_shadow_set = !any_shadow_texture && !shadow_sampler;
     const bool shadow_set_valid = no_shadow_set || legacy_shadow_set || cascaded_shadow_set;
 
-    return V2FragmentResourceContract{
+    return FragmentResourceContract{
         .valid = material_constants && base_color_texture && base_color_sampler && shadow_set_valid,
         .directional_shadow_cascade_count = cascaded_shadow_set
             ? static_cast<std::uint32_t>(runtime_shadow_cascade_count)
             : legacy_shadow_set ? 1U : 0U,
+        .shadow_texture_binding_base = 1U,
+    };
+}
+
+[[nodiscard]] FragmentResourceContract v3_fragment_resource_contract(
+    const render::ShaderModule& module
+) noexcept {
+    bool material_constants = false;
+    std::array<bool, 4U> material_textures{};
+    bool material_sampler = false;
+    std::array<bool, runtime_shadow_cascade_count> shadow_textures{};
+    bool shadow_sampler = false;
+    for (const auto& resource : module.resources()) {
+        if (resource.space != 0U || resource.count != 1U || resource.unbounded) return {};
+        switch (resource.register_class) {
+        case render::ShaderRegisterClass::constant_buffer:
+            if (resource.binding != 0U && resource.binding != 1U) return {};
+            if (resource.binding == 1U) material_constants = true;
+            break;
+        case render::ShaderRegisterClass::shader_resource:
+            if (resource.binding <= 3U) {
+                material_textures[resource.binding] = true;
+            } else if (resource.binding >= 4U && resource.binding < 4U + runtime_shadow_cascade_count) {
+                shadow_textures[resource.binding - 4U] = true;
+            } else {
+                return {};
+            }
+            break;
+        case render::ShaderRegisterClass::sampler:
+            if (resource.binding == 0U) material_sampler = true;
+            else if (resource.binding == 1U) shadow_sampler = true;
+            else return {};
+            break;
+        case render::ShaderRegisterClass::unordered_access:
+            return {};
+        }
+    }
+
+    const bool all_material_textures = std::all_of(
+        material_textures.begin(), material_textures.end(), [](const bool value) { return value; }
+    );
+    const bool any_shadow_texture = std::any_of(
+        shadow_textures.begin(), shadow_textures.end(), [](const bool value) { return value; }
+    );
+    const bool all_shadow_textures = std::all_of(
+        shadow_textures.begin(), shadow_textures.end(), [](const bool value) { return value; }
+    );
+    const bool legacy_shadow_set = shadow_textures[0] && shadow_sampler &&
+        std::none_of(
+            shadow_textures.begin() + 1, shadow_textures.end(), [](const bool value) { return value; }
+        );
+    const bool cascaded_shadow_set = all_shadow_textures && shadow_sampler;
+    const bool no_shadow_set = !any_shadow_texture && !shadow_sampler;
+    const bool shadow_set_valid = no_shadow_set || legacy_shadow_set || cascaded_shadow_set;
+
+    return FragmentResourceContract{
+        .valid = material_constants && all_material_textures && material_sampler && shadow_set_valid,
+        .directional_shadow_cascade_count = cascaded_shadow_set
+            ? static_cast<std::uint32_t>(runtime_shadow_cascade_count)
+            : legacy_shadow_set ? 1U : 0U,
+        .shadow_texture_binding_base = 4U,
     };
 }
 
@@ -131,6 +195,14 @@ struct V2FragmentResourceContract {
         },
         .metallic = material.metallic,
         .roughness = material.roughness,
+        .normal_scale = material.normal_scale,
+        .emissive_intensity = material.emissive_intensity,
+        .emissive_color = {
+            material.emissive_color.red,
+            material.emissive_color.green,
+            material.emissive_color.blue,
+            material.emissive_color.alpha,
+        },
     };
     if (!buffer->write(0U, std::as_bytes(std::span{&constants, 1}))) return nullptr;
     return buffer;
@@ -241,8 +313,12 @@ struct RuntimeMaterialLibrary::State {
         std::unique_ptr<render::GraphicsPipeline> pipeline;
         std::unique_ptr<render::Buffer> constants;
         render::Texture* base_color_texture = nullptr;
+        render::Texture* normal_texture = nullptr;
+        render::Texture* orm_texture = nullptr;
+        render::Texture* emissive_texture = nullptr;
         std::unique_ptr<render::Sampler> sampler;
         std::uint32_t directional_shadow_cascade_count = 0;
+        std::uint32_t shadow_texture_binding_base = 1U;
     };
 
     CookedRenderMaterialCatalog catalog;
@@ -294,12 +370,20 @@ bool RuntimeMaterialLibrary::initialize(
         }
 
         const bool textured = record.asset.version >= render::render_material_asset_format_version_v2;
+        const bool extended_pbr = record.asset.version >= render::render_material_asset_format_version_v3;
         std::uint32_t directional_shadow_cascade_count = 0;
+        std::uint32_t shadow_texture_binding_base = 1U;
         bool resources_valid = false;
-        if (textured) {
+        if (extended_pbr) {
+            const auto fragment_contract = v3_fragment_resource_contract(*fragment.module);
+            resources_valid = valid_v2_vertex_resources(*vertex.module) && fragment_contract.valid;
+            directional_shadow_cascade_count = fragment_contract.directional_shadow_cascade_count;
+            shadow_texture_binding_base = fragment_contract.shadow_texture_binding_base;
+        } else if (textured) {
             const auto fragment_contract = v2_fragment_resource_contract(*fragment.module);
             resources_valid = valid_v2_vertex_resources(*vertex.module) && fragment_contract.valid;
             directional_shadow_cascade_count = fragment_contract.directional_shadow_cascade_count;
+            shadow_texture_binding_base = fragment_contract.shadow_texture_binding_base;
         } else {
             resources_valid = valid_v1_resources(*vertex.module, 0U) &&
                 valid_v1_resources(*fragment.module, 1U);
@@ -312,6 +396,9 @@ bool RuntimeMaterialLibrary::initialize(
         }
 
         render::Texture* base_color_texture = nullptr;
+        render::Texture* normal_texture = nullptr;
+        render::Texture* orm_texture = nullptr;
+        render::Texture* emissive_texture = nullptr;
         std::unique_ptr<render::Sampler> sampler;
         if (textured) {
             const world::ResourceId texture_id{world::PersistentId{record.asset.base_color_texture}};
@@ -320,6 +407,19 @@ bool RuntimeMaterialLibrary::initialize(
                 set_diagnostics(diagnostics, "Render material `" + record.resource_id.value.to_string() +
                     "` references missing cooked texture `" + texture_id.value.to_string() + "`.");
                 return false;
+            }
+            if (extended_pbr) {
+                const world::ResourceId normal_id{world::PersistentId{record.asset.normal_texture}};
+                const world::ResourceId orm_id{world::PersistentId{record.asset.orm_texture}};
+                const world::ResourceId emissive_id{world::PersistentId{record.asset.emissive_texture}};
+                normal_texture = state_->textures.find(normal_id);
+                orm_texture = state_->textures.find(orm_id);
+                emissive_texture = state_->textures.find(emissive_id);
+                if (normal_texture == nullptr || orm_texture == nullptr || emissive_texture == nullptr) {
+                    set_diagnostics(diagnostics, "Render material `" + record.resource_id.value.to_string() +
+                        "` references one or more missing V3 PBR textures.");
+                    return false;
+                }
             }
             sampler = create_material_sampler(device, record.asset);
             if (!sampler) {
@@ -359,8 +459,12 @@ bool RuntimeMaterialLibrary::initialize(
             .pipeline = std::move(pipeline),
             .constants = std::move(constants),
             .base_color_texture = base_color_texture,
+            .normal_texture = normal_texture,
+            .orm_texture = orm_texture,
+            .emissive_texture = emissive_texture,
             .sampler = std::move(sampler),
             .directional_shadow_cascade_count = directional_shadow_cascade_count,
+            .shadow_texture_binding_base = shadow_texture_binding_base,
         });
     }
 
@@ -378,8 +482,13 @@ RuntimeMaterialBinding RuntimeMaterialLibrary::find(
         .pipeline = found->second.pipeline.get(),
         .constants = found->second.constants.get(),
         .base_color_texture = found->second.base_color_texture,
+        .normal_texture = found->second.normal_texture,
+        .orm_texture = found->second.orm_texture,
+        .emissive_texture = found->second.emissive_texture,
         .sampler = found->second.sampler.get(),
+        .constants_size = sizeof(MaterialConstants),
         .directional_shadow_cascade_count = found->second.directional_shadow_cascade_count,
+        .shadow_texture_binding_base = found->second.shadow_texture_binding_base,
     };
 }
 

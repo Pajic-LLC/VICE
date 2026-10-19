@@ -3,6 +3,7 @@
 #include <vice/render/rhi.hpp>
 #include <vice/runtime/scene.hpp>
 
+#include <cstddef>
 #include <cstdint>
 #include <filesystem>
 #include <memory>
@@ -15,8 +16,13 @@ struct RuntimeMaterialBinding {
     render::GraphicsPipeline* pipeline = nullptr;
     render::Buffer* constants = nullptr;
     render::Texture* base_color_texture = nullptr;
+    render::Texture* normal_texture = nullptr;
+    render::Texture* orm_texture = nullptr;
+    render::Texture* emissive_texture = nullptr;
     render::Sampler* sampler = nullptr;
+    std::size_t constants_size = 0U;
     std::uint32_t directional_shadow_cascade_count = 0;
+    std::uint32_t shadow_texture_binding_base = 1U;
 };
 
 class RuntimeMaterialLibrary final {

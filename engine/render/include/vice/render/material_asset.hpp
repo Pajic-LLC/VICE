@@ -16,7 +16,8 @@ namespace vice::render {
 
 inline constexpr std::uint32_t render_material_asset_format_version_v1 = 1U;
 inline constexpr std::uint32_t render_material_asset_format_version_v2 = 2U;
-inline constexpr std::uint32_t render_material_asset_format_version = render_material_asset_format_version_v2;
+inline constexpr std::uint32_t render_material_asset_format_version_v3 = 3U;
+inline constexpr std::uint32_t render_material_asset_format_version = render_material_asset_format_version_v3;
 inline constexpr std::uint32_t render_material_asset_min_supported_version =
     render_material_asset_format_version_v1;
 inline constexpr std::size_t render_material_asset_magic_size = 8U;
@@ -39,6 +40,12 @@ struct RenderMaterialAsset {
     float metallic = 0.0F;
     float roughness = 1.0F;
     TextureStableId base_color_texture{};
+    TextureStableId normal_texture{};
+    TextureStableId orm_texture{};
+    TextureStableId emissive_texture{};
+    Color emissive_color{0.0F, 0.0F, 0.0F, 1.0F};
+    float emissive_intensity = 0.0F;
+    float normal_scale = 1.0F;
     Filter min_filter = Filter::linear;
     Filter mag_filter = Filter::linear;
     Filter mip_filter = Filter::linear;
