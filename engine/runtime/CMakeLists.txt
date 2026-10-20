@@ -9,6 +9,7 @@ add_library(
     src/runtime.cpp
     src/scene.cpp
     src/texture_pipeline.cpp
+    src/visibility.cpp
 )
 
 add_library(VICE::Runtime ALIAS vice_runtime)
