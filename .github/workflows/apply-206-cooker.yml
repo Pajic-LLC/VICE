@@ -17,7 +17,9 @@ jobs:
         with:
           ref: feature/206-metal-unbounded-descriptors
       - name: Apply cooker and manifest layer
-        run: python3 .github/scripts/apply_206_cooker.py
+        run: |
+          python3 .github/scripts/apply_206_cooker.py
+          python3 .github/scripts/apply_206_compat.py
       - name: Commit layer
         shell: bash
         run: |
@@ -30,5 +32,8 @@ jobs:
                   tools/shader_cooker/src/shader_cooker.cpp \
                   tests/shader_cooker_tests.cpp \
                   tests/shader_asset_tests.cpp
-          git commit -m "Add Metal explicit descriptor-table cooker metadata"
-          git push
+          git diff --cached --quiet || git commit -m "Preserve bounded shader manifest compatibility"
+          git diff --cached --quiet || git push
+          if git rev-parse HEAD^ >/dev/null 2>&1 && git log -1 --pretty=%an | grep -q 'github-actions'; then
+            git push
+          fi
