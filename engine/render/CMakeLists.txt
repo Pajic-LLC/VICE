@@ -10,6 +10,7 @@ target_include_directories(
 target_sources(
   vice_render
   PRIVATE
+    src/compute.cpp
     src/environment_asset.cpp
     src/material_asset.cpp
     src/mesh_asset.cpp
@@ -24,7 +25,12 @@ vice_enable_warnings(vice_render)
 
 if(APPLE)
   enable_language(OBJCXX)
-  target_sources(vice_render PRIVATE src/metal/rhi.mm)
+  target_sources(
+    vice_render
+    PRIVATE
+      src/metal/compute_pipeline.mm
+      src/metal/rhi.mm
+  )
   set_target_properties(
     vice_render
     PROPERTIES
@@ -32,7 +38,11 @@ if(APPLE)
       OBJCXX_STANDARD_REQUIRED YES
       OBJCXX_EXTENSIONS NO
   )
-  set_source_files_properties(src/metal/rhi.mm PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
+  set_source_files_properties(
+    src/metal/compute_pipeline.mm
+    src/metal/rhi.mm
+    PROPERTIES COMPILE_OPTIONS "-fobjc-arc"
+  )
 
   find_library(APPKIT_FRAMEWORK_RENDER AppKit REQUIRED)
   find_library(METAL_FRAMEWORK Metal REQUIRED)
@@ -48,6 +58,7 @@ elseif(WIN32)
   target_sources(
     vice_render
     PRIVATE
+      src/d3d12/compute_pipeline.cpp
       src/d3d12/rhi.cpp
       src/d3d12/root_signature.cpp
   )

@@ -61,6 +61,9 @@ jobs:
                 $labManifest.artifacts.metal_reflection -ne $null) {
               throw "A Windows VICE Lab cook must not declare Metal artifacts."
             }
+            if ($labManifest.reflection.thread_group_size -ne $null) {
+              throw "A non-compute VICE Lab shader must not declare compute thread-group metadata."
+            }
           }
 
           $cubeVertexManifest = Get-Content "build/cooked/vice_lab_cube_vs/shader.vice.json" -Raw | ConvertFrom-Json
@@ -102,6 +105,10 @@ jobs:
           }
           if ($manifest.reflection.version -ne 1) {
             throw "Unexpected shader reflection version: $($manifest.reflection.version)"
+          }
+          $group = $manifest.reflection.thread_group_size
+          if (-not $group -or $group.x -ne 1 -or $group.y -ne 1 -or $group.z -ne 1) {
+            throw "Compute shader did not preserve authored [numthreads(1,1,1)] metadata."
           }
           if ($manifest.artifacts.metal_reflection -ne $null) {
             throw "A Direct3D 12-only cook must not declare a Metal reflection artifact."

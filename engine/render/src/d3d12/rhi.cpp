@@ -1,3 +1,5 @@
+#include "compute_pipeline.hpp"
+
 #include <vice/core/log.hpp>
 #include <vice/platform/native_window.hpp>
 #include <vice/render/d3d12_root_signature.hpp>
@@ -628,6 +630,39 @@ private:
     DepthStateDesc depth_{};
 };
 
+class D3D12ComputePipeline final : public ComputePipeline {
+public:
+    D3D12ComputePipeline(
+        ComPtr<ID3D12RootSignature> root_signature,
+        ComPtr<ID3D12PipelineState> state,
+        D3D12RootSignatureResult root_layout,
+        const ComputeThreadGroupSize thread_group_size
+    ) : root_signature_{std::move(root_signature)}, state_{std::move(state)},
+        root_layout_{std::move(root_layout)}, thread_group_size_{thread_group_size} {}
+
+    [[nodiscard]] ID3D12RootSignature* root_signature() const noexcept {
+        return root_signature_.Get();
+    }
+    [[nodiscard]] ID3D12PipelineState* state() const noexcept { return state_.Get(); }
+    [[nodiscard]] const D3D12RootSignatureResult& root_layout() const noexcept {
+        return root_layout_;
+    }
+    [[nodiscard]] ComputeThreadGroupSize thread_group_size() const noexcept {
+        return thread_group_size_;
+    }
+    [[nodiscard]] const D3D12BindingLocation* binding_location(
+        const ShaderBindingKey& binding
+    ) const noexcept {
+        return find_d3d12_binding_location(root_layout_, binding);
+    }
+
+private:
+    ComPtr<ID3D12RootSignature> root_signature_;
+    ComPtr<ID3D12PipelineState> state_;
+    D3D12RootSignatureResult root_layout_;
+    ComputeThreadGroupSize thread_group_size_{};
+};
+
 class D3D12Swapchain final : public Swapchain {
 public:
     D3D12Swapchain(
@@ -902,7 +937,7 @@ private:
     bool valid_ = false;
 };
 
-enum class PendingGraphicsBindingKind : std::uint8_t {
+enum class PendingBindingKind : std::uint8_t {
     constant_buffer,
     shader_buffer,
     storage_buffer,
@@ -911,9 +946,9 @@ enum class PendingGraphicsBindingKind : std::uint8_t {
     sampler,
 };
 
-struct PendingGraphicsBinding {
+struct PendingBinding {
     ShaderBindingKey key{};
-    PendingGraphicsBindingKind kind = PendingGraphicsBindingKind::texture;
+    PendingBindingKind kind = PendingBindingKind::texture;
     D3D12Buffer* buffer = nullptr;
     D3D12Texture* texture = nullptr;
     D3D12Sampler* sampler = nullptr;
@@ -985,6 +1020,7 @@ public:
         command_list_->CopyBufferRegion(
             destination_buffer->native(), destination_offset, source_buffer->native(), source_offset, size
         );
+        compute_bindings_dirty_ = true;
         return true;
     }
 
@@ -1063,6 +1099,7 @@ public:
         active_depth_texture_ = depth_texture;
         render_pass_active_ = true;
         reset_graphics_bindings();
+        compute_bindings_dirty_ = true;
         return true;
     }
 
@@ -1140,6 +1177,7 @@ public:
         active_depth_texture_ = depth_texture;
         render_pass_active_ = true;
         reset_graphics_bindings();
+        compute_bindings_dirty_ = true;
         return true;
     }
 
@@ -1176,6 +1214,7 @@ public:
         active_depth_texture_ = depth_texture;
         render_pass_active_ = true;
         reset_graphics_bindings();
+        compute_bindings_dirty_ = true;
         return true;
     }
 
@@ -1326,13 +1365,13 @@ public:
             offset > buffer.size() || (size != 0U && size > buffer.size() - offset)) {
             return false;
         }
-        PendingGraphicsBinding pending;
+        PendingBinding pending;
         pending.key = binding;
-        pending.kind = PendingGraphicsBindingKind::constant_buffer;
+        pending.kind = PendingBindingKind::constant_buffer;
         pending.buffer = native_buffer;
         pending.constant_offset = offset;
         pending.constant_size = size;
-        upsert_binding(std::move(pending));
+        upsert_binding(pending_bindings_, bindings_dirty_, std::move(pending));
         return true;
     }
 
@@ -1347,12 +1386,12 @@ public:
             !valid_buffer_view(buffer, view)) {
             return false;
         }
-        PendingGraphicsBinding pending;
+        PendingBinding pending;
         pending.key = binding;
-        pending.kind = PendingGraphicsBindingKind::shader_buffer;
+        pending.kind = PendingBindingKind::shader_buffer;
         pending.buffer = native_buffer;
         pending.view = view;
-        upsert_binding(std::move(pending));
+        upsert_binding(pending_bindings_, bindings_dirty_, std::move(pending));
         return true;
     }
 
@@ -1367,12 +1406,12 @@ public:
             !valid_buffer_view(buffer, view)) {
             return false;
         }
-        PendingGraphicsBinding pending;
+        PendingBinding pending;
         pending.key = binding;
-        pending.kind = PendingGraphicsBindingKind::storage_buffer;
+        pending.kind = PendingBindingKind::storage_buffer;
         pending.buffer = native_buffer;
         pending.view = view;
-        upsert_binding(std::move(pending));
+        upsert_binding(pending_bindings_, bindings_dirty_, std::move(pending));
         return true;
     }
 
@@ -1382,11 +1421,11 @@ public:
             native_texture == nullptr || !has_usage(texture.usage(), TextureUsage::sampled)) {
             return false;
         }
-        PendingGraphicsBinding pending;
+        PendingBinding pending;
         pending.key = binding;
-        pending.kind = PendingGraphicsBindingKind::texture;
+        pending.kind = PendingBindingKind::texture;
         pending.texture = native_texture;
-        upsert_binding(std::move(pending));
+        upsert_binding(pending_bindings_, bindings_dirty_, std::move(pending));
         return true;
     }
 
@@ -1399,11 +1438,11 @@ public:
             native_texture == nullptr || !has_usage(texture.usage(), TextureUsage::storage)) {
             return false;
         }
-        PendingGraphicsBinding pending;
+        PendingBinding pending;
         pending.key = binding;
-        pending.kind = PendingGraphicsBindingKind::storage_texture;
+        pending.kind = PendingBindingKind::storage_texture;
         pending.texture = native_texture;
-        upsert_binding(std::move(pending));
+        upsert_binding(pending_bindings_, bindings_dirty_, std::move(pending));
         return true;
     }
 
@@ -1412,11 +1451,156 @@ public:
         if (!binding_allowed(binding, ShaderRegisterClass::sampler) || native_sampler == nullptr) {
             return false;
         }
-        PendingGraphicsBinding pending;
+        PendingBinding pending;
         pending.key = binding;
-        pending.kind = PendingGraphicsBindingKind::sampler;
+        pending.kind = PendingBindingKind::sampler;
         pending.sampler = native_sampler;
-        upsert_binding(std::move(pending));
+        upsert_binding(pending_bindings_, bindings_dirty_, std::move(pending));
+        return true;
+    }
+
+    bool set_compute_pipeline(ComputePipeline& pipeline) override {
+        if (!valid() || render_pass_active_) {
+            return false;
+        }
+        auto* d3d_pipeline = dynamic_cast<D3D12ComputePipeline*>(&pipeline);
+        if (d3d_pipeline == nullptr || d3d_pipeline->state() == nullptr ||
+            d3d_pipeline->root_signature() == nullptr) {
+            return false;
+        }
+        command_list_->SetComputeRootSignature(d3d_pipeline->root_signature());
+        command_list_->SetPipelineState(d3d_pipeline->state());
+        active_compute_pipeline_ = d3d_pipeline;
+        pending_compute_bindings_.clear();
+        active_compute_resource_heap_.Reset();
+        active_compute_sampler_heap_.Reset();
+        compute_bindings_dirty_ = true;
+        compute_pipeline_bound_ = true;
+        return true;
+    }
+
+    bool set_compute_constant_buffer(
+        const ShaderBindingKey& binding,
+        Buffer& buffer,
+        const std::uint64_t offset,
+        const std::uint64_t size
+    ) override {
+        auto* native_buffer = dynamic_cast<D3D12Buffer*>(&buffer);
+        if (!compute_binding_allowed(binding, ShaderRegisterClass::constant_buffer) ||
+            native_buffer == nullptr || !has_usage(buffer.usage(), BufferUsage::uniform) ||
+            offset > buffer.size() || (size != 0U && size > buffer.size() - offset)) {
+            return false;
+        }
+        PendingBinding pending;
+        pending.key = binding;
+        pending.kind = PendingBindingKind::constant_buffer;
+        pending.buffer = native_buffer;
+        pending.constant_offset = offset;
+        pending.constant_size = size;
+        upsert_binding(pending_compute_bindings_, compute_bindings_dirty_, std::move(pending));
+        return true;
+    }
+
+    bool set_compute_buffer(
+        const ShaderBindingKey& binding,
+        Buffer& buffer,
+        const BufferViewDesc& view
+    ) override {
+        auto* native_buffer = dynamic_cast<D3D12Buffer*>(&buffer);
+        if (!compute_binding_allowed(binding, ShaderRegisterClass::shader_resource) ||
+            native_buffer == nullptr || !has_usage(buffer.usage(), BufferUsage::storage) ||
+            !valid_buffer_view(buffer, view)) {
+            return false;
+        }
+        PendingBinding pending;
+        pending.key = binding;
+        pending.kind = PendingBindingKind::shader_buffer;
+        pending.buffer = native_buffer;
+        pending.view = view;
+        upsert_binding(pending_compute_bindings_, compute_bindings_dirty_, std::move(pending));
+        return true;
+    }
+
+    bool set_compute_storage_buffer(
+        const ShaderBindingKey& binding,
+        Buffer& buffer,
+        const BufferViewDesc& view
+    ) override {
+        auto* native_buffer = dynamic_cast<D3D12Buffer*>(&buffer);
+        if (!compute_binding_allowed(binding, ShaderRegisterClass::unordered_access) ||
+            native_buffer == nullptr || !has_usage(buffer.usage(), BufferUsage::storage) ||
+            !valid_buffer_view(buffer, view)) {
+            return false;
+        }
+        PendingBinding pending;
+        pending.key = binding;
+        pending.kind = PendingBindingKind::storage_buffer;
+        pending.buffer = native_buffer;
+        pending.view = view;
+        upsert_binding(pending_compute_bindings_, compute_bindings_dirty_, std::move(pending));
+        return true;
+    }
+
+    bool set_compute_texture(const ShaderBindingKey& binding, Texture& texture) override {
+        auto* native_texture = dynamic_cast<D3D12Texture*>(&texture);
+        if (!compute_binding_allowed(binding, ShaderRegisterClass::shader_resource) ||
+            native_texture == nullptr || !has_usage(texture.usage(), TextureUsage::sampled)) {
+            return false;
+        }
+        PendingBinding pending;
+        pending.key = binding;
+        pending.kind = PendingBindingKind::texture;
+        pending.texture = native_texture;
+        upsert_binding(pending_compute_bindings_, compute_bindings_dirty_, std::move(pending));
+        return true;
+    }
+
+    bool set_compute_storage_texture(
+        const ShaderBindingKey& binding,
+        Texture& texture
+    ) override {
+        auto* native_texture = dynamic_cast<D3D12Texture*>(&texture);
+        if (!compute_binding_allowed(binding, ShaderRegisterClass::unordered_access) ||
+            native_texture == nullptr || !has_usage(texture.usage(), TextureUsage::storage)) {
+            return false;
+        }
+        PendingBinding pending;
+        pending.key = binding;
+        pending.kind = PendingBindingKind::storage_texture;
+        pending.texture = native_texture;
+        upsert_binding(pending_compute_bindings_, compute_bindings_dirty_, std::move(pending));
+        return true;
+    }
+
+    bool set_compute_sampler(const ShaderBindingKey& binding, Sampler& sampler) override {
+        auto* native_sampler = dynamic_cast<D3D12Sampler*>(&sampler);
+        if (!compute_binding_allowed(binding, ShaderRegisterClass::sampler) ||
+            native_sampler == nullptr) {
+            return false;
+        }
+        PendingBinding pending;
+        pending.key = binding;
+        pending.kind = PendingBindingKind::sampler;
+        pending.sampler = native_sampler;
+        upsert_binding(pending_compute_bindings_, compute_bindings_dirty_, std::move(pending));
+        return true;
+    }
+
+    bool dispatch(const ComputeDispatchDesc& dispatch_desc) override {
+        if (!valid() || render_pass_active_ || !compute_pipeline_bound_ ||
+            active_compute_pipeline_ == nullptr || !is_valid(dispatch_desc) ||
+            !materialize_compute_bindings()) {
+            return false;
+        }
+        command_list_->Dispatch(
+            dispatch_desc.group_count_x,
+            dispatch_desc.group_count_y,
+            dispatch_desc.group_count_z
+        );
+        D3D12_RESOURCE_BARRIER barrier{};
+        barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;
+        barrier.UAV.pResource = nullptr;
+        command_list_->ResourceBarrier(1U, &barrier);
         return true;
     }
 
@@ -1514,6 +1698,16 @@ private:
             active_pipeline_->binding_location(binding) != nullptr;
     }
 
+    [[nodiscard]] bool compute_binding_allowed(
+        const ShaderBindingKey& binding,
+        const ShaderRegisterClass expected_class
+    ) const noexcept {
+        return !render_pass_active_ && compute_pipeline_bound_ &&
+            active_compute_pipeline_ != nullptr &&
+            binding.register_class == expected_class &&
+            active_compute_pipeline_->binding_location(binding) != nullptr;
+    }
+
     [[nodiscard]] bool all_vertex_buffers_bound() const noexcept {
         if (active_pipeline_ == nullptr) {
             return false;
@@ -1588,47 +1782,35 @@ private:
         return view.offset % view.structure_stride == 0U && size % view.structure_stride == 0U;
     }
 
-    void upsert_binding(PendingGraphicsBinding pending) {
+    static void upsert_binding(
+        std::vector<PendingBinding>& bindings,
+        bool& dirty,
+        PendingBinding pending
+    ) {
         const auto found = std::find_if(
-            pending_bindings_.begin(),
-            pending_bindings_.end(),
-            [&](const PendingGraphicsBinding& current) {
+            bindings.begin(),
+            bindings.end(),
+            [&](const PendingBinding& current) {
                 return same_binding_key(current.key, pending.key);
             }
         );
-        if (found == pending_bindings_.end()) {
-            pending_bindings_.push_back(std::move(pending));
+        if (found == bindings.end()) {
+            bindings.push_back(std::move(pending));
         } else {
             *found = std::move(pending);
         }
-        bindings_dirty_ = true;
+        dirty = true;
     }
 
-    [[nodiscard]] const PendingGraphicsBinding* pending_binding(
-        const D3D12BindingLocation& location,
-        const std::uint32_t array_element
-    ) const noexcept {
-        const auto found = std::find_if(
-            pending_bindings_.begin(),
-            pending_bindings_.end(),
-            [&](const PendingGraphicsBinding& pending) {
-                return pending.key.register_class == location.register_class &&
-                    pending.key.binding == location.binding &&
-                    pending.key.space == location.space &&
-                    pending.key.array_element == array_element;
-            }
-        );
-        return found == pending_bindings_.end() ? nullptr : &*found;
-    }
-
-    [[nodiscard]] bool binding_set_is_complete(
+    [[nodiscard]] static bool binding_set_is_complete(
+        const std::vector<PendingBinding>& bindings,
         const D3D12BindingLocation& location,
         std::uint32_t& required_count
-    ) const noexcept {
+    ) noexcept {
         std::uint64_t match_count = 0;
         std::uint32_t maximum_element = 0;
         bool found_any = false;
-        for (const auto& pending : pending_bindings_) {
+        for (const auto& pending : bindings) {
             if (pending.key.register_class != location.register_class ||
                 pending.key.binding != location.binding || pending.key.space != location.space) {
                 continue;
@@ -1657,22 +1839,21 @@ private:
         return true;
     }
 
-    [[nodiscard]] bool table_descriptor_count(
+    [[nodiscard]] static bool table_descriptor_count(
+        const std::vector<PendingBinding>& bindings,
+        const D3D12RootSignatureResult& root,
         const D3D12DescriptorTableLayout& table,
         std::uint32_t& count
-    ) const noexcept {
+    ) noexcept {
         if (!table.unbounded) {
             count = table.bounded_descriptor_count;
             return count > 0U;
         }
-        if (active_pipeline_ == nullptr) {
-            return false;
-        }
-        for (const auto& location : active_pipeline_->root_layout().bindings) {
+        for (const auto& location : root.bindings) {
             if (location.root_parameter_index != table.root_parameter_index || !location.unbounded) {
                 continue;
             }
-            return binding_set_is_complete(location, count);
+            return binding_set_is_complete(bindings, location, count);
         }
         return false;
     }
@@ -1716,7 +1897,7 @@ private:
     }
 
     [[nodiscard]] bool create_constant_buffer_view(
-        const PendingGraphicsBinding& pending,
+        const PendingBinding& pending,
         const D3D12_CPU_DESCRIPTOR_HANDLE handle
     ) {
         if (pending.buffer == nullptr || pending.constant_offset % constant_buffer_alignment != 0U) {
@@ -1741,7 +1922,7 @@ private:
     }
 
     [[nodiscard]] bool create_buffer_srv(
-        const PendingGraphicsBinding& pending,
+        const PendingBinding& pending,
         const D3D12_CPU_DESCRIPTOR_HANDLE handle
     ) {
         if (pending.buffer == nullptr) {
@@ -1781,7 +1962,7 @@ private:
     }
 
     [[nodiscard]] bool create_buffer_uav(
-        const PendingGraphicsBinding& pending,
+        const PendingBinding& pending,
         const D3D12_CPU_DESCRIPTOR_HANDLE handle
     ) {
         if (pending.buffer == nullptr) {
@@ -1906,7 +2087,7 @@ private:
     }
 
     [[nodiscard]] bool create_texture_srv(
-        const PendingGraphicsBinding& pending,
+        const PendingBinding& pending,
         const D3D12_CPU_DESCRIPTOR_HANDLE handle
     ) {
         if (pending.texture == nullptr) {
@@ -1925,7 +2106,7 @@ private:
     }
 
     [[nodiscard]] bool create_texture_uav(
-        const PendingGraphicsBinding& pending,
+        const PendingBinding& pending,
         const D3D12_CPU_DESCRIPTOR_HANDLE handle
     ) {
         if (pending.texture == nullptr || pending.texture->format() == TextureFormat::depth32_float) {
@@ -1938,21 +2119,21 @@ private:
     }
 
     [[nodiscard]] bool write_descriptor(
-        const PendingGraphicsBinding& pending,
+        const PendingBinding& pending,
         const D3D12_CPU_DESCRIPTOR_HANDLE handle
     ) {
         switch (pending.kind) {
-        case PendingGraphicsBindingKind::constant_buffer:
+        case PendingBindingKind::constant_buffer:
             return create_constant_buffer_view(pending, handle);
-        case PendingGraphicsBindingKind::shader_buffer:
+        case PendingBindingKind::shader_buffer:
             return create_buffer_srv(pending, handle);
-        case PendingGraphicsBindingKind::storage_buffer:
+        case PendingBindingKind::storage_buffer:
             return create_buffer_uav(pending, handle);
-        case PendingGraphicsBindingKind::texture:
+        case PendingBindingKind::texture:
             return create_texture_srv(pending, handle);
-        case PendingGraphicsBindingKind::storage_texture:
+        case PendingBindingKind::storage_texture:
             return create_texture_uav(pending, handle);
-        case PendingGraphicsBindingKind::sampler:
+        case PendingBindingKind::sampler:
             if (pending.sampler == nullptr) {
                 return false;
             }
@@ -1962,22 +2143,30 @@ private:
         return false;
     }
 
-    [[nodiscard]] bool materialize_graphics_bindings() {
-        if (active_pipeline_ == nullptr) {
-            return false;
-        }
-        const auto& root = active_pipeline_->root_layout();
+    [[nodiscard]] bool materialize_bindings(
+        const D3D12RootSignatureResult& root,
+        const std::vector<PendingBinding>& bindings,
+        ComPtr<ID3D12DescriptorHeap>& active_resource_heap,
+        ComPtr<ID3D12DescriptorHeap>& active_sampler_heap,
+        bool& dirty,
+        const bool compute
+    ) {
         if (root.bindings.empty()) {
             return true;
         }
-        if (!bindings_dirty_) {
-            return active_resource_heap_ != nullptr || active_sampler_heap_ != nullptr;
+        if (!dirty) {
+            return active_resource_heap != nullptr || active_sampler_heap != nullptr;
         }
 
         for (const auto& location : root.bindings) {
             std::uint32_t required_count = 0;
-            if (!binding_set_is_complete(location, required_count)) {
-                core::log(core::LogLevel::error, "VICE draw is missing one or more required shader resource bindings.");
+            if (!binding_set_is_complete(bindings, location, required_count)) {
+                core::log(
+                    core::LogLevel::error,
+                    compute
+                        ? "VICE dispatch is missing one or more required shader resource bindings."
+                        : "VICE draw is missing one or more required shader resource bindings."
+                );
                 return false;
             }
         }
@@ -1988,7 +2177,7 @@ private:
         std::uint64_t sampler_count = 0;
         for (const auto& table : root.tables) {
             std::uint32_t descriptor_count = 0;
-            if (!table_descriptor_count(table, descriptor_count)) {
+            if (!table_descriptor_count(bindings, root, table, descriptor_count)) {
                 return false;
             }
             std::uint64_t& total = table.heap_class == D3D12DescriptorHeapClass::samplers
@@ -2020,8 +2209,8 @@ private:
             return false;
         }
 
-        for (const auto& pending : pending_bindings_) {
-            const auto* location = active_pipeline_->binding_location(pending.key);
+        for (const auto& pending : bindings) {
+            const auto* location = find_d3d12_binding_location(root, pending.key);
             if (location == nullptr) {
                 return false;
             }
@@ -2078,13 +2267,39 @@ private:
                 ? sampler_descriptor_size_
                 : resource_descriptor_size_;
             handle.ptr += static_cast<UINT64>(allocation.heap_offset) * static_cast<UINT64>(increment);
-            command_list_->SetGraphicsRootDescriptorTable(allocation.root_parameter_index, handle);
+            if (compute) {
+                command_list_->SetComputeRootDescriptorTable(allocation.root_parameter_index, handle);
+            } else {
+                command_list_->SetGraphicsRootDescriptorTable(allocation.root_parameter_index, handle);
+            }
         }
 
-        active_resource_heap_ = std::move(resource_heap);
-        active_sampler_heap_ = std::move(sampler_heap);
-        bindings_dirty_ = false;
+        active_resource_heap = std::move(resource_heap);
+        active_sampler_heap = std::move(sampler_heap);
+        dirty = false;
         return true;
+    }
+
+    [[nodiscard]] bool materialize_graphics_bindings() {
+        return active_pipeline_ != nullptr && materialize_bindings(
+            active_pipeline_->root_layout(),
+            pending_bindings_,
+            active_resource_heap_,
+            active_sampler_heap_,
+            bindings_dirty_,
+            false
+        );
+    }
+
+    [[nodiscard]] bool materialize_compute_bindings() {
+        return active_compute_pipeline_ != nullptr && materialize_bindings(
+            active_compute_pipeline_->root_layout(),
+            pending_compute_bindings_,
+            active_compute_resource_heap_,
+            active_compute_sampler_heap_,
+            compute_bindings_dirty_,
+            true
+        );
     }
 
     void transition(D3D12Buffer& buffer, const D3D12_RESOURCE_STATES desired) {
@@ -2150,13 +2365,17 @@ private:
     ComPtr<ID3D12Device> device_;
     ComPtr<ID3D12CommandAllocator> allocator_;
     ComPtr<ID3D12GraphicsCommandList> command_list_;
-    std::vector<PendingGraphicsBinding> pending_bindings_;
+    std::vector<PendingBinding> pending_bindings_;
+    std::vector<PendingBinding> pending_compute_bindings_;
     std::vector<ComPtr<ID3D12DescriptorHeap>> retained_heaps_;
     ComPtr<ID3D12DescriptorHeap> active_resource_heap_;
     ComPtr<ID3D12DescriptorHeap> active_sampler_heap_;
+    ComPtr<ID3D12DescriptorHeap> active_compute_resource_heap_;
+    ComPtr<ID3D12DescriptorHeap> active_compute_sampler_heap_;
     std::array<bool, max_vertex_buffers> vertex_buffers_bound_{};
     std::array<std::uint64_t, max_vertex_buffers> vertex_capacities_{};
     D3D12GraphicsPipeline* active_pipeline_ = nullptr;
+    D3D12ComputePipeline* active_compute_pipeline_ = nullptr;
     D3D12Swapchain* active_swapchain_ = nullptr;
     D3D12Swapchain* present_swapchain_ = nullptr;
     D3D12Texture* active_color_texture_ = nullptr;
@@ -2166,8 +2385,10 @@ private:
     UINT sampler_descriptor_size_ = 0;
     bool index_buffer_bound_ = false;
     bool bindings_dirty_ = true;
+    bool compute_bindings_dirty_ = true;
     bool render_pass_active_ = false;
     bool pipeline_bound_ = false;
+    bool compute_pipeline_bound_ = false;
     bool valid_ = false;
 };
 
@@ -2657,6 +2878,47 @@ public:
             std::move(vertex_streams),
             desc.color_format,
             desc.depth
+        );
+    }
+
+    [[nodiscard]] std::unique_ptr<ComputePipeline> create_compute_pipeline(
+        const ComputePipelineDesc& desc
+    ) override {
+        if (!is_valid(desc)) {
+            core::log(core::LogLevel::error, "VICE rejected an invalid compute pipeline description.");
+            return nullptr;
+        }
+        auto* compute = dynamic_cast<D3D12ShaderModule*>(desc.compute_shader);
+        if (compute == nullptr || compute->stage() != ShaderStage::compute) {
+            core::log(
+                core::LogLevel::error,
+                "Direct3D 12 compute pipelines require a Direct3D 12 compute shader."
+            );
+            return nullptr;
+        }
+        auto built = d3d12_detail::build_compute_pipeline(
+            *device_.Get(),
+            compute->native_bytecode(),
+            compute->resources(),
+            desc.thread_group_size
+        );
+        if (!built.success) {
+            core::log(
+                core::LogLevel::error,
+                built.diagnostics.empty()
+                    ? "Direct3D 12 could not create the VICE compute pipeline."
+                    : built.diagnostics
+            );
+            return nullptr;
+        }
+        if (const auto name = wide_name(desc.debug_name); !name.empty()) {
+            (void)built.pipeline_state->SetName(name.c_str());
+        }
+        return std::make_unique<D3D12ComputePipeline>(
+            std::move(built.root_signature),
+            std::move(built.pipeline_state),
+            std::move(built.root_layout),
+            built.thread_group_size
         );
     }
 

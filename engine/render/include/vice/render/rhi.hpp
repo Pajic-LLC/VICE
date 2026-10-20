@@ -2,6 +2,7 @@
 
 #include <vice/platform/types.hpp>
 #include <vice/platform/window.hpp>
+#include <vice/render/compute.hpp>
 #include <vice/render/mesh_input.hpp>
 
 #include <cstddef>
@@ -639,6 +640,66 @@ public:
         Texture& texture
     ) = 0;
     virtual bool set_graphics_sampler(const ShaderBindingKey& binding, Sampler& sampler) = 0;
+
+    virtual bool set_compute_pipeline(ComputePipeline& pipeline) {
+        (void)pipeline;
+        return false;
+    }
+    virtual bool set_compute_constant_buffer(
+        const ShaderBindingKey& binding,
+        Buffer& buffer,
+        std::uint64_t offset = 0,
+        std::uint64_t size = 0
+    ) {
+        (void)binding;
+        (void)buffer;
+        (void)offset;
+        (void)size;
+        return false;
+    }
+    virtual bool set_compute_buffer(
+        const ShaderBindingKey& binding,
+        Buffer& buffer,
+        const BufferViewDesc& view = {}
+    ) {
+        (void)binding;
+        (void)buffer;
+        (void)view;
+        return false;
+    }
+    virtual bool set_compute_storage_buffer(
+        const ShaderBindingKey& binding,
+        Buffer& buffer,
+        const BufferViewDesc& view = {}
+    ) {
+        (void)binding;
+        (void)buffer;
+        (void)view;
+        return false;
+    }
+    virtual bool set_compute_texture(const ShaderBindingKey& binding, Texture& texture) {
+        (void)binding;
+        (void)texture;
+        return false;
+    }
+    virtual bool set_compute_storage_texture(
+        const ShaderBindingKey& binding,
+        Texture& texture
+    ) {
+        (void)binding;
+        (void)texture;
+        return false;
+    }
+    virtual bool set_compute_sampler(const ShaderBindingKey& binding, Sampler& sampler) {
+        (void)binding;
+        (void)sampler;
+        return false;
+    }
+    virtual bool dispatch(const ComputeDispatchDesc& dispatch_desc) {
+        (void)dispatch_desc;
+        return false;
+    }
+
     virtual bool draw(
         std::uint32_t vertex_count,
         std::uint32_t instance_count = 1,
@@ -697,6 +758,12 @@ public:
     [[nodiscard]] virtual std::unique_ptr<GraphicsPipeline> create_graphics_pipeline(
         const GraphicsPipelineDesc& desc
     ) = 0;
+    [[nodiscard]] virtual std::unique_ptr<ComputePipeline> create_compute_pipeline(
+        const ComputePipelineDesc& desc
+    ) {
+        (void)desc;
+        return nullptr;
+    }
     [[nodiscard]] virtual std::unique_ptr<CommandList> create_command_list() = 0;
 
     virtual SubmissionId submit(std::unique_ptr<CommandList> command_list) = 0;

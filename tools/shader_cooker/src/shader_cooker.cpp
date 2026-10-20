@@ -448,6 +448,25 @@ struct BindingLocation {
     return fields;
 }
 
+[[nodiscard]] bool validate_compute_reflection(
+    const ShaderStage stage,
+    const ShaderReflection& reflection,
+    std::string& diagnostics
+) {
+    if (stage == ShaderStage::compute) {
+        if (!reflection.thread_group_size.has_value()) {
+            diagnostics = "DXC compute reflection is missing NumThreads metadata.";
+            return false;
+        }
+        const auto& size = *reflection.thread_group_size;
+        if (size.x == 0U || size.y == 0U || size.z == 0U) {
+            diagnostics = "DXC compute reflection contains an invalid zero thread-group dimension.";
+            return false;
+        }
+    }
+    return true;
+}
+
 [[nodiscard]] std::string build_manifest(
     const CookRequest& request,
     std::string_view cache_key,
@@ -527,7 +546,17 @@ struct BindingLocation {
         << "  },\n"
         << "  \"reflection\": {\n"
         << "    \"version\": 1,\n"
-        << "    \"resources\": [";
+        << "    \"thread_group_size\": ";
+    if (reflection.thread_group_size.has_value()) {
+        const auto& size = *reflection.thread_group_size;
+        manifest
+            << "{\"x\": " << size.x
+            << ", \"y\": " << size.y
+            << ", \"z\": " << size.z << "},\n";
+    } else {
+        manifest << "null,\n";
+    }
+    manifest << "    \"resources\": [";
 
     if (!reflection.resources.empty()) {
         manifest << "\n";
@@ -628,6 +657,7 @@ std::string shader_profile(const ShaderStage stage, const std::string_view shade
 
 ShaderReflection parse_dxc_resource_bindings(const std::string_view assembly) {
     ShaderReflection reflection;
+    reflection.thread_group_size = parse_dxc_compute_thread_group_size(assembly);
     constexpr std::string_view marker = "; Resource Bindings:";
     const std::size_t marker_position = assembly.find(marker);
     if (marker_position == std::string_view::npos) {
@@ -721,7 +751,7 @@ std::string make_cache_key(
 ) {
     std::string material;
     material.reserve(source.size() + 512);
-    hash_append(material, "VICE_SHADER_ASSET_V4");
+    hash_append(material, "VICE_SHADER_ASSET_V4_COMPUTE_GROUPS1");
     hash_append(material, source);
     hash_append(material, request.entry_point);
     hash_append(material, shader_stage_name(request.stage));
@@ -851,8 +881,10 @@ CookResult cook(const CookRequest& request) {
             std::filesystem::exists(*result.metal_reflection_path, error));
     if (!request.force && artifacts_exist &&
         manifest_matches(result.manifest_path, result.cache_key)) {
-        result.reflection = parse_dxc_resource_bindings(read_file(result.assembly_path));
-        if (result.reflection.valid) {
+        const std::string assembly = read_file(result.assembly_path);
+        result.reflection = parse_dxc_resource_bindings(assembly);
+        if (result.reflection.valid &&
+            validate_compute_reflection(request.stage, result.reflection, result.diagnostics)) {
             if (result.metal_reflection_path.has_value()) {
                 const MetalBindingReflection metal = parse_metal_shader_converter_reflection(
                     read_file(*result.metal_reflection_path),
@@ -894,9 +926,13 @@ CookResult cook(const CookRequest& request) {
         return result;
     }
 
-    result.reflection = parse_dxc_resource_bindings(read_file(result.assembly_path));
+    const std::string assembly = read_file(result.assembly_path);
+    result.reflection = parse_dxc_resource_bindings(assembly);
     if (!result.reflection.valid) {
         result.diagnostics = "DXC reflection extraction failed.\n" + result.reflection.diagnostics;
+        return result;
+    }
+    if (!validate_compute_reflection(request.stage, result.reflection, result.diagnostics)) {
         return result;
     }
 

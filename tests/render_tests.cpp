@@ -1,3 +1,4 @@
+#include <vice/render/compute.hpp>
 #include <vice/render/rhi.hpp>
 
 #include <array>
@@ -361,6 +362,32 @@ int main() {
 
     TestShaderModule vertex_shader{ShaderStage::vertex};
     TestShaderModule fragment_shader{ShaderStage::fragment};
+    TestShaderModule compute_shader{ShaderStage::compute};
+
+    ComputePipelineDesc compute_pipeline{
+        .compute_shader = &compute_shader,
+        .debug_name = "test compute pipeline",
+    };
+    assert(is_valid(compute_pipeline));
+
+    auto invalid_compute_pipeline = compute_pipeline;
+    invalid_compute_pipeline.compute_shader = &fragment_shader;
+    assert(!is_valid(invalid_compute_pipeline));
+
+    constexpr ComputeDispatchDesc compute_dispatch{
+        .group_count_x = 8U,
+        .group_count_y = 4U,
+        .group_count_z = 2U,
+    };
+    static_assert(is_valid(compute_dispatch));
+
+    constexpr ComputeDispatchDesc invalid_compute_dispatch{
+        .group_count_x = 0U,
+        .group_count_y = 1U,
+        .group_count_z = 1U,
+    };
+    static_assert(!is_valid(invalid_compute_dispatch));
+
     GraphicsPipelineDesc depth_only_pipeline;
     depth_only_pipeline.vertex_shader = &vertex_shader;
     depth_only_pipeline.fragment_shader = nullptr;

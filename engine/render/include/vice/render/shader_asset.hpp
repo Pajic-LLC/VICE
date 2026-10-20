@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -20,6 +21,7 @@ struct CookedShaderManifest {
     std::string metallib_artifact;
     std::vector<ShaderResourceBindingDesc> resources;
     std::vector<MetalShaderResourceLocationDesc> metal_resource_locations;
+    std::optional<ComputeThreadGroupSize> compute_thread_group_size;
     std::string diagnostics;
 };
 
@@ -27,6 +29,7 @@ struct CookedShaderManifest {
 
 struct CookedShaderLoadResult {
     std::unique_ptr<ShaderModule> module;
+    std::optional<ComputeThreadGroupSize> compute_thread_group_size;
     std::string diagnostics;
 
     [[nodiscard]] explicit operator bool() const noexcept {

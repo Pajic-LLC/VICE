@@ -135,5 +135,68 @@ int main() {
     assert(empty.valid);
     assert(empty.resources.empty());
 
+    constexpr ShaderResourceBindingDesc compute_constants{
+        .register_class = ShaderRegisterClass::constant_buffer,
+        .binding = 0,
+        .space = 0,
+        .count = 1,
+        .unbounded = false,
+    };
+    constexpr ShaderResourceBindingDesc compute_input{
+        .register_class = ShaderRegisterClass::shader_resource,
+        .binding = 0,
+        .space = 0,
+        .count = 1,
+        .unbounded = false,
+    };
+    constexpr ShaderResourceBindingDesc compute_output{
+        .register_class = ShaderRegisterClass::unordered_access,
+        .binding = 0,
+        .space = 0,
+        .count = 1,
+        .unbounded = false,
+    };
+    constexpr std::array compute_resources{
+        compute_output,
+        compute_constants,
+        compute_input,
+    };
+
+    const PipelineLayout compute = compile_compute_pipeline_layout(compute_resources);
+    assert(compute.valid);
+    assert(compute.diagnostics.empty());
+    assert(compute.resources.size() == 3U);
+    for (const auto& resource : compute.resources) {
+        assert(resource.stages == ShaderStageMask::compute);
+    }
+
+    constexpr ShaderResourceBindingDesc compute_overlap_a{
+        .register_class = ShaderRegisterClass::unordered_access,
+        .binding = 4,
+        .space = 2,
+        .count = 4,
+        .unbounded = false,
+    };
+    constexpr ShaderResourceBindingDesc compute_overlap_b{
+        .register_class = ShaderRegisterClass::unordered_access,
+        .binding = 7,
+        .space = 2,
+        .count = 2,
+        .unbounded = false,
+    };
+    constexpr std::array compute_overlap_resources{
+        compute_overlap_a,
+        compute_overlap_b,
+    };
+    const PipelineLayout compute_overlap = compile_compute_pipeline_layout(
+        compute_overlap_resources
+    );
+    assert(!compute_overlap.valid);
+    assert(!compute_overlap.diagnostics.empty());
+
+    const PipelineLayout empty_compute = compile_compute_pipeline_layout({});
+    assert(empty_compute.valid);
+    assert(empty_compute.resources.empty());
+
     return 0;
 }

@@ -180,6 +180,65 @@ int main() {
         }
     }
 
+    constexpr ShaderResourceBindingDesc compute_constants{
+        .register_class = ShaderRegisterClass::constant_buffer,
+        .binding = 0,
+        .space = 0,
+        .count = 1,
+        .unbounded = false,
+    };
+    constexpr ShaderResourceBindingDesc compute_input{
+        .register_class = ShaderRegisterClass::shader_resource,
+        .binding = 0,
+        .space = 0,
+        .count = 1,
+        .unbounded = false,
+    };
+    constexpr ShaderResourceBindingDesc compute_output{
+        .register_class = ShaderRegisterClass::unordered_access,
+        .binding = 0,
+        .space = 0,
+        .count = 1,
+        .unbounded = false,
+    };
+    constexpr std::array compute_resources{
+        compute_constants,
+        compute_input,
+        compute_output,
+    };
+    const PipelineLayout compute_layout = compile_compute_pipeline_layout(compute_resources);
+    assert(compute_layout.valid);
+
+    const D3D12RootSignatureResult compute_root = serialize_d3d12_root_signature(compute_layout);
+    assert(compute_root.success);
+    assert(compute_root.bindings.size() == 3U);
+    assert(compute_root.tables.size() == 3U);
+
+    ComPtr<ID3D12RootSignatureDeserializer> compute_deserializer;
+    const HRESULT compute_result = D3D12CreateRootSignatureDeserializer(
+        compute_root.blob.data(),
+        compute_root.blob.size(),
+        IID_PPV_ARGS(&compute_deserializer)
+    );
+    assert(SUCCEEDED(compute_result));
+    assert(compute_deserializer != nullptr);
+    const D3D12_ROOT_SIGNATURE_DESC* compute_desc = compute_deserializer->GetRootSignatureDesc();
+    assert(compute_desc != nullptr);
+    assert(compute_desc->NumParameters == 3U);
+    for (UINT parameter_index = 0; parameter_index < compute_desc->NumParameters; ++parameter_index) {
+        const auto& parameter = compute_desc->pParameters[parameter_index];
+        assert(parameter.ParameterType == D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE);
+        assert(parameter.ShaderVisibility == D3D12_SHADER_VISIBILITY_ALL);
+    }
+
+    const ShaderBindingKey compute_uav_key{
+        .register_class = ShaderRegisterClass::unordered_access,
+        .binding = 0,
+        .space = 0,
+        .array_element = 0,
+    };
+    assert(find_d3d12_binding_location(compute_root, compute_uav_key) != nullptr);
+
     PipelineLayout invalid_layout;
     invalid_layout.valid = false;
     invalid_layout.diagnostics = "expected failure";

@@ -28,6 +28,12 @@ enum class ShaderRegisterClass {
     sampler,
 };
 
+struct ComputeThreadGroupReflection {
+    std::uint32_t x = 1U;
+    std::uint32_t y = 1U;
+    std::uint32_t z = 1U;
+};
+
 struct ShaderResourceReflection {
     std::string name;
     ShaderRegisterClass register_class = ShaderRegisterClass::shader_resource;
@@ -43,6 +49,7 @@ struct ShaderResourceReflection {
 struct ShaderReflection {
     bool valid = false;
     std::vector<ShaderResourceReflection> resources;
+    std::optional<ComputeThreadGroupReflection> thread_group_size;
     std::string diagnostics;
 };
 
@@ -81,6 +88,9 @@ struct CookResult {
 [[nodiscard]] std::string_view shader_register_class_name(ShaderRegisterClass register_class) noexcept;
 [[nodiscard]] std::string shader_profile(ShaderStage stage, std::string_view shader_model);
 [[nodiscard]] ShaderReflection parse_dxc_resource_bindings(std::string_view assembly);
+[[nodiscard]] std::optional<ComputeThreadGroupReflection> parse_dxc_compute_thread_group_size(
+    std::string_view assembly
+) noexcept;
 [[nodiscard]] std::string make_cache_key(
     std::string_view source,
     const CookRequest& request,

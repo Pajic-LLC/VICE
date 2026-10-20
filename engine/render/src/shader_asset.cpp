@@ -111,11 +111,11 @@ private:
                 return fail("JSON object is missing a colon.");
             }
             skip_whitespace();
-            JsonValue member;
-            if (!parse_value(member)) {
+            JsonValue member_value;
+            if (!parse_value(member_value)) {
                 return false;
             }
-            value.object.emplace_back(std::move(key), std::move(member));
+            value.object.emplace_back(std::move(key), std::move(member_value));
             skip_whitespace();
             if (consume('}')) {
                 return true;
@@ -505,6 +505,31 @@ CookedShaderManifest parse_cooked_shader_manifest(const std::string_view json) {
         manifest.diagnostics = "Shader manifest logical reflection is missing or unsupported.";
         return manifest;
     }
+
+    const JsonValue* thread_group = member(*reflection, "thread_group_size");
+    if (manifest.stage == ShaderStage::compute) {
+        if (thread_group == nullptr || thread_group->kind != JsonKind::object) {
+            manifest.diagnostics = "Compute shader manifest is missing thread-group reflection.";
+            return manifest;
+        }
+        const auto x = uint32_member(*thread_group, "x");
+        const auto y = uint32_member(*thread_group, "y");
+        const auto z = uint32_member(*thread_group, "z");
+        if (!x.has_value() || !y.has_value() || !z.has_value()) {
+            manifest.diagnostics = "Compute shader thread-group reflection is incomplete.";
+            return manifest;
+        }
+        const ComputeThreadGroupSize size{.x = *x, .y = *y, .z = *z};
+        if (!is_valid(size)) {
+            manifest.diagnostics = "Compute shader thread-group reflection is invalid.";
+            return manifest;
+        }
+        manifest.compute_thread_group_size = size;
+    } else if (thread_group != nullptr && thread_group->kind != JsonKind::null_value) {
+        manifest.diagnostics = "Non-compute shader manifest contains compute thread-group reflection.";
+        return manifest;
+    }
+
     const JsonValue* resources = member(*reflection, "resources");
     if (resources == nullptr || resources->kind != JsonKind::array) {
         manifest.diagnostics = "Shader manifest reflection resources must be an array.";
@@ -673,6 +698,7 @@ CookedShaderLoadResult load_cooked_shader(
         result.diagnostics = manifest.diagnostics;
         return result;
     }
+    result.compute_thread_group_size = manifest.compute_thread_group_size;
 
     std::string artifact_name;
     ShaderBinaryFormat format = ShaderBinaryFormat::dxil;
