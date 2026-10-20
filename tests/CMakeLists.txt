@@ -108,6 +108,37 @@ if(WIN32)
   add_test(NAME vice_d3d12_compute_pipeline_tests COMMAND vice_d3d12_compute_pipeline_tests)
 endif()
 
+if(APPLE)
+  enable_language(OBJCXX)
+  find_library(METAL_FRAMEWORK_TEST Metal REQUIRED)
+  add_executable(vice_metal_compute_pipeline_tests metal_compute_pipeline_tests.mm)
+  target_include_directories(
+    vice_metal_compute_pipeline_tests
+    PRIVATE
+      ${CMAKE_SOURCE_DIR}/engine/render/src/metal
+  )
+  target_link_libraries(
+    vice_metal_compute_pipeline_tests
+    PRIVATE
+      VICE::Render
+      ${METAL_FRAMEWORK_TEST}
+  )
+  target_compile_features(vice_metal_compute_pipeline_tests PRIVATE cxx_std_23)
+  set_target_properties(
+    vice_metal_compute_pipeline_tests
+    PROPERTIES
+      OBJCXX_STANDARD 23
+      OBJCXX_STANDARD_REQUIRED YES
+      OBJCXX_EXTENSIONS NO
+  )
+  set_source_files_properties(
+    metal_compute_pipeline_tests.mm
+    PROPERTIES COMPILE_OPTIONS "-fobjc-arc"
+  )
+  vice_enable_warnings(vice_metal_compute_pipeline_tests)
+  add_test(NAME vice_metal_compute_pipeline_tests COMMAND vice_metal_compute_pipeline_tests)
+endif()
+
 add_executable(vice_world_tests world_tests.cpp)
 target_link_libraries(vice_world_tests PRIVATE VICE::World)
 target_compile_features(vice_world_tests PRIVATE cxx_std_23)
