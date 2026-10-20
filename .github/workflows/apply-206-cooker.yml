@@ -29,7 +29,6 @@ jobs:
                   tools/shader_cooker/src/metal_reflection.cpp \
                   tools/shader_cooker/src/shader_cooker.cpp \
                   tests/shader_cooker_tests.cpp \
-                  tests/shader_asset_tests.cpp \
-                  .github/workflows/ci.yml
+                  tests/shader_asset_tests.cpp
           git commit -m "Add Metal explicit descriptor-table cooker metadata"
           git push
