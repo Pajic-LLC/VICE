@@ -111,20 +111,7 @@ namespace {
     return left_end > static_cast<std::uint64_t>(right.binding);
 }
 
-} // namespace
-
-PipelineLayout compile_graphics_pipeline_layout(
-    const std::span<const ShaderResourceBindingDesc> vertex_resources,
-    const std::span<const ShaderResourceBindingDesc> fragment_resources
-) {
-    PipelineLayout layout;
-    layout.resources.reserve(vertex_resources.size() + fragment_resources.size());
-
-    if (!add_resources(layout, vertex_resources, ShaderStageMask::vertex) ||
-        !add_resources(layout, fragment_resources, ShaderStageMask::fragment)) {
-        return layout;
-    }
-
+[[nodiscard]] PipelineLayout finalize_layout(PipelineLayout layout) {
     std::sort(layout.resources.begin(), layout.resources.end(), binding_less);
 
     for (std::size_t index = 1; index < layout.resources.size(); ++index) {
@@ -139,6 +126,36 @@ PipelineLayout compile_graphics_pipeline_layout(
 
     layout.valid = true;
     return layout;
+}
+
+} // namespace
+
+PipelineLayout compile_graphics_pipeline_layout(
+    const std::span<const ShaderResourceBindingDesc> vertex_resources,
+    const std::span<const ShaderResourceBindingDesc> fragment_resources
+) {
+    PipelineLayout layout;
+    layout.resources.reserve(vertex_resources.size() + fragment_resources.size());
+
+    if (!add_resources(layout, vertex_resources, ShaderStageMask::vertex) ||
+        !add_resources(layout, fragment_resources, ShaderStageMask::fragment)) {
+        return layout;
+    }
+
+    return finalize_layout(std::move(layout));
+}
+
+PipelineLayout compile_compute_pipeline_layout(
+    const std::span<const ShaderResourceBindingDesc> compute_resources
+) {
+    PipelineLayout layout;
+    layout.resources.reserve(compute_resources.size());
+
+    if (!add_resources(layout, compute_resources, ShaderStageMask::compute)) {
+        return layout;
+    }
+
+    return finalize_layout(std::move(layout));
 }
 
 } // namespace vice::render
