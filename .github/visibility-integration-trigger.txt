@@ -1,1 +1,0 @@
-One-shot branch synchronization marker for the guarded RuntimeSceneRenderer GPU visibility integration. Remove with the applicator before final CI.
