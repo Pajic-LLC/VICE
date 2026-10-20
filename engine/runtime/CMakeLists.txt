@@ -2,6 +2,7 @@ add_library(
   vice_runtime
   STATIC
     src/environment_pipeline.cpp
+    src/gpu_draw_batches.cpp
     src/material_pipeline.cpp
     src/module_loader.cpp
     src/module_paths.cpp
