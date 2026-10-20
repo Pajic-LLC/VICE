@@ -137,6 +137,27 @@ target_compile_features(vice_runtime_gpu_material_table_tests PRIVATE cxx_std_23
 vice_enable_warnings(vice_runtime_gpu_material_table_tests)
 add_test(NAME vice_runtime_gpu_material_table_tests COMMAND vice_runtime_gpu_material_table_tests)
 
+add_executable(
+  vice_runtime_gpu_material_resources_tests
+  ../runtime_gpu_material_resources_tests.cpp
+)
+target_include_directories(
+  vice_runtime_gpu_material_resources_tests
+  PRIVATE
+    "${PROJECT_SOURCE_DIR}/engine/runtime/src"
+)
+target_link_libraries(
+  vice_runtime_gpu_material_resources_tests
+  PRIVATE
+    VICE::Runtime
+)
+target_compile_features(vice_runtime_gpu_material_resources_tests PRIVATE cxx_std_23)
+vice_enable_warnings(vice_runtime_gpu_material_resources_tests)
+add_test(
+  NAME vice_runtime_gpu_material_resources_tests
+  COMMAND vice_runtime_gpu_material_resources_tests
+)
+
 if(TARGET vice_mesh_cooker_lib)
   add_executable(
     vice_runtime_scene_tests
