@@ -1,0 +1,130 @@
++        const ShaderBindingKey& binding,
++        Buffer& buffer,
++        const BufferViewDesc& view
++    ) override {
++        auto* metal_buffer = dynamic_cast<MetalBuffer*>(&buffer);
++        std::uint64_t offset = 0U;
++        std::uint64_t size = 0U;
++        if (!compute_binding_allowed(binding, ShaderRegisterClass::unordered_access) ||
++            metal_buffer == nullptr || !has_usage(buffer.usage(), BufferUsage::storage) ||
++            !resolve_buffer_view(buffer, view, offset, size)) {
++            return false;
++        }
++        upsert_compute_bound(MetalBoundResource{
++            .key = binding,
++            .kind = MetalBoundKind::write_buffer,
++            .buffer = metal_buffer,
++            .offset = offset,
++            .size = size,
++        });
++        return true;
++    }
++
++    bool set_compute_texture(const ShaderBindingKey& binding, Texture& texture) override {
++        auto* metal_texture = dynamic_cast<MetalTexture*>(&texture);
++        if (!compute_binding_allowed(binding, ShaderRegisterClass::shader_resource) ||
++            metal_texture == nullptr || !has_usage(texture.usage(), TextureUsage::sampled)) {
++            return false;
++        }
++        upsert_compute_bound(MetalBoundResource{
++            .key = binding,
++            .kind = MetalBoundKind::texture,
++            .texture = metal_texture,
++        });
++        return true;
++    }
++
++    bool set_compute_storage_texture(
++        const ShaderBindingKey& binding,
++        Texture& texture
++    ) override {
++        auto* metal_texture = dynamic_cast<MetalTexture*>(&texture);
++        if (!compute_binding_allowed(binding, ShaderRegisterClass::unordered_access) ||
++            metal_texture == nullptr || !has_usage(texture.usage(), TextureUsage::storage)) {
++            return false;
++        }
++        upsert_compute_bound(MetalBoundResource{
++            .key = binding,
++            .kind = MetalBoundKind::storage_texture,
++            .texture = metal_texture,
++        });
++        return true;
++    }
++
++    bool set_compute_sampler(const ShaderBindingKey& binding, Sampler& sampler) override {
++        auto* metal_sampler = dynamic_cast<MetalSampler*>(&sampler);
++        if (!compute_binding_allowed(binding, ShaderRegisterClass::sampler) ||
++            metal_sampler == nullptr) {
++            return false;
++        }
++        upsert_compute_bound(MetalBoundResource{
++            .key = binding,
++            .kind = MetalBoundKind::sampler,
++            .sampler = metal_sampler,
++        });
++        return true;
++    }
++
++    bool dispatch(const ComputeDispatchDesc& dispatch_desc) override {
++        if (!valid() || render_encoder_ != nil || !compute_pipeline_bound_ ||
++            active_compute_pipeline_ == nullptr || !is_valid(dispatch_desc)) {
++            return false;
++        }
++        id<MTLComputeCommandEncoder> encoder = [command_buffer_ computeCommandEncoder];
++        if (encoder == nil) {
++            return false;
++        }
++        [encoder setComputePipelineState:active_compute_pipeline_->native()];
++        if (!prepare_compute_resources(encoder)) {
++            [encoder endEncoding];
++            return false;
++        }
++        const ComputeThreadGroupSize group_size = active_compute_pipeline_->thread_group_size();
++        [encoder dispatchThreadgroups:MTLSizeMake(
++                static_cast<NSUInteger>(dispatch_desc.group_count_x),
++                static_cast<NSUInteger>(dispatch_desc.group_count_y),
++                static_cast<NSUInteger>(dispatch_desc.group_count_z))
++              threadsPerThreadgroup:MTLSizeMake(
++                static_cast<NSUInteger>(group_size.x),
++                static_cast<NSUInteger>(group_size.y),
++                static_cast<NSUInteger>(group_size.z))];
++        [encoder endEncoding];
++        return true;
++    }
++
+     bool draw(
+         const std::uint32_t vertex_count,
+         const std::uint32_t instance_count,
+@@ -1230,6 +1437,15 @@
+             active_pipeline_->has_binding(binding, expected_class);
+     }
+ 
++    [[nodiscard]] bool compute_binding_allowed(
++        const ShaderBindingKey& binding,
++        const ShaderRegisterClass expected_class
++    ) const noexcept {
++        return render_encoder_ == nil && compute_pipeline_bound_ &&
++            active_compute_pipeline_ != nullptr &&
++            active_compute_pipeline_->has_binding(binding, expected_class);
++    }
++
+     [[nodiscard]] bool all_vertex_buffers_bound() const noexcept {
+         if (active_pipeline_ == nullptr) {
+             return false;
+@@ -1633,6 +1849,305 @@
+         return false;
+     }
+ 
++    void upsert_compute_bound(MetalBoundResource resource) {
++        const auto found = std::find_if(
++            bound_compute_resources_.begin(),
++            bound_compute_resources_.end(),
++            [&](const MetalBoundResource& existing) {
++                return same_binding(existing.key, resource.key);
++            }
++        );
++        if (found == bound_compute_resources_.end()) {
++            bound_compute_resources_.push_back(std::move(resource));
++        } else {
++            *found = std::move(resource);
++        }
