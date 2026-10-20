@@ -1,0 +1,125 @@
+name: Apply runtime visibility integration
+
+on:
+  pull_request:
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: github.head_ref == 'feature/198-gpu-visibility'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout branch
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.head_ref }}
+
+      - name: Apply guarded scene integration
+        shell: python
+        run: |
+          from pathlib import Path
+
+          path = Path('engine/runtime/src/scene.cpp')
+          text = path.read_text()
+          marker = '#include <vice/runtime/visibility.hpp>'
+          if marker in text:
+              print('Runtime visibility integration already present.')
+              raise SystemExit(0)
+
+          replacements = [
+              (
+                  '#include <vice/runtime/post_process.hpp>\n',
+                  '#include <vice/runtime/post_process.hpp>\n#include <vice/runtime/visibility.hpp>\n',
+              ),
+              (
+                  '        std::uint32_t index_count = 0;\n    };',
+                  '        std::uint32_t index_count = 0;\n        RuntimeBoundingSphere bounds{};\n    };',
+              ),
+              (
+                  '    detail::RuntimeEnvironment environment;\n',
+                  '    detail::RuntimeEnvironment environment;\n    RuntimeVisibilityCuller visibility;\n',
+              ),
+              (
+                  '    if (!state_->environment.initialize(device, content_root, diagnostics)) {\n        return false;\n    }\n\n    const bool metal',
+                  '    if (!state_->environment.initialize(device, content_root, diagnostics)) {\n        return false;\n    }\n    if (!state_->visibility.initialize(device, diagnostics)) {\n        return false;\n    }\n\n    const bool metal',
+              ),
+              (
+                  '                .index_count = static_cast<std::uint32_t>(record.asset.indices.size()),\n            }',
+                  '                .index_count = static_cast<std::uint32_t>(record.asset.indices.size()),\n                .bounds = runtime_mesh_bounding_sphere(record.asset.vertices),\n            }',
+              ),
+          ]
+
+          for old, new in replacements:
+              if old not in text:
+                  raise SystemExit(f'Missing expected scene integration context: {old[:80]!r}')
+              text = text.replace(old, new, 1)
+
+          command_anchor = '''    auto commands = state_->device->create_command_list();
+    if (!commands) {
+        set_diagnostics(diagnostics, "VICE Runtime could not create scene commands.");
+        return false;
+    }
+'''
+          visibility_block = command_anchor + '''
+    if (instances.size() > std::numeric_limits<std::uint32_t>::max()) {
+        set_diagnostics(diagnostics, "Runtime scene instance count exceeds the GPU visibility contract.");
+        return false;
+    }
+    const auto visibility_frustum = runtime_visibility_frustum(
+        runtime_camera.forward,
+        runtime_camera.up,
+        runtime_camera.camera.vertical_fov_radians,
+        runtime_camera.aspect_ratio,
+        runtime_camera.camera.near_plane,
+        runtime_camera.camera.far_plane
+    );
+    if (!valid(visibility_frustum)) {
+        set_diagnostics(diagnostics, "VICE Runtime could not build the camera visibility frustum.");
+        return false;
+    }
+    std::vector<RuntimeVisibilitySphere> visibility_spheres;
+    visibility_spheres.reserve(instances.size());
+    for (std::size_t instance_index = 0U; instance_index < instances.size(); ++instance_index) {
+        const auto& instance = instances[instance_index];
+        const auto& mesh = state_->meshes.at(instance.mesh);
+        const auto sphere = runtime_transform_bounding_sphere(
+            mesh.bounds,
+            runtime_model_matrix_relative_to(instance, camera_global_position)
+        );
+        if (!valid(sphere)) {
+            set_diagnostics(diagnostics, "VICE Runtime produced an invalid mesh visibility sphere.");
+            return false;
+        }
+        visibility_spheres.push_back(RuntimeVisibilitySphere{
+            .center = sphere.center,
+            .radius = sphere.radius,
+            .instance_index = static_cast<std::uint32_t>(instance_index),
+        });
+    }
+    if (!state_->visibility.cull(
+            *commands,
+            visibility_spheres,
+            visibility_frustum,
+            diagnostics
+        )) {
+        return false;
+    }
+'''
+          if command_anchor not in text:
+              raise SystemExit('Missing command-list scene integration anchor.')
+          text = text.replace(command_anchor, visibility_block, 1)
+          path.write_text(text)
+
+      - name: Commit integration
+        shell: bash
+        run: |
+          if git diff --quiet -- engine/runtime/src/scene.cpp; then
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add engine/runtime/src/scene.cpp
+          git commit -m "Integrate GPU visibility into runtime scene"
+          git push origin HEAD:${{ github.head_ref }}
