@@ -82,11 +82,16 @@ ComputePipelineBuildResult build_compute_pipeline(
     id<MTLDevice> device,
     id<MTLFunction> function,
     const std::span<const ShaderResourceBindingDesc> resources,
-    const std::span<const MetalShaderResourceLocationDesc> locations
+    const std::span<const MetalShaderResourceLocationDesc> locations,
+    const ComputeThreadGroupSize thread_group_size
 ) {
     ComputePipelineBuildResult result;
     if (device == nil || function == nil) {
         result.diagnostics = "Metal compute pipeline requires a valid device and function.";
+        return result;
+    }
+    if (!is_valid(thread_group_size)) {
+        result.diagnostics = "Metal compute pipeline requires a non-zero thread-group size.";
         return result;
     }
 
@@ -112,8 +117,14 @@ ComputePipelineBuildResult build_compute_pipeline(
         }
         return result;
     }
+    if (thread_count(thread_group_size) > result.pipeline_state.maxTotalThreadsPerThreadgroup) {
+        result.diagnostics = "Metal compute thread-group size exceeds the pipeline limit.";
+        result.pipeline_state = nil;
+        return result;
+    }
 
     result.locations.assign(locations.begin(), locations.end());
+    result.thread_group_size = thread_group_size;
     result.success = true;
     return result;
 }
