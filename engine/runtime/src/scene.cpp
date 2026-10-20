@@ -1,6 +1,7 @@
 #include <vice/runtime/scene.hpp>
 
 #include <vice/runtime/post_process.hpp>
+#include <vice/runtime/visibility.hpp>
 
 #include "bloom_shaders.hpp"
 #include "environment_pipeline.hpp"
@@ -1701,12 +1702,14 @@ struct RuntimeSceneRenderer::State {
         std::unique_ptr<render::Buffer> vertices;
         std::unique_ptr<render::Buffer> indices;
         std::uint32_t index_count = 0;
+        RuntimeBoundingSphere bounds{};
     };
 
     render::Device* device = nullptr;
     CookedMeshCatalog catalog;
     detail::RuntimeMaterialLibrary materials;
     detail::RuntimeEnvironment environment;
+    RuntimeVisibilityCuller visibility;
     std::unique_ptr<render::ShaderModule> vertex_shader;
     std::unique_ptr<render::ShaderModule> fragment_shader;
     std::unique_ptr<render::GraphicsPipeline> pipeline;
@@ -1812,6 +1815,9 @@ bool RuntimeSceneRenderer::initialize(
         return false;
     }
     if (!state_->environment.initialize(device, content_root, diagnostics)) {
+        return false;
+    }
+    if (!state_->visibility.initialize(device, diagnostics)) {
         return false;
     }
 
@@ -2230,6 +2236,7 @@ bool RuntimeSceneRenderer::initialize(
                 .vertices = std::move(vertices),
                 .indices = std::move(indices),
                 .index_count = static_cast<std::uint32_t>(record.asset.indices.size()),
+                .bounds = runtime_mesh_bounding_sphere(record.asset.vertices),
             }
         );
     }
@@ -2598,6 +2605,50 @@ bool RuntimeSceneRenderer::render(
     auto commands = state_->device->create_command_list();
     if (!commands) {
         set_diagnostics(diagnostics, "VICE Runtime could not create scene commands.");
+        return false;
+    }
+
+    if (instances.size() > std::numeric_limits<std::uint32_t>::max()) {
+        set_diagnostics(diagnostics, "Runtime scene instance count exceeds the GPU visibility contract.");
+        return false;
+    }
+    const auto visibility_frustum = runtime_visibility_frustum(
+        runtime_camera.forward,
+        runtime_camera.up,
+        runtime_camera.camera.vertical_fov_radians,
+        runtime_camera.aspect_ratio,
+        runtime_camera.camera.near_plane,
+        runtime_camera.camera.far_plane
+    );
+    if (!valid(visibility_frustum)) {
+        set_diagnostics(diagnostics, "VICE Runtime could not build the camera visibility frustum.");
+        return false;
+    }
+    std::vector<RuntimeVisibilitySphere> visibility_spheres;
+    visibility_spheres.reserve(instances.size());
+    for (std::size_t instance_index = 0U; instance_index < instances.size(); ++instance_index) {
+        const auto& instance = instances[instance_index];
+        const auto& mesh = state_->meshes.at(instance.mesh);
+        const auto sphere = runtime_transform_bounding_sphere(
+            mesh.bounds,
+            runtime_model_matrix_relative_to(instance, camera_global_position)
+        );
+        if (!valid(sphere)) {
+            set_diagnostics(diagnostics, "VICE Runtime produced an invalid mesh visibility sphere.");
+            return false;
+        }
+        visibility_spheres.push_back(RuntimeVisibilitySphere{
+            .center = sphere.center,
+            .radius = sphere.radius,
+            .instance_index = static_cast<std::uint32_t>(instance_index),
+        });
+    }
+    if (!state_->visibility.cull(
+            *commands,
+            visibility_spheres,
+            visibility_frustum,
+            diagnostics
+        )) {
         return false;
     }
 
