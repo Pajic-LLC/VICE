@@ -68,6 +68,11 @@ void main(uint3 dispatch_id : SV_DispatchThreadID) {
             .unbounded = false,
         },
     };
+    constexpr ComputeThreadGroupSize group_size{
+        .x = 4U,
+        .y = 1U,
+        .z = 1U,
+    };
 
     const D3D12_SHADER_BYTECODE bytecode{
         .pShaderBytecode = shader->GetBufferPointer(),
@@ -76,7 +81,8 @@ void main(uint3 dispatch_id : SV_DispatchThreadID) {
     const ComputePipelineBuildResult pipeline = build_compute_pipeline(
         *device.Get(),
         bytecode,
-        resources
+        resources,
+        group_size
     );
     CHECK(pipeline.success);
     CHECK(pipeline.diagnostics.empty());
@@ -84,6 +90,9 @@ void main(uint3 dispatch_id : SV_DispatchThreadID) {
     CHECK(pipeline.pipeline_state != nullptr);
     CHECK(pipeline.root_layout.success);
     CHECK(pipeline.root_layout.bindings.size() == 1U);
+    CHECK(pipeline.thread_group_size.x == 4U);
+    CHECK(pipeline.thread_group_size.y == 1U);
+    CHECK(pipeline.thread_group_size.z == 1U);
 
     const ShaderBindingKey output_key{
         .register_class = ShaderRegisterClass::unordered_access,
@@ -235,10 +244,25 @@ void main(uint3 dispatch_id : SV_DispatchThreadID) {
     const ComputePipelineBuildResult empty_shader = build_compute_pipeline(
         *device.Get(),
         D3D12_SHADER_BYTECODE{},
-        resources
+        resources,
+        group_size
     );
     CHECK(!empty_shader.success);
     CHECK(!empty_shader.diagnostics.empty());
+
+    constexpr ComputeThreadGroupSize invalid_group_size{
+        .x = 1'025U,
+        .y = 1U,
+        .z = 1U,
+    };
+    const ComputePipelineBuildResult invalid_group = build_compute_pipeline(
+        *device.Get(),
+        bytecode,
+        resources,
+        invalid_group_size
+    );
+    CHECK(!invalid_group.success);
+    CHECK(!invalid_group.diagnostics.empty());
 
     return 0;
 }
