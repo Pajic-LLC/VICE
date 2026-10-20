@@ -32,4 +32,16 @@ if(VICE_BUILD_TESTS)
     NAME vice_shader_compute_reflection_tests
     COMMAND vice_shader_compute_reflection_tests
   )
+
+  add_executable(
+    vice_shader_compute_asset_tests
+    ${CMAKE_SOURCE_DIR}/tests/shader_compute_asset_tests.cpp
+  )
+  target_link_libraries(vice_shader_compute_asset_tests PRIVATE VICE::Render)
+  target_compile_features(vice_shader_compute_asset_tests PRIVATE cxx_std_23)
+  vice_enable_warnings(vice_shader_compute_asset_tests)
+  add_test(
+    NAME vice_shader_compute_asset_tests
+    COMMAND vice_shader_compute_asset_tests
+  )
 endif()
