@@ -24,7 +24,8 @@ jobs:
           cat .github/compute-patches/d3d12.part00 \
               .github/compute-patches/d3d12.part01 \
               .github/compute-patches/d3d12.part02 \
-              .github/compute-patches/d3d12.part03 > /tmp/d3d12-compute.patch
+              .github/compute-patches/d3d12.part03 \
+              .github/compute-patches/d3d12.part04 > /tmp/d3d12-compute.patch
 
           if git apply --check /tmp/d3d12-compute.patch; then
             git apply /tmp/d3d12-compute.patch
