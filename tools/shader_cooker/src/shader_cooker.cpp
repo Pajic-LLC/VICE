@@ -1,6 +1,7 @@
 #include <vice/tools/metal_reflection.hpp>
 #include <vice/tools/shader_cooker.hpp>
 
+#include <algorithm>
 #include <array>
 #include <bit>
 #include <cctype>
