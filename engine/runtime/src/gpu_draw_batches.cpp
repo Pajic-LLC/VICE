@@ -306,6 +306,7 @@ bool RuntimeGpuDrawBatcher::build(
     const std::uint32_t batch_count = static_cast<std::uint32_t>(batches.size());
     std::vector<std::uint32_t> batch_capacities(batch_count, 0U);
     for (const std::uint32_t batch_index : instance_batches) {
+        if (batch_index == runtime_gpu_draw_batch_unassigned) continue;
         if (batch_index >= batch_count) {
             set_diagnostics(diagnostics, "Runtime GPU draw batch assignment references an invalid batch.");
             return false;

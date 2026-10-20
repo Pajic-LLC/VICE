@@ -4,11 +4,15 @@
 #include <vice/runtime/visibility.hpp>
 
 #include <cstdint>
+#include <limits>
 #include <memory>
 #include <span>
 #include <string>
 
 namespace vice::runtime {
+
+inline constexpr std::uint32_t runtime_gpu_draw_batch_unassigned =
+    std::numeric_limits<std::uint32_t>::max();
 
 struct RuntimeGpuDrawBatch {
     std::uint32_t index_count = 0U;
