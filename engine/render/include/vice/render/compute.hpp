@@ -7,6 +7,11 @@ namespace vice::render {
 
 class ShaderModule;
 
+class ComputePipeline {
+public:
+    virtual ~ComputePipeline() = default;
+};
+
 struct ComputePipelineDesc {
     ShaderModule* compute_shader = nullptr;
     std::string_view debug_name;
