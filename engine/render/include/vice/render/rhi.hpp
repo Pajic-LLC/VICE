@@ -47,6 +47,7 @@ enum class BufferUsage : std::uint32_t {
     storage = 1U << 3U,
     copy_source = 1U << 4U,
     copy_destination = 1U << 5U,
+    indirect = 1U << 6U,
 };
 
 [[nodiscard]] constexpr BufferUsage operator|(const BufferUsage left, const BufferUsage right) noexcept {
@@ -76,6 +77,16 @@ struct BufferDesc {
     MemoryLocation memory = MemoryLocation::gpu_only;
     std::string_view debug_name;
 };
+
+struct IndexedIndirectDrawArguments {
+    std::uint32_t index_count = 0U;
+    std::uint32_t instance_count = 0U;
+    std::uint32_t first_index = 0U;
+    std::int32_t vertex_offset = 0;
+    std::uint32_t first_instance = 0U;
+};
+
+static_assert(sizeof(IndexedIndirectDrawArguments) == 5U * sizeof(std::uint32_t));
 
 enum class TextureDimension : std::uint8_t {
     d1,
@@ -718,6 +729,14 @@ public:
         (void)first_index;
         (void)vertex_offset;
         (void)first_instance;
+        return false;
+    }
+    virtual bool draw_indexed_indirect(
+        Buffer& arguments,
+        std::uint64_t offset = 0U
+    ) {
+        (void)arguments;
+        (void)offset;
         return false;
     }
     virtual bool end_render_pass() = 0;

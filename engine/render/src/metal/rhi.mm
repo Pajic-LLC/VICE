@@ -29,6 +29,7 @@ constexpr NSUInteger metal_shader_converter_argument_buffer_bind_point = 2U;
 constexpr NSUInteger metal_shader_converter_vertex_buffer_base = 6U;
 constexpr NSUInteger metal_shader_converter_vertex_attribute_base = 11U;
 constexpr std::uint64_t metal_descriptor_entry_size = 3U * sizeof(std::uint64_t);
+static_assert(sizeof(IndexedIndirectDrawArguments) == sizeof(MTLDrawIndexedPrimitivesIndirectArguments));
 
 struct alignas(std::uint64_t) MetalDescriptorTableEntry {
     std::uint64_t gpu_address = 0;
@@ -1397,6 +1398,33 @@ public:
                                  instanceCount:instance_count
                                     baseVertex:vertex_offset
                                   baseInstance:first_instance];
+        return true;
+    }
+
+    bool draw_indexed_indirect(
+        Buffer& arguments,
+        const std::uint64_t offset
+    ) override {
+        auto* metal_arguments = dynamic_cast<MetalBuffer*>(&arguments);
+        if (render_encoder_ == nil || !pipeline_bound_ || active_pipeline_ == nullptr ||
+            !index_buffer_bound_ || index_buffer_ == nullptr || index_buffer_->native() == nil ||
+            metal_arguments == nullptr || metal_arguments->native() == nil ||
+            !has_usage(arguments.usage(), BufferUsage::indirect) ||
+            offset % alignof(std::uint32_t) != 0U || offset > arguments.size() ||
+            sizeof(IndexedIndirectDrawArguments) > arguments.size() - offset ||
+            offset > static_cast<std::uint64_t>(std::numeric_limits<NSUInteger>::max()) ||
+            index_offset_ > static_cast<std::uint64_t>(std::numeric_limits<NSUInteger>::max())) {
+            return false;
+        }
+        if (!prepare_draw_resources()) {
+            return false;
+        }
+        [render_encoder_ drawIndexedPrimitives:MTLPrimitiveTypeTriangle
+                                     indexType:index_type(index_format_)
+                                   indexBuffer:index_buffer_->native()
+                             indexBufferOffset:static_cast<NSUInteger>(index_offset_)
+                                indirectBuffer:metal_arguments->native()
+                          indirectBufferOffset:static_cast<NSUInteger>(offset)];
         return true;
     }
 

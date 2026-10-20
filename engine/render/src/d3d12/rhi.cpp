@@ -35,6 +35,7 @@ using Microsoft::WRL::ComPtr;
 constexpr UINT back_buffer_count = 2;
 constexpr std::uint64_t constant_buffer_alignment = 256U;
 constexpr std::uint64_t maximum_constant_buffer_size = 64U * 1024U;
+static_assert(sizeof(IndexedIndirectDrawArguments) == sizeof(D3D12_DRAW_INDEXED_ARGUMENTS));
 
 [[nodiscard]] bool succeeded(const HRESULT result, const char* message) {
     if (SUCCEEDED(result)) {
@@ -988,6 +989,20 @@ public:
         sampler_descriptor_size_ = device_->GetDescriptorHandleIncrementSize(
             D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER
         );
+        D3D12_INDIRECT_ARGUMENT_DESC argument{};
+        argument.Type = D3D12_INDIRECT_ARGUMENT_TYPE_DRAW_INDEXED;
+        D3D12_COMMAND_SIGNATURE_DESC signature{};
+        signature.ByteStride = sizeof(IndexedIndirectDrawArguments);
+        signature.NumArgumentDescs = 1U;
+        signature.pArgumentDescs = &argument;
+        if (!succeeded(
+                device_->CreateCommandSignature(
+                    &signature, nullptr, IID_PPV_ARGS(&draw_indexed_signature_)
+                ),
+                "Direct3D 12 could not create the VICE indexed indirect command signature."
+            )) {
+            return;
+        }
         valid_ = true;
     }
 
@@ -1644,6 +1659,33 @@ public:
             first_index,
             vertex_offset,
             first_instance
+        );
+        return true;
+    }
+
+    bool draw_indexed_indirect(
+        Buffer& arguments,
+        const std::uint64_t offset
+    ) override {
+        auto* native_arguments = dynamic_cast<D3D12Buffer*>(&arguments);
+        if (!render_pass_active_ || !pipeline_bound_ || active_pipeline_ == nullptr ||
+            !index_buffer_bound_ || draw_indexed_signature_ == nullptr ||
+            native_arguments == nullptr || !has_usage(arguments.usage(), BufferUsage::indirect) ||
+            offset % alignof(std::uint32_t) != 0U || offset > arguments.size() ||
+            sizeof(IndexedIndirectDrawArguments) > arguments.size() - offset) {
+            return false;
+        }
+        if (!materialize_graphics_bindings()) {
+            return false;
+        }
+        transition(*native_arguments, D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT);
+        command_list_->ExecuteIndirect(
+            draw_indexed_signature_.Get(),
+            1U,
+            native_arguments->native(),
+            offset,
+            nullptr,
+            0U
         );
         return true;
     }
@@ -2365,6 +2407,7 @@ private:
     ComPtr<ID3D12Device> device_;
     ComPtr<ID3D12CommandAllocator> allocator_;
     ComPtr<ID3D12GraphicsCommandList> command_list_;
+    ComPtr<ID3D12CommandSignature> draw_indexed_signature_;
     std::vector<PendingBinding> pending_bindings_;
     std::vector<PendingBinding> pending_compute_bindings_;
     std::vector<ComPtr<ID3D12DescriptorHeap>> retained_heaps_;
