@@ -70,13 +70,17 @@ inline constexpr std::string_view visibility_hlsl_source = R"(
 cbuffer VisibilityFrame : register(b0) {
     float4 frustum_planes[6];
     uint instance_count;
-    uint3 visibility_padding;
+    uint visibility_padding_0;
+    uint visibility_padding_1;
+    uint visibility_padding_2;
 };
 
 struct VisibilityInput {
     float4 center_radius;
     uint instance_index;
-    uint3 padding;
+    uint padding_0;
+    uint padding_1;
+    uint padding_2;
 };
 
 StructuredBuffer<VisibilityInput> visibility_instances : register(t1);
@@ -113,13 +117,17 @@ using namespace metal;
 struct VisibilityFrame {
     float4 frustum_planes[6];
     uint instance_count;
-    uint3 padding;
+    uint padding_0;
+    uint padding_1;
+    uint padding_2;
 };
 
 struct VisibilityInput {
     float4 center_radius;
     uint instance_index;
-    uint3 padding;
+    uint padding_0;
+    uint padding_1;
+    uint padding_2;
 };
 
 kernel void vice_runtime_visibility_cs(
