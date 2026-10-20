@@ -1,4 +1,33 @@
-oot_signature() == nullptr) {
++        PendingBinding pending;
+         pending.key = binding;
+-        pending.kind = PendingGraphicsBindingKind::storage_texture;
++        pending.kind = PendingBindingKind::storage_texture;
+         pending.texture = native_texture;
+-        upsert_binding(std::move(pending));
++        upsert_binding(pending_bindings_, bindings_dirty_, std::move(pending));
+         return true;
+     }
+ 
+@@ -1412,11 +1451,156 @@
+         if (!binding_allowed(binding, ShaderRegisterClass::sampler) || native_sampler == nullptr) {
+             return false;
+         }
+-        PendingGraphicsBinding pending;
++        PendingBinding pending;
++        pending.key = binding;
++        pending.kind = PendingBindingKind::sampler;
++        pending.sampler = native_sampler;
++        upsert_binding(pending_bindings_, bindings_dirty_, std::move(pending));
++        return true;
++    }
++
++    bool set_compute_pipeline(ComputePipeline& pipeline) override {
++        if (!valid() || render_pass_active_) {
++            return false;
++        }
++        auto* d3d_pipeline = dynamic_cast<D3D12ComputePipeline*>(&pipeline);
++        if (d3d_pipeline == nullptr || d3d_pipeline->state() == nullptr ||
++            d3d_pipeline->root_signature() == nullptr) {
 +            return false;
 +        }
 +        command_list_->SetComputeRootSignature(d3d_pipeline->root_signature());
@@ -139,33 +168,3 @@ oot_signature() == nullptr) {
          return true;
      }
  
-@@ -1514,6 +1698,16 @@
-             active_pipeline_->binding_location(binding) != nullptr;
-     }
- 
-+    [[nodiscard]] bool compute_binding_allowed(
-+        const ShaderBindingKey& binding,
-+        const ShaderRegisterClass expected_class
-+    ) const noexcept {
-+        return !render_pass_active_ && compute_pipeline_bound_ &&
-+            active_compute_pipeline_ != nullptr &&
-+            binding.register_class == expected_class &&
-+            active_compute_pipeline_->binding_location(binding) != nullptr;
-+    }
-+
-     [[nodiscard]] bool all_vertex_buffers_bound() const noexcept {
-         if (active_pipeline_ == nullptr) {
-             return false;
-@@ -1588,47 +1782,35 @@
-         return view.offset % view.structure_stride == 0U && size % view.structure_stride == 0U;
-     }
- 
--    void upsert_binding(PendingGraphicsBinding pending) {
-+    static void upsert_binding(
-+        std::vector<PendingBinding>& bindings,
-+        bool& dirty,
-+        PendingBinding pending
-+    ) {
-         const auto found = std::find_if(
--            pending_bindings_.begin(),
--
