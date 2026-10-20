@@ -29,7 +29,9 @@ This keeps project shader cooking and backend resource binding on one namespace 
 
 All three counts must be greater than zero. VICE rejects a dispatch with any zero dimension instead of relying on backend-specific behavior.
 
-Thread-group size remains shader-authored. The dispatch contract describes only the number of groups submitted by the engine.
+Thread-group size remains shader-authored. `ComputeThreadGroupSize` belongs to the compute pipeline and records the shader's threads-per-group dimensions. For cooked HLSL, the shader cooker reflects DXC `NumThreads=(x,y,z)` metadata from the authored `[numthreads(x,y,z)]` declaration, writes it into the cooked shader manifest, and the loader exposes the same value to pipeline creation.
+
+The dispatch contract describes only the number of groups submitted by the engine. Backends must not infer authored group dimensions from hardware properties such as Metal `threadExecutionWidth`. Direct3D 12 validates the authored dimensions against shader-model limits; Metal validates the total thread count against the created compute pipeline's supported maximum.
 
 ## Command state
 
@@ -53,7 +55,7 @@ Metal and Direct3D 12 remain equal Tier 1 implementations.
 
 The Metal path should use a compute pipeline state and compute command encoder behind the VICE interface. The Direct3D 12 path should use a compute pipeline state, the existing VICE-owned root-signature/resource-layout machinery, and `Dispatch` behind the same interface.
 
-Backend differences such as Metal thread execution width or Direct3D 12 descriptor-table layout remain implementation details.
+Backend differences such as Metal thread execution width or Direct3D 12 descriptor-table layout remain implementation details. They may constrain a pipeline, but they do not redefine shader-authored execution semantics.
 
 ## First validation target
 
@@ -66,6 +68,8 @@ The first native smoke path should:
 5. verify the expected values on the CPU
 
 That test proves pipeline creation, resource binding, dispatch, synchronization, storage writes and readback without coupling the milestone to a larger renderer feature.
+
+Both Tier 1 primitive paths should prove this behavior independently before the same scenario is promoted to a public-RHI regression. This keeps backend failures isolated while the public adapter is introduced.
 
 ## Stage C handoff
 
