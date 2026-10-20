@@ -8,6 +8,7 @@
 #include <array>
 #include <cassert>
 #include <cstddef>
+#include <string>
 
 int main() {
     using Microsoft::WRL::ComPtr;
