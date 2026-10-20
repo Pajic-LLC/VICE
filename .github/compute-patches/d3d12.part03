@@ -1,4 +1,46 @@
-required shader resource bindings.");
++        case PendingBindingKind::storage_buffer:
+             return create_buffer_uav(pending, handle);
+-        case PendingGraphicsBindingKind::texture:
++        case PendingBindingKind::texture:
+             return create_texture_srv(pending, handle);
+-        case PendingGraphicsBindingKind::storage_texture:
++        case PendingBindingKind::storage_texture:
+             return create_texture_uav(pending, handle);
+-        case PendingGraphicsBindingKind::sampler:
++        case PendingBindingKind::sampler:
+             if (pending.sampler == nullptr) {
+                 return false;
+             }
+@@ -1962,22 +2143,30 @@
+         return false;
+     }
+ 
+-    [[nodiscard]] bool materialize_graphics_bindings() {
+-        if (active_pipeline_ == nullptr) {
+-            return false;
+-        }
+-        const auto& root = active_pipeline_->root_layout();
++    [[nodiscard]] bool materialize_bindings(
++        const D3D12RootSignatureResult& root,
++        const std::vector<PendingBinding>& bindings,
++        ComPtr<ID3D12DescriptorHeap>& active_resource_heap,
++        ComPtr<ID3D12DescriptorHeap>& active_sampler_heap,
++        bool& dirty,
++        const bool compute
++    ) {
+         if (root.bindings.empty()) {
+             return true;
+         }
+-        if (!bindings_dirty_) {
+-            return active_resource_heap_ != nullptr || active_sampler_heap_ != nullptr;
++        if (!dirty) {
++            return active_resource_heap != nullptr || active_sampler_heap != nullptr;
+         }
+ 
+         for (const auto& location : root.bindings) {
+             std::uint32_t required_count = 0;
+-            if (!binding_set_is_complete(location, required_count)) {
+-                core::log(core::LogLevel::error, "VICE draw is missing one or more required shader resource bindings.");
 +            if (!binding_set_is_complete(bindings, location, required_count)) {
 +                core::log(
 +                    core::LogLevel::error,
@@ -126,30 +168,3 @@ required shader resource bindings.");
 +        }
 +        auto built = d3d12_detail::build_compute_pipeline(
 +            *device_.Get(),
-+            compute->native_bytecode(),
-+            compute->resources(),
-+            desc.thread_group_size
-+        );
-+        if (!built.success) {
-+            core::log(
-+                core::LogLevel::error,
-+                built.diagnostics.empty()
-+                    ? "Direct3D 12 could not create the VICE compute pipeline."
-+                    : built.diagnostics
-+            );
-+            return nullptr;
-+        }
-+        if (const auto name = wide_name(desc.debug_name); !name.empty()) {
-+            (void)built.pipeline_state->SetName(name.c_str());
-+        }
-+        return std::make_unique<D3D12ComputePipeline>(
-+            std::move(built.root_signature),
-+            std::move(built.pipeline_state),
-+            std::move(built.root_layout),
-+            built.thread_group_size
-+        );
-+    }
-+
-     [[nodiscard]] std::unique_ptr<CommandList> create_command_list() override {
-         auto command_list = std::make_unique<D3D12CommandList>(device_);
-         if (!command_list->valid()) {
