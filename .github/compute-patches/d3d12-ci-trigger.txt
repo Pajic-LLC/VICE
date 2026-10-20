@@ -1,2 +1,0 @@
-D3D12 public compute RHI integration landed at 0851b0f2272a6a63b26b3e57ffe953ac57860240.
-This temporary marker exists only to trigger exact-head CI after the GitHub Actions-authored source commit.
