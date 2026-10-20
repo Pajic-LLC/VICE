@@ -3,9 +3,12 @@
 
 #include <algorithm>
 #include <array>
+#include <cstddef>
 #include <cstdint>
 #include <iostream>
+#include <memory>
 #include <span>
+#include <string>
 #include <vector>
 
 namespace {
