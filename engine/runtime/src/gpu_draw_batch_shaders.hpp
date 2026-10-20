@@ -19,9 +19,9 @@ inline constexpr std::array gpu_batch_compact_resources{
 
 inline constexpr std::array gpu_batch_finalize_resources{
     render::ShaderResourceBindingDesc{render::ShaderRegisterClass::constant_buffer, 0U, 0U, 1U, false},
-    render::ShaderResourceBindingDesc{render::ShaderRegisterClass::unordered_access, 1U, 0U, 1U, false},
-    render::ShaderResourceBindingDesc{render::ShaderRegisterClass::unordered_access, 2U, 0U, 1U, false},
-    render::ShaderResourceBindingDesc{render::ShaderRegisterClass::unordered_access, 3U, 0U, 1U, false},
+    render::ShaderResourceBindingDesc{render::ShaderRegisterClass::unordered_access, 7U, 0U, 1U, false},
+    render::ShaderResourceBindingDesc{render::ShaderRegisterClass::unordered_access, 8U, 0U, 1U, false},
+    render::ShaderResourceBindingDesc{render::ShaderRegisterClass::unordered_access, 9U, 0U, 1U, false},
 };
 
 inline constexpr render::ShaderBindingKey gpu_batch_constants_binding{
@@ -47,13 +47,13 @@ inline constexpr render::ShaderBindingKey gpu_batch_compacted_binding{
 };
 
 inline constexpr render::ShaderBindingKey gpu_batch_finalize_metadata_binding{
-    render::ShaderRegisterClass::unordered_access, 1U, 0U, 0U
+    render::ShaderRegisterClass::unordered_access, 7U, 0U, 0U
 };
 inline constexpr render::ShaderBindingKey gpu_batch_finalize_counts_binding{
-    render::ShaderRegisterClass::unordered_access, 2U, 0U, 0U
+    render::ShaderRegisterClass::unordered_access, 8U, 0U, 0U
 };
 inline constexpr render::ShaderBindingKey gpu_batch_indirect_binding{
-    render::ShaderRegisterClass::unordered_access, 3U, 0U, 0U
+    render::ShaderRegisterClass::unordered_access, 9U, 0U, 0U
 };
 
 inline constexpr std::string_view gpu_batch_hlsl_source = R"(
@@ -98,9 +98,9 @@ void vice_runtime_batch_compact_cs(uint3 dispatch_id : SV_DispatchThreadID) {
     }
 }
 
-RWStructuredBuffer<BatchMetadata> finalize_metadata : register(u1);
-RWStructuredBuffer<uint> finalize_counts : register(u2);
-RWStructuredBuffer<uint> indirect_words : register(u3);
+RWStructuredBuffer<BatchMetadata> finalize_metadata : register(u7);
+RWStructuredBuffer<uint> finalize_counts : register(u8);
+RWStructuredBuffer<uint> indirect_words : register(u9);
 
 [numthreads(64, 1, 1)]
 void vice_runtime_batch_finalize_cs(uint3 dispatch_id : SV_DispatchThreadID) {
@@ -164,9 +164,9 @@ kernel void vice_runtime_batch_compact_cs(
 
 kernel void vice_runtime_batch_finalize_cs(
     constant BatchConstants& constants [[buffer(0)]],
-    device BatchMetadata* metadata [[buffer(1)]],
-    device uint* counts [[buffer(2)]],
-    device uint* indirect_words [[buffer(3)]],
+    device BatchMetadata* metadata [[buffer(7)]],
+    device uint* counts [[buffer(8)]],
+    device uint* indirect_words [[buffer(9)]],
     uint3 dispatch_id [[thread_position_in_grid]]) {
     const uint batch_index = dispatch_id.x;
     if (batch_index >= constants.batch_count) return;
