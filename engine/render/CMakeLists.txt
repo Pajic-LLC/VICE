@@ -49,6 +49,7 @@ elseif(WIN32)
   target_sources(
     vice_render
     PRIVATE
+      src/d3d12/compute_pipeline.cpp
       src/d3d12/rhi.cpp
       src/d3d12/root_signature.cpp
   )
