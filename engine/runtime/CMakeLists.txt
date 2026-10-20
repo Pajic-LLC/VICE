@@ -4,6 +4,7 @@ add_library(
     src/environment_pipeline.cpp
     src/gpu_draw_batches.cpp
     src/gpu_instance_table.cpp
+    src/gpu_material_table.cpp
     src/material_pipeline.cpp
     src/module_loader.cpp
     src/module_paths.cpp
