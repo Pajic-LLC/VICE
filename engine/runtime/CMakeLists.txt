@@ -3,6 +3,7 @@ add_library(
   STATIC
     src/environment_pipeline.cpp
     src/gpu_draw_batches.cpp
+    src/gpu_instance_materials.cpp
     src/gpu_instance_table.cpp
     src/gpu_material_resources.cpp
     src/gpu_material_table.cpp
