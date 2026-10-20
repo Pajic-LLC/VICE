@@ -1,0 +1,34 @@
+name: Fix 206 compiler include
+
+on:
+  push:
+    branches:
+      - feature/206-metal-unbounded-descriptors
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: feature/206-metal-unbounded-descriptors
+      - name: Add algorithm include
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('tools/shader_cooker/src/shader_cooker.cpp')
+          text = path.read_text()
+          if '#include <algorithm>\n' not in text:
+              text = text.replace('#include <array>\n', '#include <algorithm>\n#include <array>\n', 1)
+              path.write_text(text)
+          PY
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add tools/shader_cooker/src/shader_cooker.cpp
+          git diff --cached --quiet || git commit -m "Include algorithm for explicit Metal layout detection"
+          git push
