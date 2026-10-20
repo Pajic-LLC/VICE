@@ -37,10 +37,6 @@ constexpr std::uint64_t descriptor_entry_size = 3U * sizeof(std::uint64_t);
     }
 
     for (const auto& resource : resources) {
-        if (resource.unbounded) {
-            diagnostics = "Metal automatic compute layout does not support unbounded resource ranges.";
-            return false;
-        }
         const auto found = std::find_if(
             locations.begin(),
             locations.end(),
@@ -50,6 +46,17 @@ constexpr std::uint64_t descriptor_entry_size = 3U * sizeof(std::uint64_t);
         );
         if (found == locations.end()) {
             diagnostics = "Metal compute shader is missing a converter-reflected resource location.";
+            return false;
+        }
+        if (found->model == MetalShaderResourceBindingModel::descriptor_table) {
+            if (found->size != sizeof(std::uint64_t)) {
+                diagnostics = "Metal compute descriptor-table root location must contain one GPU address.";
+                return false;
+            }
+            continue;
+        }
+        if (resource.unbounded) {
+            diagnostics = "Metal unbounded compute ranges require an explicit descriptor table.";
             return false;
         }
         const std::uint64_t required =
