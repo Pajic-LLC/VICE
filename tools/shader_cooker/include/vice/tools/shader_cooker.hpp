@@ -28,6 +28,12 @@ enum class ShaderRegisterClass {
     sampler,
 };
 
+struct ComputeThreadGroupReflection {
+    std::uint32_t x = 1U;
+    std::uint32_t y = 1U;
+    std::uint32_t z = 1U;
+};
+
 struct ShaderResourceReflection {
     std::string name;
     ShaderRegisterClass register_class = ShaderRegisterClass::shader_resource;
@@ -43,6 +49,7 @@ struct ShaderResourceReflection {
 struct ShaderReflection {
     bool valid = false;
     std::vector<ShaderResourceReflection> resources;
+    std::optional<ComputeThreadGroupReflection> thread_group_size;
     std::string diagnostics;
 };
 
