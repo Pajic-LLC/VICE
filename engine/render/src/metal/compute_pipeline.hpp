@@ -16,6 +16,7 @@ struct ComputePipelineBuildResult {
     id<MTLComputePipelineState> pipeline_state = nil;
     PipelineLayout layout;
     std::vector<MetalShaderResourceLocationDesc> locations;
+    ComputeThreadGroupSize thread_group_size{};
     std::string diagnostics;
 };
 
@@ -23,7 +24,8 @@ struct ComputePipelineBuildResult {
     id<MTLDevice> device,
     id<MTLFunction> function,
     std::span<const ShaderResourceBindingDesc> resources,
-    std::span<const MetalShaderResourceLocationDesc> locations
+    std::span<const MetalShaderResourceLocationDesc> locations,
+    ComputeThreadGroupSize thread_group_size = {}
 );
 
 } // namespace vice::render::metal_detail
