@@ -5,6 +5,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <string_view>
 
 #define CHECK(condition) do { if (!(condition)) return __LINE__; } while (false)
 
@@ -16,7 +17,7 @@ int main() {
         id<MTLDevice> device = MTLCreateSystemDefaultDevice();
         CHECK(device != nil);
 
-        constexpr const char* source_text = R"MSL(
+        constexpr std::string_view source_text = R"MSL(
 #include <metal_stdlib>
 using namespace metal;
 
@@ -28,18 +29,8 @@ kernel void vice_compute_test(
 }
 )MSL";
         NSString* source = [[NSString alloc]
-            initWithBytes:source_text
-            length:sizeof(R"MSL(
-#include <metal_stdlib>
-using namespace metal;
-
-kernel void vice_compute_test(
-    device uint* output [[buffer(0)]],
-    uint index [[thread_position_in_grid]])
-{
-    output[index] = 0xBEEF0000u + index;
-}
-)MSL") - 1U
+            initWithBytes:source_text.data()
+            length:source_text.size()
             encoding:NSUTF8StringEncoding];
         CHECK(source != nil);
 
@@ -58,17 +49,26 @@ kernel void vice_compute_test(
                 .unbounded = false,
             },
         };
+        constexpr ComputeThreadGroupSize group_size{
+            .x = 4U,
+            .y = 1U,
+            .z = 1U,
+        };
 
         const ComputePipelineBuildResult pipeline = build_compute_pipeline(
             device,
             function,
             resources,
-            {}
+            {},
+            group_size
         );
         CHECK(pipeline.success);
         CHECK(pipeline.pipeline_state != nil);
         CHECK(pipeline.layout.valid);
         CHECK(pipeline.layout.resources.size() == 1U);
+        CHECK(pipeline.thread_group_size.x == 4U);
+        CHECK(pipeline.thread_group_size.y == 1U);
+        CHECK(pipeline.thread_group_size.z == 1U);
         CHECK(pipeline.diagnostics.empty());
 
         constexpr NSUInteger element_count = 4U;
@@ -88,7 +88,11 @@ kernel void vice_compute_test(
         [compute setBuffer:output offset:0U atIndex:0U];
         [compute useResource:output usage:MTLResourceUsageWrite];
         [compute dispatchThreadgroups:MTLSizeMake(1U, 1U, 1U)
-                 threadsPerThreadgroup:MTLSizeMake(element_count, 1U, 1U)];
+                 threadsPerThreadgroup:MTLSizeMake(
+                     pipeline.thread_group_size.x,
+                     pipeline.thread_group_size.y,
+                     pipeline.thread_group_size.z
+                 )];
         [compute endEncoding];
 
         id<MTLBlitCommandEncoder> blit = [commands blitCommandEncoder];
@@ -114,7 +118,8 @@ kernel void vice_compute_test(
             nil,
             function,
             resources,
-            {}
+            {},
+            group_size
         );
         CHECK(!invalid.success);
         CHECK(!invalid.diagnostics.empty());
