@@ -1,6 +1,7 @@
 add_library(
   vice_shader_cooker_lib STATIC
   src/shader_cooker.cpp
+  src/compute_reflection.cpp
   src/metal_reflection.cpp
 )
 add_library(VICE::ShaderCooker ALIAS vice_shader_cooker_lib)
