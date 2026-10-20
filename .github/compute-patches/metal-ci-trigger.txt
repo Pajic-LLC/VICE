@@ -1,0 +1,2 @@
+Metal public compute RHI integration landed at 0ac63e3e05b85398b485e8cf6a9b8634cd2cd426.
+This temporary marker exists only to trigger exact-head CI after the GitHub Actions-authored source commit.
