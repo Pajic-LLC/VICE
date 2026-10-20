@@ -9,6 +9,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <string_view>
 
 #define CHECK(condition) do { if (!(condition)) return __LINE__; } while (false)
 
@@ -31,7 +32,7 @@ int main() {
     )));
     CHECK(device != nullptr);
 
-    constexpr const char* source = R"HLSL(
+    constexpr std::string_view source = R"HLSL(
 RWStructuredBuffer<uint> OutputBuffer : register(u7, space3);
 
 [numthreads(4, 1, 1)]
@@ -43,15 +44,8 @@ void main(uint3 dispatch_id : SV_DispatchThreadID) {
     ComPtr<ID3DBlob> shader;
     ComPtr<ID3DBlob> errors;
     const HRESULT compile_status = D3DCompile(
-        source,
-        sizeof(R"HLSL(
-RWStructuredBuffer<uint> OutputBuffer : register(u7, space3);
-
-[numthreads(4, 1, 1)]
-void main(uint3 dispatch_id : SV_DispatchThreadID) {
-    OutputBuffer[dispatch_id.x] = 0xCAFE0000u + dispatch_id.x;
-}
-)HLSL") - 1U,
+        source.data(),
+        source.size(),
         "vice_compute_pipeline_test",
         nullptr,
         nullptr,
@@ -80,7 +74,7 @@ void main(uint3 dispatch_id : SV_DispatchThreadID) {
         .BytecodeLength = shader->GetBufferSize(),
     };
     const ComputePipelineBuildResult pipeline = build_compute_pipeline(
-        *device,
+        *device.Get(),
         bytecode,
         resources
     );
@@ -239,7 +233,7 @@ void main(uint3 dispatch_id : SV_DispatchThreadID) {
     readback->Unmap(0U, &written_range);
 
     const ComputePipelineBuildResult empty_shader = build_compute_pipeline(
-        *device,
+        *device.Get(),
         D3D12_SHADER_BYTECODE{},
         resources
     );
