@@ -166,6 +166,32 @@ int main() {
     CHECK(manifest.resources[1].count == 2U);
     CHECK(manifest.metal_resource_locations[1].argument_buffer_offset == 24U);
     CHECK(manifest.metal_resource_locations[1].size == 48U);
+    CHECK(manifest.metal_resource_locations[1].model ==
+        MetalShaderResourceBindingModel::automatic_linear);
+
+    std::string explicit_manifest{valid_manifest};
+    auto replace_all = [&](const std::string_view from, const std::string_view to) {
+        std::size_t position = 0U;
+        while ((position = explicit_manifest.find(from, position)) != std::string::npos) {
+            explicit_manifest.replace(position, from.size(), to);
+            position += to.size();
+        }
+    };
+    replace_all("\"version\": 4", "\"version\": 5");
+    replace_all("\"version\": 2", "\"version\": 3");
+    replace_all("\"automatic_linear\"", "\"explicit_descriptor_tables\"");
+    replace_all("\"size\": 24", "\"size\": 8");
+    replace_all("\"argument_buffer_offset\": 24", "\"argument_buffer_offset\": 8");
+    replace_all("\"size\": 48", "\"size\": 8");
+    replace_all("\"count\": 2,\n        \"unbounded\": false", "\"count\": 0,\n        \"unbounded\": true");
+    const CookedShaderManifest explicit_parsed = parse_cooked_shader_manifest(explicit_manifest);
+    CHECK(explicit_parsed.valid);
+    CHECK(explicit_parsed.version == 5U);
+    CHECK(explicit_parsed.resources[1].unbounded);
+    CHECK(explicit_parsed.metal_resource_locations[1].model ==
+        MetalShaderResourceBindingModel::descriptor_table);
+    CHECK(explicit_parsed.metal_resource_locations[1].argument_buffer_offset == 8U);
+    CHECK(explicit_parsed.metal_resource_locations[1].size == sizeof(std::uint64_t));
 
     std::string old_version{valid_manifest};
     const std::size_t version_position = old_version.find("\"version\": 4");

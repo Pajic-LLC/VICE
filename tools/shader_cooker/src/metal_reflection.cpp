@@ -231,6 +231,7 @@ MetalBindingReflection parse_metal_shader_converter_reflection(
     const ShaderReflection& logical_reflection
 ) {
     MetalBindingReflection result;
+    result.model = MetalBindingModel::automatic_linear;
     if (!logical_reflection.valid) {
         result.diagnostics = "Metal reflection requires valid DXC logical reflection.";
         return result;
@@ -376,6 +377,96 @@ MetalBindingReflection parse_metal_shader_converter_reflection(
 
     result.valid = true;
     return result;
+}
+
+MetalBindingReflection build_explicit_metal_binding(
+    const ShaderReflection& logical_reflection
+) {
+    MetalBindingReflection result;
+    result.model = MetalBindingModel::explicit_descriptor_tables;
+    if (!logical_reflection.valid) {
+        result.diagnostics = "Metal explicit layout requires valid DXC logical reflection.";
+        return result;
+    }
+    if (logical_reflection.resources.size() >
+        std::numeric_limits<std::uint32_t>::max() / sizeof(std::uint64_t)) {
+        result.diagnostics = "Metal explicit layout has too many root parameters.";
+        return result;
+    }
+    result.locations.reserve(logical_reflection.resources.size());
+    for (std::size_t index = 0U; index < logical_reflection.resources.size(); ++index) {
+        const auto& resource = logical_reflection.resources[index];
+        result.locations.push_back(MetalResourceLocationReflection{
+            .register_class = resource.register_class,
+            .binding = resource.binding,
+            .space = resource.space,
+            .argument_buffer_offset = static_cast<std::uint32_t>(index * sizeof(std::uint64_t)),
+            .size = static_cast<std::uint32_t>(sizeof(std::uint64_t)),
+            .descriptor_table = true,
+        });
+    }
+    result.valid = true;
+    return result;
+}
+
+std::string build_metal_root_signature_json(
+    const ShaderStage stage,
+    const ShaderReflection& logical_reflection
+) {
+    if (!logical_reflection.valid) return {};
+    const auto range_type = [](const ShaderRegisterClass register_class) -> std::string_view {
+        switch (register_class) {
+        case ShaderRegisterClass::constant_buffer: return "IRDescriptorRangeTypeCBV";
+        case ShaderRegisterClass::shader_resource: return "IRDescriptorRangeTypeSRV";
+        case ShaderRegisterClass::unordered_access: return "IRDescriptorRangeTypeUAV";
+        case ShaderRegisterClass::sampler: return "IRDescriptorRangeTypeSampler";
+        }
+        return {};
+    };
+    const auto visibility = [](const ShaderStage shader_stage) -> std::string_view {
+        switch (shader_stage) {
+        case ShaderStage::vertex: return "IRShaderVisibilityVertex";
+        case ShaderStage::fragment: return "IRShaderVisibilityPixel";
+        case ShaderStage::compute: return "IRShaderVisibilityAll";
+        }
+        return "IRShaderVisibilityAll";
+    };
+
+    std::string json;
+    json += "{\n  \"RootSignature\": {\n";
+    json += "    \"Flags\": \"IRRootSignatureFlagNone\",\n";
+    json += "    \"NumParameters\": " + std::to_string(logical_reflection.resources.size()) + ",\n";
+    json += "    \"NumStaticSamplers\": 0,\n";
+    json += "    \"Parameters\": [";
+    if (!logical_reflection.resources.empty()) json += "\n";
+    for (std::size_t index = 0U; index < logical_reflection.resources.size(); ++index) {
+        const auto& resource = logical_reflection.resources[index];
+        const std::uint32_t descriptor_count = resource.unbounded
+            ? std::numeric_limits<std::uint32_t>::max()
+            : resource.count;
+        json += "      {\n";
+        json += "        \"DescriptorTable\": {\n";
+        json += "          \"DescriptorRanges\": [\n";
+        json += "            {\n";
+        json += "              \"BaseShaderRegister\": " + std::to_string(resource.binding) + ",\n";
+        json += "              \"Flags\": \"IRDescriptorRangeFlagDescriptorsVolatile\",\n";
+        json += "              \"NumDescriptors\": " + std::to_string(descriptor_count) + ",\n";
+        json += "              \"OffsetInDescriptorsFromTableStart\": 0,\n";
+        json += "              \"RangeType\": \"" + std::string{range_type(resource.register_class)} + "\",\n";
+        json += "              \"RegisterSpace\": " + std::to_string(resource.space) + "\n";
+        json += "            }\n";
+        json += "          ],\n";
+        json += "          \"NumDescriptorRanges\": 1\n";
+        json += "        },\n";
+        json += "        \"ParameterType\": \"IRRootParameterTypeDescriptorTable\",\n";
+        json += "        \"ShaderVisibility\": \"" + std::string{visibility(stage)} + "\"\n";
+        json += "      }";
+        if (index + 1U != logical_reflection.resources.size()) json += ',';
+        json += "\n";
+    }
+    json += "    ],\n    \"StaticSamplers\": []\n  },\n";
+    json += "  \"version\": \"IRRootSignatureVersion_1_1\"\n}\n";
+    return json;
 }
 
 } // namespace vice::tools::shader_cooker

@@ -460,7 +460,7 @@ CookedShaderManifest parse_cooked_shader_manifest(const std::string_view json) {
         manifest.diagnostics = "Shader manifest identity fields are missing or invalid.";
         return manifest;
     }
-    if (*version != 4U) {
+    if (*version != 4U && *version != 5U) {
         manifest.diagnostics = "Unsupported shader manifest version: " + std::to_string(*version) + ".";
         return manifest;
     }
@@ -581,16 +581,23 @@ CookedShaderManifest parse_cooked_shader_manifest(const std::string_view json) {
     }
 
     const JsonValue* metal_binding = member(root, "metal_binding");
+    const auto metal_binding_version = metal_binding != nullptr
+        ? uint32_member(*metal_binding, "version") : std::nullopt;
     if (metal_binding == nullptr || metal_binding->kind != JsonKind::object ||
-        uint32_member(*metal_binding, "version") != 2U ||
+        !metal_binding_version.has_value() ||
+        (*metal_binding_version != 2U && *metal_binding_version != 3U) ||
         uint32_member(*metal_binding, "descriptor_entry_size") != 24U) {
         manifest.diagnostics = "Shader manifest Metal binding metadata is missing or unsupported.";
         return manifest;
     }
     const JsonValue* model = member(*metal_binding, "model");
+    const bool automatic_model = model != nullptr && model->kind == JsonKind::string &&
+        model->string == "automatic_linear";
+    const bool explicit_model = model != nullptr && model->kind == JsonKind::string &&
+        model->string == "explicit_descriptor_tables";
     if (model == nullptr ||
-        (model->kind != JsonKind::null_value &&
-            (model->kind != JsonKind::string || model->string != "automatic_linear"))) {
+        (model->kind != JsonKind::null_value && !automatic_model && !explicit_model) ||
+        (explicit_model && (*version < 5U || *metal_binding_version < 3U))) {
         manifest.diagnostics = "Shader manifest contains an unsupported Metal binding model.";
         return manifest;
     }
@@ -630,6 +637,9 @@ CookedShaderManifest parse_cooked_shader_manifest(const std::string_view json) {
             .space = *space,
             .argument_buffer_offset = *offset,
             .size = *size,
+            .model = explicit_model
+                ? MetalShaderResourceBindingModel::descriptor_table
+                : MetalShaderResourceBindingModel::automatic_linear,
         };
         if (!is_valid(location)) {
             manifest.diagnostics = "Shader manifest contains an invalid Metal resource location.";
@@ -653,8 +663,10 @@ CookedShaderManifest parse_cooked_shader_manifest(const std::string_view json) {
                     location.binding == resource.binding && location.space == resource.space;
             }
         );
-        if (logical == manifest.resources.end() || logical->unbounded ||
-            static_cast<std::uint64_t>(logical->count) * 24U > location.size) {
+        if (logical == manifest.resources.end() ||
+            (automatic_model && (logical->unbounded ||
+                static_cast<std::uint64_t>(logical->count) * 24U > location.size)) ||
+            (explicit_model && location.size != sizeof(std::uint64_t))) {
             manifest.diagnostics = "Shader manifest Metal location does not match logical reflection.";
             return manifest;
         }
