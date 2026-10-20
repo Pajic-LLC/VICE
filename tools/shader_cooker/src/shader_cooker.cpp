@@ -479,11 +479,16 @@ struct BindingLocation {
     const std::optional<MetalBindingReflection>& metal_binding,
     const ShaderReflection& reflection
 ) {
+    const bool explicit_metal_binding = metal_binding.has_value() &&
+        metal_binding->model == MetalBindingModel::explicit_descriptor_tables;
+    const std::uint32_t manifest_version = explicit_metal_binding ? 5U : 4U;
+    const std::uint32_t metal_binding_version = explicit_metal_binding ? 3U : 2U;
+
     std::ostringstream manifest;
     manifest
         << "{\n"
         << "  \"format\": \"vice.shader\",\n"
-        << "  \"version\": 5,\n"
+        << "  \"version\": " << manifest_version << ",\n"
         << "  \"cache_key\": \"" << json_escape(cache_key) << "\",\n"
         << "  \"source\": \"" << json_escape(request.input.filename().string()) << "\",\n"
         << "  \"entry_point\": \"" << json_escape(request.entry_point) << "\",\n"
@@ -513,7 +518,7 @@ struct BindingLocation {
     manifest
         << "  },\n"
         << "  \"metal_binding\": {\n"
-        << "    \"version\": 3,\n"
+        << "    \"version\": " << metal_binding_version << ",\n"
         << "    \"model\": ";
     if (metal_binding.has_value()) {
         manifest << (metal_binding->model == MetalBindingModel::explicit_descriptor_tables
