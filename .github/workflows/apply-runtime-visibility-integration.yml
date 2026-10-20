@@ -54,60 +54,62 @@ jobs:
                   raise SystemExit(f"missing scene patch context: {old[:72]!r}")
               text = text.replace(old, new, 1)
 
-          anchor = '''    auto commands = state_->device->create_command_list();
-          if (!commands) {
-              set_diagnostics(diagnostics, "VICE Runtime could not create scene commands.");
-              return false;
-          }
-          '''
-          block = anchor + '''
-          if (instances.size() > std::numeric_limits<std::uint32_t>::max()) {
-              set_diagnostics(diagnostics, "Runtime scene instance count exceeds the GPU visibility contract.");
-              return false;
-          }
-          const auto visibility_frustum = runtime_visibility_frustum(
-              runtime_camera.forward,
-              runtime_camera.up,
-              runtime_camera.camera.vertical_fov_radians,
-              runtime_camera.aspect_ratio,
-              runtime_camera.camera.near_plane,
-              runtime_camera.camera.far_plane
-          );
-          if (!valid(visibility_frustum)) {
-              set_diagnostics(diagnostics, "VICE Runtime could not build the camera visibility frustum.");
-              return false;
-          }
-          std::vector<RuntimeVisibilitySphere> visibility_spheres;
-          visibility_spheres.reserve(instances.size());
-          for (std::size_t instance_index = 0U; instance_index < instances.size(); ++instance_index) {
-              const auto& instance = instances[instance_index];
-              const auto& mesh = state_->meshes.at(instance.mesh);
-              const auto sphere = runtime_transform_bounding_sphere(
-                  mesh.bounds,
-                  runtime_model_matrix_relative_to(instance, camera_global_position)
-              );
-              if (!valid(sphere)) {
-                  set_diagnostics(diagnostics, "VICE Runtime produced an invalid mesh visibility sphere.");
-                  return false;
-              }
-              visibility_spheres.push_back(RuntimeVisibilitySphere{
-                  .center = sphere.center,
-                  .radius = sphere.radius,
-                  .instance_index = static_cast<std::uint32_t>(instance_index),
-              });
-          }
-          if (!state_->visibility.cull(
-                  *commands,
-                  visibility_spheres,
-                  visibility_frustum,
-                  diagnostics
-              )) {
-              return false;
-          }
-          '''
+          anchor = (
+              "    auto commands = state_->device->create_command_list();\n"
+              "    if (!commands) {\n"
+              "        set_diagnostics(diagnostics, \"VICE Runtime could not create scene commands.\");\n"
+              "        return false;\n"
+              "    }\n"
+          )
+          addition = (
+              "\n"
+              "    if (instances.size() > std::numeric_limits<std::uint32_t>::max()) {\n"
+              "        set_diagnostics(diagnostics, \"Runtime scene instance count exceeds the GPU visibility contract.\");\n"
+              "        return false;\n"
+              "    }\n"
+              "    const auto visibility_frustum = runtime_visibility_frustum(\n"
+              "        runtime_camera.forward,\n"
+              "        runtime_camera.up,\n"
+              "        runtime_camera.camera.vertical_fov_radians,\n"
+              "        runtime_camera.aspect_ratio,\n"
+              "        runtime_camera.camera.near_plane,\n"
+              "        runtime_camera.camera.far_plane\n"
+              "    );\n"
+              "    if (!valid(visibility_frustum)) {\n"
+              "        set_diagnostics(diagnostics, \"VICE Runtime could not build the camera visibility frustum.\");\n"
+              "        return false;\n"
+              "    }\n"
+              "    std::vector<RuntimeVisibilitySphere> visibility_spheres;\n"
+              "    visibility_spheres.reserve(instances.size());\n"
+              "    for (std::size_t instance_index = 0U; instance_index < instances.size(); ++instance_index) {\n"
+              "        const auto& instance = instances[instance_index];\n"
+              "        const auto& mesh = state_->meshes.at(instance.mesh);\n"
+              "        const auto sphere = runtime_transform_bounding_sphere(\n"
+              "            mesh.bounds,\n"
+              "            runtime_model_matrix_relative_to(instance, camera_global_position)\n"
+              "        );\n"
+              "        if (!valid(sphere)) {\n"
+              "            set_diagnostics(diagnostics, \"VICE Runtime produced an invalid mesh visibility sphere.\");\n"
+              "            return false;\n"
+              "        }\n"
+              "        visibility_spheres.push_back(RuntimeVisibilitySphere{\n"
+              "            .center = sphere.center,\n"
+              "            .radius = sphere.radius,\n"
+              "            .instance_index = static_cast<std::uint32_t>(instance_index),\n"
+              "        });\n"
+              "    }\n"
+              "    if (!state_->visibility.cull(\n"
+              "            *commands,\n"
+              "            visibility_spheres,\n"
+              "            visibility_frustum,\n"
+              "            diagnostics\n"
+              "        )) {\n"
+              "        return false;\n"
+              "    }\n"
+          )
           if anchor not in text:
               raise SystemExit("missing scene command-list patch context")
-          text = text.replace(anchor, block, 1)
+          text = text.replace(anchor, anchor + addition, 1)
           path.write_text(text)
           PY
 
