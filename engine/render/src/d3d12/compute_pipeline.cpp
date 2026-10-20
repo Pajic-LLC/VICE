@@ -3,13 +3,31 @@
 #include <vice/render/pipeline_layout.hpp>
 
 namespace vice::render::d3d12_detail {
+namespace {
+
+[[nodiscard]] constexpr bool valid_d3d12_thread_group(
+    const ComputeThreadGroupSize& size
+) noexcept {
+    return is_valid(size) &&
+        size.x <= 1'024U &&
+        size.y <= 1'024U &&
+        size.z <= 64U &&
+        thread_count(size) <= 1'024U;
+}
+
+} // namespace
 
 ComputePipelineBuildResult build_compute_pipeline(
     ID3D12Device& device,
     const D3D12_SHADER_BYTECODE shader,
-    const std::span<const ShaderResourceBindingDesc> resources
+    const std::span<const ShaderResourceBindingDesc> resources,
+    const ComputeThreadGroupSize thread_group_size
 ) {
     ComputePipelineBuildResult result;
+    if (!valid_d3d12_thread_group(thread_group_size)) {
+        result.diagnostics = "Direct3D 12 compute thread-group size exceeds shader-model limits.";
+        return result;
+    }
     if (shader.pShaderBytecode == nullptr || shader.BytecodeLength == 0U) {
         result.diagnostics = "Direct3D 12 compute pipeline requires non-empty shader bytecode.";
         return result;
@@ -59,6 +77,7 @@ ComputePipelineBuildResult build_compute_pipeline(
         return result;
     }
 
+    result.thread_group_size = thread_group_size;
     result.success = true;
     return result;
 }
