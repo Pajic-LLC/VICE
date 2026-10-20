@@ -66,4 +66,8 @@ struct PipelineLayout {
     std::span<const ShaderResourceBindingDesc> fragment_resources
 );
 
+[[nodiscard]] PipelineLayout compile_compute_pipeline_layout(
+    std::span<const ShaderResourceBindingDesc> compute_resources
+);
+
 } // namespace vice::render
