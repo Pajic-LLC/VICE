@@ -1,20 +1,21 @@
 name: Apply runtime visibility integration
 
 on:
-  pull_request:
+  push:
+    branches:
+      - feature/198-gpu-visibility
 
 permissions:
   contents: write
 
 jobs:
   apply:
-    if: github.head_ref == 'feature/198-gpu-visibility'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout branch
         uses: actions/checkout@v6
         with:
-          ref: ${{ github.head_ref }}
+          ref: feature/198-gpu-visibility
 
       - name: Apply guarded scene integration
         shell: python
@@ -122,4 +123,4 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add engine/runtime/src/scene.cpp
           git commit -m "Integrate GPU visibility into runtime scene"
-          git push origin HEAD:${{ github.head_ref }}
+          git push origin HEAD:feature/198-gpu-visibility
