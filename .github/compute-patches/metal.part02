@@ -1,0 +1,130 @@
++    }
++
++    [[nodiscard]] const MetalBoundResource* compute_bound_resource(
++        const ShaderBindingKey& key
++    ) const noexcept {
++        const auto found = std::find_if(
++            bound_compute_resources_.begin(),
++            bound_compute_resources_.end(),
++            [&](const MetalBoundResource& resource) {
++                return same_binding(resource.key, key);
++            }
++        );
++        return found == bound_compute_resources_.end() ? nullptr : &*found;
++    }
++
++    [[nodiscard]] const PipelineResourceBinding* compute_logical_binding(
++        const MetalShaderResourceLocationDesc& location
++    ) const noexcept {
++        if (active_compute_pipeline_ == nullptr) {
++            return nullptr;
++        }
++        const auto& resources = active_compute_pipeline_->layout().resources;
++        const auto found = std::find_if(
++            resources.begin(),
++            resources.end(),
++            [&](const PipelineResourceBinding& resource) {
++                return resource.register_class == location.register_class &&
++                    resource.binding == location.binding && resource.space == location.space;
++            }
++        );
++        return found == resources.end() ? nullptr : &*found;
++    }
++
++    [[nodiscard]] bool all_required_compute_resources_bound() const noexcept {
++        if (active_compute_pipeline_ == nullptr) {
++            return false;
++        }
++        for (const auto& resource : active_compute_pipeline_->layout().resources) {
++            if (resource.unbounded) {
++                return false;
++            }
++            for (std::uint32_t element = 0; element < resource.count; ++element) {
++                const ShaderBindingKey key{
++                    .register_class = resource.register_class,
++                    .binding = resource.binding,
++                    .space = resource.space,
++                    .array_element = element,
++                };
++                if (compute_bound_resource(key) == nullptr) {
++                    return false;
++                }
++            }
++        }
++        return true;
++    }
++
++    [[nodiscard]] bool prepare_compute_resources(id<MTLComputeCommandEncoder> encoder) {
++        if (active_compute_pipeline_ == nullptr || encoder == nil) {
++            return false;
++        }
++        if (!all_required_compute_resources_bound()) {
++            if (!active_compute_pipeline_->layout().resources.empty()) {
++                core::log(
++                    core::LogLevel::error,
++                    "Metal dispatch is missing a reflected shader resource."
++                );
++                return false;
++            }
++        }
++        if (!active_compute_pipeline_->locations().empty()) {
++            return encode_compute_argument_buffer(encoder);
++        }
++        return bind_compute_direct(encoder);
++    }
++
++    [[nodiscard]] bool bind_compute_direct(id<MTLComputeCommandEncoder> encoder) {
++        if (active_compute_pipeline_ == nullptr || encoder == nil) {
++            return false;
++        }
++        for (const auto& logical : active_compute_pipeline_->layout().resources) {
++            if (logical.unbounded || logical.space != 0U) {
++                core::log(
++                    core::LogLevel::error,
++                    "Metal source compute shaders require bounded resources in register space 0."
++                );
++                return false;
++            }
++            for (std::uint32_t element = 0; element < logical.count; ++element) {
++                const std::uint64_t native_index =
++                    static_cast<std::uint64_t>(logical.binding) + element;
++                if (native_index >= 31U) {
++                    return false;
++                }
++                const ShaderBindingKey key{
++                    .register_class = logical.register_class,
++                    .binding = logical.binding,
++                    .space = logical.space,
++                    .array_element = element,
++                };
++                const MetalBoundResource* bound = compute_bound_resource(key);
++                if (bound == nullptr ||
++                    !bind_direct_compute_resource(
++                        encoder,
++                        static_cast<NSUInteger>(native_index),
++                        *bound
++                    )) {
++                    return false;
++                }
++            }
++        }
++        return true;
++    }
++
++    [[nodiscard]] bool bind_direct_compute_resource(
++        id<MTLComputeCommandEncoder> encoder,
++        const NSUInteger index,
++        const MetalBoundResource& bound
++    ) {
++        switch (bound.kind) {
++        case MetalBoundKind::constant_buffer:
++        case MetalBoundKind::read_buffer:
++        case MetalBoundKind::write_buffer: {
++            if (bound.buffer == nullptr || bound.buffer->native() == nil ||
++                bound.offset > static_cast<std::uint64_t>(std::numeric_limits<NSUInteger>::max())) {
++                return false;
++            }
++            [encoder setBuffer:bound.buffer->native()
++                        offset:static_cast<NSUInteger>(bound.offset)
++                       atIndex:index];
++            const MTLResourceUsage usage = bound.kind == MetalBoundKind::write_buffer
