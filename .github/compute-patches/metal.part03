@@ -1,0 +1,130 @@
++                ? static_cast<MTLResourceUsage>(MTLResourceUsageRead | MTLResourceUsageWrite)
++                : MTLResourceUsageRead;
++            [encoder useResource:bound.buffer->native() usage:usage];
++            return true;
++        }
++        case MetalBoundKind::texture:
++        case MetalBoundKind::storage_texture: {
++            if (bound.texture == nullptr || bound.texture->native() == nil) {
++                return false;
++            }
++            [encoder setTexture:bound.texture->native() atIndex:index];
++            const MTLResourceUsage usage = bound.kind == MetalBoundKind::storage_texture
++                ? static_cast<MTLResourceUsage>(MTLResourceUsageRead | MTLResourceUsageWrite)
++                : MTLResourceUsageRead;
++            [encoder useResource:bound.texture->native() usage:usage];
++            return true;
++        }
++        case MetalBoundKind::sampler:
++            if (bound.sampler == nullptr || bound.sampler->native() == nil) {
++                return false;
++            }
++            [encoder setSamplerState:bound.sampler->native() atIndex:index];
++            [retained_samplers_ addObject:bound.sampler->native()];
++            return true;
++        }
++        return false;
++    }
++
++    [[nodiscard]] bool encode_compute_argument_buffer(
++        id<MTLComputeCommandEncoder> encoder
++    ) {
++        if (active_compute_pipeline_ == nullptr || device_ == nil || encoder == nil) {
++            return false;
++        }
++        const auto locations = active_compute_pipeline_->locations();
++        if (locations.empty()) {
++            return true;
++        }
++
++        std::uint64_t argument_buffer_size = 0U;
++        for (const auto& location : locations) {
++            const std::uint64_t end =
++                static_cast<std::uint64_t>(location.argument_buffer_offset) + location.size;
++            argument_buffer_size = std::max(argument_buffer_size, end);
++        }
++        if (argument_buffer_size == 0U ||
++            argument_buffer_size > static_cast<std::uint64_t>(std::numeric_limits<NSUInteger>::max())) {
++            return false;
++        }
++
++        id<MTLBuffer> argument_buffer = [device_
++            newBufferWithLength:static_cast<NSUInteger>(argument_buffer_size)
++            options:MTLResourceStorageModeShared];
++        if (argument_buffer == nil || argument_buffer.contents == nullptr) {
++            core::log(
++                core::LogLevel::error,
++                "Metal could not allocate the converted compute shader argument buffer."
++            );
++            return false;
++        }
++        std::memset(argument_buffer.contents, 0, static_cast<std::size_t>(argument_buffer_size));
++        auto* bytes = static_cast<std::byte*>(argument_buffer.contents);
++
++        for (const auto& location : locations) {
++            const PipelineResourceBinding* logical = compute_logical_binding(location);
++            if (logical == nullptr || logical->unbounded) {
++                return false;
++            }
++            const std::uint64_t required =
++                static_cast<std::uint64_t>(logical->count) * metal_descriptor_entry_size;
++            if (required > location.size) {
++                return false;
++            }
++            for (std::uint32_t element = 0; element < logical->count; ++element) {
++                const ShaderBindingKey key{
++                    .register_class = logical->register_class,
++                    .binding = logical->binding,
++                    .space = logical->space,
++                    .array_element = element,
++                };
++                const MetalBoundResource* bound = compute_bound_resource(key);
++                if (bound == nullptr) {
++                    return false;
++                }
++                const std::uint64_t descriptor_offset =
++                    static_cast<std::uint64_t>(location.argument_buffer_offset) +
++                    static_cast<std::uint64_t>(element) * metal_descriptor_entry_size;
++                if (descriptor_offset + metal_descriptor_entry_size > argument_buffer_size) {
++                    return false;
++                }
++                auto* entry = reinterpret_cast<MetalDescriptorTableEntry*>(
++                    bytes + static_cast<std::size_t>(descriptor_offset)
++                );
++                if (!encode_compute_descriptor(encoder, *entry, *bound)) {
++                    return false;
++                }
++            }
++        }
++
++        [encoder setBuffer:argument_buffer
++                    offset:0U
++                   atIndex:metal_shader_converter_argument_buffer_bind_point];
++        [encoder useResource:argument_buffer usage:MTLResourceUsageRead];
++        [retained_argument_buffers_ addObject:argument_buffer];
++        return true;
++    }
++
++    [[nodiscard]] bool encode_compute_descriptor(
++        id<MTLComputeCommandEncoder> encoder,
++        MetalDescriptorTableEntry& entry,
++        const MetalBoundResource& bound
++    ) {
++        entry = {};
++        switch (bound.kind) {
++        case MetalBoundKind::constant_buffer:
++        case MetalBoundKind::read_buffer:
++        case MetalBoundKind::write_buffer: {
++            if (bound.buffer == nullptr || bound.buffer->native() == nil ||
++                bound.size == 0U || bound.size > std::numeric_limits<std::uint32_t>::max()) {
++                return false;
++            }
++            const std::uint64_t gpu_address = bound.buffer->native().gpuAddress;
++            if (bound.offset > std::numeric_limits<std::uint64_t>::max() - gpu_address) {
++                return false;
++            }
++            entry.gpu_address = gpu_address + bound.offset;
++            entry.metadata = static_cast<std::uint32_t>(bound.size);
++            const MTLResourceUsage usage = bound.kind == MetalBoundKind::write_buffer
++                ? static_cast<MTLResourceUsage>(MTLResourceUsageRead | MTLResourceUsageWrite)
++                : MTLResourceUsageRead;
