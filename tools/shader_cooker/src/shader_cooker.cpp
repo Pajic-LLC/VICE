@@ -1,6 +1,7 @@
 #include <vice/tools/metal_reflection.hpp>
 #include <vice/tools/shader_cooker.hpp>
 
+#include <algorithm>
 #include <array>
 #include <bit>
 #include <cctype>
@@ -479,11 +480,16 @@ struct BindingLocation {
     const std::optional<MetalBindingReflection>& metal_binding,
     const ShaderReflection& reflection
 ) {
+    const bool explicit_metal_binding = metal_binding.has_value() &&
+        metal_binding->model == MetalBindingModel::explicit_descriptor_tables;
+    const std::uint32_t manifest_version = explicit_metal_binding ? 5U : 4U;
+    const std::uint32_t metal_binding_version = explicit_metal_binding ? 3U : 2U;
+
     std::ostringstream manifest;
     manifest
         << "{\n"
         << "  \"format\": \"vice.shader\",\n"
-        << "  \"version\": 4,\n"
+        << "  \"version\": " << manifest_version << ",\n"
         << "  \"cache_key\": \"" << json_escape(cache_key) << "\",\n"
         << "  \"source\": \"" << json_escape(request.input.filename().string()) << "\",\n"
         << "  \"entry_point\": \"" << json_escape(request.entry_point) << "\",\n"
@@ -513,10 +519,12 @@ struct BindingLocation {
     manifest
         << "  },\n"
         << "  \"metal_binding\": {\n"
-        << "    \"version\": 2,\n"
+        << "    \"version\": " << metal_binding_version << ",\n"
         << "    \"model\": ";
     if (metal_binding.has_value()) {
-        manifest << "\"automatic_linear\",\n";
+        manifest << (metal_binding->model == MetalBindingModel::explicit_descriptor_tables
+            ? "\"explicit_descriptor_tables\",\n"
+            : "\"automatic_linear\",\n");
     } else {
         manifest << "null,\n";
     }
@@ -751,7 +759,7 @@ std::string make_cache_key(
 ) {
     std::string material;
     material.reserve(source.size() + 512);
-    hash_append(material, "VICE_SHADER_ASSET_V4_COMPUTE_GROUPS1");
+    hash_append(material, "VICE_SHADER_ASSET_V5_METAL_EXPLICIT_TABLES1");
     hash_append(material, source);
     hash_append(material, request.entry_point);
     hash_append(material, shader_stage_name(request.stage));
@@ -886,10 +894,15 @@ CookResult cook(const CookRequest& request) {
         if (result.reflection.valid &&
             validate_compute_reflection(request.stage, result.reflection, result.diagnostics)) {
             if (result.metal_reflection_path.has_value()) {
-                const MetalBindingReflection metal = parse_metal_shader_converter_reflection(
-                    read_file(*result.metal_reflection_path),
-                    result.reflection
+                const bool explicit_layout = std::any_of(
+                    result.reflection.resources.begin(), result.reflection.resources.end(),
+                    [](const auto& resource) { return resource.unbounded; }
                 );
+                const MetalBindingReflection metal = explicit_layout
+                    ? build_explicit_metal_binding(result.reflection)
+                    : parse_metal_shader_converter_reflection(
+                        read_file(*result.metal_reflection_path), result.reflection
+                    );
                 if (!metal.valid) {
                     result.diagnostics =
                         "Cached Metal reflection normalization failed. " + metal.diagnostics;
@@ -938,12 +951,31 @@ CookResult cook(const CookRequest& request) {
 
     std::optional<MetalBindingReflection> metal_binding;
     if (result.metallib_path.has_value() && result.metal_reflection_path.has_value()) {
+        const bool explicit_layout = std::any_of(
+            result.reflection.resources.begin(), result.reflection.resources.end(),
+            [](const auto& resource) { return resource.unbounded; }
+        );
+        std::optional<std::filesystem::path> root_signature_path;
+        if (explicit_layout) {
+            root_signature_path = request.output_directory / "shader.metal.rootsig.json";
+            const std::string root_signature = build_metal_root_signature_json(
+                request.stage, result.reflection
+            );
+            if (root_signature.empty() || !write_file(*root_signature_path, root_signature)) {
+                result.diagnostics = "Could not write Metal explicit root signature.";
+                return result;
+            }
+        }
+
         const auto converter_log = request.output_directory / "metal-shaderconverter.log";
-        const std::string converter_command =
+        std::string converter_command =
             shell_quote_path(toolchain.metal_shader_converter) + " " +
             shell_quote_path(result.dxil_path) + " -o " +
             shell_quote_path(*result.metallib_path) + " --output-reflection-file " +
             shell_quote_path(*result.metal_reflection_path);
+        if (root_signature_path.has_value()) {
+            converter_command += " --root-signature " + shell_quote_path(*root_signature_path);
+        }
         const ProcessResult converter_result = run_capture(converter_command, converter_log);
         if (converter_result.exit_code != 0 ||
             !std::filesystem::exists(*result.metallib_path, error) ||
@@ -952,10 +984,11 @@ CookResult cook(const CookRequest& request) {
                 "Metal Shader Converter failed.\n" + converter_result.output;
             return result;
         }
-        metal_binding = parse_metal_shader_converter_reflection(
-            read_file(*result.metal_reflection_path),
-            result.reflection
-        );
+        metal_binding = explicit_layout
+            ? build_explicit_metal_binding(result.reflection)
+            : parse_metal_shader_converter_reflection(
+                read_file(*result.metal_reflection_path), result.reflection
+            );
         if (!metal_binding->valid) {
             result.diagnostics =
                 "Metal Shader Converter reflection normalization failed. " +

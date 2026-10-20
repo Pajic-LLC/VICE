@@ -170,6 +170,25 @@ int main() {
     CHECK(!unbounded_metal.valid);
     CHECK(unbounded_metal.diagnostics.find("unbounded") != std::string::npos);
 
+    const MetalBindingReflection explicit_metal = build_explicit_metal_binding(reflection);
+    CHECK(explicit_metal.valid);
+    CHECK(explicit_metal.model == MetalBindingModel::explicit_descriptor_tables);
+    CHECK(explicit_metal.locations.size() == reflection.resources.size());
+    CHECK(explicit_metal.locations[0].argument_buffer_offset == 0U);
+    CHECK(explicit_metal.locations[0].size == sizeof(std::uint64_t));
+    CHECK(explicit_metal.locations[0].descriptor_table);
+    CHECK(explicit_metal.locations[3].argument_buffer_offset == 3U * sizeof(std::uint64_t));
+    CHECK(explicit_metal.locations[3].descriptor_table);
+
+    const std::string explicit_root = build_metal_root_signature_json(
+        ShaderStage::compute, reflection
+    );
+    CHECK(!explicit_root.empty());
+    CHECK(explicit_root.find("IRRootSignatureVersion_1_1") != std::string::npos);
+    CHECK(explicit_root.find("IRDescriptorRangeTypeUAV") != std::string::npos);
+    CHECK(explicit_root.find("4294967295") != std::string::npos);
+    CHECK(explicit_root.find("IRRootParameterTypeDescriptorTable") != std::string::npos);
+
     CookRequest request;
     request.entry_point = "main_vs";
     request.stage = ShaderStage::vertex;

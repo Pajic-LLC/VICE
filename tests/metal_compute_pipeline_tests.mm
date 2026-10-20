@@ -71,6 +71,39 @@ kernel void vice_compute_test(
         CHECK(pipeline.thread_group_size.z == 1U);
         CHECK(pipeline.diagnostics.empty());
 
+        constexpr std::array unbounded_resources{
+            ShaderResourceBindingDesc{
+                .register_class = ShaderRegisterClass::unordered_access,
+                .binding = 0U,
+                .space = 0U,
+                .count = 0U,
+                .unbounded = true,
+            },
+        };
+        constexpr std::array explicit_locations{
+            MetalShaderResourceLocationDesc{
+                .register_class = ShaderRegisterClass::unordered_access,
+                .binding = 0U,
+                .space = 0U,
+                .argument_buffer_offset = 0U,
+                .size = sizeof(std::uint64_t),
+                .model = MetalShaderResourceBindingModel::descriptor_table,
+            },
+        };
+        const ComputePipelineBuildResult explicit_pipeline = build_compute_pipeline(
+            device,
+            function,
+            unbounded_resources,
+            explicit_locations,
+            group_size
+        );
+        CHECK(explicit_pipeline.success);
+        CHECK(explicit_pipeline.layout.valid);
+        CHECK(explicit_pipeline.layout.resources.size() == 1U);
+        CHECK(explicit_pipeline.layout.resources[0].unbounded);
+        CHECK(explicit_pipeline.locations.size() == 1U);
+        CHECK(explicit_pipeline.locations[0].model == MetalShaderResourceBindingModel::descriptor_table);
+
         constexpr NSUInteger element_count = 4U;
         constexpr NSUInteger byte_count = element_count * sizeof(std::uint32_t);
         id<MTLBuffer> output = [device newBufferWithLength:byte_count options:MTLResourceStorageModePrivate];

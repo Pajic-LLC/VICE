@@ -324,18 +324,30 @@ struct ShaderResourceBindingDesc {
     return desc.unbounded ? desc.count == 0U : desc.count > 0U;
 }
 
+enum class MetalShaderResourceBindingModel : std::uint8_t {
+    automatic_linear,
+    descriptor_table,
+};
+
 struct MetalShaderResourceLocationDesc {
     ShaderRegisterClass register_class = ShaderRegisterClass::shader_resource;
     std::uint32_t binding = 0;
     std::uint32_t space = 0;
     std::uint32_t argument_buffer_offset = 0;
     std::uint32_t size = 0;
+    MetalShaderResourceBindingModel model = MetalShaderResourceBindingModel::automatic_linear;
 };
 
 [[nodiscard]] constexpr bool is_valid(const MetalShaderResourceLocationDesc& desc) noexcept {
     constexpr std::uint32_t descriptor_size = 3U * sizeof(std::uint64_t);
-    return desc.argument_buffer_offset % alignof(std::uint64_t) == 0U &&
-        desc.size >= descriptor_size && desc.size % descriptor_size == 0U;
+    if (desc.argument_buffer_offset % alignof(std::uint64_t) != 0U) return false;
+    switch (desc.model) {
+    case MetalShaderResourceBindingModel::automatic_linear:
+        return desc.size >= descriptor_size && desc.size % descriptor_size == 0U;
+    case MetalShaderResourceBindingModel::descriptor_table:
+        return desc.size == sizeof(std::uint64_t);
+    }
+    return false;
 }
 
 struct ShaderBindingKey {

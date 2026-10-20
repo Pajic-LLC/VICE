@@ -234,12 +234,6 @@ void log_error(const char* prefix, NSError* error) {
         return true;
     }
     for (const auto& resource : resources) {
-        if (resource.unbounded) {
-            diagnostics =
-                "Metal automatic resource layout does not support unbounded ranges. "
-                "Use the explicit root-signature conversion path.";
-            return false;
-        }
         const auto found = std::find_if(
             locations.begin(),
             locations.end(),
@@ -249,6 +243,18 @@ void log_error(const char* prefix, NSError* error) {
         );
         if (found == locations.end()) {
             diagnostics = "Metal shader is missing a converter-reflected resource location.";
+            return false;
+        }
+        if (found->model == MetalShaderResourceBindingModel::descriptor_table) {
+            if (found->size != sizeof(std::uint64_t)) {
+                diagnostics = "Metal descriptor-table root location must contain one GPU address.";
+                return false;
+            }
+            continue;
+        }
+        if (resource.unbounded) {
+            diagnostics =
+                "Metal unbounded ranges require the explicit descriptor-table conversion path.";
             return false;
         }
         const std::uint64_t required =
@@ -533,7 +539,7 @@ public:
                     resource.binding != key.binding || resource.space != key.space) {
                     return false;
                 }
-                return !resource.unbounded && key.array_element < resource.count;
+                return resource.unbounded || key.array_element < resource.count;
             }
         );
         return found != layout_.resources.end();
@@ -595,7 +601,7 @@ public:
                     resource.binding != key.binding || resource.space != key.space) {
                     return false;
                 }
-                return !resource.unbounded && key.array_element < resource.count;
+                return resource.unbounded || key.array_element < resource.count;
             }
         );
         return found != layout_.resources.end();
@@ -1594,13 +1600,39 @@ private:
         return found == resources.end() ? nullptr : &*found;
     }
 
+    [[nodiscard]] std::uint32_t bound_prefix_count(
+        const PipelineResourceBinding& resource
+    ) const noexcept {
+        std::uint32_t count = 0U;
+        for (const auto& bound : bound_resources_) {
+            if (bound.key.register_class != resource.register_class ||
+                bound.key.binding != resource.binding || bound.key.space != resource.space) {
+                continue;
+            }
+            if (bound.key.array_element == std::numeric_limits<std::uint32_t>::max()) return 0U;
+            count = std::max(count, bound.key.array_element + 1U);
+        }
+        if (count == 0U) return 0U;
+        for (std::uint32_t element = 0U; element < count; ++element) {
+            const ShaderBindingKey key{
+                .register_class = resource.register_class,
+                .binding = resource.binding,
+                .space = resource.space,
+                .array_element = element,
+            };
+            if (bound_resource(key) == nullptr) return 0U;
+        }
+        return count;
+    }
+
     [[nodiscard]] bool all_required_resources_bound() const noexcept {
         if (active_pipeline_ == nullptr) {
             return false;
         }
         for (const auto& resource : active_pipeline_->layout().resources) {
             if (resource.unbounded) {
-                return false;
+                if (bound_prefix_count(resource) == 0U) return false;
+                continue;
             }
             for (std::uint32_t element = 0; element < resource.count; ++element) {
                 const ShaderBindingKey key{
@@ -1781,14 +1813,57 @@ private:
 
         for (const auto& location : locations) {
             const PipelineResourceBinding* logical = logical_binding(location);
-            if (logical == nullptr || logical->unbounded) {
-                return false;
+            if (logical == nullptr) return false;
+
+            if (location.model == MetalShaderResourceBindingModel::descriptor_table) {
+                const std::uint32_t descriptor_count = logical->unbounded
+                    ? bound_prefix_count(*logical)
+                    : logical->count;
+                if (descriptor_count == 0U ||
+                    static_cast<std::uint64_t>(descriptor_count) >
+                        std::numeric_limits<NSUInteger>::max() / metal_descriptor_entry_size ||
+                    static_cast<std::uint64_t>(location.argument_buffer_offset) + sizeof(std::uint64_t) >
+                        argument_buffer_size) {
+                    return false;
+                }
+                const std::uint64_t table_size =
+                    static_cast<std::uint64_t>(descriptor_count) * metal_descriptor_entry_size;
+                id<MTLBuffer> descriptor_table = [device_
+                    newBufferWithLength:static_cast<NSUInteger>(table_size)
+                    options:MTLResourceStorageModeShared];
+                if (descriptor_table == nil || descriptor_table.contents == nullptr) return false;
+                std::memset(descriptor_table.contents, 0, static_cast<std::size_t>(table_size));
+                auto* table_entries = static_cast<MetalDescriptorTableEntry*>(descriptor_table.contents);
+                for (std::uint32_t element = 0U; element < descriptor_count; ++element) {
+                    const ShaderBindingKey key{
+                        .register_class = logical->register_class,
+                        .binding = logical->binding,
+                        .space = logical->space,
+                        .array_element = element,
+                    };
+                    const MetalBoundResource* bound = bound_resource(key);
+                    if (bound == nullptr ||
+                        !encode_descriptor(table_entries[element], *bound, render_stage)) {
+                        return false;
+                    }
+                }
+                const std::uint64_t table_address = descriptor_table.gpuAddress;
+                std::memcpy(
+                    bytes + static_cast<std::size_t>(location.argument_buffer_offset),
+                    &table_address,
+                    sizeof(table_address)
+                );
+                [render_encoder_ useResource:descriptor_table
+                                       usage:MTLResourceUsageRead
+                                      stages:render_stage];
+                [retained_argument_buffers_ addObject:descriptor_table];
+                continue;
             }
+
+            if (logical->unbounded) return false;
             const std::uint64_t required =
                 static_cast<std::uint64_t>(logical->count) * metal_descriptor_entry_size;
-            if (required > location.size) {
-                return false;
-            }
+            if (required > location.size) return false;
             for (std::uint32_t element = 0; element < logical->count; ++element) {
                 const ShaderBindingKey key{
                     .register_class = logical->register_class,
@@ -1797,21 +1872,15 @@ private:
                     .array_element = element,
                 };
                 const MetalBoundResource* bound = bound_resource(key);
-                if (bound == nullptr) {
-                    return false;
-                }
+                if (bound == nullptr) return false;
                 const std::uint64_t descriptor_offset =
                     static_cast<std::uint64_t>(location.argument_buffer_offset) +
                     static_cast<std::uint64_t>(element) * metal_descriptor_entry_size;
-                if (descriptor_offset + metal_descriptor_entry_size > argument_buffer_size) {
-                    return false;
-                }
+                if (descriptor_offset + metal_descriptor_entry_size > argument_buffer_size) return false;
                 auto* entry = reinterpret_cast<MetalDescriptorTableEntry*>(
                     bytes + static_cast<std::size_t>(descriptor_offset)
                 );
-                if (!encode_descriptor(*entry, *bound, render_stage)) {
-                    return false;
-                }
+                if (!encode_descriptor(*entry, *bound, render_stage)) return false;
             }
         }
 
@@ -1923,13 +1992,39 @@ private:
         return found == resources.end() ? nullptr : &*found;
     }
 
+    [[nodiscard]] std::uint32_t compute_bound_prefix_count(
+        const PipelineResourceBinding& resource
+    ) const noexcept {
+        std::uint32_t count = 0U;
+        for (const auto& bound : bound_compute_resources_) {
+            if (bound.key.register_class != resource.register_class ||
+                bound.key.binding != resource.binding || bound.key.space != resource.space) {
+                continue;
+            }
+            if (bound.key.array_element == std::numeric_limits<std::uint32_t>::max()) return 0U;
+            count = std::max(count, bound.key.array_element + 1U);
+        }
+        if (count == 0U) return 0U;
+        for (std::uint32_t element = 0U; element < count; ++element) {
+            const ShaderBindingKey key{
+                .register_class = resource.register_class,
+                .binding = resource.binding,
+                .space = resource.space,
+                .array_element = element,
+            };
+            if (compute_bound_resource(key) == nullptr) return 0U;
+        }
+        return count;
+    }
+
     [[nodiscard]] bool all_required_compute_resources_bound() const noexcept {
         if (active_compute_pipeline_ == nullptr) {
             return false;
         }
         for (const auto& resource : active_compute_pipeline_->layout().resources) {
             if (resource.unbounded) {
-                return false;
+                if (compute_bound_prefix_count(resource) == 0U) return false;
+                continue;
             }
             for (std::uint32_t element = 0; element < resource.count; ++element) {
                 const ShaderBindingKey key{
@@ -2055,9 +2150,7 @@ private:
             return false;
         }
         const auto locations = active_compute_pipeline_->locations();
-        if (locations.empty()) {
-            return true;
-        }
+        if (locations.empty()) return true;
 
         std::uint64_t argument_buffer_size = 0U;
         for (const auto& location : locations) {
@@ -2085,14 +2178,55 @@ private:
 
         for (const auto& location : locations) {
             const PipelineResourceBinding* logical = compute_logical_binding(location);
-            if (logical == nullptr || logical->unbounded) {
-                return false;
+            if (logical == nullptr) return false;
+
+            if (location.model == MetalShaderResourceBindingModel::descriptor_table) {
+                const std::uint32_t descriptor_count = logical->unbounded
+                    ? compute_bound_prefix_count(*logical)
+                    : logical->count;
+                if (descriptor_count == 0U ||
+                    static_cast<std::uint64_t>(descriptor_count) >
+                        std::numeric_limits<NSUInteger>::max() / metal_descriptor_entry_size ||
+                    static_cast<std::uint64_t>(location.argument_buffer_offset) + sizeof(std::uint64_t) >
+                        argument_buffer_size) {
+                    return false;
+                }
+                const std::uint64_t table_size =
+                    static_cast<std::uint64_t>(descriptor_count) * metal_descriptor_entry_size;
+                id<MTLBuffer> descriptor_table = [device_
+                    newBufferWithLength:static_cast<NSUInteger>(table_size)
+                    options:MTLResourceStorageModeShared];
+                if (descriptor_table == nil || descriptor_table.contents == nullptr) return false;
+                std::memset(descriptor_table.contents, 0, static_cast<std::size_t>(table_size));
+                auto* table_entries = static_cast<MetalDescriptorTableEntry*>(descriptor_table.contents);
+                for (std::uint32_t element = 0U; element < descriptor_count; ++element) {
+                    const ShaderBindingKey key{
+                        .register_class = logical->register_class,
+                        .binding = logical->binding,
+                        .space = logical->space,
+                        .array_element = element,
+                    };
+                    const MetalBoundResource* bound = compute_bound_resource(key);
+                    if (bound == nullptr ||
+                        !encode_compute_descriptor(encoder, table_entries[element], *bound)) {
+                        return false;
+                    }
+                }
+                const std::uint64_t table_address = descriptor_table.gpuAddress;
+                std::memcpy(
+                    bytes + static_cast<std::size_t>(location.argument_buffer_offset),
+                    &table_address,
+                    sizeof(table_address)
+                );
+                [encoder useResource:descriptor_table usage:MTLResourceUsageRead];
+                [retained_argument_buffers_ addObject:descriptor_table];
+                continue;
             }
+
+            if (logical->unbounded) return false;
             const std::uint64_t required =
                 static_cast<std::uint64_t>(logical->count) * metal_descriptor_entry_size;
-            if (required > location.size) {
-                return false;
-            }
+            if (required > location.size) return false;
             for (std::uint32_t element = 0; element < logical->count; ++element) {
                 const ShaderBindingKey key{
                     .register_class = logical->register_class,
@@ -2101,21 +2235,15 @@ private:
                     .array_element = element,
                 };
                 const MetalBoundResource* bound = compute_bound_resource(key);
-                if (bound == nullptr) {
-                    return false;
-                }
+                if (bound == nullptr) return false;
                 const std::uint64_t descriptor_offset =
                     static_cast<std::uint64_t>(location.argument_buffer_offset) +
                     static_cast<std::uint64_t>(element) * metal_descriptor_entry_size;
-                if (descriptor_offset + metal_descriptor_entry_size > argument_buffer_size) {
-                    return false;
-                }
+                if (descriptor_offset + metal_descriptor_entry_size > argument_buffer_size) return false;
                 auto* entry = reinterpret_cast<MetalDescriptorTableEntry*>(
                     bytes + static_cast<std::size_t>(descriptor_offset)
                 );
-                if (!encode_compute_descriptor(encoder, *entry, *bound)) {
-                    return false;
-                }
+                if (!encode_compute_descriptor(encoder, *entry, *bound)) return false;
             }
         }
 
@@ -2497,18 +2625,6 @@ public:
             );
             return nullptr;
         }
-        if (std::any_of(
-                layout.resources.begin(),
-                layout.resources.end(),
-                [](const PipelineResourceBinding& resource) { return resource.unbounded; }
-            )) {
-            core::log(
-                core::LogLevel::error,
-                "Metal automatic resource layout cannot create a pipeline with unbounded bindings."
-            );
-            return nullptr;
-        }
-
         MTLVertexDescriptor* vertex_descriptor = nil;
         std::vector<MetalVertexStreamInfo> vertex_streams;
         vertex_streams.reserve(desc.vertex_buffers.size());
