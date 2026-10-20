@@ -23,7 +23,7 @@ namespace {
 
 template <std::size_t Size>
 void copy_id(const vice::world::PersistentId id, std::array<std::uint8_t, Size>& destination) {
-    static_assert(Size == vice::world::persistent_id_size);
+    if (destination.size() != id.bytes().size()) std::terminate();
     std::copy(id.bytes().begin(), id.bytes().end(), destination.begin());
 }
 
