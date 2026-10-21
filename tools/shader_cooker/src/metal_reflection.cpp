@@ -224,24 +224,25 @@ struct JsonObjectView {
         left.binding == right.binding && left.space == right.space;
 }
 
-} // namespace
-
-MetalBindingReflection parse_metal_shader_converter_reflection(
+[[nodiscard]] MetalBindingReflection parse_binding_reflection(
     const std::string_view json,
-    const ShaderReflection& logical_reflection
+    const ShaderReflection& logical_reflection,
+    const MetalBindingModel model
 ) {
     MetalBindingReflection result;
-    result.model = MetalBindingModel::automatic_linear;
+    result.model = model;
     if (!logical_reflection.valid) {
         result.diagnostics = "Metal reflection requires valid DXC logical reflection.";
         return result;
     }
-    for (const auto& resource : logical_reflection.resources) {
-        if (resource.unbounded) {
-            result.diagnostics =
-                "Metal automatic resource layout does not support unbounded resource ranges. "
-                "Use the explicit root-signature conversion path.";
-            return result;
+    if (model == MetalBindingModel::automatic_linear) {
+        for (const auto& resource : logical_reflection.resources) {
+            if (resource.unbounded) {
+                result.diagnostics =
+                    "Metal automatic resource layout does not support unbounded resource ranges. "
+                    "Use the explicit root-signature conversion path.";
+                return result;
+            }
         }
     }
     if (logical_reflection.resources.empty()) {
@@ -297,19 +298,32 @@ MetalBindingReflection parse_metal_shader_converter_reflection(
             result.diagnostics = "Metal Shader Converter emitted a misaligned resource offset.";
             return result;
         }
-        const std::uint64_t required_size =
-            static_cast<std::uint64_t>(logical->count) * descriptor_entry_size;
-        if (*size < required_size || *size % descriptor_entry_size != 0U) {
-            result.diagnostics =
-                "Metal Shader Converter resource location is too small for the reflected array.";
-            return result;
+
+        bool descriptor_table = false;
+        if (model == MetalBindingModel::explicit_descriptor_tables) {
+            if (*size != sizeof(std::uint64_t)) {
+                result.diagnostics =
+                    "Metal explicit descriptor-table root is not a 64-bit GPU-address entry.";
+                return result;
+            }
+            descriptor_table = true;
+        } else {
+            const std::uint64_t required_size =
+                static_cast<std::uint64_t>(logical->count) * descriptor_entry_size;
+            if (*size < required_size || *size % descriptor_entry_size != 0U) {
+                result.diagnostics =
+                    "Metal Shader Converter resource location is too small for the reflected array.";
+                return result;
+            }
         }
+
         MetalResourceLocationReflection location{
             .register_class = *resource_class,
             .binding = *slot,
             .space = *space,
             .argument_buffer_offset = *offset,
             .size = *size,
+            .descriptor_table = descriptor_table,
         };
         if (std::find_if(
                 result.locations.begin(),
@@ -379,34 +393,28 @@ MetalBindingReflection parse_metal_shader_converter_reflection(
     return result;
 }
 
-MetalBindingReflection build_explicit_metal_binding(
+} // namespace
+
+MetalBindingReflection parse_metal_shader_converter_reflection(
+    const std::string_view json,
     const ShaderReflection& logical_reflection
 ) {
-    MetalBindingReflection result;
-    result.model = MetalBindingModel::explicit_descriptor_tables;
-    if (!logical_reflection.valid) {
-        result.diagnostics = "Metal explicit layout requires valid DXC logical reflection.";
-        return result;
-    }
-    if (logical_reflection.resources.size() >
-        std::numeric_limits<std::uint32_t>::max() / sizeof(std::uint64_t)) {
-        result.diagnostics = "Metal explicit layout has too many root parameters.";
-        return result;
-    }
-    result.locations.reserve(logical_reflection.resources.size());
-    for (std::size_t index = 0U; index < logical_reflection.resources.size(); ++index) {
-        const auto& resource = logical_reflection.resources[index];
-        result.locations.push_back(MetalResourceLocationReflection{
-            .register_class = resource.register_class,
-            .binding = resource.binding,
-            .space = resource.space,
-            .argument_buffer_offset = static_cast<std::uint32_t>(index * sizeof(std::uint64_t)),
-            .size = static_cast<std::uint32_t>(sizeof(std::uint64_t)),
-            .descriptor_table = true,
-        });
-    }
-    result.valid = true;
-    return result;
+    return parse_binding_reflection(
+        json,
+        logical_reflection,
+        MetalBindingModel::automatic_linear
+    );
+}
+
+MetalBindingReflection parse_explicit_metal_shader_converter_reflection(
+    const std::string_view json,
+    const ShaderReflection& logical_reflection
+) {
+    return parse_binding_reflection(
+        json,
+        logical_reflection,
+        MetalBindingModel::explicit_descriptor_tables
+    );
 }
 
 std::string build_metal_root_signature_json(

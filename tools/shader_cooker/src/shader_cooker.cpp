@@ -759,7 +759,7 @@ std::string make_cache_key(
 ) {
     std::string material;
     material.reserve(source.size() + 512);
-    hash_append(material, "VICE_SHADER_ASSET_V5_METAL_EXPLICIT_TABLES1");
+    hash_append(material, "VICE_SHADER_ASSET_V5_METAL_EXPLICIT_TABLES2");
     hash_append(material, source);
     hash_append(material, request.entry_point);
     hash_append(material, shader_stage_name(request.stage));
@@ -899,7 +899,9 @@ CookResult cook(const CookRequest& request) {
                     [](const auto& resource) { return resource.unbounded; }
                 );
                 const MetalBindingReflection metal = explicit_layout
-                    ? build_explicit_metal_binding(result.reflection)
+                    ? parse_explicit_metal_shader_converter_reflection(
+                        read_file(*result.metal_reflection_path), result.reflection
+                    )
                     : parse_metal_shader_converter_reflection(
                         read_file(*result.metal_reflection_path), result.reflection
                     );
@@ -985,7 +987,9 @@ CookResult cook(const CookRequest& request) {
             return result;
         }
         metal_binding = explicit_layout
-            ? build_explicit_metal_binding(result.reflection)
+            ? parse_explicit_metal_shader_converter_reflection(
+                read_file(*result.metal_reflection_path), result.reflection
+            )
             : parse_metal_shader_converter_reflection(
                 read_file(*result.metal_reflection_path), result.reflection
             );

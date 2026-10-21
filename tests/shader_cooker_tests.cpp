@@ -170,15 +170,43 @@ int main() {
     CHECK(!unbounded_metal.valid);
     CHECK(unbounded_metal.diagnostics.find("unbounded") != std::string::npos);
 
-    const MetalBindingReflection explicit_metal = build_explicit_metal_binding(reflection);
+    constexpr std::string_view explicit_json = R"JSON({
+        "EntryPoint": "main",
+        "ShaderType": "Compute",
+        "TopLevelArgumentBuffer": [
+            {"EltOffset": 16, "Size": 8, "Slot": 2, "Space": 1, "Type": "CBV"},
+            {"EltOffset": 40, "Size": 8, "Slot": 3, "Space": 1, "Type": "SMP"},
+            {"EltOffset": 64, "Size": 8, "Slot": 4, "Space": 2, "Type": "SRV"},
+            {"EltOffset": 96, "Size": 8, "Slot": 7, "Space": 3, "Type": "UAV"}
+        ]
+    })JSON";
+    const MetalBindingReflection explicit_metal =
+        parse_explicit_metal_shader_converter_reflection(explicit_json, reflection);
     CHECK(explicit_metal.valid);
+    CHECK(explicit_metal.diagnostics.empty());
     CHECK(explicit_metal.model == MetalBindingModel::explicit_descriptor_tables);
     CHECK(explicit_metal.locations.size() == reflection.resources.size());
-    CHECK(explicit_metal.locations[0].argument_buffer_offset == 0U);
+    CHECK(explicit_metal.locations[0].argument_buffer_offset == 16U);
     CHECK(explicit_metal.locations[0].size == sizeof(std::uint64_t));
     CHECK(explicit_metal.locations[0].descriptor_table);
-    CHECK(explicit_metal.locations[3].argument_buffer_offset == 3U * sizeof(std::uint64_t));
+    CHECK(explicit_metal.locations[1].argument_buffer_offset == 40U);
+    CHECK(explicit_metal.locations[2].argument_buffer_offset == 64U);
+    CHECK(explicit_metal.locations[3].argument_buffer_offset == 96U);
     CHECK(explicit_metal.locations[3].descriptor_table);
+    CHECK(explicit_metal.locations[3].register_class == ShaderRegisterClass::unordered_access);
+
+    constexpr std::string_view malformed_explicit_json = R"JSON({
+        "TopLevelArgumentBuffer": [
+            {"EltOffset": 16, "Size": 24, "Slot": 2, "Space": 1, "Type": "CBV"},
+            {"EltOffset": 40, "Size": 8, "Slot": 3, "Space": 1, "Type": "SMP"},
+            {"EltOffset": 64, "Size": 8, "Slot": 4, "Space": 2, "Type": "SRV"},
+            {"EltOffset": 96, "Size": 8, "Slot": 7, "Space": 3, "Type": "UAV"}
+        ]
+    })JSON";
+    const MetalBindingReflection malformed_explicit =
+        parse_explicit_metal_shader_converter_reflection(malformed_explicit_json, reflection);
+    CHECK(!malformed_explicit.valid);
+    CHECK(malformed_explicit.diagnostics.find("64-bit") != std::string::npos);
 
     const std::string explicit_root = build_metal_root_signature_json(
         ShaderStage::compute, reflection
