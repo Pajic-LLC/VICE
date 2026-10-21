@@ -40,17 +40,17 @@ cmake -S . -B "$BUILD_DIR" \
   -DVICE_BUILD_TOOLS=ON \
   -DVICE_BUILD_LAB=OFF
 cmake --build "$BUILD_DIR" \
-  --target vice_shader_cooker vice_metal_unbounded_cooked_smoke_tests \
+  --target vice_shader_cooker vice_metal_compute_pipeline_tests \
   --parallel
 
 COOKER="$BUILD_DIR/tools/shader_cooker/vice_shader_cooker"
-SMOKE="$BUILD_DIR/tests/vice_metal_unbounded_cooked_smoke_tests"
+SMOKE="$BUILD_DIR/tests/vice_metal_compute_pipeline_tests"
 if [[ ! -x "$COOKER" ]]; then
   echo "Shader cooker was not built at $COOKER." >&2
   exit 5
 fi
 if [[ ! -x "$SMOKE" ]]; then
-  echo "Metal unbounded smoke test was not built at $SMOKE." >&2
+  echo "Metal compute test was not built at $SMOKE." >&2
   exit 6
 fi
 
@@ -108,4 +108,4 @@ if any(location.get("size") != 8 for location in locations):
 print("Cooked Metal unbounded manifest contract verified.")
 PY
 
-"$SMOKE" "$MANIFEST"
+VICE_METAL_UNBOUNDED_SMOKE_MANIFEST="$MANIFEST" "$SMOKE"
