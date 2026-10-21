@@ -35,7 +35,8 @@ struct MetalBindingReflection {
     const ShaderReflection& logical_reflection
 );
 
-[[nodiscard]] MetalBindingReflection build_explicit_metal_binding(
+[[nodiscard]] MetalBindingReflection parse_explicit_metal_shader_converter_reflection(
+    std::string_view json,
     const ShaderReflection& logical_reflection
 );
 
