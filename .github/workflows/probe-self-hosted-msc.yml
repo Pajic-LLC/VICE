@@ -1,0 +1,36 @@
+name: Probe self-hosted MSC validation
+
+on:
+  push:
+    branches:
+      - probe/self-hosted-msc
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: [self-hosted, macOS, ARM64]
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Inspect runner and tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          uname -a
+          sw_vers
+          xcodebuild -version || true
+          MSC="$(command -v metal-shaderconverter || true)"
+          DXC="$(command -v dxc || true)"
+          echo "Resolved MSC: ${MSC:-<missing>}"
+          echo "Resolved DXC: ${DXC:-<missing>}"
+          [[ -n "$MSC" ]] || { echo "Self-hosted runner does not have metal-shaderconverter on PATH." >&2; exit 10; }
+          [[ -n "$DXC" ]] || { echo "Self-hosted runner does not have dxc on PATH." >&2; exit 11; }
+          echo "VICE_METAL_SHADER_CONVERTER=$MSC" >> "$GITHUB_ENV"
+          echo "VICE_DXC=$DXC" >> "$GITHUB_ENV"
+
+      - name: Run official unbounded descriptor proof
+        run: bash scripts/validate_metal_unbounded.sh
