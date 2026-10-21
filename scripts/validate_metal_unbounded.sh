@@ -100,12 +100,52 @@ if len(inputs) != 1 or inputs[0].get("count") != 0 or inputs[0].get("unbounded")
     fail("t0,space0 is not reflected as one unbounded SRV range")
 if len(outputs) != 1 or outputs[0].get("count") != 1 or outputs[0].get("unbounded") is not False:
     fail("u0,space1 is not reflected as one bounded UAV")
+
 locations = metal.get("locations", [])
 if len(locations) != 2:
     fail(f"expected two explicit descriptor-table root locations, got {len(locations)}")
 if any(location.get("size") != 8 for location in locations):
     fail("explicit descriptor-table roots must be 64-bit GPU-address entries")
-print("Cooked Metal unbounded manifest contract verified.")
+
+raw_reflection_path = path.parent / artifacts["metal_reflection"]
+raw_reflection = json.loads(raw_reflection_path.read_text())
+raw_locations = raw_reflection.get("TopLevelArgumentBuffer", [])
+if len(raw_locations) != len(locations):
+    fail(
+        "VICE manifest/root count differs from Metal Shader Converter reflection: "
+        f"{len(locations)} vs {len(raw_locations)}"
+    )
+
+class_map = {
+    "CBV": "constant_buffer",
+    "SRV": "shader_resource",
+    "UAV": "unordered_access",
+    "SMP": "sampler",
+}
+manifest_by_identity = {
+    (location.get("class"), location.get("binding"), location.get("space")): location
+    for location in locations
+}
+for raw in raw_locations:
+    resource_class = class_map.get(raw.get("Type"))
+    if resource_class is None:
+        fail(f"unsupported raw converter resource type: {raw.get('Type')}")
+    identity = (resource_class, raw.get("Slot"), raw.get("Space"))
+    normalized = manifest_by_identity.get(identity)
+    if normalized is None:
+        fail(f"converter root {identity} is missing from VICE manifest")
+    if normalized.get("argument_buffer_offset") != raw.get("EltOffset"):
+        fail(
+            f"VICE changed converter EltOffset for {identity}: "
+            f"{normalized.get('argument_buffer_offset')} vs {raw.get('EltOffset')}"
+        )
+    if normalized.get("size") != raw.get("Size"):
+        fail(
+            f"VICE changed converter Size for {identity}: "
+            f"{normalized.get('size')} vs {raw.get('Size')}"
+        )
+
+print("Cooked Metal unbounded manifest and authoritative converter offsets verified.")
 PY
 
 VICE_METAL_UNBOUNDED_SMOKE_MANIFEST="$MANIFEST" "$SMOKE"
