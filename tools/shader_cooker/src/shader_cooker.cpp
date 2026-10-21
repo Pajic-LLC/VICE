@@ -899,7 +899,9 @@ CookResult cook(const CookRequest& request) {
                     [](const auto& resource) { return resource.unbounded; }
                 );
                 const MetalBindingReflection metal = explicit_layout
-                    ? build_explicit_metal_binding(result.reflection)
+                    ? parse_explicit_metal_shader_converter_reflection(
+                        read_file(*result.metal_reflection_path), result.reflection
+                    )
                     : parse_metal_shader_converter_reflection(
                         read_file(*result.metal_reflection_path), result.reflection
                     );
@@ -985,7 +987,9 @@ CookResult cook(const CookRequest& request) {
             return result;
         }
         metal_binding = explicit_layout
-            ? build_explicit_metal_binding(result.reflection)
+            ? parse_explicit_metal_shader_converter_reflection(
+                read_file(*result.metal_reflection_path), result.reflection
+            )
             : parse_metal_shader_converter_reflection(
                 read_file(*result.metal_reflection_path), result.reflection
             );
