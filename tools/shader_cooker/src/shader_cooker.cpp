@@ -759,7 +759,7 @@ std::string make_cache_key(
 ) {
     std::string material;
     material.reserve(source.size() + 512);
-    hash_append(material, "VICE_SHADER_ASSET_V5_METAL_EXPLICIT_TABLES1");
+    hash_append(material, "VICE_SHADER_ASSET_V5_METAL_EXPLICIT_TABLES2");
     hash_append(material, source);
     hash_append(material, request.entry_point);
     hash_append(material, shader_stage_name(request.stage));
