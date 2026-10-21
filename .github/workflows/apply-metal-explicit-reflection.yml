@@ -1,0 +1,39 @@
+name: Apply Metal explicit reflection patch
+
+on:
+  push:
+    branches:
+      - feature/206-metal-explicit-reflection
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: ${{ !contains(github.event.head_commit.message, 'Apply authoritative Metal reflection') }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          ref: feature/206-metal-explicit-reflection
+
+      - name: Apply guarded patch
+        run: python3 scripts/apply_metal_explicit_reflection.py
+
+      - name: Validate patch
+        run: |
+          git diff --check
+          git diff -- tools/shader_cooker/src/shader_cooker.cpp
+
+      - name: Commit patch
+        run: |
+          if git diff --quiet -- tools/shader_cooker/src/shader_cooker.cpp; then
+            echo "C cooker already uses authoritative explicit reflection."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add tools/shader_cooker/src/shader_cooker.cpp
+          git commit -m "Apply authoritative Metal reflection offsets"
+          git push origin HEAD:feature/206-metal-explicit-reflection
