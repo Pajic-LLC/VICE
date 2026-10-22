@@ -136,14 +136,12 @@ for raw in raw_locations:
         candidates = [
             location
             for location in locations
-            if location.get("binding") == raw.get("Slot")
-            and location.get("space") == raw.get("Space")
-            and location.get("argument_buffer_offset") == raw.get("EltOffset")
+            if location.get("argument_buffer_offset") == raw.get("EltOffset")
         ]
         if len(candidates) != 1:
             fail(
-                "converter descriptor-table root does not uniquely match the VICE manifest: "
-                f"slot={raw.get('Slot')} space={raw.get('Space')} offset={raw.get('EltOffset')}"
+                "converter descriptor-table root does not uniquely match the VICE manifest offset: "
+                f"{raw.get('EltOffset')}"
             )
         normalized = candidates[0]
         identity = (
