@@ -10,6 +10,7 @@
 #include <span>
 #include <string_view>
 #include <utility>
+#include <vector>
 
 #define CHECK(condition) do { \
     if (!(condition)) { \
@@ -31,6 +32,7 @@ static_assert(sizeof(SmokeMaterialRecord) == 16U);
 [[nodiscard]] std::unique_ptr<vice::render::Buffer> create_gpu_input(
     vice::render::Device& device,
     vice::render::CommandList& commands,
+    std::vector<std::unique_ptr<vice::render::Buffer>>& staging_buffers,
     const std::span<const std::byte> bytes,
     const std::string_view debug_name
 ) {
@@ -53,6 +55,7 @@ static_assert(sizeof(SmokeMaterialRecord) == 16U);
     if (gpu == nullptr || !commands.copy_buffer(*upload, 0U, *gpu, 0U, bytes.size())) {
         return nullptr;
     }
+    staging_buffers.push_back(std::move(upload));
     return gpu;
 }
 
@@ -173,22 +176,27 @@ int main() {
 
     auto commands = device->create_command_list();
     CHECK(commands != nullptr);
+    std::vector<std::unique_ptr<Buffer>> staging_buffers;
+    staging_buffers.reserve(3U);
 
     auto visible_buffer = create_gpu_input(
         *device,
         *commands,
+        staging_buffers,
         std::as_bytes(std::span{visible_scene_instances}),
         "VICE GPU material selection visible instances"
     );
     auto instance_material_buffer = create_gpu_input(
         *device,
         *commands,
+        staging_buffers,
         std::as_bytes(std::span{instance_materials}),
         "VICE GPU material selection instance materials"
     );
     auto material_buffer = create_gpu_input(
         *device,
         *commands,
+        staging_buffers,
         std::as_bytes(std::span{material_records}),
         "VICE GPU material selection material records"
     );
