@@ -2,6 +2,7 @@ add_library(
   vice_runtime
   STATIC
     src/environment_pipeline.cpp
+    src/gpu_cluster_visibility.cpp
     src/gpu_draw_batches.cpp
     src/gpu_instance_materials.cpp
     src/gpu_instance_table.cpp
