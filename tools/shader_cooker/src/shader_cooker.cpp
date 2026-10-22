@@ -708,13 +708,31 @@ ShaderReflection parse_dxc_resource_bindings(const std::string_view assembly) {
         }
 
         const auto fields = split_whitespace(content);
-        if (fields.size() < 7U) {
+        if (fields.size() < 6U) {
             reflection.diagnostics = "DXC emitted a malformed resource binding row: " + content;
             return reflection;
         }
 
-        const std::string& binding_token = fields[fields.size() - 2U];
-        const std::string& count_token = fields.back();
+        std::string binding_token;
+        std::string count_token;
+        constexpr std::string_view compact_unbounded_suffix{"unbounded"};
+        const std::string& final_token = fields.back();
+        if (final_token.size() > compact_unbounded_suffix.size() &&
+            final_token.ends_with(compact_unbounded_suffix)) {
+            binding_token = final_token.substr(
+                0,
+                final_token.size() - compact_unbounded_suffix.size()
+            );
+            count_token = "unbounded";
+        } else {
+            if (fields.size() < 7U) {
+                reflection.diagnostics = "DXC emitted a malformed resource binding row: " + content;
+                return reflection;
+            }
+            binding_token = fields[fields.size() - 2U];
+            count_token = final_token;
+        }
+
         const auto location = parse_binding_location(binding_token);
         if (!location.has_value()) {
             reflection.diagnostics = "DXC emitted an unsupported HLSL binding: " + binding_token;

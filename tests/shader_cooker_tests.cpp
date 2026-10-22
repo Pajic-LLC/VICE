@@ -71,6 +71,43 @@ int main() {
     CHECK(unordered_access.count == 0U);
     CHECK(unordered_access.unbounded);
 
+    constexpr const char* compact_unbounded_assembly = R"DXC(
+;
+; Resource Bindings:
+;
+; Name                                 Type  Format         Dim      ID      HLSL Bind  Count
+; ------------------------------ ---------- ------- ----------- ------- -------------- ------
+; InputBuffers                      texture  struct         r/o      T0     t0unbounded
+;
+; ViewId state:
+)DXC";
+    const ShaderReflection compact_unbounded_reflection =
+        parse_dxc_resource_bindings(compact_unbounded_assembly);
+    CHECK(compact_unbounded_reflection.valid);
+    CHECK(compact_unbounded_reflection.diagnostics.empty());
+    CHECK(compact_unbounded_reflection.resources.size() == 1U);
+    const auto& compact_unbounded = compact_unbounded_reflection.resources[0];
+    CHECK(compact_unbounded.name == "InputBuffers");
+    CHECK(compact_unbounded.register_class == ShaderRegisterClass::shader_resource);
+    CHECK(compact_unbounded.binding == 0U);
+    CHECK(compact_unbounded.space == 0U);
+    CHECK(compact_unbounded.count == 0U);
+    CHECK(compact_unbounded.unbounded);
+
+    constexpr const char* malformed_compact_unbounded_assembly = R"DXC(
+;
+; Resource Bindings:
+;
+; Name                                 Type  Format         Dim      ID      HLSL Bind  Count
+; ------------------------------ ---------- ------- ----------- ------- -------------- ------
+; InputBuffers                      texture  struct         r/o      T0       unbounded
+;
+)DXC";
+    const ShaderReflection malformed_compact_unbounded_reflection =
+        parse_dxc_resource_bindings(malformed_compact_unbounded_assembly);
+    CHECK(!malformed_compact_unbounded_reflection.valid);
+    CHECK(!malformed_compact_unbounded_reflection.diagnostics.empty());
+
     const ShaderReflection empty_reflection = parse_dxc_resource_bindings(R"DXC(
 ; Resource Bindings:
 ;
