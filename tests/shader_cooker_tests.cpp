@@ -236,10 +236,10 @@ int main() {
         "EntryPoint": "main",
         "ShaderType": "Compute",
         "TopLevelArgumentBuffer": [
-            {"EltOffset": 16, "Size": 8, "Slot": 2, "Space": 1, "Type": "Table"},
-            {"EltOffset": 40, "Size": 8, "Slot": 3, "Space": 1, "Type": "Table"},
-            {"EltOffset": 64, "Size": 8, "Slot": 4, "Space": 2, "Type": "Table"},
-            {"EltOffset": 96, "Size": 8, "Slot": 7, "Space": 3, "Type": "Table"}
+            {"EltOffset": 16, "Size": 8, "Slot": 4294967295, "Type": "Table"},
+            {"EltOffset": 40, "Size": 8, "Slot": 4294967295, "Type": "Table"},
+            {"EltOffset": 64, "Size": 8, "Slot": 4294967295, "Type": "Table"},
+            {"EltOffset": 96, "Size": 8, "Slot": 4294967295, "Type": "Table"}
         ]
     })JSON";
     const MetalBindingReflection explicit_table_metal =
@@ -248,17 +248,21 @@ int main() {
     CHECK(explicit_table_metal.diagnostics.empty());
     CHECK(explicit_table_metal.locations.size() == reflection.resources.size());
     CHECK(explicit_table_metal.locations[0].register_class == ShaderRegisterClass::constant_buffer);
+    CHECK(explicit_table_metal.locations[0].binding == 2U);
     CHECK(explicit_table_metal.locations[1].register_class == ShaderRegisterClass::sampler);
+    CHECK(explicit_table_metal.locations[1].binding == 3U);
     CHECK(explicit_table_metal.locations[2].register_class == ShaderRegisterClass::shader_resource);
+    CHECK(explicit_table_metal.locations[2].binding == 4U);
     CHECK(explicit_table_metal.locations[3].register_class == ShaderRegisterClass::unordered_access);
+    CHECK(explicit_table_metal.locations[3].binding == 7U);
     CHECK(explicit_table_metal.locations[3].descriptor_table);
 
     constexpr std::string_view malformed_explicit_json = R"JSON({
         "TopLevelArgumentBuffer": [
-            {"EltOffset": 16, "Size": 24, "Slot": 2, "Space": 1, "Type": "Table"},
-            {"EltOffset": 40, "Size": 8, "Slot": 3, "Space": 1, "Type": "Table"},
-            {"EltOffset": 64, "Size": 8, "Slot": 4, "Space": 2, "Type": "Table"},
-            {"EltOffset": 96, "Size": 8, "Slot": 7, "Space": 3, "Type": "Table"}
+            {"EltOffset": 16, "Size": 24, "Slot": 4294967295, "Type": "Table"},
+            {"EltOffset": 40, "Size": 8, "Slot": 4294967295, "Type": "Table"},
+            {"EltOffset": 64, "Size": 8, "Slot": 4294967295, "Type": "Table"},
+            {"EltOffset": 96, "Size": 8, "Slot": 4294967295, "Type": "Table"}
         ]
     })JSON";
     const MetalBindingReflection malformed_explicit =
