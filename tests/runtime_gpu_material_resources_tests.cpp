@@ -178,7 +178,7 @@ int main() {
     ));
     assert(diagnostics.empty());
 
-    const RuntimeMaterialBinding gpu_scene_binding = materials.find(world::ResourceId{material_id});
+    const detail::RuntimeMaterialBinding gpu_scene_binding = materials.find(world::ResourceId{material_id});
     assert(gpu_scene_binding.pipeline == nullptr);
     assert(gpu_scene_binding.constants == nullptr);
     assert(gpu_scene_binding.constants_size == 0U);
