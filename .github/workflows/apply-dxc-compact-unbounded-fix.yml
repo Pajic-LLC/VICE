@@ -1,0 +1,33 @@
+name: Apply DXC compact unbounded fix
+
+on:
+  push:
+    branches:
+      - fix/217-dxc-compact-unbounded
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: ${{ !contains(github.event.head_commit.message, 'Accept compact DXC unbounded binding tokens') }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          ref: fix/217-dxc-compact-unbounded
+
+      - name: Apply guarded patch
+        run: python3 scripts/apply_dxc_compact_unbounded_fix.py
+
+      - name: Validate patch
+        run: git diff --check
+
+      - name: Commit patch
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "4189826+github-actions[bot]@users.noreply.github.com"
+          git add tools/shader_cooker/src/shader_cooker.cpp tests/shader_cooker_tests.cpp
+          git commit -m "Accept compact DXC unbounded binding tokens"
+          git push origin HEAD:fix/217-dxc-compact-unbounded
