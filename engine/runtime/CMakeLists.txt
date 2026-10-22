@@ -9,6 +9,8 @@ add_library(
     src/gpu_material_scene.cpp
     src/gpu_material_table.cpp
     src/gpu_pbr_batches.cpp
+    src/gpu_shadow_batches.cpp
+    src/gpu_visibility_set.cpp
     src/material_pipeline.cpp
     src/module_loader.cpp
     src/module_paths.cpp
