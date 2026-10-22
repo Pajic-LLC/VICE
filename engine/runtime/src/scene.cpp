@@ -4,6 +4,8 @@
 #include <vice/runtime/gpu_draw_batches.hpp>
 #include <vice/runtime/gpu_instance_table.hpp>
 #include <vice/runtime/gpu_visibility_set.hpp>
+#include <vice/runtime/hiz.hpp>
+#include <vice/runtime/hiz_occlusion.hpp>
 #include <vice/runtime/post_process.hpp>
 #include <vice/runtime/visibility.hpp>
 
@@ -13,6 +15,7 @@
 #include "gpu_motion_history.hpp"
 #include "gpu_pbr_batches.hpp"
 #include "gpu_shadow_batches.hpp"
+#include "hiz_history.hpp"
 #include "material_pipeline.hpp"
 #include "sky_shaders.hpp"
 #include "taa_shaders.hpp"
@@ -2033,6 +2036,8 @@ struct RuntimeSceneRenderer::State {
     detail::RuntimeMaterialLibrary materials;
     detail::RuntimeEnvironment environment;
     RuntimeVisibilityCuller visibility;
+    RuntimeHiZPyramid hiz_pyramid;
+    RuntimeHiZOcclusionCuller hiz_occlusion;
     RuntimeGpuIdentityVisibility gpu_shadow_visibility;
     RuntimeGpuDrawBatcher gpu_draw_batches;
     RuntimeGpuDrawBatcher gpu_pbr_draw_batches;
@@ -2106,6 +2111,7 @@ struct RuntimeSceneRenderer::State {
     std::uint32_t bloom_width = 0;
     std::uint32_t bloom_height = 0;
     RuntimeTemporalHistory temporal_history;
+    detail::RuntimeHiZHistory hiz_history;
     RuntimePostProcessPlan post_process_plan = default_runtime_post_process_plan();
     std::size_t history_write_index = 0U;
     float exposure = 1.0F;
@@ -2167,6 +2173,8 @@ bool RuntimeSceneRenderer::initialize(
         return false;
     }
     if (!state_->visibility.initialize(device, diagnostics) ||
+        !state_->hiz_pyramid.initialize(device, diagnostics) ||
+        !state_->hiz_occlusion.initialize(device, diagnostics) ||
         !state_->gpu_shadow_visibility.initialize(device, diagnostics) ||
         !state_->gpu_draw_batches.initialize(device, diagnostics) ||
         !state_->gpu_pbr_draw_batches.initialize(device, diagnostics) ||
@@ -2695,6 +2703,7 @@ bool RuntimeSceneRenderer::resize(
         state_->bloom_composite.reset();
         state_->previous_models.clear();
         state_->temporal_history.reset();
+        state_->hiz_history.reset();
         state_->history_write_index = 0U;
         state_->depth_width = 0;
         state_->depth_height = 0;
@@ -2794,6 +2803,14 @@ bool RuntimeSceneRenderer::resize(
         return false;
     }
 
+    if (!state_->hiz_pyramid.resize(
+            metrics.drawable_width,
+            metrics.drawable_height,
+            diagnostics
+        )) {
+        return false;
+    }
+
     state_->scene_color = std::move(scene_color);
     state_->temporal_color_history = std::move(temporal_color_history);
     state_->depth_history = std::move(depth_history);
@@ -2803,6 +2820,7 @@ bool RuntimeSceneRenderer::resize(
     state_->bloom_composite = std::move(bloom_composite);
     state_->previous_models.clear();
     state_->temporal_history.reset();
+    state_->hiz_history.reset();
     state_->history_write_index = 0U;
     state_->depth_width = metrics.drawable_width;
     state_->depth_height = metrics.drawable_height;
@@ -2924,6 +2942,7 @@ bool RuntimeSceneRenderer::render(
         return false;
     }
     if (metrics.drawable_width == 0U || metrics.drawable_height == 0U) {
+        state_->hiz_history.reset();
         if (diagnostics != nullptr) diagnostics->clear();
         return true;
     }
@@ -3005,6 +3024,8 @@ bool RuntimeSceneRenderer::render(
         ? state_->temporal_color_history[1U - state_->history_write_index].get()
         : scene_color;
     auto* const current_depth = state_->depth_history[state_->history_write_index].get();
+    auto* const hiz_previous_depth =
+        state_->depth_history[1U - state_->history_write_index].get();
     auto* const previous_depth = temporal_frame.history_valid
         ? state_->depth_history[1U - state_->history_write_index].get()
         : current_depth;
@@ -3101,6 +3122,62 @@ bool RuntimeSceneRenderer::render(
         return false;
     }
 
+    RuntimeVisibilityGpuResult camera_visibility = state_->visibility.result();
+    const bool use_hiz_occlusion = !instances.empty() && hiz_previous_depth != nullptr &&
+        state_->hiz_history.usable(
+            runtime_camera.entity,
+            camera_global_position,
+            runtime_camera.forward,
+            runtime_camera.up,
+            runtime_camera.camera,
+            runtime_camera.aspect_ratio,
+            instances
+        );
+    if (use_hiz_occlusion) {
+        if (!state_->hiz_pyramid.build(*commands, *hiz_previous_depth, diagnostics)) {
+            return false;
+        }
+
+        const auto& previous_camera = state_->hiz_history.camera();
+        std::vector<RuntimeVisibilitySphere> previous_visibility_spheres;
+        previous_visibility_spheres.reserve(instances.size());
+        for (std::size_t instance_index = 0U; instance_index < instances.size(); ++instance_index) {
+            const auto& instance = instances[instance_index];
+            const auto& mesh = state_->meshes.at(instance.mesh);
+            const auto sphere = runtime_transform_bounding_sphere(
+                mesh.bounds,
+                runtime_model_matrix_relative_to(instance, previous_camera.global_position)
+            );
+            if (!valid(sphere)) {
+                set_diagnostics(
+                    diagnostics,
+                    "VICE Runtime produced an invalid previous-camera Hi-Z visibility sphere."
+                );
+                return false;
+            }
+            previous_visibility_spheres.push_back(RuntimeVisibilitySphere{
+                .center = sphere.center,
+                .radius = sphere.radius,
+                .instance_index = static_cast<std::uint32_t>(instance_index),
+            });
+        }
+
+        if (!state_->hiz_occlusion.cull(
+                *commands,
+                camera_visibility,
+                previous_visibility_spheres,
+                previous_camera.camera_relative_view_projection,
+                previous_camera.near_plane,
+                previous_camera.far_plane,
+                state_->hiz_pyramid,
+                0.001F,
+                diagnostics
+            )) {
+            return false;
+        }
+        camera_visibility = state_->hiz_occlusion.result();
+    }
+
     std::vector<math::Mat4> gpu_instance_models;
     gpu_instance_models.reserve(instances.size());
     std::vector<std::uint32_t> gpu_batch_assignments(
@@ -3173,7 +3250,7 @@ bool RuntimeSceneRenderer::render(
                 *commands, gpu_previous_build.models, diagnostics
             ) || !state_->gpu_motion_draw_batches.build(
                 *commands,
-                state_->visibility.result(),
+                camera_visibility,
                 gpu_shadow_plan.instance_batches,
                 gpu_shadow_plan.batches,
                 diagnostics
@@ -3195,7 +3272,7 @@ bool RuntimeSceneRenderer::render(
     if (!gpu_default_batches.empty()) {
         if (!state_->gpu_draw_batches.build(
                 *commands,
-                state_->visibility.result(),
+                camera_visibility,
                 gpu_batch_assignments,
                 gpu_default_batches,
                 diagnostics
@@ -3214,7 +3291,7 @@ bool RuntimeSceneRenderer::render(
     if (!gpu_pbr_plan.batches.empty()) {
         if (!state_->gpu_pbr_draw_batches.build(
                 *commands,
-                state_->visibility.result(),
+                camera_visibility,
                 gpu_pbr_plan.instance_batches,
                 gpu_pbr_plan.batches,
                 diagnostics
@@ -4405,6 +4482,29 @@ bool RuntimeSceneRenderer::render(
         set_diagnostics(diagnostics, "VICE Runtime scene submission failed.");
         return false;
     }
+
+    const math::Mat4 hiz_relative_view_projection = runtime_apply_projection_jitter(
+        math::multiply(
+            math::perspective_rh_zo(
+                runtime_camera.camera.vertical_fov_radians,
+                runtime_camera.aspect_ratio,
+                runtime_camera.camera.near_plane,
+                runtime_camera.camera.far_plane
+            ),
+            math::look_at_rh({}, runtime_camera.forward, runtime_camera.up)
+        ),
+        jitter
+    );
+    state_->hiz_history.commit(
+        runtime_camera.entity,
+        camera_global_position,
+        runtime_camera.forward,
+        runtime_camera.up,
+        runtime_camera.camera,
+        runtime_camera.aspect_ratio,
+        hiz_relative_view_projection,
+        instances
+    );
 
     state_->previous_models.clear();
     if (temporal_resolved) {
