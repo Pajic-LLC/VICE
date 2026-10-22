@@ -12,6 +12,7 @@ add_library(
     src/gpu_shadow_batches.cpp
     src/gpu_visibility_set.cpp
     src/hiz.cpp
+    src/hiz_occlusion.cpp
     src/material_pipeline.cpp
     src/module_loader.cpp
     src/module_paths.cpp
