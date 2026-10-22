@@ -90,6 +90,22 @@ namespace {
     );
 }
 
+[[nodiscard]] bool has_unbounded_binding(
+    const tools::shader_cooker::ShaderReflection& reflection,
+    const tools::shader_cooker::ShaderRegisterClass register_class,
+    const std::uint32_t binding,
+    const std::uint32_t space
+) noexcept {
+    return std::any_of(
+        reflection.resources.begin(),
+        reflection.resources.end(),
+        [=](const tools::shader_cooker::ShaderResourceReflection& resource) {
+            return resource.register_class == register_class && resource.binding == binding &&
+                resource.space == space && resource.count == 0U && resource.unbounded;
+        }
+    );
+}
+
 [[nodiscard]] bool supported_v1_reflection(
     const tools::shader_cooker::ShaderReflection& reflection
 ) noexcept {
@@ -193,6 +209,85 @@ namespace {
     return supported_textured_fragment_reflection(reflection, 4U, 4U, true, false);
 }
 
+[[nodiscard]] bool supported_v4_vertex_reflection(
+    const tools::shader_cooker::ShaderReflection& reflection
+) noexcept {
+    if (!reflection.valid) return false;
+    for (const auto& resource : reflection.resources) {
+        if (resource.register_class == tools::shader_cooker::ShaderRegisterClass::constant_buffer) {
+            if (resource.space != 0U || resource.binding != 0U || resource.count != 1U || resource.unbounded) {
+                return false;
+            }
+        } else if (resource.register_class == tools::shader_cooker::ShaderRegisterClass::shader_resource) {
+            if (resource.space != 0U || resource.binding > 1U || resource.count != 1U || resource.unbounded) {
+                return false;
+            }
+        } else {
+            return false;
+        }
+    }
+    return has_binding(
+        reflection, tools::shader_cooker::ShaderRegisterClass::constant_buffer, 0U, 0U
+    ) && has_binding(
+        reflection, tools::shader_cooker::ShaderRegisterClass::shader_resource, 0U, 0U
+    ) && has_binding(
+        reflection, tools::shader_cooker::ShaderRegisterClass::shader_resource, 1U, 0U
+    );
+}
+
+[[nodiscard]] bool supported_v4_fragment_reflection(
+    const tools::shader_cooker::ShaderReflection& reflection
+) noexcept {
+    if (!reflection.valid) return false;
+    for (const auto& resource : reflection.resources) {
+        if (resource.register_class == tools::shader_cooker::ShaderRegisterClass::constant_buffer) {
+            if (resource.space != 0U || resource.binding != 0U || resource.count != 1U || resource.unbounded) {
+                return false;
+            }
+        } else if (resource.register_class == tools::shader_cooker::ShaderRegisterClass::shader_resource) {
+            const bool scene_table = resource.space == 0U &&
+                (resource.binding == 2U || resource.binding == 3U) &&
+                resource.count == 1U && !resource.unbounded;
+            const bool material_textures = resource.space == 1U && resource.binding == 0U &&
+                resource.count == 0U && resource.unbounded;
+            const bool lighting = resource.space == 2U && resource.binding <= 24U &&
+                resource.count == 1U && !resource.unbounded;
+            if (!scene_table && !material_textures && !lighting) return false;
+        } else if (resource.register_class == tools::shader_cooker::ShaderRegisterClass::sampler) {
+            const bool material_samplers = resource.space == 1U && resource.binding == 0U &&
+                resource.count == 0U && resource.unbounded;
+            const bool lighting_samplers = resource.space == 2U && resource.binding <= 1U &&
+                resource.count == 1U && !resource.unbounded;
+            if (!material_samplers && !lighting_samplers) return false;
+        } else {
+            return false;
+        }
+    }
+
+    bool required = has_binding(
+        reflection, tools::shader_cooker::ShaderRegisterClass::constant_buffer, 0U, 0U
+    ) && has_binding(
+        reflection, tools::shader_cooker::ShaderRegisterClass::shader_resource, 2U, 0U
+    ) && has_binding(
+        reflection, tools::shader_cooker::ShaderRegisterClass::shader_resource, 3U, 0U
+    ) && has_unbounded_binding(
+        reflection, tools::shader_cooker::ShaderRegisterClass::shader_resource, 0U, 1U
+    ) && has_unbounded_binding(
+        reflection, tools::shader_cooker::ShaderRegisterClass::sampler, 0U, 1U
+    );
+    for (std::uint32_t binding = 0U; binding <= 24U; ++binding) {
+        required = required && has_binding(
+            reflection, tools::shader_cooker::ShaderRegisterClass::shader_resource, binding, 2U
+        );
+    }
+    for (std::uint32_t binding = 0U; binding <= 1U; ++binding) {
+        required = required && has_binding(
+            reflection, tools::shader_cooker::ShaderRegisterClass::sampler, binding, 2U
+        );
+    }
+    return required;
+}
+
 [[nodiscard]] bool texture_available(
     const render::TextureStableId& texture,
     const std::span<const world::ResourceId> available
@@ -268,6 +363,8 @@ ProjectMaterialCookResult cook_project_render_materials(
             tools::render_material_cooker::render_material_source_format_version_v2;
         const bool extended_pbr = parsed.source->version >=
             tools::render_material_cooker::render_material_source_format_version_v3;
+        const bool gpu_scene_pbr = parsed.source->version ==
+            tools::render_material_cooker::render_material_source_format_version_v4;
         if (textured && !texture_available(parsed.source->base_color_texture, available_textures)) {
             result.diagnostics = "Render material `" + path_text(iterator->path()) +
                 "` references a base-color texture that this project did not cook.";
@@ -305,22 +402,23 @@ ProjectMaterialCookResult cook_project_render_materials(
         vertex_request.entry_point = parsed.source->vertex_entry;
         vertex_request.stage = tools::shader_cooker::ShaderStage::vertex;
         vertex_request.target = platform_target();
+        if (gpu_scene_pbr) vertex_request.shader_model = "6.6";
         vertex_request.toolchain = configured_toolchain();
         const auto vertex = tools::shader_cooker::cook(vertex_request);
         if (!vertex.success) {
             result.diagnostics = shader_failure(iterator->path(), "vertex", vertex);
             return result;
         }
-        const bool vertex_supported = textured
-            ? supported_v2_vertex_reflection(vertex.reflection)
-            : supported_v1_reflection(vertex.reflection);
-        if (!vertex_supported || !has_binding(
-                vertex.reflection,
-                tools::shader_cooker::ShaderRegisterClass::constant_buffer,
-                0U
-            )) {
-            result.diagnostics = "Render material vertex shader `" + path_text(shader_source) +
-                "` must use the VICE scene constant buffer at b0, space0 without unsupported resources.";
+        const bool vertex_supported = gpu_scene_pbr
+            ? supported_v4_vertex_reflection(vertex.reflection)
+            : textured ? supported_v2_vertex_reflection(vertex.reflection)
+                       : supported_v1_reflection(vertex.reflection);
+        if (!vertex_supported) {
+            result.diagnostics = gpu_scene_pbr
+                ? "Render material v4 vertex shader `" + path_text(shader_source) +
+                    "` must use b0 SceneFrame plus t0 scene models and t1 visible-instance indices in space0."
+                : "Render material vertex shader `" + path_text(shader_source) +
+                    "` must use the VICE scene constant buffer at b0, space0 without unsupported resources.";
             return result;
         }
 
@@ -330,47 +428,57 @@ ProjectMaterialCookResult cook_project_render_materials(
         fragment_request.entry_point = parsed.source->fragment_entry;
         fragment_request.stage = tools::shader_cooker::ShaderStage::fragment;
         fragment_request.target = platform_target();
+        if (gpu_scene_pbr) fragment_request.shader_model = "6.6";
         fragment_request.toolchain = configured_toolchain();
         const auto fragment = tools::shader_cooker::cook(fragment_request);
         if (!fragment.success) {
             result.diagnostics = shader_failure(iterator->path(), "fragment", fragment);
             return result;
         }
-        const bool fragment_supported = extended_pbr
-            ? supported_v3_fragment_reflection(fragment.reflection)
-            : textured ? supported_v2_fragment_reflection(fragment.reflection)
-                       : supported_v1_reflection(fragment.reflection);
-        bool fragment_required = has_binding(
-            fragment.reflection,
-            tools::shader_cooker::ShaderRegisterClass::constant_buffer,
-            1U
-        );
-        if (textured) {
-            fragment_required = fragment_required && has_binding(
-                fragment.reflection, tools::shader_cooker::ShaderRegisterClass::shader_resource, 0U
-            ) && has_binding(
-                fragment.reflection, tools::shader_cooker::ShaderRegisterClass::sampler, 0U
+
+        if (gpu_scene_pbr) {
+            if (!supported_v4_fragment_reflection(fragment.reflection)) {
+                result.diagnostics = "Render material v4 fragment shader `" + path_text(shader_source) +
+                    "` must use t2 instance materials and t3 material records in space0, unbounded t0/s0 material arrays in space1, and the complete bounded t0-t24/s0-s1 lighting set in space2.";
+                return result;
+            }
+        } else {
+            const bool fragment_supported = extended_pbr
+                ? supported_v3_fragment_reflection(fragment.reflection)
+                : textured ? supported_v2_fragment_reflection(fragment.reflection)
+                           : supported_v1_reflection(fragment.reflection);
+            bool fragment_required = has_binding(
+                fragment.reflection,
+                tools::shader_cooker::ShaderRegisterClass::constant_buffer,
+                1U
             );
-        }
-        if (extended_pbr) {
-            for (std::uint32_t binding = 1U; binding <= 3U; ++binding) {
+            if (textured) {
                 fragment_required = fragment_required && has_binding(
-                    fragment.reflection, tools::shader_cooker::ShaderRegisterClass::shader_resource, binding
+                    fragment.reflection, tools::shader_cooker::ShaderRegisterClass::shader_resource, 0U
+                ) && has_binding(
+                    fragment.reflection, tools::shader_cooker::ShaderRegisterClass::sampler, 0U
                 );
             }
-        }
-        if (!fragment_supported || !fragment_required) {
-            result.diagnostics = extended_pbr
-                ? "Render material v3 fragment shader `" + path_text(shader_source) +
-                    "` must use b1 material constants, t0-t3 PBR textures, and s0 sampler in space0; "
-                    "optional IBL must provide the complete t8-t10/s2 set."
-                : textured
-                    ? "Render material v2 fragment shader `" + path_text(shader_source) +
-                        "` must use b1 material constants, t0 base-color texture, and s0 sampler in space0; "
-                        "optional directional shadows use t1-t4/s1 and optional point shadows require the complete t5-t16/s1 set."
-                    : "Render material fragment shader `" + path_text(shader_source) +
-                    "` must use the VICE material constant buffer at b1, space0.";
-            return result;
+            if (extended_pbr) {
+                for (std::uint32_t binding = 1U; binding <= 3U; ++binding) {
+                    fragment_required = fragment_required && has_binding(
+                        fragment.reflection, tools::shader_cooker::ShaderRegisterClass::shader_resource, binding
+                    );
+                }
+            }
+            if (!fragment_supported || !fragment_required) {
+                result.diagnostics = extended_pbr
+                    ? "Render material v3 fragment shader `" + path_text(shader_source) +
+                        "` must use b1 material constants, t0-t3 PBR textures, and s0 sampler in space0; "
+                        "optional IBL must provide the complete t8-t10/s2 set."
+                    : textured
+                        ? "Render material v2 fragment shader `" + path_text(shader_source) +
+                            "` must use b1 material constants, t0 base-color texture, and s0 sampler in space0; "
+                            "optional directional shadows use t1-t4/s1 and optional point shadows require the complete t5-t16/s1 set."
+                        : "Render material fragment shader `" + path_text(shader_source) +
+                        "` must use the VICE material constant buffer at b1, space0.";
+                return result;
+            }
         }
 
         const auto vertex_relative = std::filesystem::relative(vertex.manifest_path, cooked_path.parent_path(), error);
