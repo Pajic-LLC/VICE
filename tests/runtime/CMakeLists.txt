@@ -167,6 +167,22 @@ vice_enable_warnings(vice_runtime_gpu_meshlet_table_tests)
 add_test(NAME vice_runtime_gpu_meshlet_table_tests COMMAND vice_runtime_gpu_meshlet_table_tests)
 
 add_executable(
+  vice_runtime_gpu_cluster_visibility_tests
+  ../runtime_gpu_cluster_visibility_tests.cpp
+)
+target_link_libraries(
+  vice_runtime_gpu_cluster_visibility_tests
+  PRIVATE
+    VICE::Runtime
+)
+target_compile_features(vice_runtime_gpu_cluster_visibility_tests PRIVATE cxx_std_23)
+vice_enable_warnings(vice_runtime_gpu_cluster_visibility_tests)
+add_test(
+  NAME vice_runtime_gpu_cluster_visibility_tests
+  COMMAND vice_runtime_gpu_cluster_visibility_tests
+)
+
+add_executable(
   vice_runtime_gpu_material_resources_tests
   ../runtime_gpu_material_resources_tests.cpp
 )
@@ -192,16 +208,10 @@ add_executable(
   ../runtime_gpu_instance_material_tests.cpp
 )
 target_link_libraries(
-  vice_runtime_gpu_instance_material_tests
-  PRIVATE
-    VICE::Runtime
-)
+  vice_runtime_gpu_instance_material_tests PRIVATE VICE::Runtime)
 target_compile_features(vice_runtime_gpu_instance_material_tests PRIVATE cxx_std_23)
 vice_enable_warnings(vice_runtime_gpu_instance_material_tests)
-add_test(
-  NAME vice_runtime_gpu_instance_material_tests
-  COMMAND vice_runtime_gpu_instance_material_tests
-)
+add_test(NAME vice_runtime_gpu_instance_material_tests COMMAND vice_runtime_gpu_instance_material_tests)
 
 add_executable(
   vice_runtime_gpu_pbr_batch_tests
@@ -212,17 +222,10 @@ target_include_directories(
   PRIVATE
     "${PROJECT_SOURCE_DIR}/engine/runtime/src"
 )
-target_link_libraries(
-  vice_runtime_gpu_pbr_batch_tests
-  PRIVATE
-    VICE::Runtime
-)
+target_link_libraries(vice_runtime_gpu_pbr_batch_tests PRIVATE VICE::Runtime)
 target_compile_features(vice_runtime_gpu_pbr_batch_tests PRIVATE cxx_std_23)
 vice_enable_warnings(vice_runtime_gpu_pbr_batch_tests)
-add_test(
-  NAME vice_runtime_gpu_pbr_batch_tests
-  COMMAND vice_runtime_gpu_pbr_batch_tests
-)
+add_test(NAME vice_runtime_gpu_pbr_batch_tests COMMAND vice_runtime_gpu_pbr_batch_tests)
 
 add_executable(
   vice_runtime_gpu_shadow_batch_tests
@@ -233,17 +236,10 @@ target_include_directories(
   PRIVATE
     "${PROJECT_SOURCE_DIR}/engine/runtime/src"
 )
-target_link_libraries(
-  vice_runtime_gpu_shadow_batch_tests
-  PRIVATE
-    VICE::Runtime
-)
+target_link_libraries(vice_runtime_gpu_shadow_batch_tests PRIVATE VICE::Runtime)
 target_compile_features(vice_runtime_gpu_shadow_batch_tests PRIVATE cxx_std_23)
 vice_enable_warnings(vice_runtime_gpu_shadow_batch_tests)
-add_test(
-  NAME vice_runtime_gpu_shadow_batch_tests
-  COMMAND vice_runtime_gpu_shadow_batch_tests
-)
+add_test(NAME vice_runtime_gpu_shadow_batch_tests COMMAND vice_runtime_gpu_shadow_batch_tests)
 
 add_executable(
   vice_runtime_gpu_motion_history_tests
@@ -254,65 +250,37 @@ target_include_directories(
   PRIVATE
     "${PROJECT_SOURCE_DIR}/engine/runtime/src"
 )
-target_link_libraries(
-  vice_runtime_gpu_motion_history_tests
-  PRIVATE
-    VICE::Runtime
-)
+target_link_libraries(vice_runtime_gpu_motion_history_tests PRIVATE VICE::Runtime)
 target_compile_features(vice_runtime_gpu_motion_history_tests PRIVATE cxx_std_23)
 vice_enable_warnings(vice_runtime_gpu_motion_history_tests)
-add_test(
-  NAME vice_runtime_gpu_motion_history_tests
-  COMMAND vice_runtime_gpu_motion_history_tests
-)
+add_test(NAME vice_runtime_gpu_motion_history_tests COMMAND vice_runtime_gpu_motion_history_tests)
 
 add_executable(
   vice_runtime_supporting_pass_execution_tests
   ../runtime_supporting_pass_execution_tests.cpp
 )
-target_link_libraries(
-  vice_runtime_supporting_pass_execution_tests
-  PRIVATE
-    VICE::Runtime
-)
+target_link_libraries(vice_runtime_supporting_pass_execution_tests PRIVATE VICE::Runtime)
 target_compile_features(vice_runtime_supporting_pass_execution_tests PRIVATE cxx_std_23)
 vice_enable_warnings(vice_runtime_supporting_pass_execution_tests)
-add_test(
-  NAME vice_runtime_supporting_pass_execution_tests
-  COMMAND vice_runtime_supporting_pass_execution_tests
-)
+add_test(NAME vice_runtime_supporting_pass_execution_tests COMMAND vice_runtime_supporting_pass_execution_tests)
 
 add_executable(
   vice_runtime_hiz_tests
   ../runtime_hiz_tests.cpp
 )
-target_link_libraries(
-  vice_runtime_hiz_tests
-  PRIVATE
-    VICE::Runtime
-)
+target_link_libraries(vice_runtime_hiz_tests PRIVATE VICE::Runtime)
 target_compile_features(vice_runtime_hiz_tests PRIVATE cxx_std_23)
 vice_enable_warnings(vice_runtime_hiz_tests)
-add_test(
-  NAME vice_runtime_hiz_tests
-  COMMAND vice_runtime_hiz_tests
-)
+add_test(NAME vice_runtime_hiz_tests COMMAND vice_runtime_hiz_tests)
 
 add_executable(
   vice_runtime_hiz_occlusion_tests
   ../runtime_hiz_occlusion_tests.cpp
 )
-target_link_libraries(
-  vice_runtime_hiz_occlusion_tests
-  PRIVATE
-    VICE::Runtime
-)
+target_link_libraries(vice_runtime_hiz_occlusion_tests PRIVATE VICE::Runtime)
 target_compile_features(vice_runtime_hiz_occlusion_tests PRIVATE cxx_std_23)
 vice_enable_warnings(vice_runtime_hiz_occlusion_tests)
-add_test(
-  NAME vice_runtime_hiz_occlusion_tests
-  COMMAND vice_runtime_hiz_occlusion_tests
-)
+add_test(NAME vice_runtime_hiz_occlusion_tests COMMAND vice_runtime_hiz_occlusion_tests)
 
 add_executable(
   vice_runtime_hiz_history_tests
@@ -323,17 +291,10 @@ target_include_directories(
   PRIVATE
     "${PROJECT_SOURCE_DIR}/engine/runtime/src"
 )
-target_link_libraries(
-  vice_runtime_hiz_history_tests
-  PRIVATE
-    VICE::Runtime
-)
+target_link_libraries(vice_runtime_hiz_history_tests PRIVATE VICE::Runtime)
 target_compile_features(vice_runtime_hiz_history_tests PRIVATE cxx_std_23)
 vice_enable_warnings(vice_runtime_hiz_history_tests)
-add_test(
-  NAME vice_runtime_hiz_history_tests
-  COMMAND vice_runtime_hiz_history_tests
-)
+add_test(NAME vice_runtime_hiz_history_tests COMMAND vice_runtime_hiz_history_tests)
 
 if(TARGET vice_mesh_cooker_lib)
   add_executable(
