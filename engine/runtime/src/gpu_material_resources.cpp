@@ -1,5 +1,7 @@
 #include "gpu_material_resources.hpp"
+#include "material_pipeline.hpp"
 
+#include <optional>
 #include <utility>
 
 namespace vice::runtime::detail {
@@ -24,26 +26,48 @@ void set_diagnostics(std::string* const diagnostics, std::string message) {
     return desc;
 }
 
-} // namespace
-
-void RuntimeGpuMaterialResourceTable::clear() noexcept {
-    samplers_.clear();
-    owned_samplers_.clear();
-    textures_.clear();
+[[nodiscard]] world::ResourceId texture_resource_id(
+    const render::TextureStableId& stable_id
+) noexcept {
+    return world::ResourceId{world::PersistentId{stable_id}};
 }
 
-bool RuntimeGpuMaterialResourceTable::initialize(
+[[nodiscard]] render::Texture* find_shared_material_texture(
+    const RuntimeMaterialLibrary& material_library,
+    const world::ResourceId resource_id
+) noexcept {
+    for (const auto& record : material_library.catalog().records()) {
+        const RuntimeMaterialBinding binding = material_library.find(record.resource_id);
+        if (texture_resource_id(record.asset.base_color_texture) == resource_id) {
+            return binding.base_color_texture;
+        }
+        if (texture_resource_id(record.asset.normal_texture) == resource_id) {
+            return binding.normal_texture;
+        }
+        if (texture_resource_id(record.asset.orm_texture) == resource_id) {
+            return binding.orm_texture;
+        }
+        if (texture_resource_id(record.asset.emissive_texture) == resource_id) {
+            return binding.emissive_texture;
+        }
+    }
+    return nullptr;
+}
+
+template <typename TextureResolver>
+[[nodiscard]] bool build_resources(
     render::Device& device,
     const RuntimeGpuMaterialTablePlan& plan,
-    const RuntimeTextureLibrary& texture_library,
+    TextureResolver&& resolve_texture,
+    std::vector<render::Texture*>& textures,
+    std::vector<std::unique_ptr<render::Sampler>>& owned_samplers,
+    std::vector<render::Sampler*>& samplers,
     std::string* const diagnostics
 ) {
-    clear();
-
     std::vector<render::Texture*> next_textures;
     next_textures.reserve(plan.texture_ids.size());
     for (const world::ResourceId resource_id : plan.texture_ids) {
-        render::Texture* const texture = texture_library.find(resource_id);
+        render::Texture* const texture = resolve_texture(resource_id);
         if (texture == nullptr) {
             set_diagnostics(
                 diagnostics,
@@ -80,11 +104,57 @@ bool RuntimeGpuMaterialResourceTable::initialize(
         next_owned_samplers.push_back(std::move(sampler));
     }
 
-    textures_ = std::move(next_textures);
-    owned_samplers_ = std::move(next_owned_samplers);
-    samplers_ = std::move(next_samplers);
+    textures = std::move(next_textures);
+    owned_samplers = std::move(next_owned_samplers);
+    samplers = std::move(next_samplers);
     if (diagnostics != nullptr) diagnostics->clear();
     return true;
+}
+
+} // namespace
+
+void RuntimeGpuMaterialResourceTable::clear() noexcept {
+    samplers_.clear();
+    owned_samplers_.clear();
+    textures_.clear();
+}
+
+bool RuntimeGpuMaterialResourceTable::initialize(
+    render::Device& device,
+    const RuntimeGpuMaterialTablePlan& plan,
+    const RuntimeTextureLibrary& texture_library,
+    std::string* const diagnostics
+) {
+    clear();
+    return build_resources(
+        device,
+        plan,
+        [&](const world::ResourceId resource_id) { return texture_library.find(resource_id); },
+        textures_,
+        owned_samplers_,
+        samplers_,
+        diagnostics
+    );
+}
+
+bool RuntimeGpuMaterialResourceTable::initialize(
+    render::Device& device,
+    const RuntimeGpuMaterialTablePlan& plan,
+    const RuntimeMaterialLibrary& material_library,
+    std::string* const diagnostics
+) {
+    clear();
+    return build_resources(
+        device,
+        plan,
+        [&](const world::ResourceId resource_id) {
+            return find_shared_material_texture(material_library, resource_id);
+        },
+        textures_,
+        owned_samplers_,
+        samplers_,
+        diagnostics
+    );
 }
 
 RuntimeGpuMaterialResourceTableView RuntimeGpuMaterialResourceTable::view() const noexcept {

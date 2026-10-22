@@ -11,6 +11,8 @@
 
 namespace vice::runtime::detail {
 
+class RuntimeMaterialLibrary;
+
 struct RuntimeGpuMaterialResourceTableView {
     std::span<render::Texture* const> textures;
     std::span<render::Sampler* const> samplers;
@@ -30,6 +32,13 @@ public:
         render::Device& device,
         const RuntimeGpuMaterialTablePlan& plan,
         const RuntimeTextureLibrary& texture_library,
+        std::string* diagnostics = nullptr
+    );
+
+    [[nodiscard]] bool initialize(
+        render::Device& device,
+        const RuntimeGpuMaterialTablePlan& plan,
+        const RuntimeMaterialLibrary& material_library,
         std::string* diagnostics = nullptr
     );
 
