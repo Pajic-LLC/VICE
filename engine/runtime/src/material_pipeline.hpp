@@ -12,6 +12,8 @@
 
 namespace vice::runtime::detail {
 
+class RuntimeTextureLibrary;
+
 struct RuntimeMaterialBinding {
     render::GraphicsPipeline* pipeline = nullptr;
     render::Buffer* constants = nullptr;
@@ -48,6 +50,7 @@ public:
 
     [[nodiscard]] RuntimeMaterialBinding find(world::ResourceId resource_id) const noexcept;
     [[nodiscard]] const CookedRenderMaterialCatalog& catalog() const noexcept;
+    [[nodiscard]] const RuntimeTextureLibrary* texture_library() const noexcept;
 
 private:
     struct State;
