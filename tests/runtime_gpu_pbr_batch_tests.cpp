@@ -89,8 +89,14 @@ int main() {
     material_plan.records.resize(material_plan.material_ids.size());
     const auto instance_materials = build_runtime_gpu_instance_material_records(instances, material_plan);
     assert(instance_materials);
-    assert(instance_materials.records[0].material_index != instance_materials.records[1].material_index);
+    assert(instance_materials.records.size() == instances.size());
+    assert(instance_materials.records[0].material_index == 0U);
+    assert(instance_materials.records[1].material_index == 1U);
+    assert(instance_materials.records[2].material_index == 2U);
+    assert(instance_materials.records[3].material_index == runtime_gpu_resource_unassigned);
+    assert(instance_materials.records[4].material_index == 1U);
     assert(batches.plan.instance_batches[0] == batches.plan.instance_batches[1]);
+    assert(batches.plan.instance_batches[2] == runtime_gpu_draw_batch_unassigned);
 
     auto missing_material_instances = instances;
     missing_material_instances[0].material = world::ResourceId{
