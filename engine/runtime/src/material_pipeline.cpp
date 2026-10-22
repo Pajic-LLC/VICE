@@ -398,6 +398,34 @@ bool RuntimeMaterialLibrary::initialize(
     if (!state_->textures.initialize(device, content_root, diagnostics)) return false;
 
     for (const auto& record : state_->catalog.records()) {
+        const bool textured = record.asset.version >= render::render_material_asset_format_version_v2;
+        const bool extended_pbr = record.asset.version >= render::render_material_asset_format_version_v3;
+        const bool gpu_scene_pbr = render::render_material_uses_gpu_scene_pbr(record.asset.version);
+
+        if (gpu_scene_pbr) {
+            const world::ResourceId base_color_id{world::PersistentId{record.asset.base_color_texture}};
+            const world::ResourceId normal_id{world::PersistentId{record.asset.normal_texture}};
+            const world::ResourceId orm_id{world::PersistentId{record.asset.orm_texture}};
+            const world::ResourceId emissive_id{world::PersistentId{record.asset.emissive_texture}};
+            render::Texture* const base_color_texture = state_->textures.find(base_color_id);
+            render::Texture* const normal_texture = state_->textures.find(normal_id);
+            render::Texture* const orm_texture = state_->textures.find(orm_id);
+            render::Texture* const emissive_texture = state_->textures.find(emissive_id);
+            if (base_color_texture == nullptr || normal_texture == nullptr ||
+                orm_texture == nullptr || emissive_texture == nullptr) {
+                set_diagnostics(diagnostics, "Render material `" + record.resource_id.value.to_string() +
+                    "` references one or more missing V4 GPU-scene PBR textures.");
+                return false;
+            }
+            state_->materials.emplace(record.resource_id, State::MaterialGpu{
+                .base_color_texture = base_color_texture,
+                .normal_texture = normal_texture,
+                .orm_texture = orm_texture,
+                .emissive_texture = emissive_texture,
+            });
+            continue;
+        }
+
         const auto vertex_manifest = (
             record.path.parent_path() / record.asset.vertex_shader_manifest
         ).lexically_normal();
@@ -417,8 +445,6 @@ bool RuntimeMaterialLibrary::initialize(
             return false;
         }
 
-        const bool textured = record.asset.version >= render::render_material_asset_format_version_v2;
-        const bool extended_pbr = record.asset.version >= render::render_material_asset_format_version_v3;
         std::uint32_t directional_shadow_cascade_count = 0;
         std::uint32_t shadow_texture_binding_base = 1U;
         std::uint32_t point_shadow_light_capacity = 0U;
@@ -543,7 +569,7 @@ RuntimeMaterialBinding RuntimeMaterialLibrary::find(
         .orm_texture = found->second.orm_texture,
         .emissive_texture = found->second.emissive_texture,
         .sampler = found->second.sampler.get(),
-        .constants_size = sizeof(MaterialConstants),
+        .constants_size = found->second.constants != nullptr ? sizeof(MaterialConstants) : 0U,
         .directional_shadow_cascade_count = found->second.directional_shadow_cascade_count,
         .shadow_texture_binding_base = found->second.shadow_texture_binding_base,
         .point_shadow_light_capacity = found->second.point_shadow_light_capacity,

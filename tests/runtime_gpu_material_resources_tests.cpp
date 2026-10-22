@@ -1,5 +1,7 @@
 #include "gpu_material_resources.hpp"
+#include "material_pipeline.hpp"
 
+#include <vice/render/material_asset.hpp>
 #include <vice/render/texture_asset.hpp>
 #include <vice/world/persistent_id.hpp>
 #include <vice/world/resource.hpp>
@@ -49,6 +51,27 @@ void write_texture(
     write_bytes(path, encoded.bytes);
 }
 
+void write_gpu_scene_material(
+    const std::filesystem::path& path,
+    const vice::world::PersistentId material_id,
+    const vice::world::PersistentId texture_a_id,
+    const vice::world::PersistentId texture_b_id
+) {
+    vice::render::RenderMaterialAsset asset;
+    asset.version = vice::render::render_material_asset_format_version_v4;
+    asset.stable_id = material_id.bytes();
+    asset.source_fingerprint = 1U;
+    asset.base_color_texture = texture_a_id.bytes();
+    asset.normal_texture = texture_b_id.bytes();
+    asset.orm_texture = texture_a_id.bytes();
+    asset.emissive_texture = texture_b_id.bytes();
+    asset.vertex_shader_manifest = "unused/vertex/shader.vice.json";
+    asset.fragment_shader_manifest = "unused/fragment/shader.vice.json";
+    const auto encoded = vice::render::encode_render_material_asset(asset);
+    assert(encoded);
+    write_bytes(path, encoded.bytes);
+}
+
 } // namespace
 
 int main() {
@@ -66,6 +89,7 @@ int main() {
     const auto texture_a_id = required_id("71000000-0000-4000-8000-000000000001");
     const auto texture_b_id = required_id("71000000-0000-4000-8000-000000000002");
     const auto missing_id = required_id("71000000-0000-4000-8000-000000000099");
+    const auto material_id = required_id("70000000-0000-4000-8000-000000000001");
     write_texture(
         root / "a.vtexc", texture_a_id,
         std::byte{255U}, std::byte{0U}, std::byte{0U}
@@ -73,6 +97,9 @@ int main() {
     write_texture(
         root / "b.vtexc", texture_b_id,
         std::byte{0U}, std::byte{128U}, std::byte{255U}
+    );
+    write_gpu_scene_material(
+        root / "gpu_scene.vmatc", material_id, texture_a_id, texture_b_id
     );
 
     auto device = render::Device::create();
@@ -139,6 +166,41 @@ int main() {
     assert(view.textures.size() == 1U);
     assert(view.samplers.size() == 1U);
     assert(view.textures.front() == textures.find(world::ResourceId{texture_a_id}));
+    assert(view.samplers.front() != nullptr);
+
+    detail::RuntimeMaterialLibrary materials;
+    assert(materials.initialize(
+        *device,
+        render::TextureFormat::rgba16_float,
+        {},
+        root,
+        &diagnostics
+    ));
+    assert(diagnostics.empty());
+
+    const RuntimeMaterialBinding gpu_scene_binding = materials.find(world::ResourceId{material_id});
+    assert(gpu_scene_binding.pipeline == nullptr);
+    assert(gpu_scene_binding.constants == nullptr);
+    assert(gpu_scene_binding.constants_size == 0U);
+    assert(gpu_scene_binding.sampler == nullptr);
+    assert(gpu_scene_binding.base_color_texture != nullptr);
+    assert(gpu_scene_binding.normal_texture != nullptr);
+    assert(gpu_scene_binding.orm_texture != nullptr);
+    assert(gpu_scene_binding.emissive_texture != nullptr);
+
+    RuntimeGpuMaterialTablePlan resident_plan;
+    resident_plan.texture_ids = {
+        world::ResourceId{texture_b_id},
+        world::ResourceId{texture_a_id},
+    };
+    resident_plan.samplers = {linear_repeat};
+    assert(resources.initialize(*device, resident_plan, materials, &diagnostics));
+    assert(diagnostics.empty());
+    view = resources.view();
+    assert(view.textures.size() == 2U);
+    assert(view.textures[0] == gpu_scene_binding.normal_texture);
+    assert(view.textures[1] == gpu_scene_binding.base_color_texture);
+    assert(view.samplers.size() == 1U);
     assert(view.samplers.front() != nullptr);
 
     std::filesystem::remove_all(root, error);
