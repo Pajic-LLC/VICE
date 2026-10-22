@@ -9,6 +9,7 @@
 #include <memory>
 #include <span>
 #include <string_view>
+#include <utility>
 
 #define CHECK(condition) do { if (!(condition)) return __LINE__; } while (false)
 
