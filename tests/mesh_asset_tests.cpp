@@ -1,4 +1,5 @@
 #include <vice/render/mesh_asset.hpp>
+#include <vice/render/meshlet.hpp>
 #include <vice/tools/mesh_cooker.hpp>
 
 #include <bit>
@@ -6,6 +7,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <span>
 #include <string>
 #include <string_view>
@@ -70,6 +72,66 @@ std::vector<std::byte> legacy_mesh(
 
 bool nearly_equal(const float left, const float right) {
     return std::abs(left - right) < 0.0001F;
+}
+
+vice::render::MeshVertex meshlet_vertex(const float x, const float y, const float z) {
+    vice::render::MeshVertex vertex;
+    vertex.position[0] = x;
+    vertex.position[1] = y;
+    vertex.position[2] = z;
+    return vertex;
+}
+
+std::vector<std::uint32_t> reconstruct_meshlet_indices(
+    const vice::render::MeshletGeometry& geometry
+) {
+    std::vector<std::uint32_t> result;
+    for (const auto& meshlet : geometry.meshlets) {
+        assert(meshlet.vertex_count > 0U);
+        assert(meshlet.vertex_count <= vice::render::meshlet_max_vertices);
+        assert(meshlet.triangle_count > 0U);
+        assert(meshlet.triangle_count <= vice::render::meshlet_max_triangles);
+        assert(static_cast<std::size_t>(meshlet.vertex_offset) + meshlet.vertex_count <=
+            geometry.vertex_indices.size());
+        assert(static_cast<std::size_t>(meshlet.triangle_offset) + meshlet.triangle_count * 3U <=
+            geometry.triangle_indices.size());
+        for (std::uint32_t triangle = 0U; triangle < meshlet.triangle_count; ++triangle) {
+            for (std::uint32_t corner = 0U; corner < 3U; ++corner) {
+                const std::size_t local_offset = static_cast<std::size_t>(meshlet.triangle_offset) +
+                    static_cast<std::size_t>(triangle) * 3U + corner;
+                const std::uint8_t local_index = geometry.triangle_indices[local_offset];
+                assert(local_index < meshlet.vertex_count);
+                result.push_back(geometry.vertex_indices[
+                    static_cast<std::size_t>(meshlet.vertex_offset) + local_index
+                ]);
+            }
+        }
+    }
+    return result;
+}
+
+void assert_meshlet_bounds_contain_vertices(
+    const std::span<const vice::render::MeshVertex> vertices,
+    const vice::render::MeshletGeometry& geometry
+) {
+    for (const auto& meshlet : geometry.meshlets) {
+        assert(std::isfinite(meshlet.bounds.center[0]));
+        assert(std::isfinite(meshlet.bounds.center[1]));
+        assert(std::isfinite(meshlet.bounds.center[2]));
+        assert(std::isfinite(meshlet.bounds.radius));
+        assert(meshlet.bounds.radius >= 0.0F);
+        for (std::uint32_t local_index = 0U; local_index < meshlet.vertex_count; ++local_index) {
+            const auto global_index = geometry.vertex_indices[
+                static_cast<std::size_t>(meshlet.vertex_offset) + local_index
+            ];
+            const auto& vertex = vertices[global_index];
+            const float dx = vertex.position[0] - meshlet.bounds.center[0];
+            const float dy = vertex.position[1] - meshlet.bounds.center[1];
+            const float dz = vertex.position[2] - meshlet.bounds.center[2];
+            const float distance = std::sqrt(dx * dx + dy * dy + dz * dz);
+            assert(distance <= meshlet.bounds.radius + 0.0001F);
+        }
+    }
 }
 
 } // namespace
@@ -186,6 +248,74 @@ vertex 0 1 0 1 1 1 0 1 0 0 1
 triangle 0 1 2
 )";
     assert(!tools::mesh_cooker::parse_source_manifest(bad_v2).source.has_value());
+
+    const std::vector<render::MeshVertex> quad_vertices{
+        meshlet_vertex(-1.0F, 0.0F, -1.0F),
+        meshlet_vertex(1.0F, 0.0F, -1.0F),
+        meshlet_vertex(-1.0F, 0.0F, 1.0F),
+        meshlet_vertex(1.0F, 0.0F, 1.0F),
+    };
+    const std::vector<std::uint32_t> quad_indices{0U, 1U, 2U, 2U, 1U, 3U};
+    const auto quad_meshlets = render::build_meshlets(quad_vertices, quad_indices);
+    const auto quad_meshlets_repeat = render::build_meshlets(quad_vertices, quad_indices);
+    assert(quad_meshlets);
+    assert(quad_meshlets_repeat);
+    assert(*quad_meshlets.geometry == *quad_meshlets_repeat.geometry);
+    assert(quad_meshlets.geometry->meshlets.size() == 1U);
+    assert(quad_meshlets.geometry->meshlets[0].vertex_count == 4U);
+    assert(quad_meshlets.geometry->meshlets[0].triangle_count == 2U);
+    assert(reconstruct_meshlet_indices(*quad_meshlets.geometry) == quad_indices);
+    assert_meshlet_bounds_contain_vertices(quad_vertices, *quad_meshlets.geometry);
+
+    std::vector<render::MeshVertex> vertex_limit_vertices;
+    std::vector<std::uint32_t> vertex_limit_indices;
+    for (std::uint32_t index = 0U; index < 66U; ++index) {
+        vertex_limit_vertices.push_back(meshlet_vertex(
+            static_cast<float>(index),
+            static_cast<float>(index % 5U),
+            static_cast<float>(index % 7U)
+        ));
+        vertex_limit_indices.push_back(index);
+    }
+    const auto vertex_limited = render::build_meshlets(
+        vertex_limit_vertices, vertex_limit_indices
+    );
+    assert(vertex_limited);
+    assert(vertex_limited.geometry->meshlets.size() == 2U);
+    assert(vertex_limited.geometry->meshlets[0].vertex_count == 63U);
+    assert(vertex_limited.geometry->meshlets[0].triangle_count == 21U);
+    assert(vertex_limited.geometry->meshlets[1].vertex_count == 3U);
+    assert(vertex_limited.geometry->meshlets[1].triangle_count == 1U);
+    assert(reconstruct_meshlet_indices(*vertex_limited.geometry) == vertex_limit_indices);
+    assert_meshlet_bounds_contain_vertices(vertex_limit_vertices, *vertex_limited.geometry);
+
+    const std::vector<render::MeshVertex> triangle_limit_vertices{
+        meshlet_vertex(0.0F, 0.0F, 0.0F),
+        meshlet_vertex(1.0F, 0.0F, 0.0F),
+        meshlet_vertex(0.0F, 1.0F, 0.0F),
+    };
+    std::vector<std::uint32_t> triangle_limit_indices;
+    triangle_limit_indices.reserve(127U * 3U);
+    for (std::uint32_t triangle = 0U; triangle < 127U; ++triangle) {
+        triangle_limit_indices.push_back(0U);
+        triangle_limit_indices.push_back(1U);
+        triangle_limit_indices.push_back(2U);
+    }
+    const auto triangle_limited = render::build_meshlets(
+        triangle_limit_vertices, triangle_limit_indices
+    );
+    assert(triangle_limited);
+    assert(triangle_limited.geometry->meshlets.size() == 2U);
+    assert(triangle_limited.geometry->meshlets[0].vertex_count == 3U);
+    assert(triangle_limited.geometry->meshlets[0].triangle_count == 126U);
+    assert(triangle_limited.geometry->meshlets[1].triangle_count == 1U);
+    assert(reconstruct_meshlet_indices(*triangle_limited.geometry) == triangle_limit_indices);
+
+    auto invalid_vertices = triangle_limit_vertices;
+    invalid_vertices[0].position[0] = std::numeric_limits<float>::infinity();
+    assert(!render::build_meshlets(invalid_vertices, triangle_limit_indices));
+    assert(!render::build_meshlets(triangle_limit_vertices, std::vector<std::uint32_t>{0U, 1U, 3U}));
+    assert(!render::build_meshlets(triangle_limit_vertices, std::vector<std::uint32_t>{0U, 0U, 1U}));
 
     return 0;
 }
