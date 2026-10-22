@@ -301,6 +301,27 @@ add_test(
   COMMAND vice_runtime_hiz_occlusion_tests
 )
 
+add_executable(
+  vice_runtime_hiz_history_tests
+  ../runtime_hiz_history_tests.cpp
+)
+target_include_directories(
+  vice_runtime_hiz_history_tests
+  PRIVATE
+    "${PROJECT_SOURCE_DIR}/engine/runtime/src"
+)
+target_link_libraries(
+  vice_runtime_hiz_history_tests
+  PRIVATE
+    VICE::Runtime
+)
+target_compile_features(vice_runtime_hiz_history_tests PRIVATE cxx_std_23)
+vice_enable_warnings(vice_runtime_hiz_history_tests)
+add_test(
+  NAME vice_runtime_hiz_history_tests
+  COMMAND vice_runtime_hiz_history_tests
+)
+
 if(TARGET vice_mesh_cooker_lib)
   add_executable(
     vice_runtime_scene_tests
