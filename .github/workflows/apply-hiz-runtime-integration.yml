@@ -1,0 +1,34 @@
+name: Apply Hi-Z Runtime Integration
+
+on:
+  push:
+    branches:
+      - feat/238-hiz-runtime-integration
+    paths:
+      - scripts/apply_hiz_runtime_integration.py
+      - .github/workflows/apply-hiz-runtime-integration.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: feat/238-hiz-runtime-integration
+      - name: Apply guarded integration
+        run: python3 scripts/apply_hiz_runtime_integration.py
+      - name: Commit integration
+        shell: bash
+        run: |
+          if git diff --quiet -- engine/runtime/src/scene.cpp tests/runtime/CMakeLists.txt; then
+            echo "No integration changes to commit."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add engine/runtime/src/scene.cpp tests/runtime/CMakeLists.txt
+          git commit -m "Integrate Hi-Z occlusion into Runtime scene submission (#238)"
+          git push origin HEAD:feat/238-hiz-runtime-integration
