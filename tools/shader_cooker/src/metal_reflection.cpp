@@ -216,32 +216,6 @@ struct JsonObjectView {
     return found == reflection.resources.end() ? nullptr : &*found;
 }
 
-[[nodiscard]] const ShaderResourceReflection* find_explicit_table_resource(
-    const ShaderReflection& reflection,
-    const std::uint32_t binding,
-    const std::uint32_t space,
-    const std::size_t reflection_index
-) noexcept {
-    if (reflection_index < reflection.resources.size()) {
-        const auto& positional = reflection.resources[reflection_index];
-        if (positional.binding == binding && positional.space == space) {
-            return &positional;
-        }
-    }
-
-    const ShaderResourceReflection* match = nullptr;
-    for (const auto& resource : reflection.resources) {
-        if (resource.binding != binding || resource.space != space) {
-            continue;
-        }
-        if (match != nullptr) {
-            return nullptr;
-        }
-        match = &resource;
-    }
-    return match;
-}
-
 [[nodiscard]] bool same_location_identity(
     const MetalResourceLocationReflection& left,
     const MetalResourceLocationReflection& right
@@ -297,8 +271,7 @@ struct JsonObjectView {
         const auto size = uint_field(object, "Size");
         const auto slot = uint_field(object, "Slot");
         const auto space = uint_field(object, "Space");
-        if (!type.has_value() || !offset.has_value() || !size.has_value() ||
-            !slot.has_value() || !space.has_value()) {
+        if (!type.has_value() || !offset.has_value() || !size.has_value()) {
             result.diagnostics =
                 "Metal Shader Converter emitted an incomplete top-level resource location.";
             return result;
@@ -307,6 +280,11 @@ struct JsonObjectView {
         auto resource_class = register_class(*type);
         const ShaderResourceReflection* logical = nullptr;
         if (resource_class.has_value()) {
+            if (!slot.has_value() || !space.has_value()) {
+                result.diagnostics =
+                    "Metal Shader Converter emitted an incomplete typed resource location.";
+                return result;
+            }
             logical = find_logical_resource(
                 logical_reflection,
                 *resource_class,
@@ -314,17 +292,12 @@ struct JsonObjectView {
                 *space
             );
         } else if (model == MetalBindingModel::explicit_descriptor_tables && *type == "Table") {
-            logical = find_explicit_table_resource(
-                logical_reflection,
-                *slot,
-                *space,
-                object_index
-            );
-            if (logical == nullptr) {
+            if (object_index >= logical_reflection.resources.size()) {
                 result.diagnostics =
-                    "Metal Shader Converter descriptor-table root does not uniquely match DXC logical reflection.";
+                    "Metal Shader Converter emitted more descriptor-table roots than DXC logical resources.";
                 return result;
             }
+            logical = &logical_reflection.resources[object_index];
             resource_class = logical->register_class;
         } else {
             result.diagnostics =
@@ -363,8 +336,8 @@ struct JsonObjectView {
 
         MetalResourceLocationReflection location{
             .register_class = *resource_class,
-            .binding = *slot,
-            .space = *space,
+            .binding = logical->binding,
+            .space = logical->space,
             .argument_buffer_offset = *offset,
             .size = *size,
             .descriptor_table = descriptor_table,
