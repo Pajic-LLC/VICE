@@ -36,6 +36,8 @@ int main() {
     const world::ResourceId material_a{required_id("70000000-0000-4000-8000-000000000001")};
     const world::ResourceId material_b{required_id("70000000-0000-4000-8000-000000000002")};
     const world::ResourceId legacy_material{required_id("70000000-0000-4000-8000-000000000003")};
+    const auto texture_a = required_id("71000000-0000-4000-8000-000000000001");
+    const auto texture_b = required_id("71000000-0000-4000-8000-000000000002");
 
     std::vector<CookedMeshRecord> meshes(2U);
     meshes[0].resource_id = mesh_a;
@@ -44,14 +46,26 @@ int main() {
     meshes[1].asset.indices = {0U, 1U, 2U, 2U, 3U, 0U};
 
     std::vector<CookedRenderMaterialRecord> materials;
-    materials.push_back(material_record(
+    auto gpu_material_a = material_record(
         "70000000-0000-4000-8000-000000000001",
         render::render_material_asset_format_version_v4
-    ));
-    materials.push_back(material_record(
+    );
+    gpu_material_a.asset.base_color_texture = texture_a.bytes();
+    gpu_material_a.asset.normal_texture = texture_a.bytes();
+    gpu_material_a.asset.orm_texture = texture_a.bytes();
+    gpu_material_a.asset.emissive_texture = texture_a.bytes();
+    materials.push_back(std::move(gpu_material_a));
+
+    auto gpu_material_b = material_record(
         "70000000-0000-4000-8000-000000000002",
         render::render_material_asset_format_version_v4
-    ));
+    );
+    gpu_material_b.asset.base_color_texture = texture_b.bytes();
+    gpu_material_b.asset.normal_texture = texture_b.bytes();
+    gpu_material_b.asset.orm_texture = texture_b.bytes();
+    gpu_material_b.asset.emissive_texture = texture_b.bytes();
+    materials.push_back(std::move(gpu_material_b));
+
     materials.push_back(material_record(
         "70000000-0000-4000-8000-000000000003",
         render::render_material_asset_format_version_v3
@@ -84,18 +98,36 @@ int main() {
     assert(batches.plan.instance_batches[3] == runtime_gpu_draw_batch_unassigned);
     assert(batches.plan.instance_batches[4] == 1U);
 
-    RuntimeGpuMaterialTablePlan material_plan;
-    material_plan.material_ids = {material_a, material_b, legacy_material};
-    material_plan.records.resize(material_plan.material_ids.size());
-    const auto instance_materials = build_runtime_gpu_instance_material_records(instances, material_plan);
+    const auto material_table = build_runtime_gpu_material_table_plan(
+        RuntimeGpuMaterialTableBuildInput{
+            .materials = materials,
+            .validate_texture_references = false,
+        }
+    );
+    assert(material_table);
+    const auto material_a_index = material_table.plan.material_index(material_a);
+    const auto material_b_index = material_table.plan.material_index(material_b);
+    const auto legacy_material_index = material_table.plan.material_index(legacy_material);
+    assert(material_a_index.has_value());
+    assert(material_b_index.has_value());
+    assert(legacy_material_index.has_value());
+    assert(material_table.plan.records[*material_a_index].base_color_texture !=
+        material_table.plan.records[*material_b_index].base_color_texture);
+    assert(material_table.plan.texture_ids.size() == 2U);
+
+    const auto instance_materials = build_runtime_gpu_instance_material_records(
+        instances,
+        material_table.plan
+    );
     assert(instance_materials);
     assert(instance_materials.records.size() == instances.size());
-    assert(instance_materials.records[0].material_index == 0U);
-    assert(instance_materials.records[1].material_index == 1U);
-    assert(instance_materials.records[2].material_index == 2U);
+    assert(instance_materials.records[0].material_index == *material_a_index);
+    assert(instance_materials.records[1].material_index == *material_b_index);
+    assert(instance_materials.records[2].material_index == *legacy_material_index);
     assert(instance_materials.records[3].material_index == runtime_gpu_resource_unassigned);
-    assert(instance_materials.records[4].material_index == 1U);
+    assert(instance_materials.records[4].material_index == *material_b_index);
     assert(batches.plan.instance_batches[0] == batches.plan.instance_batches[1]);
+    assert(instance_materials.records[0].material_index != instance_materials.records[1].material_index);
     assert(batches.plan.instance_batches[2] == runtime_gpu_draw_batch_unassigned);
 
     auto missing_material_instances = instances;
