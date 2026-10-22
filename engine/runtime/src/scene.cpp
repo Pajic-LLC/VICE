@@ -10,6 +10,7 @@
 #include "bloom_shaders.hpp"
 #include "environment_pipeline.hpp"
 #include "gpu_material_scene.hpp"
+#include "gpu_motion_history.hpp"
 #include "gpu_pbr_batches.hpp"
 #include "gpu_shadow_batches.hpp"
 #include "material_pipeline.hpp"
@@ -98,6 +99,37 @@ static constexpr std::array vertex_resources{
     },
 };
 
+static constexpr std::array motion_vertex_resources{
+    render::ShaderResourceBindingDesc{
+        .register_class = render::ShaderRegisterClass::constant_buffer,
+        .binding = 0,
+        .space = 0,
+        .count = 1,
+        .unbounded = false,
+    },
+    render::ShaderResourceBindingDesc{
+        .register_class = render::ShaderRegisterClass::shader_resource,
+        .binding = 1,
+        .space = 0,
+        .count = 1,
+        .unbounded = false,
+    },
+    render::ShaderResourceBindingDesc{
+        .register_class = render::ShaderRegisterClass::shader_resource,
+        .binding = 2,
+        .space = 0,
+        .count = 1,
+        .unbounded = false,
+    },
+    render::ShaderResourceBindingDesc{
+        .register_class = render::ShaderRegisterClass::shader_resource,
+        .binding = 3,
+        .space = 0,
+        .count = 1,
+        .unbounded = false,
+    },
+};
+
 constexpr render::ShaderBindingKey frame_binding{
     .register_class = render::ShaderRegisterClass::constant_buffer,
     .binding = 0,
@@ -115,6 +147,20 @@ constexpr render::ShaderBindingKey gpu_model_table_binding{
 constexpr render::ShaderBindingKey gpu_compacted_instance_binding{
     .register_class = render::ShaderRegisterClass::shader_resource,
     .binding = 2,
+    .space = 0,
+    .array_element = 0,
+};
+
+constexpr render::ShaderBindingKey gpu_motion_previous_model_binding{
+    .register_class = render::ShaderRegisterClass::shader_resource,
+    .binding = 2,
+    .space = 0,
+    .array_element = 0,
+};
+
+constexpr render::ShaderBindingKey gpu_motion_compacted_instance_binding{
+    .register_class = render::ShaderRegisterClass::shader_resource,
+    .binding = 3,
     .space = 0,
     .array_element = 0,
 };
@@ -416,16 +462,9 @@ struct GpuPbrSceneConstants {
     std::array<ScenePointShadowConstants, runtime_point_shadow_light_count> point_shadows{};
 };
 
-struct ShadowConstants {
-    math::Mat4 view_projection{};
-    math::Mat4 model{};
-};
-
 struct MotionConstants {
     math::Mat4 current_view_projection{};
     math::Mat4 previous_view_projection{};
-    math::Mat4 current_model{};
-    math::Mat4 previous_model{};
 };
 
 struct TaaConstants {
@@ -445,8 +484,7 @@ static_assert(sizeof(SceneReflectionProjectionConstants) == 96U);
 static_assert(sizeof(ScenePointShadowConstants) == 464U);
 static_assert(sizeof(SceneConstants) == 2256U);
 static_assert(sizeof(GpuPbrSceneConstants) == 2192U);
-static_assert(sizeof(ShadowConstants) == 128U);
-static_assert(sizeof(MotionConstants) == 256U);
+static_assert(sizeof(MotionConstants) == 128U);
 static_assert(sizeof(TaaConstants) == 32U);
 
 constexpr std::string_view hlsl_source = R"(
@@ -511,37 +549,6 @@ fragment float4 vice_runtime_mesh_fs(VertexOut input [[stage_in]]) {
 }
 )";
 
-constexpr std::string_view shadow_hlsl_source = R"(
-cbuffer ShadowFrame : register(b0) {
-    float4x4 view_projection;
-    float4x4 model;
-};
-struct VertexIn {
-    float3 position : POSITION0;
-};
-float4 vice_runtime_shadow_vs(VertexIn input) : SV_Position {
-    const float4 world_position = mul(model, float4(input.position, 1.0));
-    return mul(view_projection, world_position);
-}
-)";
-
-constexpr std::string_view shadow_metal_source = R"(
-#include <metal_stdlib>
-using namespace metal;
-struct ShadowFrame {
-    float4x4 view_projection;
-    float4x4 model;
-};
-struct VertexIn {
-    float3 position [[attribute(11)]];
-};
-vertex float4 vice_runtime_shadow_vs(
-    VertexIn input [[stage_in]],
-    constant ShadowFrame& frame [[buffer(0)]]) {
-    return frame.view_projection * frame.model * float4(input.position, 1.0);
-}
-)";
-
 constexpr std::string_view gpu_shadow_hlsl_source = R"(
 cbuffer ShadowFrame : register(b0) {
     float4x4 view_projection;
@@ -585,9 +592,10 @@ constexpr std::string_view motion_hlsl_source = R"(
 cbuffer MotionFrame : register(b0) {
     float4x4 current_view_projection;
     float4x4 previous_view_projection;
-    float4x4 current_model;
-    float4x4 previous_model;
 };
+StructuredBuffer<float4x4> current_models : register(t1);
+StructuredBuffer<float4x4> previous_models : register(t2);
+StructuredBuffer<uint> compacted_instance_indices : register(t3);
 struct VertexIn {
     float3 position : POSITION0;
 };
@@ -596,10 +604,15 @@ struct MotionVertexOut {
     float4 current_clip : TEXCOORD0;
     float4 previous_clip : TEXCOORD1;
 };
-MotionVertexOut vice_runtime_motion_vs(VertexIn input) {
+MotionVertexOut vice_runtime_motion_vs(VertexIn input, uint instance_id : SV_InstanceID) {
     MotionVertexOut output;
-    const float4 current_world = mul(current_model, float4(input.position, 1.0));
-    const float4 previous_world = mul(previous_model, float4(input.position, 1.0));
+    const uint scene_instance = compacted_instance_indices[instance_id];
+    const float4 current_world = mul(
+        current_models[scene_instance], float4(input.position, 1.0)
+    );
+    const float4 previous_world = mul(
+        previous_models[scene_instance], float4(input.position, 1.0)
+    );
     output.current_clip = mul(current_view_projection, current_world);
     output.previous_clip = mul(previous_view_projection, previous_world);
     output.position = output.current_clip;
@@ -625,8 +638,6 @@ using namespace metal;
 struct MotionFrame {
     float4x4 current_view_projection;
     float4x4 previous_view_projection;
-    float4x4 current_model;
-    float4x4 previous_model;
 };
 struct VertexIn {
     float3 position [[attribute(11)]];
@@ -638,10 +649,15 @@ struct MotionVertexOut {
 };
 vertex MotionVertexOut vice_runtime_motion_vs(
     VertexIn input [[stage_in]],
-    constant MotionFrame& frame [[buffer(0)]]) {
+    constant MotionFrame& frame [[buffer(0)]],
+    device const float4x4* current_models [[buffer(1)]],
+    device const float4x4* previous_models [[buffer(2)]],
+    device const uint* compacted_instance_indices [[buffer(3)]],
+    uint instance_id [[instance_id]]) {
     MotionVertexOut output;
-    const float4 current_world = frame.current_model * float4(input.position, 1.0);
-    const float4 previous_world = frame.previous_model * float4(input.position, 1.0);
+    const uint scene_instance = compacted_instance_indices[instance_id];
+    const float4 current_world = current_models[scene_instance] * float4(input.position, 1.0);
+    const float4 previous_world = previous_models[scene_instance] * float4(input.position, 1.0);
     output.current_clip = frame.current_view_projection * current_world;
     output.previous_clip = frame.previous_view_projection * previous_world;
     output.position = output.current_clip;
@@ -910,17 +926,6 @@ fragment float4 vice_runtime_tonemap_fs(
     desc.usage = render::BufferUsage::uniform;
     desc.memory = render::MemoryLocation::cpu_to_gpu;
     desc.debug_name = "VICE Runtime scene constants";
-    return device.create_buffer(desc);
-}
-
-[[nodiscard]] std::unique_ptr<render::Buffer> create_shadow_constant_buffer(
-    render::Device& device
-) {
-    render::BufferDesc desc;
-    desc.size = sizeof(ShadowConstants);
-    desc.usage = render::BufferUsage::uniform;
-    desc.memory = render::MemoryLocation::cpu_to_gpu;
-    desc.debug_name = "VICE Runtime shadow constants";
     return device.create_buffer(desc);
 }
 
@@ -2032,7 +2037,9 @@ struct RuntimeSceneRenderer::State {
     RuntimeGpuDrawBatcher gpu_draw_batches;
     RuntimeGpuDrawBatcher gpu_pbr_draw_batches;
     RuntimeGpuDrawBatcher gpu_shadow_draw_batches;
+    RuntimeGpuDrawBatcher gpu_motion_draw_batches;
     RuntimeGpuInstanceTable gpu_instances;
+    RuntimeGpuInstanceTable gpu_previous_instances;
     std::array<RuntimeGpuInstanceTable, runtime_point_shadow_light_count> gpu_point_shadow_instances;
     detail::RuntimeGpuMaterialSceneResources gpu_material_scene;
     std::unique_ptr<render::Buffer> gpu_default_frame;
@@ -2055,6 +2062,7 @@ struct RuntimeSceneRenderer::State {
     std::unique_ptr<render::ShaderModule> motion_vertex_shader;
     std::unique_ptr<render::ShaderModule> motion_fragment_shader;
     std::unique_ptr<render::GraphicsPipeline> motion_pipeline;
+    std::unique_ptr<render::Buffer> gpu_motion_frame;
     std::unique_ptr<render::ShaderModule> taa_vertex_shader;
     std::unique_ptr<render::ShaderModule> taa_fragment_shader;
     std::unique_ptr<render::GraphicsPipeline> taa_pipeline;
@@ -2075,8 +2083,6 @@ struct RuntimeSceneRenderer::State {
     std::unique_ptr<render::GraphicsPipeline> tone_map_pipeline;
     std::unique_ptr<render::Sampler> tone_map_sampler;
     std::unique_ptr<render::Buffer> tone_map_constants;
-    std::unique_ptr<render::ShaderModule> shadow_vertex_shader;
-    std::unique_ptr<render::GraphicsPipeline> shadow_pipeline;
     std::unique_ptr<render::ShaderModule> gpu_shadow_vertex_shader;
     std::unique_ptr<render::GraphicsPipeline> gpu_shadow_pipeline;
     std::array<std::unique_ptr<render::Texture>, runtime_shadow_cascade_count> shadow_maps;
@@ -2094,19 +2100,7 @@ struct RuntimeSceneRenderer::State {
     std::unique_ptr<render::Texture> bloom_composite;
     std::unordered_map<world::ResourceId, MeshGpu, world::ResourceIdHash> meshes;
     std::unordered_map<world::PersistentId, std::unique_ptr<render::Buffer>, world::PersistentIdHash> constants;
-    std::unordered_map<world::PersistentId, std::unique_ptr<render::Buffer>, world::PersistentIdHash> motion_constants;
     std::unordered_map<world::PersistentId, math::Mat4, world::PersistentIdHash> previous_models;
-    std::array<
-        std::unordered_map<world::PersistentId, std::unique_ptr<render::Buffer>, world::PersistentIdHash>,
-        runtime_shadow_cascade_count
-    > shadow_constants;
-    std::array<
-        std::array<
-            std::unordered_map<world::PersistentId, std::unique_ptr<render::Buffer>, world::PersistentIdHash>,
-            runtime_point_shadow_face_count
-        >,
-        runtime_point_shadow_light_count
-    > point_shadow_constants;
     std::uint32_t depth_width = 0;
     std::uint32_t depth_height = 0;
     std::uint32_t bloom_width = 0;
@@ -2177,7 +2171,9 @@ bool RuntimeSceneRenderer::initialize(
         !state_->gpu_draw_batches.initialize(device, diagnostics) ||
         !state_->gpu_pbr_draw_batches.initialize(device, diagnostics) ||
         !state_->gpu_shadow_draw_batches.initialize(device, diagnostics) ||
-        !state_->gpu_instances.initialize(device, diagnostics)) {
+        !state_->gpu_motion_draw_batches.initialize(device, diagnostics) ||
+        !state_->gpu_instances.initialize(device, diagnostics) ||
+        !state_->gpu_previous_instances.initialize(device, diagnostics)) {
         return false;
     }
     for (auto& table : state_->gpu_point_shadow_instances) {
@@ -2334,7 +2330,7 @@ bool RuntimeSceneRenderer::initialize(
     motion_vertex_desc.stage = render::ShaderStage::vertex;
     motion_vertex_desc.language = vertex_desc.language;
     motion_vertex_desc.source = metal ? motion_metal_source : motion_hlsl_source;
-    motion_vertex_desc.resources = vertex_resources;
+    motion_vertex_desc.resources = motion_vertex_resources;
     motion_vertex_desc.entry_point = "vice_runtime_motion_vs";
     motion_vertex_desc.debug_name = "VICE Runtime motion-vector vertex";
 
@@ -2364,8 +2360,9 @@ bool RuntimeSceneRenderer::initialize(
     motion_pipeline_desc.vertex_buffers = mesh_layouts;
     motion_pipeline_desc.debug_name = "VICE Runtime motion-vector pipeline";
     state_->motion_pipeline = device.create_graphics_pipeline(motion_pipeline_desc);
-    if (!state_->motion_pipeline) {
-        set_diagnostics(diagnostics, "VICE Runtime could not create the motion-vector pipeline.");
+    state_->gpu_motion_frame = create_motion_constant_buffer(device);
+    if (!state_->motion_pipeline || !state_->gpu_motion_frame) {
+        set_diagnostics(diagnostics, "VICE Runtime could not create the motion-vector pipeline/resources.");
         return false;
     }
 
@@ -2572,36 +2569,6 @@ bool RuntimeSceneRenderer::initialize(
         return false;
     }
 
-    render::ShaderModuleDesc shadow_vertex_desc;
-    shadow_vertex_desc.stage = render::ShaderStage::vertex;
-    shadow_vertex_desc.language = vertex_desc.language;
-    shadow_vertex_desc.source = metal ? shadow_metal_source : shadow_hlsl_source;
-    shadow_vertex_desc.resources = vertex_resources;
-    shadow_vertex_desc.entry_point = "vice_runtime_shadow_vs";
-    shadow_vertex_desc.debug_name = "VICE Runtime directional shadow vertex";
-    state_->shadow_vertex_shader = device.create_shader_module(shadow_vertex_desc);
-    if (!state_->shadow_vertex_shader) {
-        set_diagnostics(diagnostics, "VICE Runtime could not create the directional shadow shader.");
-        return false;
-    }
-
-    render::GraphicsPipelineDesc shadow_pipeline_desc;
-    shadow_pipeline_desc.vertex_shader = state_->shadow_vertex_shader.get();
-    shadow_pipeline_desc.fragment_shader = nullptr;
-    shadow_pipeline_desc.color_format = render::TextureFormat::undefined;
-    shadow_pipeline_desc.cull_mode = render::CullMode::none;
-    shadow_pipeline_desc.depth.format = render::TextureFormat::depth32_float;
-    shadow_pipeline_desc.depth.test_enabled = true;
-    shadow_pipeline_desc.depth.write_enabled = true;
-    shadow_pipeline_desc.depth.compare = render::CompareOp::less;
-    shadow_pipeline_desc.vertex_buffers = mesh_layouts;
-    shadow_pipeline_desc.debug_name = "VICE Runtime directional shadow pipeline";
-    state_->shadow_pipeline = device.create_graphics_pipeline(shadow_pipeline_desc);
-    if (!state_->shadow_pipeline) {
-        set_diagnostics(diagnostics, "VICE Runtime could not create the directional shadow pipeline.");
-        return false;
-    }
-
     render::ShaderModuleDesc gpu_shadow_vertex_desc;
     gpu_shadow_vertex_desc.stage = render::ShaderStage::vertex;
     gpu_shadow_vertex_desc.language = vertex_desc.language;
@@ -2615,8 +2582,16 @@ bool RuntimeSceneRenderer::initialize(
         return false;
     }
 
-    render::GraphicsPipelineDesc gpu_shadow_pipeline_desc = shadow_pipeline_desc;
+    render::GraphicsPipelineDesc gpu_shadow_pipeline_desc;
     gpu_shadow_pipeline_desc.vertex_shader = state_->gpu_shadow_vertex_shader.get();
+    gpu_shadow_pipeline_desc.fragment_shader = nullptr;
+    gpu_shadow_pipeline_desc.color_format = render::TextureFormat::undefined;
+    gpu_shadow_pipeline_desc.cull_mode = render::CullMode::none;
+    gpu_shadow_pipeline_desc.depth.format = render::TextureFormat::depth32_float;
+    gpu_shadow_pipeline_desc.depth.test_enabled = true;
+    gpu_shadow_pipeline_desc.depth.write_enabled = true;
+    gpu_shadow_pipeline_desc.depth.compare = render::CompareOp::less;
+    gpu_shadow_pipeline_desc.vertex_buffers = mesh_layouts;
     gpu_shadow_pipeline_desc.debug_name = "VICE Runtime GPU directional shadow pipeline";
     state_->gpu_shadow_pipeline = device.create_graphics_pipeline(gpu_shadow_pipeline_desc);
     if (!state_->gpu_shadow_pipeline) {
@@ -3177,10 +3152,45 @@ bool RuntimeSceneRenderer::render(
     RuntimeGpuDrawBatchResult gpu_default_batch_result{};
     RuntimeGpuDrawBatchResult gpu_pbr_batch_result{};
     RuntimeGpuDrawBatchResult gpu_shadow_batch_result{};
+    RuntimeGpuDrawBatchResult gpu_motion_batch_result{};
     if (!instances.empty()) {
         if (!state_->gpu_instances.upload(*commands, gpu_instance_models, diagnostics)) {
             return false;
         }
+    }
+    if (!gpu_shadow_plan.batches.empty()) {
+        const auto gpu_previous_build = detail::build_runtime_gpu_previous_models(
+            instances,
+            gpu_instance_models,
+            state_->previous_models,
+            temporal_frame.history_valid
+        );
+        if (!gpu_previous_build) {
+            set_diagnostics(diagnostics, gpu_previous_build.diagnostics);
+            return false;
+        }
+        if (!state_->gpu_previous_instances.upload(
+                *commands, gpu_previous_build.models, diagnostics
+            ) || !state_->gpu_motion_draw_batches.build(
+                *commands,
+                state_->visibility.result(),
+                gpu_shadow_plan.instance_batches,
+                gpu_shadow_plan.batches,
+                diagnostics
+            )) {
+            return false;
+        }
+        const MotionConstants motion_frame{
+            .current_view_projection = temporal_frame.current_view_projection,
+            .previous_view_projection = temporal_frame.previous_view_projection,
+        };
+        if (!state_->gpu_motion_frame->write(
+                0U, std::as_bytes(std::span{&motion_frame, 1})
+            )) {
+            set_diagnostics(diagnostics, "VICE Runtime could not update GPU motion-vector frame constants.");
+            return false;
+        }
+        gpu_motion_batch_result = state_->gpu_motion_draw_batches.result();
     }
     if (!gpu_default_batches.empty()) {
         if (!state_->gpu_draw_batches.build(
@@ -4091,56 +4101,60 @@ bool RuntimeSceneRenderer::render(
         return false;
     }
 
-    for (const auto& instance : instances) {
-        auto motion_iterator = state_->motion_constants.find(instance.entity);
-        if (motion_iterator == state_->motion_constants.end()) {
-            auto constants = create_motion_constant_buffer(*state_->device);
-            if (!constants) {
-                set_diagnostics(diagnostics, "VICE Runtime could not create motion-vector constants.");
-                return false;
-            }
-            motion_iterator = state_->motion_constants.emplace(
-                instance.entity,
-                std::move(constants)
-            ).first;
-        }
-
-        const math::Mat4 current_model = runtime_model_matrix(instance);
-        math::Mat4 previous_model = current_model;
-        if (temporal_frame.history_valid) {
-            const auto previous = state_->previous_models.find(instance.entity);
-            if (previous != state_->previous_models.end()) previous_model = previous->second;
-        }
-        const MotionConstants motion_constants{
-            .current_view_projection = temporal_frame.current_view_projection,
-            .previous_view_projection = temporal_frame.previous_view_projection,
-            .current_model = current_model,
-            .previous_model = previous_model,
-        };
-        if (!motion_iterator->second->write(
-                0U,
-                std::as_bytes(std::span{&motion_constants, 1})
-            )) {
-            set_diagnostics(diagnostics, "VICE Runtime could not update motion-vector constants.");
+    if (!gpu_shadow_plan.batches.empty()) {
+        const auto current_instance_table = state_->gpu_instances.result();
+        const auto previous_instance_table = state_->gpu_previous_instances.result();
+        if (current_instance_table.models == nullptr ||
+            previous_instance_table.models == nullptr ||
+            gpu_motion_batch_result.compacted_instance_indices == nullptr ||
+            gpu_motion_batch_result.indirect_arguments == nullptr) {
+            set_diagnostics(diagnostics, "VICE Runtime GPU motion-vector batch resources are unavailable.");
             return false;
         }
-
-        auto& mesh = state_->meshes.at(instance.mesh);
-        if (!commands->set_vertex_buffer(0U, *mesh.vertices) ||
-            !commands->set_index_buffer(*mesh.indices, render::IndexFormat::uint32) ||
-            !commands->set_graphics_constant_buffer(
+        const render::BufferViewDesc motion_model_view{
+            .offset = 0U,
+            .size = static_cast<std::uint64_t>(instances.size()) * sizeof(math::Mat4),
+            .structure_stride = sizeof(math::Mat4),
+        };
+        const render::BufferViewDesc motion_compacted_view{
+            .offset = 0U,
+            .size = static_cast<std::uint64_t>(instances.size()) * sizeof(std::uint32_t),
+            .structure_stride = sizeof(std::uint32_t),
+        };
+        if (!commands->set_graphics_constant_buffer(
                 frame_binding,
-                *motion_iterator->second,
+                *state_->gpu_motion_frame,
                 0U,
                 sizeof(MotionConstants)
-            ) ||
-            !commands->draw_indexed(mesh.index_count)) {
-            set_diagnostics(
-                diagnostics,
-                "VICE Runtime could not encode motion vectors for mesh `" +
-                    instance.mesh.value.to_string() + "`."
-            );
+            ) || !commands->set_graphics_buffer(
+                gpu_model_table_binding,
+                *current_instance_table.models,
+                motion_model_view
+            ) || !commands->set_graphics_buffer(
+                gpu_motion_previous_model_binding,
+                *previous_instance_table.models,
+                motion_model_view
+            ) || !commands->set_graphics_buffer(
+                gpu_motion_compacted_instance_binding,
+                *gpu_motion_batch_result.compacted_instance_indices,
+                motion_compacted_view
+            )) {
+            set_diagnostics(diagnostics, "VICE Runtime could not bind GPU motion-vector resources.");
             return false;
+        }
+        for (std::size_t batch_index = 0U; batch_index < gpu_shadow_plan.batches.size(); ++batch_index) {
+            auto& mesh = state_->meshes.at(gpu_shadow_plan.batch_meshes[batch_index]);
+            const std::uint64_t argument_offset = static_cast<std::uint64_t>(batch_index) *
+                sizeof(render::IndexedIndirectDrawArguments);
+            if (!commands->set_vertex_buffer(0U, *mesh.vertices) ||
+                !commands->set_index_buffer(*mesh.indices, render::IndexFormat::uint32) ||
+                !commands->draw_indexed_indirect(
+                    *gpu_motion_batch_result.indirect_arguments,
+                    argument_offset
+                )) {
+                set_diagnostics(diagnostics, "VICE Runtime could not encode a GPU-driven motion-vector batch.");
+                return false;
+            }
         }
     }
     if (!commands->end_render_pass()) {
