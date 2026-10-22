@@ -174,3 +174,78 @@ jobs:
           if (-not $environmentSampler) {
             throw "Probe-aware V3 shader is missing environment sampler s2."
           }
+
+          foreach ($gpuPbrStage in @(
+            @{ Entry = "vice_gpu_pbr_vs"; Stage = "vertex"; Name = "vertex" },
+            @{ Entry = "vice_gpu_pbr_fs"; Stage = "fragment"; Name = "fragment" }
+          )) {
+            $output = "build/cooked/vice_gpu_pbr_$($gpuPbrStage.Name)"
+            & $cooker `
+              --input "assets/shaders/vice_gpu_pbr_surface.hlsl" `
+              --output $output `
+              --entry $gpuPbrStage.Entry `
+              --stage $gpuPbrStage.Stage `
+              --target d3d12 `
+              --shader-model 6.6 `
+              --dxc $dxc.FullName `
+              --force
+            if ($LASTEXITCODE -ne 0) {
+              exit $LASTEXITCODE
+            }
+          }
+
+          $gpuPbrVertex = Get-Content "build/cooked/vice_gpu_pbr_vertex/shader.vice.json" -Raw | ConvertFrom-Json
+          $gpuPbrFragment = Get-Content "build/cooked/vice_gpu_pbr_fragment/shader.vice.json" -Raw | ConvertFrom-Json
+
+          function Assert-GpuPbrBoundResource($reflection, $name, $class, $binding, $space) {
+            $resource = $reflection.resources | Where-Object { $_.name -eq $name }
+            if (-not $resource) {
+              throw "GPU PBR shader is missing reflected resource $name."
+            }
+            if ($resource.class -ne $class -or
+                $resource.binding -ne $binding -or
+                $resource.space -ne $space -or
+                $resource.count -ne 1 -or
+                $resource.unbounded) {
+              throw "GPU PBR shader has unexpected reflection for $name."
+            }
+          }
+
+          Assert-GpuPbrBoundResource $gpuPbrVertex.reflection "SceneFrame" "constant_buffer" 0 0
+          Assert-GpuPbrBoundResource $gpuPbrVertex.reflection "scene_models" "shader_resource" 0 0
+          Assert-GpuPbrBoundResource $gpuPbrVertex.reflection "visible_scene_instances" "shader_resource" 1 0
+          Assert-GpuPbrBoundResource $gpuPbrFragment.reflection "SceneFrame" "constant_buffer" 0 0
+          Assert-GpuPbrBoundResource $gpuPbrFragment.reflection "instance_materials" "shader_resource" 2 0
+          Assert-GpuPbrBoundResource $gpuPbrFragment.reflection "material_records" "shader_resource" 3 0
+
+          foreach ($arrayResource in @(
+            @{ Name = "material_textures"; Class = "shader_resource"; Binding = 0 },
+            @{ Name = "material_samplers"; Class = "sampler"; Binding = 0 }
+          )) {
+            $resource = $gpuPbrFragment.reflection.resources | Where-Object { $_.name -eq $arrayResource.Name }
+            if (-not $resource -or
+                $resource.class -ne $arrayResource.Class -or
+                $resource.binding -ne $arrayResource.Binding -or
+                $resource.space -ne 1 -or
+                $resource.count -ne 0 -or
+                -not $resource.unbounded) {
+              throw "GPU PBR shader did not preserve unbounded $($arrayResource.Name) at space1."
+            }
+          }
+
+          foreach ($binding in 0..24) {
+            $resource = $gpuPbrFragment.reflection.resources | Where-Object {
+              $_.class -eq "shader_resource" -and $_.binding -eq $binding -and $_.space -eq 2
+            }
+            if (-not $resource -or $resource.count -ne 1 -or $resource.unbounded) {
+              throw "GPU PBR shader is missing bounded lighting resource t$binding,space2."
+            }
+          }
+          foreach ($binding in 0..1) {
+            $resource = $gpuPbrFragment.reflection.resources | Where-Object {
+              $_.class -eq "sampler" -and $_.binding -eq $binding -and $_.space -eq 2
+            }
+            if (-not $resource -or $resource.count -ne 1 -or $resource.unbounded) {
+              throw "GPU PBR shader is missing bounded lighting sampler s$binding,space2."
+            }
+          }

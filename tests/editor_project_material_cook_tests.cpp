@@ -215,6 +215,142 @@ float4 surface_fs(VertexOut input) : SV_Target0 {
     const auto missing_texture = editor::cook_project_render_materials(*session, {});
     require(!missing_texture.success, "material rejects an uncooked texture dependency");
 
+    const auto gpu_shader_path = project_root / "assets" / "shaders" / "vice_gpu_pbr_surface.hlsl";
+    const auto gpu_material_path = project_root / "assets" / "materials" / "gpu_surface.vmat";
+    std::string gpu_shader = R"(
+cbuffer SceneFrame : register(b0, space0) {
+    column_major float4x4 view_projection;
+    float4 frame_marker;
+};
+StructuredBuffer<float4x4> scene_models : register(t0, space0);
+StructuredBuffer<uint> visible_scene_instances : register(t1, space0);
+StructuredBuffer<uint4> instance_materials : register(t2, space0);
+StructuredBuffer<uint4> material_records : register(t3, space0);
+Texture2D<float4> material_textures[] : register(t0, space1);
+SamplerState material_samplers[] : register(s0, space1);
+Texture2D<float4> lighting_texture_0 : register(t0, space2);
+Texture2D<float4> lighting_texture_1 : register(t1, space2);
+Texture2D<float4> lighting_texture_2 : register(t2, space2);
+Texture2D<float4> lighting_texture_3 : register(t3, space2);
+Texture2D<float4> lighting_texture_4 : register(t4, space2);
+Texture2D<float4> lighting_texture_5 : register(t5, space2);
+Texture2D<float4> lighting_texture_6 : register(t6, space2);
+Texture2D<float4> lighting_texture_7 : register(t7, space2);
+Texture2D<float4> lighting_texture_8 : register(t8, space2);
+Texture2D<float4> lighting_texture_9 : register(t9, space2);
+Texture2D<float4> lighting_texture_10 : register(t10, space2);
+Texture2D<float4> lighting_texture_11 : register(t11, space2);
+Texture2D<float4> lighting_texture_12 : register(t12, space2);
+Texture2D<float4> lighting_texture_13 : register(t13, space2);
+Texture2D<float4> lighting_texture_14 : register(t14, space2);
+Texture2D<float4> lighting_texture_15 : register(t15, space2);
+Texture2D<float4> lighting_texture_16 : register(t16, space2);
+Texture2D<float4> lighting_texture_17 : register(t17, space2);
+Texture2D<float4> lighting_texture_18 : register(t18, space2);
+Texture2D<float4> lighting_texture_19 : register(t19, space2);
+Texture2D<float4> lighting_texture_20 : register(t20, space2);
+Texture2D<float4> lighting_texture_21 : register(t21, space2);
+Texture2D<float4> lighting_texture_22 : register(t22, space2);
+Texture2D<float4> lighting_texture_23 : register(t23, space2);
+Texture2D<float4> lighting_texture_24 : register(t24, space2);
+SamplerState lighting_sampler_0 : register(s0, space2);
+SamplerState lighting_sampler_1 : register(s1, space2);
+struct VertexIn { float3 position : POSITION0; float2 uv : TEXCOORD0; };
+struct VertexOut {
+    float4 position : SV_Position;
+    float2 uv : TEXCOORD0;
+    nointerpolation uint scene_instance_index : TEXCOORD1;
+};
+VertexOut vice_gpu_pbr_vs(VertexIn input, uint instance_id : SV_InstanceID) {
+    VertexOut output;
+    const uint scene_instance_index = visible_scene_instances[instance_id];
+    const float4x4 model = scene_models[scene_instance_index];
+    output.position = mul(view_projection, mul(model, float4(input.position, 1.0)));
+    output.uv = input.uv;
+    output.scene_instance_index = scene_instance_index;
+    return output;
+}
+float4 vice_gpu_pbr_fs(VertexOut input) : SV_Target0 {
+    const uint4 instance_material = instance_materials[input.scene_instance_index];
+    const uint4 material = material_records[instance_material.x];
+    const uint texture_index = NonUniformResourceIndex(material.x);
+    const uint sampler_index = NonUniformResourceIndex(material.y);
+    float4 value = material_textures[texture_index].Sample(material_samplers[sampler_index], input.uv);
+    value += lighting_texture_0.Sample(lighting_sampler_0, input.uv) * 1.0e-7;
+    value += lighting_texture_1.Sample(lighting_sampler_0, input.uv) * 1.0e-7;
+    value += lighting_texture_2.Sample(lighting_sampler_0, input.uv) * 1.0e-7;
+    value += lighting_texture_3.Sample(lighting_sampler_0, input.uv) * 1.0e-7;
+    value += lighting_texture_4.Sample(lighting_sampler_0, input.uv) * 1.0e-7;
+    value += lighting_texture_5.Sample(lighting_sampler_0, input.uv) * 1.0e-7;
+    value += lighting_texture_6.Sample(lighting_sampler_0, input.uv) * 1.0e-7;
+    value += lighting_texture_7.Sample(lighting_sampler_0, input.uv) * 1.0e-7;
+    value += lighting_texture_8.Sample(lighting_sampler_0, input.uv) * 1.0e-7;
+    value += lighting_texture_9.Sample(lighting_sampler_0, input.uv) * 1.0e-7;
+    value += lighting_texture_10.Sample(lighting_sampler_0, input.uv) * 1.0e-7;
+    value += lighting_texture_11.Sample(lighting_sampler_0, input.uv) * 1.0e-7;
+    value += lighting_texture_12.Sample(lighting_sampler_0, input.uv) * 1.0e-7;
+    value += lighting_texture_13.Sample(lighting_sampler_0, input.uv) * 1.0e-7;
+    value += lighting_texture_14.Sample(lighting_sampler_0, input.uv) * 1.0e-7;
+    value += lighting_texture_15.Sample(lighting_sampler_0, input.uv) * 1.0e-7;
+    value += lighting_texture_16.Sample(lighting_sampler_1, input.uv) * 1.0e-7;
+    value += lighting_texture_17.Sample(lighting_sampler_1, input.uv) * 1.0e-7;
+    value += lighting_texture_18.Sample(lighting_sampler_1, input.uv) * 1.0e-7;
+    value += lighting_texture_19.Sample(lighting_sampler_1, input.uv) * 1.0e-7;
+    value += lighting_texture_20.Sample(lighting_sampler_1, input.uv) * 1.0e-7;
+    value += lighting_texture_21.Sample(lighting_sampler_1, input.uv) * 1.0e-7;
+    value += lighting_texture_22.Sample(lighting_sampler_1, input.uv) * 1.0e-7;
+    value += lighting_texture_23.Sample(lighting_sampler_1, input.uv) * 1.0e-7;
+    value += lighting_texture_24.Sample(lighting_sampler_1, input.uv) * 1.0e-7;
+    return value + frame_marker.x * 1.0e-7;
+}
+)";
+    write_text(gpu_shader_path, gpu_shader);
+    write_text(
+        gpu_material_path,
+        "vice-render-material 4\n"
+        "id 70000000-0000-4000-8000-000000000002\n"
+        "shader \"shaders/vice_gpu_pbr_surface.hlsl\"\n"
+        "vertex vice_gpu_pbr_vs\n"
+        "fragment vice_gpu_pbr_fs\n"
+        "base_color 1 1 1 1\n"
+        "metallic 0.4\n"
+        "roughness 0.3\n"
+        "base_color_texture 71000000-0000-4000-8000-000000000001\n"
+        "normal_texture 71000000-0000-4000-8000-000000000001\n"
+        "orm_texture 71000000-0000-4000-8000-000000000001\n"
+        "emissive_texture 71000000-0000-4000-8000-000000000001\n"
+        "normal_scale 1\n"
+        "emissive_color 0.2 0.3 0.4\n"
+        "emissive_intensity 2\n"
+        "sampler linear linear linear repeat repeat repeat 4\n"
+    );
+
+    const auto gpu_cooked = editor::cook_project_render_materials(*session, texture_ids);
+    if (!gpu_cooked.success) std::cerr << gpu_cooked.diagnostics << '\n';
+    require(gpu_cooked.success, "GPU PBR v4 project material cooks");
+    require(gpu_cooked.materials.size() == 2U, "legacy and GPU PBR materials both cook");
+    bool gpu_material_found = false;
+    for (const auto& cooked_material : gpu_cooked.materials) {
+        const auto candidate = render::load_render_material_asset(cooked_material.cooked_path);
+        require(candidate.asset.has_value(), "recooked material loads");
+        if (candidate.asset->version == render::render_material_asset_format_version_v4) {
+            gpu_material_found = true;
+            require(
+                render::render_material_uses_gpu_scene_pbr(candidate.asset->version),
+                "GPU PBR v4 material keeps the compatibility marker"
+            );
+        }
+    }
+    require(gpu_material_found, "GPU PBR v4 cooked material found");
+
+    const std::string old_binding = "register(t24, space2)";
+    const auto binding_position = gpu_shader.find(old_binding);
+    require(binding_position != std::string::npos, "GPU PBR ABI drift fixture binding found");
+    gpu_shader.replace(binding_position, old_binding.size(), "register(t25, space2)");
+    write_text(gpu_shader_path, gpu_shader);
+    const auto drifted = editor::cook_project_render_materials(*session, texture_ids);
+    require(!drifted.success, "GPU PBR v4 rejects shader ABI drift");
+
     std::filesystem::remove_all(root, error);
     require(!error, "temporary cleanup");
     return 0;
