@@ -249,3 +249,48 @@ jobs:
               throw "GPU PBR shader is missing bounded lighting sampler s$binding,space2."
             }
           }
+
+          $materialSelectionOutput = "build/cooked/vice_gpu_material_selection_smoke"
+          & $cooker `
+            --input "assets/shaders/vice_gpu_material_selection_smoke.hlsl" `
+            --output $materialSelectionOutput `
+            --entry "vice_gpu_material_selection_cs" `
+            --stage compute `
+            --target d3d12 `
+            --shader-model 6.6 `
+            --dxc $dxc.FullName `
+            --force
+          if ($LASTEXITCODE -ne 0) {
+            exit $LASTEXITCODE
+          }
+
+          $materialSelectionManifest = Get-Content "$materialSelectionOutput/shader.vice.json" -Raw | ConvertFrom-Json
+          $materialTextures = $materialSelectionManifest.reflection.resources | Where-Object {
+            $_.name -eq "material_textures"
+          }
+          $materialSamplers = $materialSelectionManifest.reflection.resources | Where-Object {
+            $_.name -eq "material_samplers"
+          }
+          if (-not $materialTextures -or
+              $materialTextures.class -ne "shader_resource" -or
+              $materialTextures.binding -ne 0 -or
+              $materialTextures.space -ne 1 -or
+              $materialTextures.count -ne 0 -or
+              -not $materialTextures.unbounded) {
+            throw "GPU material selection smoke did not preserve the unbounded texture table."
+          }
+          if (-not $materialSamplers -or
+              $materialSamplers.class -ne "sampler" -or
+              $materialSamplers.binding -ne 0 -or
+              $materialSamplers.space -ne 1 -or
+              $materialSamplers.count -ne 0 -or
+              -not $materialSamplers.unbounded) {
+            throw "GPU material selection smoke did not preserve the unbounded sampler table."
+          }
+
+          $materialSelectionSmoke = Resolve-Path "build/tests/Release/vice_gpu_material_selection_smoke_tests.exe"
+          $env:VICE_GPU_MATERIAL_SELECTION_SMOKE_MANIFEST = (Resolve-Path "$materialSelectionOutput/shader.vice.json").Path
+          & $materialSelectionSmoke
+          if ($LASTEXITCODE -ne 0) {
+            exit $LASTEXITCODE
+          }

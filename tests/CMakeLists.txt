@@ -34,6 +34,18 @@ target_compile_features(vice_compute_rhi_smoke_tests PRIVATE cxx_std_23)
 vice_enable_warnings(vice_compute_rhi_smoke_tests)
 add_test(NAME vice_compute_rhi_smoke_tests COMMAND vice_compute_rhi_smoke_tests)
 
+add_executable(
+  vice_gpu_material_selection_smoke_tests
+  gpu_material_selection_smoke_tests.cpp
+)
+target_link_libraries(vice_gpu_material_selection_smoke_tests PRIVATE VICE::Render)
+target_compile_features(vice_gpu_material_selection_smoke_tests PRIVATE cxx_std_23)
+vice_enable_warnings(vice_gpu_material_selection_smoke_tests)
+add_test(
+  NAME vice_gpu_material_selection_smoke_tests
+  COMMAND vice_gpu_material_selection_smoke_tests
+)
+
 add_executable(vice_indexed_indirect_draw_tests indexed_indirect_draw_tests.cpp)
 target_link_libraries(vice_indexed_indirect_draw_tests PRIVATE VICE::Render)
 target_compile_features(vice_indexed_indirect_draw_tests PRIVATE cxx_std_23)
