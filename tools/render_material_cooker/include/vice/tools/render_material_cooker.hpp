@@ -16,11 +16,18 @@ namespace vice::tools::render_material_cooker {
 inline constexpr std::uint32_t render_material_source_format_version_v1 = 1U;
 inline constexpr std::uint32_t render_material_source_format_version_v2 = 2U;
 inline constexpr std::uint32_t render_material_source_format_version_v3 = 3U;
+inline constexpr std::uint32_t render_material_source_format_version_v4 = 4U;
 inline constexpr std::uint32_t render_material_source_format_version =
-    render_material_source_format_version_v3;
+    render_material_source_format_version_v4;
+
+inline constexpr std::string_view gpu_scene_pbr_shader_source =
+    "shaders/vice_gpu_pbr_surface.hlsl";
+inline constexpr std::string_view gpu_scene_pbr_vertex_entry = "vice_gpu_pbr_vs";
+inline constexpr std::string_view gpu_scene_pbr_fragment_entry = "vice_gpu_pbr_fs";
 
 struct MaterialSource {
-    std::uint32_t version = render_material_source_format_version;
+    // Default construction stays on the legacy v3 contract. Source v4 is explicit opt-in.
+    std::uint32_t version = render_material_source_format_version_v3;
     render::RenderMaterialStableId stable_id{};
     std::filesystem::path shader_source;
     std::string vertex_entry;
