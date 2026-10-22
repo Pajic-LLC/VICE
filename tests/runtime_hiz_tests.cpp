@@ -7,6 +7,7 @@
 #include <iostream>
 #include <span>
 #include <string>
+#include <vector>
 
 #define CHECK(condition) do { \
     if (!(condition)) { \
@@ -19,14 +20,19 @@ int main() {
     using namespace vice::render;
     using namespace vice::runtime;
 
+    const std::vector<RuntimeHiZLevelSize> expected_single{{1U, 1U}};
+    const std::vector<RuntimeHiZLevelSize> expected_even{
+        {8U, 8U}, {4U, 4U}, {2U, 2U}, {1U, 1U},
+    };
+    const std::vector<RuntimeHiZLevelSize> expected_odd{
+        {7U, 5U}, {4U, 3U}, {2U, 2U}, {1U, 1U},
+    };
+
     CHECK(runtime_hiz_level_sizes(0U, 8U).empty());
     CHECK(runtime_hiz_level_sizes(8U, 0U).empty());
-    CHECK(runtime_hiz_level_sizes(1U, 1U) ==
-        std::vector<RuntimeHiZLevelSize>{{1U, 1U}});
-    CHECK(runtime_hiz_level_sizes(8U, 8U) ==
-        std::vector<RuntimeHiZLevelSize>{{8U, 8U}, {4U, 4U}, {2U, 2U}, {1U, 1U}});
-    CHECK(runtime_hiz_level_sizes(7U, 5U) ==
-        std::vector<RuntimeHiZLevelSize>{{7U, 5U}, {4U, 3U}, {2U, 2U}, {1U, 1U}});
+    CHECK(runtime_hiz_level_sizes(1U, 1U) == expected_single);
+    CHECK(runtime_hiz_level_sizes(8U, 8U) == expected_even);
+    CHECK(runtime_hiz_level_sizes(7U, 5U) == expected_odd);
 
     auto device = Device::create();
     if (!device) {
@@ -40,10 +46,15 @@ int main() {
     CHECK(pyramid.resize(7U, 5U, &diagnostics));
     CHECK(diagnostics.empty());
     CHECK(pyramid.level_count() == 4U);
-    CHECK(pyramid.level_size(0U) == RuntimeHiZLevelSize{7U, 5U});
-    CHECK(pyramid.level_size(1U) == RuntimeHiZLevelSize{4U, 3U});
-    CHECK(pyramid.level_size(2U) == RuntimeHiZLevelSize{2U, 2U});
-    CHECK(pyramid.level_size(3U) == RuntimeHiZLevelSize{1U, 1U});
+
+    const RuntimeHiZLevelSize expected_level_0{7U, 5U};
+    const RuntimeHiZLevelSize expected_level_1{4U, 3U};
+    const RuntimeHiZLevelSize expected_level_2{2U, 2U};
+    const RuntimeHiZLevelSize expected_level_3{1U, 1U};
+    CHECK(pyramid.level_size(0U) == expected_level_0);
+    CHECK(pyramid.level_size(1U) == expected_level_1);
+    CHECK(pyramid.level_size(2U) == expected_level_2);
+    CHECK(pyramid.level_size(3U) == expected_level_3);
     CHECK(pyramid.level(4U) == nullptr);
 
     TextureDesc depth_desc;
