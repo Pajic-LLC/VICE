@@ -105,6 +105,13 @@ constexpr std::uint64_t fnv_prime = 1'099'511'628'211ULL;
         source.emissive_intensity >= 0.0F;
 }
 
+[[nodiscard]] bool valid_gpu_scene_pbr_contract(const MaterialSource& source) {
+    if (source.version != render_material_source_format_version_v4) return true;
+    return source.shader_source.generic_string() == gpu_scene_pbr_shader_source &&
+        source.vertex_entry == gpu_scene_pbr_vertex_entry &&
+        source.fragment_entry == gpu_scene_pbr_fragment_entry;
+}
+
 } // namespace
 
 ParseResult parse_source_manifest(const std::string_view source_text) {
@@ -153,8 +160,9 @@ ParseResult parse_source_manifest(const std::string_view source_text) {
             if (keyword != "vice-render-material" || !(values >> version) ||
                 (version != render_material_source_format_version_v1 &&
                     version != render_material_source_format_version_v2 &&
-                    version != render_material_source_format_version_v3)) {
-                fail("expected `vice-render-material 1`, `vice-render-material 2`, or `vice-render-material 3`.");
+                    version != render_material_source_format_version_v3 &&
+                    version != render_material_source_format_version_v4)) {
+                fail("expected `vice-render-material 1`, `vice-render-material 2`, `vice-render-material 3`, or `vice-render-material 4`.");
                 return result;
             }
             std::string trailing;
@@ -241,7 +249,7 @@ ParseResult parse_source_manifest(const std::string_view source_text) {
         } else if (keyword == "normal_texture") {
             std::string id_text;
             if (parsed.version < render_material_source_format_version_v3) {
-                fail("normal_texture requires render material version 3.");
+                fail("normal_texture requires render material version 3 or newer.");
                 return result;
             }
             if (normal_texture_seen || !(values >> id_text)) {
@@ -258,7 +266,7 @@ ParseResult parse_source_manifest(const std::string_view source_text) {
         } else if (keyword == "orm_texture") {
             std::string id_text;
             if (parsed.version < render_material_source_format_version_v3) {
-                fail("orm_texture requires render material version 3.");
+                fail("orm_texture requires render material version 3 or newer.");
                 return result;
             }
             if (orm_texture_seen || !(values >> id_text)) {
@@ -275,7 +283,7 @@ ParseResult parse_source_manifest(const std::string_view source_text) {
         } else if (keyword == "emissive_texture") {
             std::string id_text;
             if (parsed.version < render_material_source_format_version_v3) {
-                fail("emissive_texture requires render material version 3.");
+                fail("emissive_texture requires render material version 3 or newer.");
                 return result;
             }
             if (emissive_texture_seen || !(values >> id_text)) {
@@ -291,7 +299,7 @@ ParseResult parse_source_manifest(const std::string_view source_text) {
             emissive_texture_seen = true;
         } else if (keyword == "normal_scale") {
             if (parsed.version < render_material_source_format_version_v3) {
-                fail("normal_scale requires render material version 3.");
+                fail("normal_scale requires render material version 3 or newer.");
                 return result;
             }
             if (normal_scale_seen || !(values >> parsed.normal_scale) || !std::isfinite(parsed.normal_scale) ||
@@ -302,7 +310,7 @@ ParseResult parse_source_manifest(const std::string_view source_text) {
             normal_scale_seen = true;
         } else if (keyword == "emissive_color") {
             if (parsed.version < render_material_source_format_version_v3) {
-                fail("emissive_color requires render material version 3.");
+                fail("emissive_color requires render material version 3 or newer.");
                 return result;
             }
             parsed.emissive_color.alpha = 1.0F;
@@ -314,7 +322,7 @@ ParseResult parse_source_manifest(const std::string_view source_text) {
             emissive_color_seen = true;
         } else if (keyword == "emissive_intensity") {
             if (parsed.version < render_material_source_format_version_v3) {
-                fail("emissive_intensity requires render material version 3.");
+                fail("emissive_intensity requires render material version 3 or newer.");
                 return result;
             }
             if (emissive_intensity_seen || !(values >> parsed.emissive_intensity) ||
@@ -392,7 +400,15 @@ ParseResult parse_source_manifest(const std::string_view source_text) {
     if (parsed.version >= render_material_source_format_version_v3 &&
         (!normal_texture_seen || !orm_texture_seen || !emissive_texture_seen || !normal_scale_seen ||
             !emissive_color_seen || !emissive_intensity_seen || !valid_v3_pbr(parsed))) {
-        result.diagnostics = "Render material v3 requires normal/ORM/emissive textures, normal scale, emissive color, and emissive intensity.";
+        result.diagnostics = "Render material v3+ requires normal/ORM/emissive textures, normal scale, emissive color, and emissive intensity.";
+        return result;
+    }
+    if (!valid_gpu_scene_pbr_contract(parsed)) {
+        result.diagnostics =
+            "Render material v4 is reserved for the standard GPU-scene PBR shader contract: `" +
+            std::string{gpu_scene_pbr_shader_source} + "` / `" +
+            std::string{gpu_scene_pbr_vertex_entry} + "` / `" +
+            std::string{gpu_scene_pbr_fragment_entry} + "`.";
         return result;
     }
 
@@ -410,12 +426,14 @@ CookResult cook(
     CookResult result;
     if ((source.version != render_material_source_format_version_v1 &&
             source.version != render_material_source_format_version_v2 &&
-            source.version != render_material_source_format_version_v3) ||
+            source.version != render_material_source_format_version_v3 &&
+            source.version != render_material_source_format_version_v4) ||
         !render::valid_render_material_id(source.stable_id) || source.source_fingerprint == 0U ||
         !safe_shader_source_path(source.shader_source) || !valid_entry_point(source.vertex_entry) ||
         !valid_entry_point(source.fragment_entry) || !valid_color(source.base_color) ||
         (source.version >= render_material_source_format_version_v2 && !valid_v2_pbr(source)) ||
-        (source.version >= render_material_source_format_version_v3 && !valid_v3_pbr(source))) {
+        (source.version >= render_material_source_format_version_v3 && !valid_v3_pbr(source)) ||
+        !valid_gpu_scene_pbr_contract(source)) {
         result.diagnostics = "Render material source is invalid.";
         return result;
     }
