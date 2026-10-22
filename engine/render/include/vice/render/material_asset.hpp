@@ -36,7 +36,7 @@ using RenderMaterialStableId = std::array<std::uint8_t, render_material_stable_i
 [[nodiscard]] constexpr bool render_material_uses_gpu_scene_pbr(
     const std::uint32_t version
 ) noexcept {
-    return version >= render_material_asset_format_version_v4;
+    return version == render_material_asset_format_version_v4;
 }
 
 struct RenderMaterialAsset {
