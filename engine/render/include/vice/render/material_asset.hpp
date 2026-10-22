@@ -17,7 +17,8 @@ namespace vice::render {
 inline constexpr std::uint32_t render_material_asset_format_version_v1 = 1U;
 inline constexpr std::uint32_t render_material_asset_format_version_v2 = 2U;
 inline constexpr std::uint32_t render_material_asset_format_version_v3 = 3U;
-inline constexpr std::uint32_t render_material_asset_format_version = render_material_asset_format_version_v3;
+inline constexpr std::uint32_t render_material_asset_format_version_v4 = 4U;
+inline constexpr std::uint32_t render_material_asset_format_version = render_material_asset_format_version_v4;
 inline constexpr std::uint32_t render_material_asset_min_supported_version =
     render_material_asset_format_version_v1;
 inline constexpr std::size_t render_material_asset_magic_size = 8U;
@@ -32,8 +33,15 @@ using RenderMaterialStableId = std::array<std::uint8_t, render_material_stable_i
     return false;
 }
 
+[[nodiscard]] constexpr bool render_material_uses_gpu_scene_pbr(
+    const std::uint32_t version
+) noexcept {
+    return version >= render_material_asset_format_version_v4;
+}
+
 struct RenderMaterialAsset {
-    std::uint32_t version = render_material_asset_format_version;
+    // Default construction remains legacy/direct-draw compatible. V4 is an explicit opt-in.
+    std::uint32_t version = render_material_asset_format_version_v3;
     RenderMaterialStableId stable_id{};
     std::uint64_t source_fingerprint = 0U;
     Color base_color{1.0F, 1.0F, 1.0F, 1.0F};
