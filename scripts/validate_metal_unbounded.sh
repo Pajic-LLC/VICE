@@ -127,13 +127,36 @@ manifest_by_identity = {
     for location in locations
 }
 for raw in raw_locations:
-    resource_class = class_map.get(raw.get("Type"))
-    if resource_class is None:
-        fail(f"unsupported raw converter resource type: {raw.get('Type')}")
-    identity = (resource_class, raw.get("Slot"), raw.get("Space"))
-    normalized = manifest_by_identity.get(identity)
-    if normalized is None:
-        fail(f"converter root {identity} is missing from VICE manifest")
+    raw_type = raw.get("Type")
+    resource_class = class_map.get(raw_type)
+    if resource_class is None and raw_type != "Table":
+        fail(f"unsupported raw converter resource type: {raw_type}")
+
+    if raw_type == "Table":
+        candidates = [
+            location
+            for location in locations
+            if location.get("binding") == raw.get("Slot")
+            and location.get("space") == raw.get("Space")
+            and location.get("argument_buffer_offset") == raw.get("EltOffset")
+        ]
+        if len(candidates) != 1:
+            fail(
+                "converter descriptor-table root does not uniquely match the VICE manifest: "
+                f"slot={raw.get('Slot')} space={raw.get('Space')} offset={raw.get('EltOffset')}"
+            )
+        normalized = candidates[0]
+        identity = (
+            normalized.get("class"),
+            normalized.get("binding"),
+            normalized.get("space"),
+        )
+    else:
+        identity = (resource_class, raw.get("Slot"), raw.get("Space"))
+        normalized = manifest_by_identity.get(identity)
+        if normalized is None:
+            fail(f"converter root {identity} is missing from VICE manifest")
+
     if normalized.get("argument_buffer_offset") != raw.get("EltOffset"):
         fail(
             f"VICE changed converter EltOffset for {identity}: "
