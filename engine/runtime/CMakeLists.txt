@@ -6,6 +6,7 @@ add_library(
     src/gpu_instance_materials.cpp
     src/gpu_instance_table.cpp
     src/gpu_material_resources.cpp
+    src/gpu_material_scene.cpp
     src/gpu_material_table.cpp
     src/material_pipeline.cpp
     src/module_loader.cpp
