@@ -8,6 +8,7 @@ add_library(
     src/gpu_material_resources.cpp
     src/gpu_material_scene.cpp
     src/gpu_material_table.cpp
+    src/gpu_meshlet_table.cpp
     src/gpu_pbr_batches.cpp
     src/gpu_shadow_batches.cpp
     src/gpu_visibility_set.cpp
