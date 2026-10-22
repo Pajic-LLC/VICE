@@ -342,16 +342,16 @@ float4 point_shadow_metadata(uint slot) {
     return slot == 0 ? point_shadow_metadata_0 : point_shadow_metadata_1;
 }
 
-float3 point_shadow_relative_position(uint slot, float3 model_position) {
-    return slot == 0
-        ? mul(point_shadow_model_to_light_0, float4(model_position, 1.0)).xyz
-        : mul(point_shadow_model_to_light_1, float4(model_position, 1.0)).xyz;
+float3 point_shadow_relative_position(uint slot, float3 world_position) {
+    const float4 metadata = point_shadow_metadata(slot);
+    const uint light_index = (uint)metadata.y;
+    return world_position - lights[light_index].position_or_direction.xyz;
 }
 
-float point_shadow_visibility(uint slot, float3 model_position) {
+float point_shadow_visibility(uint slot, float3 world_position) {
     const float4 metadata = point_shadow_metadata(slot);
     if (metadata.x < 0.5 || metadata.z <= 0.0) return 1.0;
-    const float3 relative_position = point_shadow_relative_position(slot, model_position);
+    const float3 relative_position = point_shadow_relative_position(slot, world_position);
     const float distance_to_light = length(relative_position);
     if (distance_to_light <= 0.0001 || distance_to_light >= metadata.z) return 1.0;
     const uint face = point_shadow_face(relative_position);
@@ -548,9 +548,9 @@ float4 vice_gpu_pbr_fs(VertexOut input) : SV_Target0 {
             visibility = directional_shadow_visibility(input.world_position, normal);
         } else if (lights[index].position_or_direction.w >= 0.5) {
             if (point_shadow_metadata_0.x >= 0.5 && index == (uint)point_shadow_metadata_0.y) {
-                visibility = point_shadow_visibility(0, input.model_position);
+                visibility = point_shadow_visibility(0, input.world_position);
             } else if (point_shadow_metadata_1.x >= 0.5 && index == (uint)point_shadow_metadata_1.y) {
-                visibility = point_shadow_visibility(1, input.model_position);
+                visibility = point_shadow_visibility(1, input.world_position);
             }
         }
         direct += visibility * evaluate_light(
@@ -574,7 +574,7 @@ float4 vice_gpu_pbr_fs(VertexOut input) : SV_Target0 {
     float3 surface = ambient + direct + environment * base_sample.rgb + emissive;
 
     if (atmosphere_secondary.z >= 0.5) {
-        const float3 camera_relative = mul(atmosphere_camera_from_model, float4(input.model_position, 1.0)).xyz;
+        const float3 camera_relative = input.world_position - camera_position.xyz;
         const float distance_to_camera = length(camera_relative);
         if (distance_to_camera > 0.0001) {
             const float density = max(atmosphere_parameters.w, 0.0);
