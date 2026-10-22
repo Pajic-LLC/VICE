@@ -14,6 +14,7 @@ target_sources(
     src/environment_asset.cpp
     src/material_asset.cpp
     src/mesh_asset.cpp
+    src/meshlet.cpp
     src/pipeline_layout.cpp
     src/shader_asset.cpp
     src/telemetry.cpp
