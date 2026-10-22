@@ -14,10 +14,13 @@ namespace vice::render {
 inline constexpr std::uint32_t mesh_asset_format_version_v1 = 1U;
 inline constexpr std::uint32_t mesh_asset_format_version_v2 = 2U;
 inline constexpr std::uint32_t mesh_asset_format_version_v3 = 3U;
-inline constexpr std::uint32_t mesh_asset_format_version = mesh_asset_format_version_v3;
+inline constexpr std::uint32_t mesh_asset_format_version_v4 = 4U;
+inline constexpr std::uint32_t mesh_asset_format_version = mesh_asset_format_version_v4;
 inline constexpr std::uint32_t mesh_asset_min_supported_version = mesh_asset_format_version_v1;
 inline constexpr std::size_t mesh_asset_magic_size = 8U;
 inline constexpr std::size_t mesh_stable_id_size = 16U;
+inline constexpr std::uint32_t meshlet_max_vertices = 64U;
+inline constexpr std::uint32_t meshlet_max_triangles = 126U;
 
 using MeshStableId = std::array<std::uint8_t, mesh_stable_id_size>;
 
@@ -37,12 +40,38 @@ struct MeshVertex {
 
 static_assert(sizeof(MeshVertex) == 44U);
 
+struct MeshletBounds {
+    std::array<float, 3U> center{};
+    float radius = 0.0F;
+
+    friend bool operator==(const MeshletBounds&, const MeshletBounds&) = default;
+};
+
+struct Meshlet {
+    std::uint32_t vertex_offset = 0U;
+    std::uint32_t vertex_count = 0U;
+    std::uint32_t triangle_offset = 0U;
+    std::uint32_t triangle_count = 0U;
+    MeshletBounds bounds{};
+
+    friend bool operator==(const Meshlet&, const Meshlet&) = default;
+};
+
+struct MeshletGeometry {
+    std::vector<Meshlet> meshlets;
+    std::vector<std::uint32_t> vertex_indices;
+    std::vector<std::uint8_t> triangle_indices;
+
+    friend bool operator==(const MeshletGeometry&, const MeshletGeometry&) = default;
+};
+
 struct MeshAsset {
     std::uint32_t version = mesh_asset_format_version;
     MeshStableId stable_id{};
     std::uint64_t source_fingerprint = 0U;
     std::vector<MeshVertex> vertices;
     std::vector<std::uint32_t> indices;
+    MeshletGeometry meshlet_geometry;
 };
 
 struct MeshAssetDecodeResult {

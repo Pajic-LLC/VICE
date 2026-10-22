@@ -1,5 +1,6 @@
 #include <vice/tools/mesh_cooker.hpp>
 
+#include <vice/render/meshlet.hpp>
 #include <vice/world/persistent_id.hpp>
 
 #include <algorithm>
@@ -9,9 +10,11 @@
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <limits>
 #include <sstream>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace vice::tools::mesh_cooker {
@@ -293,6 +296,11 @@ CookResult cook(const MeshSource& source) {
         result.diagnostics = "Mesh source is incomplete.";
         return result;
     }
+    if (source.vertices.size() > std::numeric_limits<std::uint32_t>::max() ||
+        source.indices.size() > std::numeric_limits<std::uint32_t>::max()) {
+        result.diagnostics = "Mesh source exceeds the 32-bit cooked geometry contract.";
+        return result;
+    }
     for (const auto& vertex : source.vertices) {
         if (!finite_surface_vertex(vertex)) {
             result.diagnostics = "Mesh source contains an invalid surface vertex.";
@@ -310,9 +318,29 @@ CookResult cook(const MeshSource& source) {
         }
     }
 
+    const auto meshlet_build = render::build_meshlets(source.vertices, source.indices);
+    if (!meshlet_build) {
+        result.diagnostics = "Mesh source could not be partitioned into deterministic clusters: " +
+            meshlet_build.diagnostics;
+        return result;
+    }
+    const auto& meshlets = *meshlet_build.geometry;
+    if (meshlets.meshlets.size() > std::numeric_limits<std::uint32_t>::max() ||
+        meshlets.vertex_indices.size() > std::numeric_limits<std::uint32_t>::max() ||
+        meshlets.triangle_indices.size() > std::numeric_limits<std::uint32_t>::max()) {
+        result.diagnostics = "Meshlet metadata exceeds the 32-bit cooked mesh contract.";
+        return result;
+    }
+
     std::vector<std::byte> payload;
-    payload.reserve(source.vertices.size() * sizeof(render::MeshVertex) +
-        source.indices.size() * sizeof(std::uint32_t));
+    const std::size_t descriptor_bytes = meshlets.meshlets.size() * 32U;
+    payload.reserve(
+        source.vertices.size() * sizeof(render::MeshVertex) +
+        source.indices.size() * sizeof(std::uint32_t) +
+        descriptor_bytes +
+        meshlets.vertex_indices.size() * sizeof(std::uint32_t) +
+        meshlets.triangle_indices.size()
+    );
     for (const auto& vertex : source.vertices) {
         for (const float component : vertex.position) append_f32(payload, component);
         for (const float component : vertex.color) append_f32(payload, component);
@@ -320,10 +348,23 @@ CookResult cook(const MeshSource& source) {
         for (const float component : vertex.uv) append_f32(payload, component);
     }
     for (const std::uint32_t index : source.indices) append_u32(payload, index);
+    for (const auto& meshlet : meshlets.meshlets) {
+        append_u32(payload, meshlet.vertex_offset);
+        append_u32(payload, meshlet.vertex_count);
+        append_u32(payload, meshlet.triangle_offset);
+        append_u32(payload, meshlet.triangle_count);
+        append_f32(payload, meshlet.bounds.center[0]);
+        append_f32(payload, meshlet.bounds.center[1]);
+        append_f32(payload, meshlet.bounds.center[2]);
+        append_f32(payload, meshlet.bounds.radius);
+    }
+    for (const std::uint32_t index : meshlets.vertex_indices) append_u32(payload, index);
+    for (const std::uint8_t index : meshlets.triangle_indices) append_u8(payload, index);
 
     result.source_fingerprint = fingerprint(payload);
-    result.bytes.reserve(render::mesh_asset_magic_size + sizeof(std::uint32_t) * 3U +
-        sizeof(std::uint64_t) + render::mesh_stable_id_size + payload.size());
+    constexpr std::size_t v4_header_bytes = render::mesh_asset_magic_size +
+        sizeof(std::uint32_t) * 6U + sizeof(std::uint64_t) + render::mesh_stable_id_size;
+    result.bytes.reserve(v4_header_bytes + payload.size());
     constexpr std::string_view magic = "VICEMESH";
     for (const char value : magic) result.bytes.push_back(static_cast<std::byte>(value));
     append_u32(result.bytes, render::mesh_asset_format_version);
@@ -331,12 +372,20 @@ CookResult cook(const MeshSource& source) {
     append_u32(result.bytes, static_cast<std::uint32_t>(source.indices.size()));
     append_u64(result.bytes, result.source_fingerprint);
     for (const std::uint8_t value : source.stable_id) append_u8(result.bytes, value);
+    append_u32(result.bytes, static_cast<std::uint32_t>(meshlets.meshlets.size()));
+    append_u32(result.bytes, static_cast<std::uint32_t>(meshlets.vertex_indices.size()));
+    append_u32(result.bytes, static_cast<std::uint32_t>(meshlets.triangle_indices.size()));
     result.bytes.insert(result.bytes.end(), payload.begin(), payload.end());
 
     const auto decoded = render::decode_mesh_asset(result.bytes);
     if (!decoded.asset.has_value()) {
         result.bytes.clear();
         result.diagnostics = "Cooked mesh failed runtime validation: " + decoded.diagnostics;
+        return result;
+    }
+    if (decoded.asset->meshlet_geometry != meshlets) {
+        result.bytes.clear();
+        result.diagnostics = "Cooked mesh cluster metadata did not round-trip deterministically.";
         return result;
     }
 
