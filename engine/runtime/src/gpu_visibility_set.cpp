@@ -32,6 +32,7 @@ struct RuntimeGpuIdentityVisibility::State {
     std::unique_ptr<render::Buffer> indices_upload;
     std::unique_ptr<render::Buffer> indices_gpu;
     std::uint32_t capacity = 0U;
+    std::uint32_t uploaded_capacity = 0U;
     std::uint32_t instance_count = 0U;
 
     [[nodiscard]] bool ensure_capacity(
@@ -74,6 +75,7 @@ struct RuntimeGpuIdentityVisibility::State {
         indices_upload = std::move(new_upload);
         indices_gpu = std::move(new_gpu);
         capacity = new_capacity;
+        uploaded_capacity = 0U;
         return true;
     }
 };
@@ -117,6 +119,7 @@ bool RuntimeGpuIdentityVisibility::initialize(
     state_->indices_upload.reset();
     state_->indices_gpu.reset();
     state_->capacity = 0U;
+    state_->uploaded_capacity = 0U;
     state_->instance_count = 0U;
     if (diagnostics != nullptr) diagnostics->clear();
     return true;
@@ -137,8 +140,8 @@ bool RuntimeGpuIdentityVisibility::prepare(
         return true;
     }
 
-    const bool grew = instance_count > state_->capacity;
     if (!state_->ensure_capacity(instance_count, diagnostics)) return false;
+    const bool upload_indices = state_->uploaded_capacity < state_->capacity;
     if (!state_->count_upload->write(
             0U, std::as_bytes(std::span{&instance_count, 1})
         ) ||
@@ -149,7 +152,7 @@ bool RuntimeGpuIdentityVisibility::prepare(
             0U,
             sizeof(std::uint32_t)
         ) ||
-        (grew && !commands.copy_buffer(
+        (upload_indices && !commands.copy_buffer(
             *state_->indices_upload,
             0U,
             *state_->indices_gpu,
@@ -160,6 +163,7 @@ bool RuntimeGpuIdentityVisibility::prepare(
         return false;
     }
 
+    if (upload_indices) state_->uploaded_capacity = state_->capacity;
     state_->instance_count = instance_count;
     if (diagnostics != nullptr) diagnostics->clear();
     return true;
