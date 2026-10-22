@@ -10,6 +10,7 @@
 #include "bloom_shaders.hpp"
 #include "environment_pipeline.hpp"
 #include "gpu_material_scene.hpp"
+#include "gpu_motion_history.hpp"
 #include "gpu_pbr_batches.hpp"
 #include "gpu_shadow_batches.hpp"
 #include "material_pipeline.hpp"
@@ -3241,18 +3242,19 @@ bool RuntimeSceneRenderer::render(
         }
     }
     if (!gpu_shadow_plan.batches.empty()) {
-        std::vector<math::Mat4> gpu_previous_models;
-        gpu_previous_models.reserve(instances.size());
-        for (std::size_t instance_index = 0U; instance_index < instances.size(); ++instance_index) {
-            math::Mat4 previous_model = gpu_instance_models[instance_index];
-            if (temporal_frame.history_valid) {
-                const auto previous = state_->previous_models.find(instances[instance_index].entity);
-                if (previous != state_->previous_models.end()) previous_model = previous->second;
-            }
-            gpu_previous_models.push_back(previous_model);
+        const auto gpu_previous_build = detail::build_runtime_gpu_previous_models(
+            instances,
+            gpu_instance_models,
+            state_->previous_models,
+            temporal_frame.history_valid
+        );
+        if (!gpu_previous_build) {
+            set_diagnostics(diagnostics, gpu_previous_build.diagnostics);
+            return false;
         }
-        if (!state_->gpu_previous_instances.upload(*commands, gpu_previous_models, diagnostics) ||
-            !state_->gpu_motion_draw_batches.build(
+        if (!state_->gpu_previous_instances.upload(
+                *commands, gpu_previous_build.models, diagnostics
+            ) || !state_->gpu_motion_draw_batches.build(
                 *commands,
                 state_->visibility.result(),
                 gpu_shadow_plan.instance_batches,
