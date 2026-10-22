@@ -462,11 +462,6 @@ struct GpuPbrSceneConstants {
     std::array<ScenePointShadowConstants, runtime_point_shadow_light_count> point_shadows{};
 };
 
-struct ShadowConstants {
-    math::Mat4 view_projection{};
-    math::Mat4 model{};
-};
-
 struct MotionConstants {
     math::Mat4 current_view_projection{};
     math::Mat4 previous_view_projection{};
@@ -489,7 +484,6 @@ static_assert(sizeof(SceneReflectionProjectionConstants) == 96U);
 static_assert(sizeof(ScenePointShadowConstants) == 464U);
 static_assert(sizeof(SceneConstants) == 2256U);
 static_assert(sizeof(GpuPbrSceneConstants) == 2192U);
-static_assert(sizeof(ShadowConstants) == 128U);
 static_assert(sizeof(MotionConstants) == 128U);
 static_assert(sizeof(TaaConstants) == 32U);
 
@@ -552,37 +546,6 @@ vertex VertexOut vice_runtime_mesh_vs(
 }
 fragment float4 vice_runtime_mesh_fs(VertexOut input [[stage_in]]) {
     return float4(input.color, 1.0);
-}
-)";
-
-constexpr std::string_view shadow_hlsl_source = R"(
-cbuffer ShadowFrame : register(b0) {
-    float4x4 view_projection;
-    float4x4 model;
-};
-struct VertexIn {
-    float3 position : POSITION0;
-};
-float4 vice_runtime_shadow_vs(VertexIn input) : SV_Position {
-    const float4 world_position = mul(model, float4(input.position, 1.0));
-    return mul(view_projection, world_position);
-}
-)";
-
-constexpr std::string_view shadow_metal_source = R"(
-#include <metal_stdlib>
-using namespace metal;
-struct ShadowFrame {
-    float4x4 view_projection;
-    float4x4 model;
-};
-struct VertexIn {
-    float3 position [[attribute(11)]];
-};
-vertex float4 vice_runtime_shadow_vs(
-    VertexIn input [[stage_in]],
-    constant ShadowFrame& frame [[buffer(0)]]) {
-    return frame.view_projection * frame.model * float4(input.position, 1.0);
 }
 )";
 
@@ -963,17 +926,6 @@ fragment float4 vice_runtime_tonemap_fs(
     desc.usage = render::BufferUsage::uniform;
     desc.memory = render::MemoryLocation::cpu_to_gpu;
     desc.debug_name = "VICE Runtime scene constants";
-    return device.create_buffer(desc);
-}
-
-[[nodiscard]] std::unique_ptr<render::Buffer> create_shadow_constant_buffer(
-    render::Device& device
-) {
-    render::BufferDesc desc;
-    desc.size = sizeof(ShadowConstants);
-    desc.usage = render::BufferUsage::uniform;
-    desc.memory = render::MemoryLocation::cpu_to_gpu;
-    desc.debug_name = "VICE Runtime shadow constants";
     return device.create_buffer(desc);
 }
 
@@ -2131,8 +2083,6 @@ struct RuntimeSceneRenderer::State {
     std::unique_ptr<render::GraphicsPipeline> tone_map_pipeline;
     std::unique_ptr<render::Sampler> tone_map_sampler;
     std::unique_ptr<render::Buffer> tone_map_constants;
-    std::unique_ptr<render::ShaderModule> shadow_vertex_shader;
-    std::unique_ptr<render::GraphicsPipeline> shadow_pipeline;
     std::unique_ptr<render::ShaderModule> gpu_shadow_vertex_shader;
     std::unique_ptr<render::GraphicsPipeline> gpu_shadow_pipeline;
     std::array<std::unique_ptr<render::Texture>, runtime_shadow_cascade_count> shadow_maps;
@@ -2151,17 +2101,6 @@ struct RuntimeSceneRenderer::State {
     std::unordered_map<world::ResourceId, MeshGpu, world::ResourceIdHash> meshes;
     std::unordered_map<world::PersistentId, std::unique_ptr<render::Buffer>, world::PersistentIdHash> constants;
     std::unordered_map<world::PersistentId, math::Mat4, world::PersistentIdHash> previous_models;
-    std::array<
-        std::unordered_map<world::PersistentId, std::unique_ptr<render::Buffer>, world::PersistentIdHash>,
-        runtime_shadow_cascade_count
-    > shadow_constants;
-    std::array<
-        std::array<
-            std::unordered_map<world::PersistentId, std::unique_ptr<render::Buffer>, world::PersistentIdHash>,
-            runtime_point_shadow_face_count
-        >,
-        runtime_point_shadow_light_count
-    > point_shadow_constants;
     std::uint32_t depth_width = 0;
     std::uint32_t depth_height = 0;
     std::uint32_t bloom_width = 0;
@@ -2630,36 +2569,6 @@ bool RuntimeSceneRenderer::initialize(
         return false;
     }
 
-    render::ShaderModuleDesc shadow_vertex_desc;
-    shadow_vertex_desc.stage = render::ShaderStage::vertex;
-    shadow_vertex_desc.language = vertex_desc.language;
-    shadow_vertex_desc.source = metal ? shadow_metal_source : shadow_hlsl_source;
-    shadow_vertex_desc.resources = vertex_resources;
-    shadow_vertex_desc.entry_point = "vice_runtime_shadow_vs";
-    shadow_vertex_desc.debug_name = "VICE Runtime directional shadow vertex";
-    state_->shadow_vertex_shader = device.create_shader_module(shadow_vertex_desc);
-    if (!state_->shadow_vertex_shader) {
-        set_diagnostics(diagnostics, "VICE Runtime could not create the directional shadow shader.");
-        return false;
-    }
-
-    render::GraphicsPipelineDesc shadow_pipeline_desc;
-    shadow_pipeline_desc.vertex_shader = state_->shadow_vertex_shader.get();
-    shadow_pipeline_desc.fragment_shader = nullptr;
-    shadow_pipeline_desc.color_format = render::TextureFormat::undefined;
-    shadow_pipeline_desc.cull_mode = render::CullMode::none;
-    shadow_pipeline_desc.depth.format = render::TextureFormat::depth32_float;
-    shadow_pipeline_desc.depth.test_enabled = true;
-    shadow_pipeline_desc.depth.write_enabled = true;
-    shadow_pipeline_desc.depth.compare = render::CompareOp::less;
-    shadow_pipeline_desc.vertex_buffers = mesh_layouts;
-    shadow_pipeline_desc.debug_name = "VICE Runtime directional shadow pipeline";
-    state_->shadow_pipeline = device.create_graphics_pipeline(shadow_pipeline_desc);
-    if (!state_->shadow_pipeline) {
-        set_diagnostics(diagnostics, "VICE Runtime could not create the directional shadow pipeline.");
-        return false;
-    }
-
     render::ShaderModuleDesc gpu_shadow_vertex_desc;
     gpu_shadow_vertex_desc.stage = render::ShaderStage::vertex;
     gpu_shadow_vertex_desc.language = vertex_desc.language;
@@ -2673,8 +2582,16 @@ bool RuntimeSceneRenderer::initialize(
         return false;
     }
 
-    render::GraphicsPipelineDesc gpu_shadow_pipeline_desc = shadow_pipeline_desc;
+    render::GraphicsPipelineDesc gpu_shadow_pipeline_desc;
     gpu_shadow_pipeline_desc.vertex_shader = state_->gpu_shadow_vertex_shader.get();
+    gpu_shadow_pipeline_desc.fragment_shader = nullptr;
+    gpu_shadow_pipeline_desc.color_format = render::TextureFormat::undefined;
+    gpu_shadow_pipeline_desc.cull_mode = render::CullMode::none;
+    gpu_shadow_pipeline_desc.depth.format = render::TextureFormat::depth32_float;
+    gpu_shadow_pipeline_desc.depth.test_enabled = true;
+    gpu_shadow_pipeline_desc.depth.write_enabled = true;
+    gpu_shadow_pipeline_desc.depth.compare = render::CompareOp::less;
+    gpu_shadow_pipeline_desc.vertex_buffers = mesh_layouts;
     gpu_shadow_pipeline_desc.debug_name = "VICE Runtime GPU directional shadow pipeline";
     state_->gpu_shadow_pipeline = device.create_graphics_pipeline(gpu_shadow_pipeline_desc);
     if (!state_->gpu_shadow_pipeline) {
