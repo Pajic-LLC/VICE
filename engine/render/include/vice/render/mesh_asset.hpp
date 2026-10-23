@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <limits>
 #include <optional>
 #include <span>
 #include <string>
@@ -23,6 +24,9 @@ inline constexpr std::size_t mesh_stable_id_size = 16U;
 inline constexpr std::uint32_t meshlet_max_vertices = 64U;
 inline constexpr std::uint32_t meshlet_max_triangles = 126U;
 inline constexpr std::uint32_t virtual_geometry_page_max_meshlets = 32U;
+inline constexpr std::uint32_t virtual_geometry_hierarchy_fanout = 4U;
+inline constexpr std::uint32_t virtual_geometry_invalid_node =
+    std::numeric_limits<std::uint32_t>::max();
 
 using MeshStableId = std::array<std::uint8_t, mesh_stable_id_size>;
 
@@ -83,6 +87,26 @@ struct VirtualGeometryPageTable {
     std::vector<VirtualGeometryPage> pages;
 
     friend bool operator==(const VirtualGeometryPageTable&, const VirtualGeometryPageTable&) = default;
+};
+
+struct VirtualGeometryHierarchyNode {
+    std::uint32_t parent_index = virtual_geometry_invalid_node;
+    std::uint32_t first_child = virtual_geometry_invalid_node;
+    std::uint32_t child_count = 0U;
+    std::uint32_t page_offset = 0U;
+    std::uint32_t page_count = 0U;
+    std::uint32_t depth = 0U;
+    MeshletBounds bounds{};
+    float geometric_error = 0.0F;
+
+    friend bool operator==(const VirtualGeometryHierarchyNode&, const VirtualGeometryHierarchyNode&) = default;
+};
+
+struct VirtualGeometryHierarchy {
+    std::vector<VirtualGeometryHierarchyNode> nodes;
+    std::uint32_t root_index = virtual_geometry_invalid_node;
+
+    friend bool operator==(const VirtualGeometryHierarchy&, const VirtualGeometryHierarchy&) = default;
 };
 
 struct MeshAsset {
