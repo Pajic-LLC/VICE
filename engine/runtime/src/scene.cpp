@@ -4,6 +4,7 @@
 #include <vice/runtime/visibility.hpp>
 
 #include <algorithm>
+#include <limits>
 #include <utility>
 
 namespace vice::runtime::detail {
@@ -23,6 +24,7 @@ namespace {
 
 struct RuntimeVirtualGeometrySceneContext {
     CookedMeshCatalog* catalog = nullptr;
+    RuntimeGpuMeshletTablePlan* gpu_meshlet_plan = nullptr;
     platform::WindowMetrics metrics{};
 };
 
@@ -63,6 +65,40 @@ private:
     return result;
 }
 
+[[nodiscard]] bool ensure_runtime_virtual_geometry_meshlet_alias(
+    RuntimeGpuMeshletTablePlan& plan,
+    const world::ResourceId resource,
+    std::string* const diagnostics
+) {
+    if (const auto existing = plan.mesh_index(resource); existing.has_value()) {
+        if (*existing >= plan.meshes.size() || plan.meshes[*existing].meshlet_count != 0U) {
+            set_diagnostics(
+                diagnostics,
+                "Runtime virtual geometry resource collides with authoritative meshlet metadata."
+            );
+            return false;
+        }
+        if (diagnostics != nullptr) diagnostics->clear();
+        return true;
+    }
+    if (plan.mesh_ids.size() != plan.meshes.size() ||
+        plan.mesh_ids.size() >= std::numeric_limits<std::uint32_t>::max() ||
+        plan.meshlets.size() > std::numeric_limits<std::uint32_t>::max()) {
+        set_diagnostics(
+            diagnostics,
+            "Runtime virtual geometry meshlet alias exceeds the CPU meshlet table contract."
+        );
+        return false;
+    }
+    plan.mesh_ids.push_back(resource);
+    plan.meshes.push_back(RuntimeGpuMeshletMeshRecord{
+        .first_meshlet = static_cast<std::uint32_t>(plan.meshlets.size()),
+        .meshlet_count = 0U,
+    });
+    if (diagnostics != nullptr) diagnostics->clear();
+    return true;
+}
+
 } // namespace
 
 bool CookedMeshCatalog::upsert_runtime_record(
@@ -101,11 +137,14 @@ RuntimeRenderResidentSceneBuildResult build_runtime_render_resident_scene_with_v
 ) {
     auto result = ::vice::runtime::build_runtime_render_resident_scene(world);
     if (!result || active_virtual_geometry_context == nullptr ||
-        active_virtual_geometry_context->catalog == nullptr || result.scene.meshes.empty()) {
+        active_virtual_geometry_context->catalog == nullptr ||
+        active_virtual_geometry_context->gpu_meshlet_plan == nullptr ||
+        result.scene.meshes.empty()) {
         return result;
     }
 
     auto& catalog = *active_virtual_geometry_context->catalog;
+    auto& gpu_meshlet_plan = *active_virtual_geometry_context->gpu_meshlet_plan;
     const auto metrics = active_virtual_geometry_context->metrics;
     const float aspect = static_cast<float>(metrics.drawable_width) /
         static_cast<float>(std::max(1U, metrics.drawable_height));
@@ -179,6 +218,14 @@ RuntimeRenderResidentSceneBuildResult build_runtime_render_resident_scene_with_v
             result.diagnostics = "Runtime virtual geometry variant collides with an authored mesh resource.";
             return result;
         }
+        if (!ensure_runtime_virtual_geometry_meshlet_alias(
+                gpu_meshlet_plan,
+                variant_id,
+                &result.diagnostics
+            )) {
+            result.scene = {};
+            return result;
+        }
 
         instance.mesh = variant_id;
         instance.geometry_node_index = render::virtual_geometry_invalid_node;
@@ -201,6 +248,7 @@ bool RuntimeSceneRenderer::render(
     }
     RuntimeVirtualGeometrySceneContext context{
         .catalog = &state_->catalog,
+        .gpu_meshlet_plan = &state_->gpu_meshlet_plan,
         .metrics = metrics,
     };
     const RuntimeVirtualGeometrySceneScope scope{context};
