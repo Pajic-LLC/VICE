@@ -3,16 +3,22 @@
 #include <vice/render/virtual_geometry_selection.hpp>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <limits>
+#include <map>
 #include <span>
 #include <string>
 #include <utility>
 
 namespace vice::runtime {
 namespace {
+
+constexpr std::uint64_t fnv_offset_basis = 14'695'981'039'346'656'037ULL;
+constexpr std::uint64_t fnv_prime = 1'099'511'628'211ULL;
 
 void set_diagnostics(std::string* const diagnostics, std::string message) {
     if (diagnostics != nullptr) *diagnostics = std::move(message);
@@ -81,6 +87,68 @@ void set_diagnostics(std::string* const diagnostics, std::string message) {
     return view;
 }
 
+[[nodiscard]] std::uint64_t hash_variant_domain(
+    const world::ResourceId mesh,
+    const std::uint32_t node_index,
+    const std::uint8_t domain
+) noexcept {
+    std::uint64_t hash = fnv_offset_basis;
+    for (const auto value : mesh.value.bytes()) {
+        hash ^= value;
+        hash *= fnv_prime;
+    }
+    for (std::size_t byte = 0U; byte < sizeof(node_index); ++byte) {
+        hash ^= static_cast<std::uint8_t>((node_index >> (byte * 8U)) & 0xFFU);
+        hash *= fnv_prime;
+    }
+    hash ^= domain;
+    hash *= fnv_prime;
+    return hash;
+}
+
+[[nodiscard]] bool append_compacted_authoritative_page(
+    const render::MeshAsset& source,
+    const render::VirtualGeometryHierarchyNode& node,
+    render::MeshAsset& variant,
+    std::string& diagnostics
+) {
+    if (node.child_count != 0U || node.page_count != 1U ||
+        node.page_offset >= source.virtual_geometry_pages.pages.size()) {
+        diagnostics = "Runtime virtual geometry leaf has an invalid authoritative page mapping.";
+        return false;
+    }
+    const auto& page = source.virtual_geometry_pages.pages[node.page_offset];
+    const std::uint64_t end = static_cast<std::uint64_t>(page.triangle_index_offset) +
+        page.triangle_index_count;
+    if (page.triangle_index_count == 0U || page.triangle_index_count % 3U != 0U ||
+        end > source.indices.size()) {
+        diagnostics = "Runtime virtual geometry leaf page range exceeds the authoritative index stream.";
+        return false;
+    }
+
+    std::map<std::uint32_t, std::uint32_t> remap;
+    variant.indices.reserve(page.triangle_index_count);
+    for (std::size_t offset = page.triangle_index_offset; offset < end; ++offset) {
+        const std::uint32_t global_index = source.indices[offset];
+        if (global_index >= source.vertices.size()) {
+            diagnostics = "Runtime virtual geometry leaf references an out-of-range authoritative vertex.";
+            return false;
+        }
+        auto found = remap.find(global_index);
+        if (found == remap.end()) {
+            if (variant.vertices.size() >= std::numeric_limits<std::uint32_t>::max()) {
+                diagnostics = "Runtime virtual geometry leaf compaction exceeds the 32-bit vertex contract.";
+                return false;
+            }
+            const auto local_index = static_cast<std::uint32_t>(variant.vertices.size());
+            variant.vertices.push_back(source.vertices[global_index]);
+            found = remap.emplace(global_index, local_index).first;
+        }
+        variant.indices.push_back(found->second);
+    }
+    return !variant.vertices.empty() && !variant.indices.empty();
+}
+
 } // namespace
 
 std::size_t RuntimeGeometryVariantKeyHash::operator()(
@@ -98,6 +166,27 @@ RuntimeGeometryVariantKey runtime_geometry_variant_key(
         .mesh = instance.mesh,
         .node_index = instance.geometry_node_index,
     };
+}
+
+world::ResourceId runtime_virtual_geometry_variant_resource_id(
+    const world::ResourceId mesh,
+    const std::uint32_t node_index
+) noexcept {
+    world::PersistentId::Bytes bytes{};
+    const std::array<std::uint64_t, 2U> hashes{
+        hash_variant_domain(mesh, node_index, 0xA7U),
+        hash_variant_domain(mesh, node_index, 0x5DU),
+    };
+    for (std::size_t half = 0U; half < hashes.size(); ++half) {
+        for (std::size_t byte = 0U; byte < sizeof(std::uint64_t); ++byte) {
+            bytes[half * sizeof(std::uint64_t) + byte] = static_cast<std::uint8_t>(
+                (hashes[half] >> (byte * 8U)) & 0xFFU
+            );
+        }
+    }
+    bytes[6] = static_cast<std::uint8_t>((bytes[6] & 0x0FU) | 0x40U);
+    bytes[8] = static_cast<std::uint8_t>((bytes[8] & 0x3FU) | 0x80U);
+    return world::ResourceId{world::PersistentId{bytes}};
 }
 
 RuntimeVirtualGeometryBufferBuildResult build_runtime_virtual_geometry_buffer_plan(
@@ -143,6 +232,63 @@ RuntimeVirtualGeometryBufferBuildResult build_runtime_virtual_geometry_buffer_pl
         plan.indices.insert(plan.indices.end(), proxy.indices.begin(), proxy.indices.end());
     }
     result.plan = std::move(plan);
+    return result;
+}
+
+RuntimeVirtualGeometryVariantBuildResult build_runtime_virtual_geometry_variant_asset(
+    const render::MeshAsset& source,
+    const std::uint32_t node_index
+) {
+    RuntimeVirtualGeometryVariantBuildResult result;
+    const auto& hierarchy = source.virtual_geometry_proxies.hierarchy;
+    if (!valid_authoritative_geometry(source) || hierarchy.nodes.empty() ||
+        node_index >= hierarchy.nodes.size()) {
+        result.diagnostics = "Runtime virtual geometry variant references an invalid source asset or hierarchy node.";
+        return result;
+    }
+
+    render::MeshAsset variant;
+    variant.version = render::mesh_asset_format_version_v3;
+    variant.source_fingerprint = source.source_fingerprint;
+    const auto& node = hierarchy.nodes[node_index];
+    if (node.child_count == 0U) {
+        if (!append_compacted_authoritative_page(source, node, variant, result.diagnostics)) {
+            if (result.diagnostics.empty()) {
+                result.diagnostics = "Runtime virtual geometry leaf compaction produced no renderable geometry.";
+            }
+            return result;
+        }
+    } else {
+        const auto found = std::find_if(
+            source.virtual_geometry_proxies.proxies.begin(),
+            source.virtual_geometry_proxies.proxies.end(),
+            [=](const auto& proxy) { return proxy.node_index == node_index; }
+        );
+        if (found == source.virtual_geometry_proxies.proxies.end() || found->vertices.empty() ||
+            found->indices.empty() || found->indices.size() % 3U != 0U) {
+            result.diagnostics = "Runtime virtual geometry internal node has no renderable persisted proxy.";
+            return result;
+        }
+        for (const auto index : found->indices) {
+            if (index >= found->vertices.size()) {
+                result.diagnostics = "Runtime virtual geometry proxy contains an out-of-range local index.";
+                return result;
+            }
+        }
+        variant.vertices = found->vertices;
+        variant.indices = found->indices;
+    }
+
+    for (std::size_t offset = 0U; offset < variant.indices.size(); offset += 3U) {
+        const auto a = variant.indices[offset];
+        const auto b = variant.indices[offset + 1U];
+        const auto c = variant.indices[offset + 2U];
+        if (a == b || b == c || a == c) {
+            result.diagnostics = "Runtime virtual geometry variant contains a degenerate triangle.";
+            return result;
+        }
+    }
+    result.asset = std::move(variant);
     return result;
 }
 
