@@ -113,7 +113,16 @@ int main() {
     assert(legacy_material_index.has_value());
     assert(material_table.plan.records[*material_a_index].base_color_texture !=
         material_table.plan.records[*material_b_index].base_color_texture);
-    assert(material_table.plan.texture_ids.size() == 2U);
+    assert(material_table.plan.texture_ids.size() == 8U);
+    assert(material_table.plan.texture_channels.size() == 8U);
+    for (std::size_t channel = 0U; channel < 4U; ++channel) {
+        assert(material_table.plan.texture_ids[channel] == world::ResourceId{texture_a});
+        assert(material_table.plan.texture_channels[channel] ==
+            static_cast<RuntimeGpuMaterialTextureChannel>(channel));
+        assert(material_table.plan.texture_ids[4U + channel] == world::ResourceId{texture_b});
+        assert(material_table.plan.texture_channels[4U + channel] ==
+            static_cast<RuntimeGpuMaterialTextureChannel>(channel));
+    }
 
     const auto instance_materials = build_runtime_gpu_instance_material_records(
         instances,
