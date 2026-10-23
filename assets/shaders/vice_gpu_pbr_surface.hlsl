@@ -113,6 +113,8 @@ Texture2D<float4> environment_brdf_2 : register(t24, space2);
 SamplerState shadow_sampler : register(s0, space2);
 SamplerState environment_sampler : register(s1, space2);
 
+RWStructuredBuffer<uint> virtual_texture_feedback : register(u0, space3);
+
 struct VertexIn {
     float3 position : POSITION0;
     float3 color : COLOR0;
@@ -220,6 +222,10 @@ float4 vice_load_virtual_texel(
         descriptor, desired_mip, desired_tile.x, desired_tile.y
     );
     const uint4 page = vice_virtual_record(page_table_texture, page_index);
+    if (page.y > desired_mip) {
+        uint previous;
+        InterlockedOr(virtual_texture_feedback[page_index], 1u, previous);
+    }
     const uint2 resolved_extent = vice_virtual_mip_extent(descriptor.x, descriptor.y, page.y);
     const float2 normalized_center =
         (float2(wrapped_texel) + 0.5) / float2(desired_extent);
