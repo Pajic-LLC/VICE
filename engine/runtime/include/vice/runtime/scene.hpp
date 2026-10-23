@@ -83,6 +83,17 @@ inline constexpr std::size_t runtime_point_shadow_light_count = 2U;
 inline constexpr std::size_t runtime_point_shadow_face_count = 6U;
 inline constexpr std::uint32_t runtime_point_shadow_map_size = 1024U;
 inline constexpr std::size_t runtime_local_reflection_probe_count = 2U;
+inline constexpr std::uint64_t default_runtime_geometry_residency_budget =
+    512ULL * 1024ULL * 1024ULL;
+inline constexpr std::uint64_t default_runtime_texture_residency_budget =
+    1024ULL * 1024ULL * 1024ULL;
+
+struct RuntimeRenderResourceBudgets {
+    std::uint64_t geometry_bytes = default_runtime_geometry_residency_budget;
+    std::uint64_t texture_bytes = default_runtime_texture_residency_budget;
+
+    friend bool operator==(const RuntimeRenderResourceBudgets&, const RuntimeRenderResourceBudgets&) = default;
+};
 
 struct RuntimeLight {
     world::PersistentId entity{};
@@ -273,6 +284,11 @@ public:
 
     [[nodiscard]] bool set_vignette(
         float intensity,
+        std::string* diagnostics = nullptr
+    );
+
+    [[nodiscard]] bool set_resource_budgets(
+        RuntimeRenderResourceBudgets budgets,
         std::string* diagnostics = nullptr
     );
 

@@ -17,6 +17,13 @@ namespace vice::runtime {
 inline constexpr std::uint32_t runtime_gpu_resource_unassigned =
     std::numeric_limits<std::uint32_t>::max();
 
+enum class RuntimeGpuMaterialTextureChannel : std::uint8_t {
+    base_color,
+    normal,
+    orm,
+    emissive,
+};
+
 struct RuntimeGpuMaterialSampler {
     render::Filter min_filter = render::Filter::linear;
     render::Filter mag_filter = render::Filter::linear;
@@ -52,6 +59,7 @@ struct RuntimeGpuMaterialTablePlan {
     std::vector<RuntimeGpuMaterialRecord> records;
     std::vector<world::ResourceId> material_ids;
     std::vector<world::ResourceId> texture_ids;
+    std::vector<RuntimeGpuMaterialTextureChannel> texture_channels;
     std::vector<RuntimeGpuMaterialSampler> samplers;
 
     [[nodiscard]] std::optional<std::uint32_t> material_index(

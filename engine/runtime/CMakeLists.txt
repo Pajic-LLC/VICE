@@ -22,6 +22,7 @@ add_library(
     src/post_process.cpp
     src/render_residency.cpp
     src/render_streaming.cpp
+    src/resource_residency.cpp
     src/runtime.cpp
     src/scene.cpp
     src/texture_pipeline.cpp

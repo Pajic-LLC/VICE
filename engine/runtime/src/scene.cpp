@@ -11,6 +11,7 @@
 #include <vice/runtime/hiz_occlusion.hpp>
 #include <vice/runtime/post_process.hpp>
 #include <vice/runtime/render_streaming.hpp>
+#include <vice/runtime/resource_residency.hpp>
 #include <vice/runtime/visibility.hpp>
 
 #include "bloom_shaders.hpp"
@@ -2125,6 +2126,8 @@ struct RuntimeSceneRenderer::State {
     RuntimeTemporalHistory temporal_history;
     detail::RuntimeHiZHistory hiz_history;
     RuntimePostProcessPlan post_process_plan = default_runtime_post_process_plan();
+    RuntimeRenderResourceBudgets resource_budgets{};
+    std::uint64_t gpu_material_texture_generation = 0U;
     std::size_t history_write_index = 0U;
     float exposure = 1.0F;
     float bloom_threshold = 1.0F;
@@ -2687,36 +2690,6 @@ bool RuntimeSceneRenderer::initialize(
         return false;
     }
 
-    for (const auto& record : state_->catalog.records()) {
-        auto vertices = create_buffer_with_data(
-            device,
-            render::BufferUsage::vertex,
-            std::as_bytes(std::span{record.asset.vertices}),
-            "VICE Runtime mesh vertices"
-        );
-        auto indices = create_buffer_with_data(
-            device,
-            render::BufferUsage::index,
-            std::as_bytes(std::span{record.asset.indices}),
-            "VICE Runtime mesh indices"
-        );
-        if (!vertices || !indices) {
-            set_diagnostics(
-                diagnostics,
-                "VICE Runtime could not upload cooked mesh `" + record.path.generic_string() + "`."
-            );
-            return false;
-        }
-        state_->meshes.emplace(
-            record.resource_id,
-            State::MeshGpu{
-                .vertices = std::move(vertices),
-                .indices = std::move(indices),
-                .index_count = static_cast<std::uint32_t>(record.asset.indices.size()),
-                .bounds = runtime_mesh_bounding_sphere(record.asset.vertices),
-            }
-        );
-    }
 
     state_->initialized = true;
     if (diagnostics != nullptr) diagnostics->clear();
@@ -2962,6 +2935,19 @@ bool RuntimeSceneRenderer::set_vignette(
     return true;
 }
 
+bool RuntimeSceneRenderer::set_resource_budgets(
+    const RuntimeRenderResourceBudgets budgets,
+    std::string* const diagnostics
+) {
+    if (state_ == nullptr || !state_->initialized) {
+        set_diagnostics(diagnostics, "Runtime scene renderer is not initialized.");
+        return false;
+    }
+    state_->resource_budgets = budgets;
+    if (diagnostics != nullptr) diagnostics->clear();
+    return true;
+}
+
 bool RuntimeSceneRenderer::render(
     const world::World& world,
     render::Swapchain& swapchain,
@@ -2999,15 +2985,87 @@ bool RuntimeSceneRenderer::render(
         return false;
     }
     const auto& resident_scene = resident_scene_build.scene;
-    const auto& instances = resident_scene.meshes;
-    for (const auto& instance : instances) {
-        if (!state_->meshes.contains(instance.mesh)) {
+    auto resource_residency_build = build_runtime_render_resource_residency(
+        resident_scene,
+        state_->catalog,
+        state_->materials.catalog(),
+        state_->materials.texture_catalog(),
+        state_->resource_budgets
+    );
+    if (!resource_residency_build) {
+        set_diagnostics(diagnostics, resource_residency_build.diagnostics);
+        return false;
+    }
+    const auto& resource_residency = resource_residency_build.residency;
+
+    if (!state_->materials.set_texture_residency(
+            resource_residency.textures.resources,
+            diagnostics
+        )) {
+        return false;
+    }
+    const std::uint64_t texture_generation = state_->materials.texture_residency_generation();
+    if (texture_generation != state_->gpu_material_texture_generation) {
+        if (!state_->gpu_material_scene.refresh_resources(
+                *state_->device,
+                state_->materials,
+                diagnostics
+            )) {
+            return false;
+        }
+        state_->gpu_material_texture_generation = texture_generation;
+    }
+
+    std::erase_if(state_->meshes, [&](const auto& entry) {
+        return !resource_residency.geometry.resident(entry.first);
+    });
+    for (const world::ResourceId resource : resource_residency.geometry.resources) {
+        if (state_->meshes.contains(resource)) continue;
+        const auto* const record = state_->catalog.find(resource);
+        if (record == nullptr) {
             set_diagnostics(
                 diagnostics,
-                "Runtime World references missing cooked mesh `" + instance.mesh.value.to_string() + "`."
+                "Runtime geometry residency references missing cooked mesh `" +
+                    resource.value.to_string() + "`."
             );
             return false;
         }
+        auto vertices = create_buffer_with_data(
+            *state_->device,
+            render::BufferUsage::vertex,
+            std::as_bytes(std::span{record->asset.vertices}),
+            "VICE Runtime resident mesh vertices"
+        );
+        auto indices = create_buffer_with_data(
+            *state_->device,
+            render::BufferUsage::index,
+            std::as_bytes(std::span{record->asset.indices}),
+            "VICE Runtime resident mesh indices"
+        );
+        if (!vertices || !indices) {
+            set_diagnostics(
+                diagnostics,
+                "VICE Runtime could not upload resident cooked mesh `" +
+                    record->path.generic_string() + "`."
+            );
+            return false;
+        }
+        state_->meshes.emplace(
+            resource,
+            State::MeshGpu{
+                .vertices = std::move(vertices),
+                .indices = std::move(indices),
+                .index_count = static_cast<std::uint32_t>(record->asset.indices.size()),
+                .bounds = runtime_mesh_bounding_sphere(record->asset.vertices),
+            }
+        );
+    }
+
+    const auto instances = filter_runtime_resident_geometry(
+        resident_scene.meshes,
+        resource_residency.geometry
+    );
+    for (const auto& instance : instances) {
         if (instance.material.has_value()) {
             const auto* const material_record = state_->materials.catalog().find(*instance.material);
             if (material_record == nullptr) {

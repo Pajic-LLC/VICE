@@ -1,6 +1,7 @@
 #include "texture_pipeline.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cstddef>
 #include <filesystem>
 #include <memory>
@@ -9,6 +10,7 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
+#include <vector>
 
 namespace vice::runtime {
 
@@ -85,10 +87,84 @@ const std::string& CookedTextureCatalog::diagnostics() const noexcept {
 }
 
 namespace detail {
+namespace {
+
+[[nodiscard]] std::unique_ptr<render::Texture> create_texture(
+    render::Device& device,
+    const CookedTextureRecord& record
+) {
+    render::TextureDesc desc;
+    desc.dimension = render::TextureDimension::d2;
+    desc.width = record.asset.width;
+    desc.height = record.asset.height;
+    desc.depth = 1U;
+    desc.mip_levels = 1U;
+    desc.array_layers = 1U;
+    desc.sample_count = 1U;
+    desc.format = record.asset.color_space == render::TextureColorSpace::srgb
+        ? render::TextureFormat::rgba8_unorm_srgb
+        : render::TextureFormat::rgba8_unorm;
+    desc.usage = render::TextureUsage::sampled | render::TextureUsage::copy_destination;
+    desc.debug_name = "VICE Runtime project texture";
+    auto texture = device.create_texture(desc);
+    if (!texture) return nullptr;
+    const std::uint64_t row_bytes = static_cast<std::uint64_t>(record.asset.width) * 4U;
+    if (!texture->write_2d(record.asset.rgba8, row_bytes)) return nullptr;
+    return texture;
+}
+
+[[nodiscard]] std::unique_ptr<render::Texture> create_fallback(
+    render::Device& device,
+    const RuntimeMaterialTextureChannel channel
+) {
+    render::TextureDesc desc;
+    desc.dimension = render::TextureDimension::d2;
+    desc.width = 1U;
+    desc.height = 1U;
+    desc.depth = 1U;
+    desc.mip_levels = 1U;
+    desc.array_layers = 1U;
+    desc.sample_count = 1U;
+    desc.format = channel == RuntimeMaterialTextureChannel::normal ||
+            channel == RuntimeMaterialTextureChannel::orm
+        ? render::TextureFormat::rgba8_unorm
+        : render::TextureFormat::rgba8_unorm_srgb;
+    desc.usage = render::TextureUsage::sampled | render::TextureUsage::copy_destination;
+    desc.debug_name = "VICE Runtime material residency fallback";
+    auto texture = device.create_texture(desc);
+    if (!texture) return nullptr;
+
+    std::array<std::byte, 4U> texel{};
+    switch (channel) {
+    case RuntimeMaterialTextureChannel::base_color:
+        texel = {std::byte{255U}, std::byte{255U}, std::byte{255U}, std::byte{255U}};
+        break;
+    case RuntimeMaterialTextureChannel::normal:
+        texel = {std::byte{128U}, std::byte{128U}, std::byte{255U}, std::byte{255U}};
+        break;
+    case RuntimeMaterialTextureChannel::orm:
+        texel = {std::byte{255U}, std::byte{255U}, std::byte{0U}, std::byte{255U}};
+        break;
+    case RuntimeMaterialTextureChannel::emissive:
+        texel = {std::byte{0U}, std::byte{0U}, std::byte{0U}, std::byte{255U}};
+        break;
+    }
+    if (!texture->write_2d(texel, 4U)) return nullptr;
+    return texture;
+}
+
+[[nodiscard]] std::size_t channel_index(const RuntimeMaterialTextureChannel channel) noexcept {
+    return static_cast<std::size_t>(channel);
+}
+
+} // namespace
 
 struct RuntimeTextureLibrary::State {
+    render::Device* device = nullptr;
     CookedTextureCatalog catalog;
     std::unordered_map<world::ResourceId, std::unique_ptr<render::Texture>, world::ResourceIdHash> textures;
+    std::array<std::unique_ptr<render::Texture>, 4U> fallbacks;
+    std::uint64_t generation = 0U;
 };
 
 RuntimeTextureLibrary::RuntimeTextureLibrary() : state_{std::make_unique<State>()} {}
@@ -99,40 +175,91 @@ RuntimeTextureLibrary& RuntimeTextureLibrary::operator=(RuntimeTextureLibrary&&)
 bool RuntimeTextureLibrary::initialize(
     render::Device& device,
     const std::filesystem::path& content_root,
-    std::string* const diagnostics
+    std::string* const diagnostics,
+    const bool eager_upload
 ) {
     const auto fail = [&](std::string message) {
         if (diagnostics != nullptr) *diagnostics = std::move(message);
         return false;
     };
     if (state_ == nullptr) return fail("Runtime texture library state is unavailable.");
+    state_->device = &device;
     state_->textures.clear();
+    state_->fallbacks = {};
+    state_->generation = 0U;
     if (!state_->catalog.load(content_root)) return fail(state_->catalog.diagnostics());
 
-    for (const auto& record : state_->catalog.records()) {
-        render::TextureDesc desc;
-        desc.dimension = render::TextureDimension::d2;
-        desc.width = record.asset.width;
-        desc.height = record.asset.height;
-        desc.depth = 1U;
-        desc.mip_levels = 1U;
-        desc.array_layers = 1U;
-        desc.sample_count = 1U;
-        desc.format = record.asset.color_space == render::TextureColorSpace::srgb
-            ? render::TextureFormat::rgba8_unorm_srgb
-            : render::TextureFormat::rgba8_unorm;
-        desc.usage = render::TextureUsage::sampled | render::TextureUsage::copy_destination;
-        desc.debug_name = "VICE Runtime project texture";
-        auto texture = device.create_texture(desc);
-        if (!texture) {
-            return fail("Could not create GPU texture for `" + record.resource_id.value.to_string() + "`.");
+    for (std::size_t index = 0U; index < state_->fallbacks.size(); ++index) {
+        state_->fallbacks[index] = create_fallback(
+            device,
+            static_cast<RuntimeMaterialTextureChannel>(index)
+        );
+        if (!state_->fallbacks[index]) {
+            return fail("Could not create Runtime material residency fallback texture.");
         }
-        const std::uint64_t row_bytes = static_cast<std::uint64_t>(record.asset.width) * 4U;
-        if (!texture->write_2d(record.asset.rgba8, row_bytes)) {
-            return fail("Could not upload GPU texture for `" + record.resource_id.value.to_string() + "`.");
-        }
-        state_->textures.emplace(record.resource_id, std::move(texture));
     }
+
+    if (eager_upload) {
+        std::vector<world::ResourceId> resources;
+        resources.reserve(state_->catalog.records().size());
+        for (const auto& record : state_->catalog.records()) resources.push_back(record.resource_id);
+        if (!set_residency(resources, diagnostics)) return false;
+    }
+
+    if (diagnostics != nullptr) diagnostics->clear();
+    return true;
+}
+
+bool RuntimeTextureLibrary::set_residency(
+    const std::span<const world::ResourceId> resources,
+    std::string* const diagnostics
+) {
+    const auto fail = [&](std::string message) {
+        if (diagnostics != nullptr) *diagnostics = std::move(message);
+        return false;
+    };
+    if (state_ == nullptr || state_->device == nullptr) {
+        return fail("Runtime texture library is not initialized.");
+    }
+
+    std::unordered_set<world::ResourceId, world::ResourceIdHash> requested;
+    requested.reserve(resources.size());
+    for (const auto resource : resources) {
+        if (!resource.valid() || state_->catalog.find(resource) == nullptr) {
+            return fail("Runtime texture residency references missing cooked texture `" +
+                resource.value.to_string() + "`.");
+        }
+        requested.insert(resource);
+    }
+
+    bool changed = requested.size() != state_->textures.size();
+    if (!changed) {
+        for (const auto& entry : state_->textures) {
+            if (!requested.contains(entry.first)) {
+                changed = true;
+                break;
+            }
+        }
+    }
+    if (!changed) {
+        if (diagnostics != nullptr) diagnostics->clear();
+        return true;
+    }
+
+    std::erase_if(state_->textures, [&](const auto& entry) {
+        return !requested.contains(entry.first);
+    });
+
+    for (const auto resource : resources) {
+        if (state_->textures.contains(resource)) continue;
+        const auto* const record = state_->catalog.find(resource);
+        auto texture = create_texture(*state_->device, *record);
+        if (!texture) {
+            return fail("Could not upload resident GPU texture `" + resource.value.to_string() + "`.");
+        }
+        state_->textures.emplace(resource, std::move(texture));
+    }
+    ++state_->generation;
 
     if (diagnostics != nullptr) diagnostics->clear();
     return true;
@@ -142,6 +269,33 @@ render::Texture* RuntimeTextureLibrary::find(const world::ResourceId resource_id
     if (state_ == nullptr) return nullptr;
     const auto found = state_->textures.find(resource_id);
     return found == state_->textures.end() ? nullptr : found->second.get();
+}
+
+render::Texture* RuntimeTextureLibrary::resolve(
+    const world::ResourceId resource_id,
+    const RuntimeMaterialTextureChannel channel
+) const noexcept {
+    if (state_ == nullptr || state_->catalog.find(resource_id) == nullptr) return nullptr;
+    if (auto* const texture = find(resource_id); texture != nullptr) return texture;
+    return state_->fallbacks[channel_index(channel)].get();
+}
+
+bool RuntimeTextureLibrary::resident(const world::ResourceId resource_id) const noexcept {
+    return find(resource_id) != nullptr;
+}
+
+std::uint64_t RuntimeTextureLibrary::resident_bytes() const noexcept {
+    if (state_ == nullptr) return 0U;
+    std::uint64_t bytes = 0U;
+    for (const auto& entry : state_->textures) {
+        const auto* const record = state_->catalog.find(entry.first);
+        if (record != nullptr) bytes += static_cast<std::uint64_t>(record->asset.rgba8.size());
+    }
+    return bytes;
+}
+
+std::uint64_t RuntimeTextureLibrary::residency_generation() const noexcept {
+    return state_ != nullptr ? state_->generation : 0U;
 }
 
 const CookedTextureCatalog& RuntimeTextureLibrary::catalog() const noexcept {

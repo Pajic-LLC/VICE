@@ -1,5 +1,7 @@
 #pragma once
 
+#include "texture_pipeline.hpp"
+
 #include <vice/render/rhi.hpp>
 #include <vice/runtime/scene.hpp>
 
@@ -46,8 +48,20 @@ public:
         std::string* diagnostics = nullptr
     );
 
+    [[nodiscard]] bool set_texture_residency(
+        std::span<const world::ResourceId> resources,
+        std::string* diagnostics = nullptr
+    );
+
     [[nodiscard]] RuntimeMaterialBinding find(world::ResourceId resource_id) const noexcept;
+    [[nodiscard]] render::Texture* resolve_texture(
+        world::ResourceId resource_id,
+        RuntimeMaterialTextureChannel channel
+    ) const noexcept;
     [[nodiscard]] const CookedRenderMaterialCatalog& catalog() const noexcept;
+    [[nodiscard]] const CookedTextureCatalog& texture_catalog() const noexcept;
+    [[nodiscard]] std::uint64_t texture_residency_generation() const noexcept;
+    [[nodiscard]] std::uint64_t resident_texture_bytes() const noexcept;
 
 private:
     struct State;
