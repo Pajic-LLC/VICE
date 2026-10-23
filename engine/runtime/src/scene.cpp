@@ -91,7 +91,7 @@ private:
         return false;
     }
     plan.mesh_ids.push_back(resource);
-    plan.meshes.push_back(RuntimeGpuMeshletMeshRecord{
+    plan.meshes.push_back(RuntimeGpuMeshRecord{
         .first_meshlet = static_cast<std::uint32_t>(plan.meshlets.size()),
         .meshlet_count = 0U,
     });
