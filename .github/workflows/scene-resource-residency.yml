@@ -1,0 +1,34 @@
+name: Apply Runtime resource residency
+
+on:
+  push:
+    branches:
+      - feat/250-resource-budgets
+    paths:
+      - scripts/apply_scene_resource_residency.py
+      - .github/workflows/scene-resource-residency.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/250-resource-budgets
+          fetch-depth: 0
+      - name: Apply guarded Runtime resource residency patch
+        run: python3 scripts/apply_scene_resource_residency.py
+      - name: Remove one-shot helpers
+        run: |
+          rm scripts/apply_scene_resource_residency.py
+          rm .github/workflows/scene-resource-residency.yml
+      - name: Commit Runtime residency integration
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add engine/runtime/src/scene.cpp scripts/apply_scene_resource_residency.py .github/workflows/scene-resource-residency.yml
+          git commit -m "Integrate Runtime geometry and texture budgets (#250)"
+          git push origin HEAD:feat/250-resource-budgets
