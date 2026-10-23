@@ -38,12 +38,13 @@ public:
 
     [[nodiscard]] bool initialize(
         render::Device& device,
-        RuntimeGpuMaterialTablePlan& plan,
+        const RuntimeGpuMaterialTablePlan& plan,
         const RuntimeMaterialLibrary& material_library,
         std::string* diagnostics = nullptr
     );
 
     [[nodiscard]] RuntimeGpuMaterialResourceTableView view() const noexcept;
+    [[nodiscard]] std::span<const RuntimeGpuMaterialRecord> material_records() const noexcept;
 
 private:
     void clear() noexcept;
@@ -51,6 +52,7 @@ private:
     std::vector<render::Texture*> textures_;
     std::vector<std::unique_ptr<render::Sampler>> owned_samplers_;
     std::vector<render::Sampler*> samplers_;
+    std::vector<RuntimeGpuMaterialRecord> material_records_;
     std::unique_ptr<RuntimeVirtualTextureResidentPool> virtual_resident_pool_;
     RuntimeVirtualTextureSamplingPlan virtual_sampling_plan_;
     std::unique_ptr<render::Texture> virtual_texture_descriptors_;
