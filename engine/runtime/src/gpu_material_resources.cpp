@@ -1,7 +1,7 @@
 #include "gpu_material_resources.hpp"
 #include "material_pipeline.hpp"
 
-#include <optional>
+#include <cstddef>
 #include <utility>
 
 namespace vice::runtime::detail {
@@ -26,32 +26,20 @@ void set_diagnostics(std::string* const diagnostics, std::string message) {
     return desc;
 }
 
-[[nodiscard]] world::ResourceId texture_resource_id(
-    const render::TextureStableId& stable_id
+[[nodiscard]] RuntimeMaterialTextureChannel material_channel(
+    const RuntimeGpuMaterialTextureChannel channel
 ) noexcept {
-    return world::ResourceId{world::PersistentId{stable_id}};
-}
-
-[[nodiscard]] render::Texture* find_shared_material_texture(
-    const RuntimeMaterialLibrary& material_library,
-    const world::ResourceId resource_id
-) noexcept {
-    for (const auto& record : material_library.catalog().records()) {
-        const RuntimeMaterialBinding binding = material_library.find(record.resource_id);
-        if (texture_resource_id(record.asset.base_color_texture) == resource_id) {
-            return binding.base_color_texture;
-        }
-        if (texture_resource_id(record.asset.normal_texture) == resource_id) {
-            return binding.normal_texture;
-        }
-        if (texture_resource_id(record.asset.orm_texture) == resource_id) {
-            return binding.orm_texture;
-        }
-        if (texture_resource_id(record.asset.emissive_texture) == resource_id) {
-            return binding.emissive_texture;
-        }
+    switch (channel) {
+    case RuntimeGpuMaterialTextureChannel::base_color:
+        return RuntimeMaterialTextureChannel::base_color;
+    case RuntimeGpuMaterialTextureChannel::normal:
+        return RuntimeMaterialTextureChannel::normal;
+    case RuntimeGpuMaterialTextureChannel::orm:
+        return RuntimeMaterialTextureChannel::orm;
+    case RuntimeGpuMaterialTextureChannel::emissive:
+        return RuntimeMaterialTextureChannel::emissive;
     }
-    return nullptr;
+    return RuntimeMaterialTextureChannel::base_color;
 }
 
 template <typename TextureResolver>
@@ -64,10 +52,19 @@ template <typename TextureResolver>
     std::vector<render::Sampler*>& samplers,
     std::string* const diagnostics
 ) {
+    if (!plan.texture_channels.empty() && plan.texture_channels.size() != plan.texture_ids.size()) {
+        set_diagnostics(diagnostics, "Runtime GPU material texture semantic table is misaligned.");
+        return false;
+    }
+
     std::vector<render::Texture*> next_textures;
     next_textures.reserve(plan.texture_ids.size());
-    for (const world::ResourceId resource_id : plan.texture_ids) {
-        render::Texture* const texture = resolve_texture(resource_id);
+    for (std::size_t index = 0U; index < plan.texture_ids.size(); ++index) {
+        const world::ResourceId resource_id = plan.texture_ids[index];
+        const RuntimeGpuMaterialTextureChannel channel = plan.texture_channels.empty()
+            ? RuntimeGpuMaterialTextureChannel::base_color
+            : plan.texture_channels[index];
+        render::Texture* const texture = resolve_texture(resource_id, channel);
         if (texture == nullptr) {
             set_diagnostics(
                 diagnostics,
@@ -129,7 +126,9 @@ bool RuntimeGpuMaterialResourceTable::initialize(
     return build_resources(
         device,
         plan,
-        [&](const world::ResourceId resource_id) { return texture_library.find(resource_id); },
+        [&](const world::ResourceId resource_id, const RuntimeGpuMaterialTextureChannel channel) {
+            return texture_library.resolve(resource_id, material_channel(channel));
+        },
         textures_,
         owned_samplers_,
         samplers_,
@@ -147,8 +146,8 @@ bool RuntimeGpuMaterialResourceTable::initialize(
     return build_resources(
         device,
         plan,
-        [&](const world::ResourceId resource_id) {
-            return find_shared_material_texture(material_library, resource_id);
+        [&](const world::ResourceId resource_id, const RuntimeGpuMaterialTextureChannel channel) {
+            return material_library.resolve_texture(resource_id, material_channel(channel));
         },
         textures_,
         owned_samplers_,
