@@ -107,10 +107,37 @@ struct RuntimeGpuVirtualTextureFeedback::State {
     std::unique_ptr<render::Buffer> readback;
     RuntimeVirtualTextureSamplingPlan captured_sampling;
     render::SubmissionId submission = render::invalid_submission;
+    std::uint32_t dummy_capacity = 0U;
     std::uint32_t capacity = 0U;
     std::uint32_t page_count = 0U;
     bool prepared = false;
     bool captured = false;
+
+    [[nodiscard]] bool ensure_dummy_capacity(
+        const std::uint32_t required,
+        std::string* const diagnostics
+    ) {
+        if (device == nullptr || required == 0U) {
+            set_diagnostics(diagnostics, "GPU virtual texture feedback requires a non-zero sink capacity.");
+            return false;
+        }
+        if (dummy && required <= dummy_capacity) return true;
+        const std::uint64_t bytes = static_cast<std::uint64_t>(required) * sizeof(std::uint32_t);
+        auto next_dummy = make_buffer(
+            *device,
+            bytes,
+            render::BufferUsage::storage,
+            render::MemoryLocation::gpu_only,
+            "VICE Runtime virtual texture feedback sink"
+        );
+        if (!next_dummy) {
+            set_diagnostics(diagnostics, "VICE Runtime could not allocate the virtual texture feedback sink buffer.");
+            return false;
+        }
+        dummy = std::move(next_dummy);
+        dummy_capacity = required;
+        return true;
+    }
 
     [[nodiscard]] bool ensure_capacity(
         const std::uint32_t required,
@@ -176,28 +203,19 @@ bool RuntimeGpuVirtualTextureFeedback::initialize(
         set_diagnostics(diagnostics, "Runtime GPU virtual texture feedback state is unavailable.");
         return false;
     }
-    auto dummy = make_buffer(
-        device,
-        sizeof(std::uint32_t),
-        render::BufferUsage::storage,
-        render::MemoryLocation::gpu_only,
-        "VICE Runtime virtual texture feedback dummy"
-    );
-    if (!dummy) {
-        set_diagnostics(diagnostics, "VICE Runtime could not create the virtual texture feedback dummy buffer.");
-        return false;
-    }
     state_->device = &device;
-    state_->dummy = std::move(dummy);
+    state_->dummy.reset();
     state_->flags.reset();
     state_->zero_upload.reset();
     state_->readback.reset();
     state_->captured_sampling = {};
     state_->submission = render::invalid_submission;
+    state_->dummy_capacity = 0U;
     state_->capacity = 0U;
     state_->page_count = 0U;
     state_->prepared = false;
     state_->captured = false;
+    if (!state_->ensure_dummy_capacity(1U, diagnostics)) return false;
     if (diagnostics != nullptr) diagnostics->clear();
     return true;
 }
@@ -246,10 +264,6 @@ bool RuntimeGpuVirtualTextureFeedback::prepare(
     }
     state_->prepared = false;
     state_->captured = false;
-    if (state_->submission != render::invalid_submission) {
-        if (diagnostics != nullptr) diagnostics->clear();
-        return true;
-    }
     if (sampling.pages.empty()) {
         if (diagnostics != nullptr) diagnostics->clear();
         return true;
@@ -260,6 +274,11 @@ bool RuntimeGpuVirtualTextureFeedback::prepare(
         return false;
     }
     const auto page_count = static_cast<std::uint32_t>(sampling.pages.size());
+    if (!state_->ensure_dummy_capacity(page_count, diagnostics)) return false;
+    if (state_->submission != render::invalid_submission) {
+        if (diagnostics != nullptr) diagnostics->clear();
+        return true;
+    }
     if (!state_->ensure_capacity(page_count, diagnostics)) return false;
     const std::uint64_t bytes = static_cast<std::uint64_t>(page_count) * sizeof(std::uint32_t);
     if (!commands.copy_buffer(*state_->zero_upload, 0U, *state_->flags, 0U, bytes)) {
