@@ -79,7 +79,12 @@ bool RuntimeGpuMaterialSceneResources::upload(
         return false;
     }
 
-    if (!materials_.upload(commands, plan_.records, diagnostics) ||
+    const auto gpu_records = resources_.material_records();
+    if (gpu_records.size() != plan_.records.size()) {
+        set_diagnostics(diagnostics, "Runtime GPU material resource record table is misaligned.");
+        return false;
+    }
+    if (!materials_.upload(commands, gpu_records, diagnostics) ||
         !instance_materials_.upload(commands, instance_records.records, diagnostics)) {
         return false;
     }
