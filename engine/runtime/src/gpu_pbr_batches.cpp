@@ -1,6 +1,7 @@
 #include "gpu_pbr_batches.hpp"
 
 #include <vice/render/material_asset.hpp>
+#include <vice/runtime/virtual_geometry.hpp>
 
 #include <algorithm>
 #include <limits>
@@ -46,7 +47,11 @@ RuntimeGpuPbrBatchBuildResult build_runtime_gpu_pbr_batch_plan(
     result.plan.instance_batches.assign(
         instances.size(), runtime_gpu_draw_batch_unassigned
     );
-    std::unordered_map<world::ResourceId, std::uint32_t, world::ResourceIdHash> batch_lookup;
+    std::unordered_map<
+        RuntimeGeometryVariantKey,
+        std::uint32_t,
+        RuntimeGeometryVariantKeyHash
+    > batch_lookup;
 
     for (std::size_t instance_index = 0U; instance_index < instances.size(); ++instance_index) {
         const auto& instance = instances[instance_index];
@@ -68,23 +73,26 @@ RuntimeGpuPbrBatchBuildResult build_runtime_gpu_pbr_batch_plan(
                 instance.mesh.value.to_string() + "`.";
             return result;
         }
-        if (mesh->asset.indices.empty() ||
-            mesh->asset.indices.size() > std::numeric_limits<std::uint32_t>::max()) {
-            result.plan = {};
-            result.diagnostics = "Runtime GPU PBR mesh has an invalid index count.";
-            return result;
-        }
 
-        auto found = batch_lookup.find(instance.mesh);
+        const auto key = runtime_geometry_variant_key(instance);
+        auto found = batch_lookup.find(key);
         if (found == batch_lookup.end()) {
+            std::string draw_diagnostics;
+            const auto draw = runtime_virtual_geometry_draw_batch(
+                mesh->asset,
+                instance.geometry_node_index,
+                &draw_diagnostics
+            );
+            if (!draw.has_value()) {
+                result.plan = {};
+                result.diagnostics = "Runtime GPU PBR virtual geometry batch is invalid: " +
+                    draw_diagnostics;
+                return result;
+            }
             const std::uint32_t batch_index = static_cast<std::uint32_t>(result.plan.batches.size());
-            result.plan.batches.push_back(RuntimeGpuDrawBatch{
-                .index_count = static_cast<std::uint32_t>(mesh->asset.indices.size()),
-                .first_index = 0U,
-                .vertex_offset = 0,
-            });
+            result.plan.batches.push_back(*draw);
             result.plan.batch_meshes.push_back(instance.mesh);
-            found = batch_lookup.emplace(instance.mesh, batch_index).first;
+            found = batch_lookup.emplace(key, batch_index).first;
         }
         result.plan.instance_batches[instance_index] = found->second;
     }
