@@ -21,6 +21,7 @@ inline constexpr std::size_t mesh_asset_magic_size = 8U;
 inline constexpr std::size_t mesh_stable_id_size = 16U;
 inline constexpr std::uint32_t meshlet_max_vertices = 64U;
 inline constexpr std::uint32_t meshlet_max_triangles = 126U;
+inline constexpr std::uint32_t virtual_geometry_page_max_meshlets = 32U;
 
 using MeshStableId = std::array<std::uint8_t, mesh_stable_id_size>;
 
@@ -63,6 +64,24 @@ struct MeshletGeometry {
     std::vector<std::uint8_t> triangle_indices;
 
     friend bool operator==(const MeshletGeometry&, const MeshletGeometry&) = default;
+};
+
+struct VirtualGeometryPage {
+    std::uint32_t meshlet_offset = 0U;
+    std::uint32_t meshlet_count = 0U;
+    std::uint32_t vertex_index_offset = 0U;
+    std::uint32_t vertex_index_count = 0U;
+    std::uint32_t triangle_index_offset = 0U;
+    std::uint32_t triangle_index_count = 0U;
+    MeshletBounds bounds{};
+
+    friend bool operator==(const VirtualGeometryPage&, const VirtualGeometryPage&) = default;
+};
+
+struct VirtualGeometryPageTable {
+    std::vector<VirtualGeometryPage> pages;
+
+    friend bool operator==(const VirtualGeometryPageTable&, const VirtualGeometryPageTable&) = default;
 };
 
 struct MeshAsset {
