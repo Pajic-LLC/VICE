@@ -38,12 +38,13 @@ int main() {
     const auto feedback = build_runtime_gpu_virtual_texture_feedback_requests(sampling, flags);
     assert(feedback);
     assert(feedback.requests.size() == 1U);
-    assert(feedback.requests.front() == RuntimeVirtualTextureTileKey{
+    const RuntimeVirtualTextureTileKey expected{
         .texture = texture,
         .mip_level = 1U,
         .tile_x = 0U,
         .tile_y = 0U,
-    });
+    };
+    assert(feedback.requests.front() == expected);
 
     const std::vector<std::uint32_t> exact_flags{0U, 0U, 1U};
     const auto exact = build_runtime_gpu_virtual_texture_feedback_requests(sampling, exact_flags);
