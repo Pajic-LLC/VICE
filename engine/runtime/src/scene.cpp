@@ -1,8 +1,11 @@
 #include <vice/runtime/scene.hpp>
 
 #include <vice/render/shader_asset.hpp>
+#include <vice/runtime/gpu_cluster_instance_remap.hpp>
+#include <vice/runtime/gpu_cluster_visibility.hpp>
 #include <vice/runtime/gpu_draw_batches.hpp>
 #include <vice/runtime/gpu_instance_table.hpp>
+#include <vice/runtime/gpu_meshlet_table.hpp>
 #include <vice/runtime/gpu_visibility_set.hpp>
 #include <vice/runtime/hiz.hpp>
 #include <vice/runtime/hiz_occlusion.hpp>
@@ -2038,12 +2041,20 @@ struct RuntimeSceneRenderer::State {
     RuntimeVisibilityCuller visibility;
     RuntimeHiZPyramid hiz_pyramid;
     RuntimeHiZOcclusionCuller hiz_occlusion;
+    RuntimeGpuMeshletTablePlan gpu_meshlet_plan;
+    RuntimeGpuMeshletTable gpu_meshlet_table;
+    RuntimeGpuClusterVisibility gpu_cluster_visibility;
     RuntimeGpuIdentityVisibility gpu_shadow_visibility;
     RuntimeGpuDrawBatcher gpu_draw_batches;
     RuntimeGpuDrawBatcher gpu_pbr_draw_batches;
+    RuntimeGpuDrawBatcher gpu_cluster_default_draw_batches;
+    RuntimeGpuDrawBatcher gpu_cluster_pbr_draw_batches;
     RuntimeGpuDrawBatcher gpu_shadow_draw_batches;
     RuntimeGpuDrawBatcher gpu_motion_draw_batches;
+    RuntimeGpuClusterInstanceRemap gpu_cluster_default_instances;
+    RuntimeGpuClusterInstanceRemap gpu_cluster_pbr_instances;
     RuntimeGpuInstanceTable gpu_instances;
+    RuntimeGpuInstanceTable gpu_cluster_instances;
     RuntimeGpuInstanceTable gpu_previous_instances;
     std::array<RuntimeGpuInstanceTable, runtime_point_shadow_light_count> gpu_point_shadow_instances;
     detail::RuntimeGpuMaterialSceneResources gpu_material_scene;
@@ -2142,6 +2153,12 @@ bool RuntimeSceneRenderer::initialize(
         set_diagnostics(diagnostics, state_->catalog.diagnostics());
         return false;
     }
+    auto gpu_meshlet_build = build_runtime_gpu_meshlet_table_plan(state_->catalog.records());
+    if (!gpu_meshlet_build) {
+        set_diagnostics(diagnostics, gpu_meshlet_build.diagnostics);
+        return false;
+    }
+    state_->gpu_meshlet_plan = std::move(gpu_meshlet_build.plan);
     if (!state_->materials.initialize(
             device,
             render::TextureFormat::rgba16_float,
@@ -2175,17 +2192,37 @@ bool RuntimeSceneRenderer::initialize(
     if (!state_->visibility.initialize(device, diagnostics) ||
         !state_->hiz_pyramid.initialize(device, diagnostics) ||
         !state_->hiz_occlusion.initialize(device, diagnostics) ||
+        !state_->gpu_meshlet_table.initialize(device, diagnostics) ||
+        !state_->gpu_cluster_visibility.initialize(device, diagnostics) ||
         !state_->gpu_shadow_visibility.initialize(device, diagnostics) ||
         !state_->gpu_draw_batches.initialize(device, diagnostics) ||
         !state_->gpu_pbr_draw_batches.initialize(device, diagnostics) ||
+        !state_->gpu_cluster_default_draw_batches.initialize(device, diagnostics) ||
+        !state_->gpu_cluster_pbr_draw_batches.initialize(device, diagnostics) ||
         !state_->gpu_shadow_draw_batches.initialize(device, diagnostics) ||
         !state_->gpu_motion_draw_batches.initialize(device, diagnostics) ||
+        !state_->gpu_cluster_default_instances.initialize(device, diagnostics) ||
+        !state_->gpu_cluster_pbr_instances.initialize(device, diagnostics) ||
         !state_->gpu_instances.initialize(device, diagnostics) ||
+        !state_->gpu_cluster_instances.initialize(device, diagnostics) ||
         !state_->gpu_previous_instances.initialize(device, diagnostics)) {
         return false;
     }
     for (auto& table : state_->gpu_point_shadow_instances) {
         if (!table.initialize(device, diagnostics)) return false;
+    }
+    auto meshlet_commands = device.create_command_list();
+    if (!meshlet_commands || !state_->gpu_meshlet_table.upload(
+            *meshlet_commands, state_->gpu_meshlet_plan, diagnostics
+        )) {
+        set_diagnostics(diagnostics, "VICE Runtime could not upload immutable GPU meshlet metadata.");
+        return false;
+    }
+    const auto meshlet_submission = device.submit(std::move(meshlet_commands));
+    if (meshlet_submission == render::invalid_submission ||
+        !device.wait_for_submission(meshlet_submission)) {
+        set_diagnostics(diagnostics, "VICE Runtime GPU meshlet metadata submission failed.");
+        return false;
     }
     state_->gpu_default_frame = create_gpu_default_frame_buffer(device);
     if (!state_->gpu_default_frame) {
@@ -3178,8 +3215,60 @@ bool RuntimeSceneRenderer::render(
         camera_visibility = state_->hiz_occlusion.result();
     }
 
+    const auto gpu_cluster_candidate_build = build_runtime_gpu_cluster_candidate_plan(
+        instances,
+        state_->gpu_meshlet_plan
+    );
+    if (!gpu_cluster_candidate_build) {
+        set_diagnostics(diagnostics, gpu_cluster_candidate_build.diagnostics);
+        return false;
+    }
+    const auto& gpu_cluster_candidates = gpu_cluster_candidate_build.plan;
+    std::vector<std::uint8_t> gpu_cluster_default_eligible(instances.size(), 0U);
+    std::vector<std::uint8_t> gpu_cluster_pbr_eligible(instances.size(), 0U);
+    for (std::size_t instance_index = 0U; instance_index < instances.size(); ++instance_index) {
+        const auto& instance = instances[instance_index];
+        const auto mesh_index = state_->gpu_meshlet_plan.mesh_index(instance.mesh);
+        if (!mesh_index.has_value() || *mesh_index >= state_->gpu_meshlet_plan.meshes.size()) {
+            set_diagnostics(diagnostics, "Runtime cluster submission could not resolve a mesh table index.");
+            return false;
+        }
+        if (state_->gpu_meshlet_plan.meshes[*mesh_index].meshlet_count == 0U) continue;
+        if (!instance.material.has_value()) {
+            gpu_cluster_default_eligible[instance_index] = 1U;
+            continue;
+        }
+        const auto* const material = state_->materials.catalog().find(*instance.material);
+        if (material != nullptr && render::render_material_uses_gpu_scene_pbr(material->asset.version)) {
+            gpu_cluster_pbr_eligible[instance_index] = 1U;
+        }
+    }
+    const auto gpu_cluster_default_build = build_runtime_gpu_cluster_batch_plan(
+        gpu_cluster_candidates,
+        state_->gpu_meshlet_plan,
+        gpu_cluster_default_eligible
+    );
+    const auto gpu_cluster_pbr_build = build_runtime_gpu_cluster_batch_plan(
+        gpu_cluster_candidates,
+        state_->gpu_meshlet_plan,
+        gpu_cluster_pbr_eligible
+    );
+    if (!gpu_cluster_default_build || !gpu_cluster_pbr_build) {
+        set_diagnostics(
+            diagnostics,
+            !gpu_cluster_default_build
+                ? gpu_cluster_default_build.diagnostics
+                : gpu_cluster_pbr_build.diagnostics
+        );
+        return false;
+    }
+    const auto& gpu_cluster_default_plan = gpu_cluster_default_build.plan;
+    const auto& gpu_cluster_pbr_plan = gpu_cluster_pbr_build.plan;
+
     std::vector<math::Mat4> gpu_instance_models;
     gpu_instance_models.reserve(instances.size());
+    std::vector<math::Mat4> gpu_cluster_models;
+    gpu_cluster_models.reserve(instances.size());
     std::vector<std::uint32_t> gpu_batch_assignments(
         instances.size(), runtime_gpu_draw_batch_unassigned
     );
@@ -3189,7 +3278,8 @@ bool RuntimeSceneRenderer::render(
     for (std::size_t instance_index = 0U; instance_index < instances.size(); ++instance_index) {
         const auto& instance = instances[instance_index];
         gpu_instance_models.push_back(runtime_model_matrix(instance));
-        if (instance.material.has_value()) continue;
+        gpu_cluster_models.push_back(runtime_model_matrix_relative_to(instance, camera_global_position));
+        if (instance.material.has_value() || gpu_cluster_default_eligible[instance_index] != 0U) continue;
 
         auto found = gpu_default_batch_lookup.find(instance.mesh);
         if (found == gpu_default_batch_lookup.end()) {
@@ -3215,7 +3305,12 @@ bool RuntimeSceneRenderer::render(
         set_diagnostics(diagnostics, gpu_pbr_build.diagnostics);
         return false;
     }
-    const auto& gpu_pbr_plan = gpu_pbr_build.plan;
+    auto gpu_pbr_plan = std::move(gpu_pbr_build.plan);
+    for (std::size_t instance_index = 0U; instance_index < instances.size(); ++instance_index) {
+        if (gpu_cluster_pbr_eligible[instance_index] != 0U) {
+            gpu_pbr_plan.instance_batches[instance_index] = runtime_gpu_draw_batch_unassigned;
+        }
+    }
     const auto gpu_shadow_build = detail::build_runtime_gpu_shadow_batch_plan(
         instances,
         state_->catalog.records()
@@ -3228,12 +3323,31 @@ bool RuntimeSceneRenderer::render(
 
     RuntimeGpuDrawBatchResult gpu_default_batch_result{};
     RuntimeGpuDrawBatchResult gpu_pbr_batch_result{};
+    RuntimeGpuDrawBatchResult gpu_cluster_default_batch_result{};
+    RuntimeGpuDrawBatchResult gpu_cluster_pbr_batch_result{};
     RuntimeGpuDrawBatchResult gpu_shadow_batch_result{};
     RuntimeGpuDrawBatchResult gpu_motion_batch_result{};
+    RuntimeGpuClusterVisibilityResult gpu_cluster_visibility_result{};
     if (!instances.empty()) {
-        if (!state_->gpu_instances.upload(*commands, gpu_instance_models, diagnostics)) {
+        if (!state_->gpu_instances.upload(*commands, gpu_instance_models, diagnostics) ||
+            !state_->gpu_cluster_instances.upload(*commands, gpu_cluster_models, diagnostics)) {
             return false;
         }
+    }
+    if (!gpu_cluster_candidates.candidates.empty() &&
+        (!gpu_cluster_default_plan.batches.empty() || !gpu_cluster_pbr_plan.batches.empty())) {
+        if (!state_->gpu_cluster_visibility.cull(
+                *commands,
+                gpu_cluster_candidates.candidates,
+                camera_visibility,
+                state_->gpu_meshlet_table.result(),
+                state_->gpu_cluster_instances.result(),
+                visibility_frustum,
+                diagnostics
+            )) {
+            return false;
+        }
+        gpu_cluster_visibility_result = state_->gpu_cluster_visibility.result();
     }
     if (!gpu_shadow_plan.batches.empty()) {
         const auto gpu_previous_build = detail::build_runtime_gpu_previous_models(
@@ -3288,6 +3402,30 @@ bool RuntimeSceneRenderer::render(
         }
         gpu_default_batch_result = state_->gpu_draw_batches.result();
     }
+    if (!gpu_cluster_default_plan.batches.empty()) {
+        if (!state_->gpu_cluster_default_draw_batches.build(
+                *commands,
+                gpu_cluster_visibility_result.visibility,
+                gpu_cluster_default_plan.candidate_batches,
+                gpu_cluster_default_plan.batches,
+                diagnostics
+            ) || !state_->gpu_cluster_default_instances.remap(
+                *commands,
+                state_->gpu_cluster_default_draw_batches.result(),
+                gpu_cluster_visibility_result,
+                diagnostics
+            )) {
+            return false;
+        }
+        const GpuDefaultFrame gpu_frame{.view_projection = view_projection};
+        if (!state_->gpu_default_frame->write(
+                0U, std::as_bytes(std::span{&gpu_frame, 1})
+            )) {
+            set_diagnostics(diagnostics, "VICE Runtime could not update GPU default cluster frame constants.");
+            return false;
+        }
+        gpu_cluster_default_batch_result = state_->gpu_cluster_default_draw_batches.result();
+    }
     if (!gpu_pbr_plan.batches.empty()) {
         if (!state_->gpu_pbr_draw_batches.build(
                 *commands,
@@ -3314,6 +3452,23 @@ bool RuntimeSceneRenderer::render(
             return false;
         }
         gpu_pbr_batch_result = state_->gpu_pbr_draw_batches.result();
+    }
+    if (!gpu_cluster_pbr_plan.batches.empty()) {
+        if (!state_->gpu_cluster_pbr_draw_batches.build(
+                *commands,
+                gpu_cluster_visibility_result.visibility,
+                gpu_cluster_pbr_plan.candidate_batches,
+                gpu_cluster_pbr_plan.batches,
+                diagnostics
+            ) || !state_->gpu_cluster_pbr_instances.remap(
+                *commands,
+                state_->gpu_cluster_pbr_draw_batches.result(),
+                gpu_cluster_visibility_result,
+                diagnostics
+            )) {
+            return false;
+        }
+        gpu_cluster_pbr_batch_result = state_->gpu_cluster_pbr_draw_batches.result();
     }
     const bool has_point_shadows = std::any_of(
         point_shadow_views.begin(),
@@ -3657,6 +3812,53 @@ bool RuntimeSceneRenderer::render(
         }
     }
 
+    if (!gpu_cluster_default_plan.batches.empty()) {
+        const auto instance_table = state_->gpu_instances.result();
+        const auto remapped_instances = state_->gpu_cluster_default_instances.result();
+        if (instance_table.models == nullptr || remapped_instances.scene_instance_indices == nullptr ||
+            gpu_cluster_default_batch_result.indirect_arguments == nullptr) {
+            set_diagnostics(diagnostics, "VICE Runtime GPU default cluster resources are unavailable.");
+            return false;
+        }
+        const render::BufferViewDesc model_view{
+            .offset = 0U,
+            .size = static_cast<std::uint64_t>(instances.size()) * sizeof(math::Mat4),
+            .structure_stride = sizeof(math::Mat4),
+        };
+        const render::BufferViewDesc compacted_view{
+            .offset = 0U,
+            .size = static_cast<std::uint64_t>(gpu_cluster_candidates.candidates.size()) * sizeof(std::uint32_t),
+            .structure_stride = sizeof(std::uint32_t),
+        };
+        if (!commands->set_graphics_pipeline(*state_->pipeline) ||
+            !commands->set_graphics_constant_buffer(
+                frame_binding, *state_->gpu_default_frame, 0U, sizeof(GpuDefaultFrame)
+            ) || !commands->set_graphics_buffer(
+                gpu_model_table_binding, *instance_table.models, model_view
+            ) || !commands->set_graphics_buffer(
+                gpu_compacted_instance_binding,
+                *remapped_instances.scene_instance_indices,
+                compacted_view
+            )) {
+            set_diagnostics(diagnostics, "VICE Runtime could not bind GPU default cluster resources.");
+            return false;
+        }
+        for (std::size_t batch_index = 0U; batch_index < gpu_cluster_default_plan.batches.size(); ++batch_index) {
+            auto& mesh = state_->meshes.at(gpu_cluster_default_plan.batch_meshes[batch_index]);
+            const std::uint64_t argument_offset = static_cast<std::uint64_t>(batch_index) *
+                sizeof(render::IndexedIndirectDrawArguments);
+            if (!commands->set_vertex_buffer(0U, *mesh.vertices) ||
+                !commands->set_index_buffer(*mesh.indices, render::IndexFormat::uint32) ||
+                !commands->draw_indexed_indirect(
+                    *gpu_cluster_default_batch_result.indirect_arguments,
+                    argument_offset
+                )) {
+                set_diagnostics(diagnostics, "VICE Runtime could not encode a GPU-driven default cluster batch.");
+                return false;
+            }
+        }
+    }
+
     if (!gpu_pbr_plan.batches.empty()) {
         const auto instance_table = state_->gpu_instances.result();
         const auto material_scene = state_->gpu_material_scene.view();
@@ -3816,6 +4018,45 @@ bool RuntimeSceneRenderer::render(
                 )) {
                 set_diagnostics(diagnostics, "VICE Runtime could not encode an indexed GPU PBR batch.");
                 return false;
+            }
+        }
+
+        if (!gpu_cluster_pbr_plan.batches.empty()) {
+            const auto remapped_instances = state_->gpu_cluster_pbr_instances.result();
+            if (remapped_instances.scene_instance_indices == nullptr ||
+                gpu_cluster_pbr_batch_result.indirect_arguments == nullptr) {
+                set_diagnostics(diagnostics, "VICE Runtime GPU PBR cluster resources are unavailable.");
+                return false;
+            }
+            const render::BufferViewDesc cluster_compacted_view{
+                .offset = 0U,
+                .size = static_cast<std::uint64_t>(gpu_cluster_candidates.candidates.size()) *
+                    sizeof(std::uint32_t),
+                .structure_stride = sizeof(std::uint32_t),
+            };
+            if (!commands->set_graphics_buffer(
+                    gpu_pbr_compacted_instance_binding,
+                    *remapped_instances.scene_instance_indices,
+                    cluster_compacted_view
+                )) {
+                set_diagnostics(diagnostics, "VICE Runtime could not bind GPU PBR cluster instance indices.");
+                return false;
+            }
+            for (std::size_t batch_index = 0U;
+                 batch_index < gpu_cluster_pbr_plan.batches.size();
+                 ++batch_index) {
+                auto& mesh = state_->meshes.at(gpu_cluster_pbr_plan.batch_meshes[batch_index]);
+                const std::uint64_t argument_offset = static_cast<std::uint64_t>(batch_index) *
+                    sizeof(render::IndexedIndirectDrawArguments);
+                if (!commands->set_vertex_buffer(0U, *mesh.vertices) ||
+                    !commands->set_index_buffer(*mesh.indices, render::IndexFormat::uint32) ||
+                    !commands->draw_indexed_indirect(
+                        *gpu_cluster_pbr_batch_result.indirect_arguments,
+                        argument_offset
+                    )) {
+                    set_diagnostics(diagnostics, "VICE Runtime could not encode an indexed GPU PBR cluster batch.");
+                    return false;
+                }
             }
         }
     }
