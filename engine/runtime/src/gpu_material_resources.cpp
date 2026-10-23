@@ -6,8 +6,10 @@
 #include <cstdint>
 #include <filesystem>
 #include <limits>
+#include <optional>
 #include <span>
 #include <string_view>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -16,6 +18,7 @@ namespace {
 
 constexpr std::uint64_t virtual_texture_sampling_budget = 64ULL * 1024ULL * 1024ULL;
 constexpr std::uint32_t virtual_texture_bootstrap_extent = 512U;
+constexpr std::size_t virtual_texture_feedback_request_limit = 256U;
 constexpr std::uint32_t virtual_table_width = 1024U;
 constexpr std::uint32_t virtual_table_max_height = 16'384U;
 
@@ -63,6 +66,24 @@ void set_diagnostics(std::string* const diagnostics, std::string message) {
     return std::lexicographical_compare(
         left_bytes.begin(), left_bytes.end(), right_bytes.begin(), right_bytes.end()
     );
+}
+
+[[nodiscard]] bool key_less(
+    const RuntimeVirtualTextureTileKey& left,
+    const RuntimeVirtualTextureTileKey& right
+) noexcept {
+    if (left.texture != right.texture) return resource_less(left.texture, right.texture);
+    return std::tie(left.mip_level, left.tile_y, left.tile_x) <
+        std::tie(right.mip_level, right.tile_y, right.tile_x);
+}
+
+[[nodiscard]] bool refinement_priority_less(
+    const RuntimeVirtualTextureTileKey& left,
+    const RuntimeVirtualTextureTileKey& right
+) noexcept {
+    if (left.mip_level != right.mip_level) return left.mip_level > right.mip_level;
+    if (left.texture != right.texture) return resource_less(left.texture, right.texture);
+    return std::tie(left.tile_y, left.tile_x) < std::tie(right.tile_y, right.tile_x);
 }
 
 template <typename TextureResolver>
@@ -213,6 +234,93 @@ template <typename TextureResolver>
             }
         }
     }
+    std::sort(result.begin(), result.end(), key_less);
+    result.erase(std::unique(result.begin(), result.end()), result.end());
+    return result;
+}
+
+[[nodiscard]] std::optional<std::uint64_t> tile_bytes(
+    const CookedTextureCatalog& catalog,
+    const RuntimeVirtualTextureTileKey& key
+) noexcept {
+    const auto* const record = catalog.find(key.texture);
+    if (record == nullptr || key.mip_level >= record->asset.mip_levels.size()) return std::nullopt;
+    const auto& mip = record->asset.mip_levels[key.mip_level];
+    const std::uint64_t end = static_cast<std::uint64_t>(mip.first_tile) + mip.tile_count;
+    if (end > record->asset.virtual_tiles.size()) return std::nullopt;
+    for (std::uint64_t index = mip.first_tile; index < end; ++index) {
+        const auto& tile = record->asset.virtual_tiles[static_cast<std::size_t>(index)];
+        if (tile.mip_level == key.mip_level && tile.tile_x == key.tile_x && tile.tile_y == key.tile_y) {
+            const std::uint64_t pixels = static_cast<std::uint64_t>(tile.width) * tile.height;
+            if (pixels > std::numeric_limits<std::uint64_t>::max() / 4U) return std::nullopt;
+            return pixels * 4U;
+        }
+    }
+    return std::nullopt;
+}
+
+struct FeedbackAdmission {
+    std::vector<RuntimeVirtualTextureTileKey> requests;
+    std::string diagnostics;
+
+    [[nodiscard]] explicit operator bool() const noexcept { return diagnostics.empty(); }
+};
+
+[[nodiscard]] FeedbackAdmission admit_feedback_requests(
+    const CookedTextureCatalog& catalog,
+    const std::span<const world::ResourceId> candidates,
+    const std::span<const RuntimeVirtualTextureTileKey> bootstrap,
+    const std::span<const RuntimeVirtualTextureTileKey> feedback,
+    const std::uint64_t budget_bytes
+) {
+    FeedbackAdmission result;
+    result.requests.assign(bootstrap.begin(), bootstrap.end());
+    std::uint64_t requested_bytes = 0U;
+    for (const auto& key : result.requests) {
+        const auto bytes = tile_bytes(catalog, key);
+        if (!bytes.has_value() || requested_bytes > budget_bytes - std::min(*bytes, budget_bytes)) {
+            result.diagnostics = "Runtime virtual texture bootstrap set exceeds its residency budget.";
+            result.requests.clear();
+            return result;
+        }
+        requested_bytes += *bytes;
+        if (requested_bytes > budget_bytes) {
+            result.diagnostics = "Runtime virtual texture bootstrap set exceeds its residency budget.";
+            result.requests.clear();
+            return result;
+        }
+    }
+
+    std::vector<RuntimeVirtualTextureTileKey> refinements;
+    refinements.reserve(feedback.size());
+    for (const auto& key : feedback) {
+        if (!key.texture.valid() ||
+            !std::binary_search(candidates.begin(), candidates.end(), key.texture, resource_less)) {
+            continue;
+        }
+        refinements.push_back(key);
+    }
+    std::sort(refinements.begin(), refinements.end(), key_less);
+    refinements.erase(std::unique(refinements.begin(), refinements.end()), refinements.end());
+    std::sort(refinements.begin(), refinements.end(), refinement_priority_less);
+
+    std::size_t admitted = 0U;
+    for (const auto& key : refinements) {
+        if (admitted >= virtual_texture_feedback_request_limit) break;
+        if (std::binary_search(result.requests.begin(), result.requests.end(), key, key_less)) continue;
+        const auto bytes = tile_bytes(catalog, key);
+        if (!bytes.has_value()) {
+            result.diagnostics = "Runtime virtual texture feedback references an unknown canonical tile.";
+            result.requests.clear();
+            return result;
+        }
+        if (*bytes > budget_bytes || requested_bytes > budget_bytes - *bytes) continue;
+        result.requests.push_back(key);
+        requested_bytes += *bytes;
+        ++admitted;
+        std::sort(result.requests.begin(), result.requests.end(), key_less);
+    }
+    result.requests.erase(std::unique(result.requests.begin(), result.requests.end()), result.requests.end());
     return result;
 }
 
@@ -257,55 +365,61 @@ template <typename TextureResolver>
     return texture;
 }
 
-void build_virtual_resources(
+struct VirtualBindingBuild {
+    std::vector<RuntimeGpuMaterialRecord> records;
+    std::vector<render::Texture*> textures;
+    RuntimeVirtualTextureSamplingPlan sampling;
+    std::unique_ptr<render::Texture> descriptors;
+    std::unique_ptr<render::Texture> pages;
+    std::string diagnostics;
+
+    [[nodiscard]] explicit operator bool() const noexcept { return diagnostics.empty(); }
+};
+
+[[nodiscard]] VirtualBindingBuild build_virtual_bindings(
     render::Device& device,
     const RuntimeGpuMaterialTablePlan& conventional_plan,
-    const RuntimeMaterialLibrary& material_library,
-    std::vector<RuntimeGpuMaterialRecord>& gpu_records,
-    std::vector<render::Texture*>& material_textures,
-    std::unique_ptr<RuntimeVirtualTextureResidentPool>& resident_pool,
-    RuntimeVirtualTextureSamplingPlan& sampling_plan,
-    std::unique_ptr<render::Texture>& descriptor_table,
-    std::unique_ptr<render::Texture>& page_table
+    const CookedTextureCatalog& catalog,
+    const RuntimeVirtualTextureResidentPool& resident_pool,
+    const std::span<const world::ResourceId> candidates,
+    const std::span<render::Texture* const> conventional_textures
 ) {
-    const auto candidates = virtual_candidate_textures(
-        conventional_plan, material_library.texture_catalog()
-    );
-    if (candidates.empty()) return;
-    const auto requests = bootstrap_requests(material_library.texture_catalog(), candidates);
-    if (requests.empty()) return;
-
-    auto next_pool = std::make_unique<RuntimeVirtualTextureResidentPool>(virtual_texture_sampling_budget);
-    const auto update = next_pool->update(device, material_library.texture_catalog(), requests);
-    if (!update) return;
-    auto next_sampling = build_runtime_virtual_texture_sampling_plan(
-        material_library.texture_catalog(), *next_pool, candidates
-    );
-    if (!next_sampling) return;
+    VirtualBindingBuild result;
+    result.sampling = build_runtime_virtual_texture_sampling_plan(catalog, resident_pool, candidates);
+    if (!result.sampling) {
+        result.diagnostics = result.sampling.diagnostics;
+        return result;
+    }
 
     RuntimeGpuMaterialTablePlan tagged_plan = conventional_plan;
-    if (!apply_runtime_virtual_texture_sampling(tagged_plan, next_sampling, nullptr)) return;
+    if (!apply_runtime_virtual_texture_sampling(tagged_plan, result.sampling, &result.diagnostics)) {
+        return result;
+    }
 
-    const std::uint64_t conventional_count = material_textures.size();
-    const std::uint64_t physical_count = next_sampling.physical_textures.size();
-    if (conventional_count + physical_count + 2U > std::numeric_limits<std::uint32_t>::max()) return;
+    const std::uint64_t conventional_count = conventional_textures.size();
+    const std::uint64_t physical_count = result.sampling.physical_textures.size();
+    if (conventional_count + physical_count + 2U > std::numeric_limits<std::uint32_t>::max()) {
+        result.diagnostics = "Runtime virtual texture descriptor table exceeds the bindless index contract.";
+        return result;
+    }
     const auto descriptor_slot = static_cast<std::uint32_t>(conventional_count + physical_count);
     const auto page_slot = descriptor_slot + 1U;
 
     std::vector<std::uint32_t> descriptor_words;
-    descriptor_words.reserve(next_sampling.textures.size() * 4U);
-    for (const auto& descriptor : next_sampling.textures) {
+    descriptor_words.reserve(result.sampling.textures.size() * 4U);
+    for (const auto& descriptor : result.sampling.textures) {
         descriptor_words.push_back(descriptor.width);
         descriptor_words.push_back(descriptor.height);
         descriptor_words.push_back(descriptor.mip_count);
         descriptor_words.push_back(descriptor.first_page);
     }
     std::vector<std::uint32_t> page_words;
-    page_words.reserve(next_sampling.pages.size() * 4U);
-    for (const auto& page : next_sampling.pages) {
+    page_words.reserve(result.sampling.pages.size() * 4U);
+    for (const auto& page : result.sampling.pages) {
         if (page.physical_slot == runtime_virtual_texture_invalid_index ||
             conventional_count + page.physical_slot > std::numeric_limits<std::uint32_t>::max()) {
-            return;
+            result.diagnostics = "Runtime virtual texture page references an invalid physical slot.";
+            return result;
         }
         page_words.push_back(static_cast<std::uint32_t>(conventional_count + page.physical_slot));
         page_words.push_back(page.resolved_mip);
@@ -313,13 +427,16 @@ void build_virtual_resources(
         page_words.push_back(page.resolved_tile_y);
     }
 
-    auto next_descriptors = create_uint_table_texture(
+    result.descriptors = create_uint_table_texture(
         device, descriptor_words, "VICE Runtime virtual texture descriptors"
     );
-    auto next_pages = create_uint_table_texture(
+    result.pages = create_uint_table_texture(
         device, page_words, "VICE Runtime virtual texture page table"
     );
-    if (!next_descriptors || !next_pages) return;
+    if (!result.descriptors || !result.pages) {
+        result.diagnostics = "VICE Runtime could not create virtual texture descriptor/page tables.";
+        return result;
+    }
 
     for (auto& record : tagged_plan.records) {
         if (!record_uses_virtual_texture(record)) continue;
@@ -328,18 +445,16 @@ void build_virtual_resources(
         record.reserved[2] = runtime_gpu_resource_unassigned;
     }
 
-    material_textures.insert(
-        material_textures.end(),
-        next_sampling.physical_textures.begin(),
-        next_sampling.physical_textures.end()
+    result.textures.assign(conventional_textures.begin(), conventional_textures.end());
+    result.textures.insert(
+        result.textures.end(),
+        result.sampling.physical_textures.begin(),
+        result.sampling.physical_textures.end()
     );
-    material_textures.push_back(next_descriptors.get());
-    material_textures.push_back(next_pages.get());
-    gpu_records = std::move(tagged_plan.records);
-    resident_pool = std::move(next_pool);
-    sampling_plan = std::move(next_sampling);
-    descriptor_table = std::move(next_descriptors);
-    page_table = std::move(next_pages);
+    result.textures.push_back(result.descriptors.get());
+    result.textures.push_back(result.pages.get());
+    result.records = std::move(tagged_plan.records);
+    return result;
 }
 
 } // namespace
@@ -349,6 +464,9 @@ void RuntimeGpuMaterialResourceTable::clear() noexcept {
     samplers_.clear();
     owned_samplers_.clear();
     material_records_.clear();
+    conventional_texture_count_ = 0U;
+    virtual_candidate_textures_.clear();
+    virtual_bootstrap_requests_.clear();
     virtual_texture_descriptors_.reset();
     virtual_texture_pages_.reset();
     virtual_sampling_plan_ = {};
@@ -363,17 +481,21 @@ bool RuntimeGpuMaterialResourceTable::initialize(
 ) {
     clear();
     material_records_ = plan.records;
-    return build_resources(
-        device,
-        plan,
-        [&](const world::ResourceId resource_id, const RuntimeGpuMaterialTextureChannel channel) {
-            return texture_library.resolve(resource_id, material_channel(channel));
-        },
-        textures_,
-        owned_samplers_,
-        samplers_,
-        diagnostics
-    );
+    if (!build_resources(
+            device,
+            plan,
+            [&](const world::ResourceId resource_id, const RuntimeGpuMaterialTextureChannel channel) {
+                return texture_library.resolve(resource_id, material_channel(channel));
+            },
+            textures_,
+            owned_samplers_,
+            samplers_,
+            diagnostics
+        )) {
+        return false;
+    }
+    conventional_texture_count_ = textures_.size();
+    return true;
 }
 
 bool RuntimeGpuMaterialResourceTable::initialize(
@@ -397,17 +519,129 @@ bool RuntimeGpuMaterialResourceTable::initialize(
         )) {
         return false;
     }
-    build_virtual_resources(
+    conventional_texture_count_ = textures_.size();
+    virtual_candidate_textures_ = virtual_candidate_textures(
+        plan, material_library.texture_catalog()
+    );
+    if (virtual_candidate_textures_.empty()) {
+        if (diagnostics != nullptr) diagnostics->clear();
+        return true;
+    }
+    virtual_bootstrap_requests_ = bootstrap_requests(
+        material_library.texture_catalog(), virtual_candidate_textures_
+    );
+    if (virtual_bootstrap_requests_.empty()) {
+        virtual_candidate_textures_.clear();
+        if (diagnostics != nullptr) diagnostics->clear();
+        return true;
+    }
+
+    auto next_pool = std::make_unique<RuntimeVirtualTextureResidentPool>(virtual_texture_sampling_budget);
+    const auto update = next_pool->update(
+        device, material_library.texture_catalog(), virtual_bootstrap_requests_
+    );
+    if (!update) {
+        virtual_candidate_textures_.clear();
+        virtual_bootstrap_requests_.clear();
+        if (diagnostics != nullptr) diagnostics->clear();
+        return true;
+    }
+    const auto conventional = std::span<render::Texture* const>{
+        textures_.data(), conventional_texture_count_
+    };
+    auto bindings = build_virtual_bindings(
         device,
         plan,
-        material_library,
-        material_records_,
-        textures_,
-        virtual_resident_pool_,
-        virtual_sampling_plan_,
-        virtual_texture_descriptors_,
-        virtual_texture_pages_
+        material_library.texture_catalog(),
+        *next_pool,
+        virtual_candidate_textures_,
+        conventional
     );
+    if (!bindings) {
+        virtual_candidate_textures_.clear();
+        virtual_bootstrap_requests_.clear();
+        if (diagnostics != nullptr) diagnostics->clear();
+        return true;
+    }
+
+    material_records_ = std::move(bindings.records);
+    textures_ = std::move(bindings.textures);
+    virtual_sampling_plan_ = std::move(bindings.sampling);
+    virtual_texture_descriptors_ = std::move(bindings.descriptors);
+    virtual_texture_pages_ = std::move(bindings.pages);
+    virtual_resident_pool_ = std::move(next_pool);
+    if (diagnostics != nullptr) diagnostics->clear();
+    return true;
+}
+
+bool RuntimeGpuMaterialResourceTable::apply_virtual_texture_feedback(
+    render::Device& device,
+    const RuntimeGpuMaterialTablePlan& plan,
+    const RuntimeMaterialLibrary& material_library,
+    const std::span<const RuntimeVirtualTextureTileKey> requests,
+    std::string* const diagnostics
+) {
+    if (requests.empty() || virtual_resident_pool_ == nullptr ||
+        virtual_candidate_textures_.empty() || conventional_texture_count_ > textures_.size()) {
+        if (diagnostics != nullptr) diagnostics->clear();
+        return true;
+    }
+
+    const auto admitted = admit_feedback_requests(
+        material_library.texture_catalog(),
+        virtual_candidate_textures_,
+        virtual_bootstrap_requests_,
+        requests,
+        virtual_resident_pool_->budget_bytes()
+    );
+    if (!admitted) {
+        set_diagnostics(diagnostics, admitted.diagnostics);
+        return false;
+    }
+    const auto update = virtual_resident_pool_->update(
+        device,
+        material_library.texture_catalog(),
+        admitted.requests
+    );
+    if (!update) {
+        set_diagnostics(diagnostics, update.diagnostics);
+        return false;
+    }
+    if (update.loaded == 0U && update.evicted == 0U) {
+        if (diagnostics != nullptr) diagnostics->clear();
+        return true;
+    }
+
+    const auto conventional = std::span<render::Texture* const>{
+        textures_.data(), conventional_texture_count_
+    };
+    auto bindings = build_virtual_bindings(
+        device,
+        plan,
+        material_library.texture_catalog(),
+        *virtual_resident_pool_,
+        virtual_candidate_textures_,
+        conventional
+    );
+    if (!bindings) {
+        textures_.resize(conventional_texture_count_);
+        material_records_ = plan.records;
+        virtual_sampling_plan_ = {};
+        virtual_texture_descriptors_.reset();
+        virtual_texture_pages_.reset();
+        set_diagnostics(
+            diagnostics,
+            "Runtime virtual texture feedback residency changed, but page-table rebuild failed closed: " +
+                bindings.diagnostics
+        );
+        return false;
+    }
+
+    material_records_ = std::move(bindings.records);
+    textures_ = std::move(bindings.textures);
+    virtual_sampling_plan_ = std::move(bindings.sampling);
+    virtual_texture_descriptors_ = std::move(bindings.descriptors);
+    virtual_texture_pages_ = std::move(bindings.pages);
     if (diagnostics != nullptr) diagnostics->clear();
     return true;
 }
@@ -421,6 +655,11 @@ RuntimeGpuMaterialResourceTableView RuntimeGpuMaterialResourceTable::view() cons
 
 std::span<const RuntimeGpuMaterialRecord> RuntimeGpuMaterialResourceTable::material_records() const noexcept {
     return material_records_;
+}
+
+const RuntimeVirtualTextureSamplingPlan&
+RuntimeGpuMaterialResourceTable::virtual_sampling_plan() const noexcept {
+    return virtual_sampling_plan_;
 }
 
 } // namespace vice::runtime::detail

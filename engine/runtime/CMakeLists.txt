@@ -16,6 +16,7 @@ add_library(
     src/gpu_virtual_geometry.cpp
     src/gpu_virtual_geometry_feedback.cpp
     src/gpu_virtual_geometry_feedback_ring.cpp
+    src/gpu_virtual_texture_feedback.cpp
     src/gpu_visibility_set.cpp
     src/hiz.cpp
     src/hiz_occlusion.cpp
