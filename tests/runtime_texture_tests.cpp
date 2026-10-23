@@ -1,30 +1,140 @@
 #include <vice/render/rhi.hpp>
 #include <vice/render/texture_asset.hpp>
+#include <vice/render/virtual_texture_archive.hpp>
 #include <vice/runtime/texture.hpp>
+#include <vice/runtime/virtual_texture_streaming.hpp>
 #include <vice/world/persistent_id.hpp>
 #include <vice/world/resource.hpp>
 
 #include "../engine/runtime/src/texture_pipeline.hpp"
 
-#include <cassert>
+#include <algorithm>
+#include <cstddef>
+#include <cstdint>
+#include <exception>
 #include <filesystem>
 #include <fstream>
 #include <span>
 #include <string>
+#include <vector>
 
 namespace {
 
 vice::world::PersistentId required_id(const char* text) {
     const auto parsed = vice::world::PersistentId::parse(text);
-    assert(parsed.has_value());
+    if (!parsed.has_value()) std::terminate();
     return *parsed;
 }
 
-void write_bytes(const std::filesystem::path& path, const std::span<const std::byte> bytes) {
+[[nodiscard]] bool write_bytes(
+    const std::filesystem::path& path,
+    const std::span<const std::byte> bytes
+) {
     std::ofstream output{path, std::ios::binary | std::ios::trunc};
-    assert(output);
+    if (!output) return false;
     output.write(reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
-    assert(output);
+    return output.good();
+}
+
+[[nodiscard]] constexpr std::uint32_t next_extent(const std::uint32_t value) noexcept {
+    return value > 1U ? (value + 1U) / 2U : 1U;
+}
+
+[[nodiscard]] vice::render::TextureAsset make_virtual_texture_asset(
+    const vice::world::PersistentId id
+) {
+    using namespace vice;
+    render::TextureAsset asset;
+    asset.version = render::texture_asset_format_version_v2;
+    asset.stable_id = id.bytes();
+    asset.source_fingerprint = 99U;
+    asset.width = 256U;
+    asset.height = 128U;
+    asset.color_space = render::TextureColorSpace::srgb;
+
+    std::uint32_t width = asset.width;
+    std::uint32_t height = asset.height;
+    std::uint32_t mip = 0U;
+    for (;;) {
+        const auto payload_offset = static_cast<std::uint64_t>(asset.rgba8.size());
+        const auto payload_size = static_cast<std::uint64_t>(width) * height * 4U;
+        const auto first_tile = static_cast<std::uint32_t>(asset.virtual_tiles.size());
+        const std::uint32_t columns = (width + render::virtual_texture_tile_extent - 1U) /
+            render::virtual_texture_tile_extent;
+        const std::uint32_t rows = (height + render::virtual_texture_tile_extent - 1U) /
+            render::virtual_texture_tile_extent;
+        for (std::uint32_t tile_y = 0U; tile_y < rows; ++tile_y) {
+            for (std::uint32_t tile_x = 0U; tile_x < columns; ++tile_x) {
+                const std::uint32_t pixel_x = tile_x * render::virtual_texture_tile_extent;
+                const std::uint32_t pixel_y = tile_y * render::virtual_texture_tile_extent;
+                asset.virtual_tiles.push_back(render::VirtualTextureTile{
+                    .mip_level = mip,
+                    .tile_x = tile_x,
+                    .tile_y = tile_y,
+                    .width = std::min(render::virtual_texture_tile_extent, width - pixel_x),
+                    .height = std::min(render::virtual_texture_tile_extent, height - pixel_y),
+                });
+            }
+        }
+        asset.mip_levels.push_back(render::TextureMipLevel{
+            .width = width,
+            .height = height,
+            .payload_offset = payload_offset,
+            .payload_size = payload_size,
+            .first_tile = first_tile,
+            .tile_count = columns * rows,
+        });
+        const std::size_t start = asset.rgba8.size();
+        asset.rgba8.resize(start + static_cast<std::size_t>(payload_size));
+        for (std::size_t index = 0U; index < static_cast<std::size_t>(payload_size); ++index) {
+            asset.rgba8[start + index] = static_cast<std::byte>((index + mip * 37U) & 0xFFU);
+        }
+        if (width == 1U && height == 1U) break;
+        width = next_extent(width);
+        height = next_extent(height);
+        ++mip;
+    }
+    return asset;
+}
+
+[[nodiscard]] std::vector<std::byte> canonical_tile_bytes(
+    const vice::render::TextureAsset& asset,
+    const vice::render::VirtualTextureArchiveTile& tile
+) {
+    const auto mip = vice::render::texture_mip_rgba8(asset, tile.mip_level);
+    const auto& mip_desc = asset.mip_levels[tile.mip_level];
+    const std::uint64_t origin_x = static_cast<std::uint64_t>(tile.tile_x) *
+        vice::render::virtual_texture_tile_extent;
+    const std::uint64_t origin_y = static_cast<std::uint64_t>(tile.tile_y) *
+        vice::render::virtual_texture_tile_extent;
+    const std::uint64_t source_row = static_cast<std::uint64_t>(mip_desc.width) * 4U;
+    const std::uint64_t tile_row = static_cast<std::uint64_t>(tile.width) * 4U;
+    std::vector<std::byte> result(static_cast<std::size_t>(tile_row * tile.height));
+    for (std::uint32_t row = 0U; row < tile.height; ++row) {
+        const auto source_offset = static_cast<std::size_t>((origin_y + row) * source_row + origin_x * 4U);
+        const auto destination_offset = static_cast<std::size_t>(static_cast<std::uint64_t>(row) * tile_row);
+        std::copy_n(
+            mip.begin() + static_cast<std::ptrdiff_t>(source_offset),
+            static_cast<std::size_t>(tile_row),
+            result.begin() + static_cast<std::ptrdiff_t>(destination_offset)
+        );
+    }
+    return result;
+}
+
+[[nodiscard]] bool same_keys(
+    const std::span<const vice::runtime::RuntimeVirtualTextureResidentTile> tiles,
+    const std::vector<vice::runtime::RuntimeVirtualTextureTileKey>& keys
+) {
+    if (tiles.size() != keys.size()) return false;
+    for (const auto& key : keys) {
+        if (std::find_if(tiles.begin(), tiles.end(), [&](const auto& tile) {
+                return tile.key == key;
+            }) == tiles.end()) {
+            return false;
+        }
+    }
+    return true;
 }
 
 } // namespace
@@ -37,85 +147,153 @@ int main() {
     std::filesystem::remove_all(root, error);
     error.clear();
     std::filesystem::create_directories(root, error);
-    assert(!error);
+    if (error) return 1;
 
     const auto id = required_id("71000000-0000-4000-8000-000000000001");
-    render::TextureAsset asset;
-    asset.version = render::texture_asset_format_version_v2;
-    asset.stable_id = id.bytes();
-    asset.source_fingerprint = 99U;
-    asset.width = 2U;
-    asset.height = 1U;
-    asset.color_space = render::TextureColorSpace::srgb;
-    asset.rgba8 = {
-        std::byte{255U}, std::byte{0U}, std::byte{0U}, std::byte{255U},
-        std::byte{0U}, std::byte{128U}, std::byte{255U}, std::byte{255U},
-        std::byte{128U}, std::byte{64U}, std::byte{128U}, std::byte{255U},
-    };
-    asset.mip_levels = {
-        render::TextureMipLevel{
-            .width = 2U,
-            .height = 1U,
-            .payload_offset = 0U,
-            .payload_size = 8U,
-            .first_tile = 0U,
-            .tile_count = 1U,
-        },
-        render::TextureMipLevel{
-            .width = 1U,
-            .height = 1U,
-            .payload_offset = 8U,
-            .payload_size = 4U,
-            .first_tile = 1U,
-            .tile_count = 1U,
-        },
-    };
-    asset.virtual_tiles = {
-        render::VirtualTextureTile{
-            .mip_level = 0U,
-            .tile_x = 0U,
-            .tile_y = 0U,
-            .width = 2U,
-            .height = 1U,
-        },
-        render::VirtualTextureTile{
-            .mip_level = 1U,
-            .tile_x = 0U,
-            .tile_y = 0U,
-            .width = 1U,
-            .height = 1U,
-        },
-    };
+    const world::ResourceId resource{id};
+    const auto asset = make_virtual_texture_asset(id);
     const auto encoded = render::encode_texture_asset(asset);
-    assert(encoded);
-    write_bytes(root / "surface.vtexc", encoded.bytes);
+    const auto archive = render::encode_virtual_texture_archive(asset);
+    const auto archive_again = render::encode_virtual_texture_archive(asset);
+    if (!encoded || !archive || !archive_again || archive.bytes != archive_again.bytes) return 1;
+
+    const auto texture_path = root / "surface.vtexc";
+    const auto archive_path = root / "surface.vtilec";
+    if (!write_bytes(texture_path, encoded.bytes) || !write_bytes(archive_path, archive.bytes)) return 1;
 
     runtime::CookedTextureCatalog catalog;
-    assert(catalog.load(root));
-    assert(catalog.records().size() == 1U);
-    const world::ResourceId resource{id};
+    if (!catalog.load(root) || catalog.records().size() != 1U || catalog.find(resource) == nullptr) return 1;
     const auto* found = catalog.find(resource);
-    assert(found != nullptr);
-    assert(found->asset.width == 2U);
-    assert(found->asset.color_space == render::TextureColorSpace::srgb);
-    assert(render::texture_mip_count(found->asset) == 2U);
+    if (found->asset.width != asset.width || render::texture_mip_count(found->asset) != asset.mip_levels.size()) {
+        return 1;
+    }
 
     auto device = render::Device::create();
-    assert(device != nullptr);
+    if (!device) return 1;
     runtime::detail::RuntimeTextureLibrary library;
     std::string diagnostics;
-    assert(library.initialize(*device, root, &diagnostics, true));
-    assert(diagnostics.empty());
-    auto* const gpu_texture = library.find(resource);
-    assert(gpu_texture != nullptr);
-    assert(gpu_texture->mip_levels() == 2U);
-    assert(library.resident_bytes() == asset.rgba8.size());
+    if (!library.initialize(*device, root, &diagnostics, true) || !diagnostics.empty()) return 1;
+    auto* const full_texture = library.find(resource);
+    if (full_texture == nullptr || full_texture->mip_levels() != asset.mip_levels.size() ||
+        library.resident_bytes() != asset.rgba8.size()) {
+        return 1;
+    }
 
-    write_bytes(root / "duplicate.vtexc", encoded.bytes);
-    assert(!catalog.load(root));
-    assert(catalog.diagnostics().find(id.to_string()) != std::string::npos);
+    const auto directory = render::load_virtual_texture_archive_directory(archive_path);
+    if (!directory.directory.has_value() ||
+        !render::virtual_texture_archive_matches_asset(*directory.directory, asset) ||
+        directory.directory->tiles.size() < 3U) {
+        return 1;
+    }
+
+    const auto first_descriptor = directory.directory->tiles[0U];
+    const auto second_descriptor = directory.directory->tiles[1U];
+    const auto third_descriptor = directory.directory->tiles[2U];
+    const auto first_tile = render::load_virtual_texture_archive_tile(
+        archive_path,
+        *directory.directory,
+        first_descriptor.mip_level,
+        first_descriptor.tile_x,
+        first_descriptor.tile_y
+    );
+    if (!first_tile.tile.has_value() || first_tile.tile->rgba8 != canonical_tile_bytes(asset, first_descriptor)) {
+        return 1;
+    }
+
+    auto corrupted = archive.bytes;
+    corrupted[static_cast<std::size_t>(first_descriptor.payload_offset)] ^= std::byte{0x01U};
+    const auto corrupt_path = root / "corrupt.vtilec";
+    if (!write_bytes(corrupt_path, corrupted)) return 1;
+    const auto corrupt_directory = render::load_virtual_texture_archive_directory(corrupt_path);
+    if (!corrupt_directory.directory.has_value()) return 1;
+    if (render::load_virtual_texture_archive_tile(
+            corrupt_path,
+            *corrupt_directory.directory,
+            first_descriptor.mip_level,
+            first_descriptor.tile_x,
+            first_descriptor.tile_y
+        ).tile.has_value()) {
+        return 1;
+    }
+    if (!render::load_virtual_texture_archive_tile(
+            corrupt_path,
+            *corrupt_directory.directory,
+            second_descriptor.mip_level,
+            second_descriptor.tile_x,
+            second_descriptor.tile_y
+        ).tile.has_value()) {
+        return 1;
+    }
+
+    auto corrupt_directory_bytes = archive.bytes;
+    if (corrupt_directory_bytes.size() < 40U) return 1;
+    corrupt_directory_bytes[corrupt_directory_bytes.size() - 40U] ^= std::byte{0x01U};
+    const auto corrupt_directory_path = root / "corrupt_directory.vtilec";
+    if (!write_bytes(corrupt_directory_path, corrupt_directory_bytes) ||
+        render::load_virtual_texture_archive_directory(corrupt_directory_path).directory.has_value()) {
+        return 1;
+    }
+
+    const runtime::RuntimeVirtualTextureTileKey key_a{
+        .texture = resource,
+        .mip_level = first_descriptor.mip_level,
+        .tile_x = first_descriptor.tile_x,
+        .tile_y = first_descriptor.tile_y,
+    };
+    const runtime::RuntimeVirtualTextureTileKey key_b{
+        .texture = resource,
+        .mip_level = second_descriptor.mip_level,
+        .tile_x = second_descriptor.tile_x,
+        .tile_y = second_descriptor.tile_y,
+    };
+    const runtime::RuntimeVirtualTextureTileKey key_c{
+        .texture = resource,
+        .mip_level = third_descriptor.mip_level,
+        .tile_x = third_descriptor.tile_x,
+        .tile_y = third_descriptor.tile_y,
+    };
+    const std::uint64_t budget = first_descriptor.payload_size + second_descriptor.payload_size;
+    runtime::RuntimeVirtualTextureResidentPool pool{budget};
+
+    const runtime::RuntimeVirtualTextureTileKey duplicate_a[]{key_a, key_a};
+    const auto first_update = pool.update(*device, catalog, duplicate_a);
+    if (!first_update || first_update.requested != 1U || first_update.loaded != 1U ||
+        first_update.resident_hits != 0U || !pool.resident(key_a) || pool.find(key_a) == nullptr) {
+        return 1;
+    }
+
+    const runtime::RuntimeVirtualTextureTileKey ab[]{key_a, key_b};
+    const auto second_update = pool.update(*device, catalog, ab);
+    if (!second_update || second_update.resident_hits != 1U || second_update.loaded != 1U ||
+        !same_keys(pool.tiles(), {key_a, key_b})) {
+        return 1;
+    }
+
+    const runtime::RuntimeVirtualTextureTileKey touch_b[]{key_b};
+    const auto touch_update = pool.update(*device, catalog, touch_b);
+    if (!touch_update || touch_update.resident_hits != 1U) return 1;
+
+    const runtime::RuntimeVirtualTextureTileKey bc[]{key_b, key_c};
+    const auto eviction_update = pool.update(*device, catalog, bc);
+    if (!eviction_update || eviction_update.resident_hits != 1U || eviction_update.loaded != 1U ||
+        eviction_update.evicted != 1U || pool.resident(key_a) ||
+        !same_keys(pool.tiles(), {key_b, key_c})) {
+        return 1;
+    }
+
+    const auto before_failure_bytes = pool.resident_bytes();
+    const runtime::RuntimeVirtualTextureTileKey abc[]{key_a, key_b, key_c};
+    const auto failed_update = pool.update(*device, catalog, abc);
+    if (failed_update || pool.resident_bytes() != before_failure_bytes ||
+        !same_keys(pool.tiles(), {key_b, key_c})) {
+        return 1;
+    }
+
+    if (!device->wait_idle()) return 1;
+
+    if (!write_bytes(root / "duplicate.vtexc", encoded.bytes)) return 1;
+    if (catalog.load(root) || catalog.diagnostics().find(id.to_string()) == std::string::npos) return 1;
 
     std::filesystem::remove_all(root, error);
-    assert(!error);
-    return 0;
+    return error ? 1 : 0;
 }
