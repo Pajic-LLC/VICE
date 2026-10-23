@@ -66,6 +66,7 @@ if(TARGET vice_world_cooker_lib AND
       VICE::MeshCooker
       VICE::Platform
       VICE::RenderMaterialCooker
+      VICE::Runtime
       VICE::ShaderCooker
       VICE::TextureCooker
       VICE::World
