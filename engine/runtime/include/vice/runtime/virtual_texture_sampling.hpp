@@ -1,6 +1,7 @@
 #pragma once
 
 #include <vice/render/rhi.hpp>
+#include <vice/runtime/gpu_material_table.hpp>
 #include <vice/runtime/texture.hpp>
 #include <vice/runtime/virtual_texture_streaming.hpp>
 #include <vice/world/resource.hpp>
@@ -68,5 +69,11 @@ struct RuntimeVirtualTextureSamplingPlan {
     std::uint32_t tile_x,
     std::uint32_t tile_y
 ) noexcept;
+
+[[nodiscard]] bool apply_runtime_virtual_texture_sampling(
+    RuntimeGpuMaterialTablePlan& materials,
+    const RuntimeVirtualTextureSamplingPlan& virtual_textures,
+    std::string* diagnostics = nullptr
+);
 
 } // namespace vice::runtime
