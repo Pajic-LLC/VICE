@@ -2,6 +2,7 @@
 #include <vice/render/texture_asset.hpp>
 #include <vice/render/virtual_texture_archive.hpp>
 #include <vice/runtime/texture.hpp>
+#include <vice/runtime/virtual_texture_sampling.hpp>
 #include <vice/runtime/virtual_texture_streaming.hpp>
 #include <vice/world/persistent_id.hpp>
 #include <vice/world/resource.hpp>
@@ -286,6 +287,92 @@ int main() {
     const auto failed_update = pool.update(*device, catalog, abc);
     if (failed_update || pool.resident_bytes() != before_failure_bytes ||
         !same_keys(pool.tiles(), {key_b, key_c})) {
+        return 1;
+    }
+
+    const auto terminal_descriptor = directory.directory->tiles.back();
+    const runtime::RuntimeVirtualTextureTileKey terminal_key{
+        .texture = resource,
+        .mip_level = terminal_descriptor.mip_level,
+        .tile_x = terminal_descriptor.tile_x,
+        .tile_y = terminal_descriptor.tile_y,
+    };
+    runtime::RuntimeVirtualTextureResidentPool sampling_pool{asset.rgba8.size()};
+    const runtime::RuntimeVirtualTextureTileKey sampling_requests[]{key_a, key_c, terminal_key};
+    const auto sampling_update = sampling_pool.update(*device, catalog, sampling_requests);
+    if (!sampling_update || !sampling_pool.resident(key_a) || !sampling_pool.resident(key_c) ||
+        !sampling_pool.resident(terminal_key)) {
+        return 1;
+    }
+
+    const world::ResourceId sampling_textures[]{resource};
+    const auto sampling = runtime::build_runtime_virtual_texture_sampling_plan(
+        catalog, sampling_pool, sampling_textures
+    );
+    if (!sampling || sampling.texture_ids.size() != 1U || sampling.textures.size() != 1U ||
+        sampling.pages.size() != asset.virtual_tiles.size() || !sampling.texture_index(resource).has_value() ||
+        *sampling.texture_index(resource) != 0U || sampling.physical_textures.size() != 3U) {
+        return 1;
+    }
+
+    const auto& descriptor = sampling.textures.front();
+    const auto exact_page_index = runtime::runtime_virtual_texture_page_index(
+        descriptor, key_a.mip_level, key_a.tile_x, key_a.tile_y
+    );
+    const auto fallback_page_index = runtime::runtime_virtual_texture_page_index(
+        descriptor, key_b.mip_level, key_b.tile_x, key_b.tile_y
+    );
+    const auto terminal_page_index = runtime::runtime_virtual_texture_page_index(
+        descriptor, terminal_key.mip_level, terminal_key.tile_x, terminal_key.tile_y
+    );
+    if (exact_page_index == runtime::runtime_virtual_texture_invalid_index ||
+        fallback_page_index == runtime::runtime_virtual_texture_invalid_index ||
+        terminal_page_index == runtime::runtime_virtual_texture_invalid_index ||
+        exact_page_index >= sampling.pages.size() || fallback_page_index >= sampling.pages.size() ||
+        terminal_page_index >= sampling.pages.size()) {
+        return 1;
+    }
+    const auto& exact_page = sampling.pages[exact_page_index];
+    const auto& fallback_page = sampling.pages[fallback_page_index];
+    const auto& terminal_page = sampling.pages[terminal_page_index];
+    if (exact_page.resolved_mip != key_a.mip_level || exact_page.resolved_tile_x != key_a.tile_x ||
+        exact_page.resolved_tile_y != key_a.tile_y ||
+        fallback_page.resolved_mip != key_c.mip_level || fallback_page.resolved_tile_x != key_c.tile_x ||
+        fallback_page.resolved_tile_y != key_c.tile_y ||
+        terminal_page.resolved_mip != terminal_key.mip_level ||
+        terminal_page.resolved_tile_x != terminal_key.tile_x ||
+        terminal_page.resolved_tile_y != terminal_key.tile_y) {
+        return 1;
+    }
+
+    runtime::RuntimeGpuMaterialTablePlan virtual_materials;
+    virtual_materials.texture_ids = {resource};
+    virtual_materials.samplers.resize(2U);
+    virtual_materials.samplers[1U].address_u = render::AddressMode::clamp_to_edge;
+    virtual_materials.samplers[1U].address_v = render::AddressMode::clamp_to_edge;
+    virtual_materials.records.resize(2U);
+    virtual_materials.records[0U].base_color_texture = 0U;
+    virtual_materials.records[0U].sampler = 0U;
+    virtual_materials.records[1U].base_color_texture = 0U;
+    virtual_materials.records[1U].sampler = 1U;
+    if (!runtime::apply_runtime_virtual_texture_sampling(virtual_materials, sampling, &diagnostics) ||
+        !diagnostics.empty()) {
+        return 1;
+    }
+    if ((virtual_materials.records[0U].base_color_texture & runtime::runtime_gpu_virtual_texture_flag) == 0U ||
+        (virtual_materials.records[0U].base_color_texture & runtime::runtime_gpu_virtual_texture_index_mask) != 0U ||
+        virtual_materials.records[1U].base_color_texture != 0U ||
+        virtual_materials.records[0U].reserved[0U] != runtime::runtime_gpu_resource_unassigned ||
+        virtual_materials.records[0U].reserved[1U] != runtime::runtime_gpu_resource_unassigned) {
+        return 1;
+    }
+
+    runtime::RuntimeVirtualTextureResidentPool missing_terminal_pool{asset.rgba8.size()};
+    const runtime::RuntimeVirtualTextureTileKey missing_terminal_requests[]{key_a, key_c};
+    if (!missing_terminal_pool.update(*device, catalog, missing_terminal_requests)) return 1;
+    if (runtime::build_runtime_virtual_texture_sampling_plan(
+            catalog, missing_terminal_pool, sampling_textures
+        )) {
         return 1;
     }
 
