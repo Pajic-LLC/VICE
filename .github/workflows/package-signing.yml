@@ -1,0 +1,165 @@
+name: Package Signing
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  sign-and-tamper:
+    name: ${{ matrix.name }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macOS ARM64
+            os: macos-15
+          - name: Windows x64
+            os: windows-2025
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Configure
+        run: >-
+          cmake -S . -B build
+          -DVICE_BUILD_TESTS=OFF
+          -DVICE_BUILD_LAB=OFF
+          -DVICE_BUILD_EDITOR=OFF
+          -DVICE_BUILD_TOOLS=ON
+          -DVICE_ENABLE_JOLT_RIGID_BODY=OFF
+
+      - name: Build package tools
+        run: cmake --build build --config Release --target vice_player vice_package_signer --parallel
+
+      - name: Sign and tamper macOS package
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp build/apps/vice_player/vice_player build/vice-sign-test
+
+          build/tools/package_signer/vice_package_signer \
+            --executable build/vice-sign-test \
+            --stamp-asset com.pajic.vice \
+            --identity -
+
+          codesign --verify --strict --verbose=2 build/vice-sign-test
+
+          export VICE_SIGN_TEST="$PWD/build/vice-sign-test"
+          python3 <<'PY'
+          import os
+          from pathlib import Path
+
+          path = Path(os.environ["VICE_SIGN_TEST"])
+          data = bytearray(path.read_bytes())
+          start = b"VICEPKG1"
+          end = b"1GKPECIV"
+          matches = [
+              index
+              for index in range(0, len(data) - 319)
+              if data[index:index + 8] == start
+              and data[index + 312:index + 320] == end
+          ]
+          if len(matches) != 1:
+              raise SystemExit(f"expected one VICE package record, found {len(matches)}")
+          data[matches[0] + 20] ^= 1
+          path.write_bytes(data)
+          PY
+
+          if codesign --verify --strict --verbose=2 build/vice-sign-test; then
+            echo "Tampered macOS package still passed code signature verification."
+            exit 1
+          fi
+
+      - name: Sign and tamper Windows package
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $player = Resolve-Path "build/apps/vice_player/Release/vice_player.exe"
+          $signer = Resolve-Path "build/tools/package_signer/Release/vice_package_signer.exe"
+          $target = Join-Path $PWD "build/vice-sign-test.exe"
+          Copy-Item $player $target -Force
+
+          $signtool = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin" -Filter signtool.exe -File -Recurse |
+            Where-Object { $_.FullName -match '\\x64\\signtool\.exe$' } |
+            Sort-Object FullName -Descending |
+            Select-Object -First 1
+          if (-not $signtool) {
+            throw "signtool.exe was not found in the Windows SDK."
+          }
+
+          $cert = New-SelfSignedCertificate `
+            -Type CodeSigningCert `
+            -Subject "CN=VICE CI Package Signing" `
+            -CertStoreLocation "Cert:\CurrentUser\My"
+
+          $root = [System.Security.Cryptography.X509Certificates.X509Store]::new(
+            "Root",
+            [System.Security.Cryptography.X509Certificates.StoreLocation]::CurrentUser
+          )
+          $root.Open([System.Security.Cryptography.X509Certificates.OpenFlags]::ReadWrite)
+          $root.Add($cert)
+          $root.Close()
+
+          & $signer `
+            --executable $target `
+            --stamp-asset com.pajic.vice `
+            --signtool $signtool.FullName `
+            --certificate-sha1 $cert.Thumbprint
+          if ($LASTEXITCODE -ne 0) {
+            exit $LASTEXITCODE
+          }
+
+          & $signtool.FullName verify /pa /all /v $target
+          if ($LASTEXITCODE -ne 0) {
+            exit $LASTEXITCODE
+          }
+
+          $bytes = [System.IO.File]::ReadAllBytes($target)
+          $start = [System.Text.Encoding]::ASCII.GetBytes("VICEPKG1")
+          $end = [System.Text.Encoding]::ASCII.GetBytes("1GKPECIV")
+          $matches = @()
+          for ($offset = 0; $offset -le $bytes.Length - 320; $offset++) {
+            $startMatch = $true
+            for ($index = 0; $index -lt 8; $index++) {
+              if ($bytes[$offset + $index] -ne $start[$index]) {
+                $startMatch = $false
+                break
+              }
+            }
+            if (-not $startMatch) {
+              continue
+            }
+
+            $endMatch = $true
+            for ($index = 0; $index -lt 8; $index++) {
+              if ($bytes[$offset + 312 + $index] -ne $end[$index]) {
+                $endMatch = $false
+                break
+              }
+            }
+            if ($endMatch) {
+              $matches += $offset
+            }
+          }
+          if ($matches.Count -ne 1) {
+            throw "Expected one VICE package record, found $($matches.Count)."
+          }
+
+          $bytes[$matches[0] + 20] = $bytes[$matches[0] + 20] -bxor 1
+          [System.IO.File]::WriteAllBytes($target, $bytes)
+
+          & $signtool.FullName verify /pa /all /v $target
+          if ($LASTEXITCODE -eq 0) {
+            throw "Tampered Windows package still passed Authenticode verification."
+          }
