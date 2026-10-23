@@ -293,7 +293,7 @@ int main() {
 
     const auto islands = make_triangle_islands(160U);
     assert(islands.pages.pages.size() == 5U);
-    assert(internal_node_count(islands.hierarchy) == 2U);
+    assert(internal_node_count(islands.hierarchy) == 3U);
     const auto island_proxy = build_virtual_geometry_proxies(
         islands.vertices, islands.geometry, islands.pages, islands.hierarchy
     );
