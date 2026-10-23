@@ -3,6 +3,7 @@
 
 #include <vice/platform/dynamic_library.hpp>
 #include <vice/project/project.hpp>
+#include <vice/runtime/package_metadata.hpp>
 #include <vice/world/snapshot_file.hpp>
 
 #include <cstdlib>
@@ -167,12 +168,40 @@ int main() {
     );
     require(std::filesystem::is_regular_file(game_build.runtime_manifest), "runtime manifest exists");
 
+    const auto open_package = runtime::load_staged_package_metadata(game_build.game_executable);
+    require(static_cast<bool>(open_package), "staged package metadata loads");
+    require(!open_package.dade_required, "project without dade.asset stays non-DADE");
+
+    write_text(project_root / "dade.asset", "com.pajic.vice\n");
+    const auto protected_build = editor::build_game_target(*session, runtime_host);
+    require(static_cast<bool>(protected_build), "DADE game target build succeeds");
+    const auto protected_package = runtime::load_staged_package_metadata(
+        protected_build.game_executable
+    );
+    require(static_cast<bool>(protected_package), "protected package metadata loads");
+    require(protected_package.dade_required, "dade.asset enables protected package gate");
+    require(protected_package.dade_asset_id == "com.pajic.vice", "protected package asset ID");
+    require(
+        !std::filesystem::exists(protected_build.game_output_root / "dade.asset"),
+        "dade.asset is not staged as the retail switch"
+    );
+    std::error_code dade_remove_error;
+    std::filesystem::remove(project_root / "dade.asset", dade_remove_error);
+    require(!dade_remove_error, "authoring dade.asset removal");
+    const auto still_protected = runtime::load_staged_package_metadata(
+        protected_build.game_executable
+    );
+    require(
+        static_cast<bool>(still_protected) && still_protected.dade_required,
+        "staged DADE requirement survives authoring sidecar removal"
+    );
+
     const auto expected_module = expected_output / "modules" /
         ("palma-game" + std::string{platform::dynamic_library_extension()});
-    require(game_build.game_module == expected_module, "staged project game module path");
+    require(protected_build.game_module == expected_module, "staged project game module path");
     require(std::filesystem::is_regular_file(expected_module), "staged project game module exists");
 
-    const auto runtime_manifest = project::load_manifest(game_build.runtime_manifest);
+    const auto runtime_manifest = project::load_manifest(protected_build.runtime_manifest);
     require(runtime_manifest.manifest.has_value(), "runtime manifest loads");
     require(runtime_manifest.manifest->game_target == "palma-game", "runtime manifest target");
     require(runtime_manifest.manifest->game_name == "Palma Game", "runtime manifest display name");
@@ -195,11 +224,11 @@ int main() {
         "textures" /
         "surface.vtexc"
     ).lexically_normal();
-    require(game_build.texture_count == 1U, "game build reports one cooked texture");
+    require(protected_build.texture_count == 1U, "game build reports one cooked texture");
     require(std::filesystem::is_regular_file(expected_runtime_texture), "runtime texture is staged");
 
-    const auto game_request = editor::game_run_request(game_build);
-    require(game_request.executable == game_build.game_executable, "game run executable");
+    const auto game_request = editor::game_run_request(protected_build);
+    require(game_request.executable == protected_build.game_executable, "game run executable");
     require(game_request.arguments.empty(), "staged game target needs no arguments");
     require(game_request.working_directory == expected_output, "game run working directory");
 
