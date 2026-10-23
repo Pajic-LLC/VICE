@@ -1,11 +1,19 @@
+#include <vice/runtime/gpu_instance_table.hpp>
+#include <vice/runtime/gpu_virtual_geometry.hpp>
+#include <vice/runtime/gpu_virtual_geometry_feedback.hpp>
 #include <vice/runtime/render_streaming.hpp>
 #include <vice/runtime/scene.hpp>
 #include <vice/runtime/virtual_geometry.hpp>
+#include <vice/runtime/virtual_geometry_streaming.hpp>
+#include <vice/runtime/virtual_geometry_submission.hpp>
 #include <vice/runtime/visibility.hpp>
 
 #include <algorithm>
+#include <cstdint>
 #include <limits>
+#include <memory>
 #include <utility>
+#include <vector>
 
 namespace vice::runtime::detail {
 [[nodiscard]] RuntimeRenderResidentSceneBuildResult
@@ -23,8 +31,10 @@ namespace vice::runtime {
 namespace {
 
 struct RuntimeVirtualGeometrySceneContext {
+    render::Device* device = nullptr;
     CookedMeshCatalog* catalog = nullptr;
     RuntimeGpuMeshletTablePlan* gpu_meshlet_plan = nullptr;
+    RuntimeRenderResourceBudgets resource_budgets{};
     platform::WindowMetrics metrics{};
 };
 
@@ -47,6 +57,20 @@ public:
 private:
     RuntimeVirtualGeometrySceneContext* previous_ = nullptr;
 };
+
+struct RuntimeVirtualGeometryStreamingState {
+    explicit RuntimeVirtualGeometryStreamingState(const std::uint64_t budget_bytes)
+        : resident_pool{budget_bytes} {}
+
+    render::Device* device = nullptr;
+    const CookedMeshCatalog* catalog = nullptr;
+    RuntimeGpuInstanceTable models;
+    RuntimeGpuVirtualGeometrySelector selector;
+    RuntimeGpuVirtualGeometryFeedback feedback;
+    RuntimeVirtualGeometryResidentPool resident_pool;
+};
+
+thread_local std::unique_ptr<RuntimeVirtualGeometryStreamingState> virtual_geometry_streaming_state;
 
 [[nodiscard]] world::GlobalPosition runtime_camera_global_position(
     const world::World& world,
@@ -99,6 +123,124 @@ private:
     return true;
 }
 
+[[nodiscard]] bool streamable_v7_virtual_geometry(
+    const std::span<const RenderMeshInstance> instances,
+    const CookedMeshCatalog& catalog
+) noexcept {
+    for (const auto& instance : instances) {
+        const auto* const source = catalog.find(instance.mesh);
+        if (source == nullptr) return false;
+        if (source->asset.virtual_geometry_proxies.hierarchy.nodes.empty()) continue;
+        if (source->runtime_generated || source->path.empty() ||
+            source->asset.version < render::mesh_asset_format_version_v7) {
+            return false;
+        }
+    }
+    return true;
+}
+
+[[nodiscard]] bool ensure_streaming_state(
+    render::Device& device,
+    const CookedMeshCatalog& catalog,
+    const std::uint64_t budget_bytes,
+    std::string* const diagnostics
+) {
+    if (!virtual_geometry_streaming_state ||
+        virtual_geometry_streaming_state->device != &device ||
+        virtual_geometry_streaming_state->catalog != &catalog) {
+        auto next = std::make_unique<RuntimeVirtualGeometryStreamingState>(budget_bytes);
+        if (!next->models.initialize(device, diagnostics) ||
+            !next->selector.initialize(device, diagnostics) ||
+            !next->feedback.initialize(device, diagnostics)) {
+            return false;
+        }
+        next->device = &device;
+        next->catalog = &catalog;
+        virtual_geometry_streaming_state = std::move(next);
+    } else if (!virtual_geometry_streaming_state->resident_pool.set_budget(budget_bytes)) {
+        virtual_geometry_streaming_state->resident_pool =
+            RuntimeVirtualGeometryResidentPool{budget_bytes};
+    }
+    if (diagnostics != nullptr) diagnostics->clear();
+    return true;
+}
+
+[[nodiscard]] bool materialize_cpu_virtual_geometry_scene(
+    RuntimeRenderResidentSceneBuildResult& result,
+    CookedMeshCatalog& catalog,
+    RuntimeGpuMeshletTablePlan& gpu_meshlet_plan,
+    const RuntimeVisibilityFrustum& frustum,
+    const world::GlobalPosition camera_global_position,
+    const RuntimeCameraView& camera,
+    const platform::WindowMetrics metrics
+) {
+    const auto selected = select_runtime_virtual_geometry_instances(
+        result.scene.meshes,
+        catalog.records(),
+        frustum,
+        camera_global_position,
+        camera.camera.vertical_fov_radians,
+        static_cast<float>(metrics.drawable_height)
+    );
+    if (!selected) {
+        result.scene = {};
+        result.diagnostics = selected.diagnostics;
+        return false;
+    }
+
+    auto selected_instances = selected.instances;
+    for (auto& instance : selected_instances) {
+        if (instance.geometry_node_index == render::virtual_geometry_invalid_node) continue;
+
+        const auto source_mesh = instance.mesh;
+        const auto node_index = instance.geometry_node_index;
+        const auto variant_id = runtime_virtual_geometry_variant_resource_id(source_mesh, node_index);
+        const auto* existing = catalog.find(variant_id);
+        if (existing == nullptr) {
+            const auto* const source = catalog.find(source_mesh);
+            if (source == nullptr || source->runtime_generated) {
+                result.scene = {};
+                result.diagnostics = "Runtime virtual geometry could not resolve its authored source mesh.";
+                return false;
+            }
+            auto variant = build_runtime_virtual_geometry_variant_asset(source->asset, node_index);
+            if (!variant) {
+                result.scene = {};
+                result.diagnostics = variant.diagnostics;
+                return false;
+            }
+            const auto bytes = variant_id.value.bytes();
+            std::copy(bytes.begin(), bytes.end(), variant.asset->stable_id.begin());
+            if (!catalog.upsert_runtime_record(CookedMeshRecord{
+                    .resource_id = variant_id,
+                    .path = {},
+                    .asset = std::move(*variant.asset),
+                    .runtime_generated = true,
+                }, &result.diagnostics)) {
+                result.scene = {};
+                return false;
+            }
+        } else if (!existing->runtime_generated) {
+            result.scene = {};
+            result.diagnostics = "Runtime virtual geometry variant collides with an authored mesh resource.";
+            return false;
+        }
+        if (!ensure_runtime_virtual_geometry_meshlet_alias(
+                gpu_meshlet_plan,
+                variant_id,
+                &result.diagnostics
+            )) {
+            result.scene = {};
+            return false;
+        }
+
+        instance.mesh = variant_id;
+        instance.geometry_node_index = render::virtual_geometry_invalid_node;
+    }
+    result.scene.meshes = std::move(selected_instances);
+    return true;
+}
+
 } // namespace
 
 bool CookedMeshCatalog::upsert_runtime_record(
@@ -137,6 +279,7 @@ RuntimeRenderResidentSceneBuildResult build_runtime_render_resident_scene_with_v
 ) {
     auto result = ::vice::runtime::build_runtime_render_resident_scene(world);
     if (!result || active_virtual_geometry_context == nullptr ||
+        active_virtual_geometry_context->device == nullptr ||
         active_virtual_geometry_context->catalog == nullptr ||
         active_virtual_geometry_context->gpu_meshlet_plan == nullptr ||
         result.scene.meshes.empty()) {
@@ -145,6 +288,7 @@ RuntimeRenderResidentSceneBuildResult build_runtime_render_resident_scene_with_v
 
     auto& catalog = *active_virtual_geometry_context->catalog;
     auto& gpu_meshlet_plan = *active_virtual_geometry_context->gpu_meshlet_plan;
+    auto& device = *active_virtual_geometry_context->device;
     const auto metrics = active_virtual_geometry_context->metrics;
     const float aspect = static_cast<float>(metrics.drawable_width) /
         static_cast<float>(std::max(1U, metrics.drawable_height));
@@ -167,70 +311,122 @@ RuntimeRenderResidentSceneBuildResult build_runtime_render_resident_scene_with_v
         return result;
     }
 
-    const auto selected = select_runtime_virtual_geometry_instances(
-        result.scene.meshes,
-        catalog.records(),
-        frustum,
-        camera_global_position,
-        camera.camera.vertical_fov_radians,
-        static_cast<float>(metrics.drawable_height)
-    );
-    if (!selected) {
-        result.scene = {};
-        result.diagnostics = selected.diagnostics;
+    if (!streamable_v7_virtual_geometry(result.scene.meshes, catalog)) {
+        materialize_cpu_virtual_geometry_scene(
+            result,
+            catalog,
+            gpu_meshlet_plan,
+            frustum,
+            camera_global_position,
+            camera,
+            metrics
+        );
         return result;
     }
 
-    auto selected_instances = selected.instances;
-    for (auto& instance : selected_instances) {
-        if (instance.geometry_node_index == render::virtual_geometry_invalid_node) continue;
+    const auto gpu_plan = build_runtime_gpu_virtual_geometry_plan(
+        result.scene.meshes,
+        catalog.records()
+    );
+    if (!gpu_plan) {
+        result.scene = {};
+        result.diagnostics = gpu_plan.diagnostics;
+        return result;
+    }
+    if (gpu_plan.plan.candidates.empty()) return result;
 
-        const auto source_mesh = instance.mesh;
-        const auto node_index = instance.geometry_node_index;
-        const auto variant_id = runtime_virtual_geometry_variant_resource_id(source_mesh, node_index);
-        const auto* existing = catalog.find(variant_id);
-        if (existing == nullptr) {
-            const auto* const source = catalog.find(source_mesh);
-            if (source == nullptr || source->runtime_generated) {
-                result.scene = {};
-                result.diagnostics = "Runtime virtual geometry could not resolve its authored source mesh.";
-                return result;
-            }
-            auto variant = build_runtime_virtual_geometry_variant_asset(source->asset, node_index);
-            if (!variant) {
-                result.scene = {};
-                result.diagnostics = variant.diagnostics;
-                return result;
-            }
-            const auto bytes = variant_id.value.bytes();
-            std::copy(bytes.begin(), bytes.end(), variant.asset->stable_id.begin());
-            if (!catalog.upsert_runtime_record(CookedMeshRecord{
-                    .resource_id = variant_id,
-                    .path = {},
-                    .asset = std::move(*variant.asset),
-                    .runtime_generated = true,
-                }, &result.diagnostics)) {
-                result.scene = {};
-                return result;
-            }
-        } else if (!existing->runtime_generated) {
+    if (!ensure_streaming_state(
+            device,
+            catalog,
+            active_virtual_geometry_context->resource_budgets.geometry_bytes,
+            &result.diagnostics
+        )) {
+        result.scene = {};
+        return result;
+    }
+    auto& streaming = *virtual_geometry_streaming_state;
+
+    std::vector<math::Mat4> camera_relative_models;
+    camera_relative_models.reserve(result.scene.meshes.size());
+    for (const auto& instance : result.scene.meshes) {
+        camera_relative_models.push_back(
+            runtime_model_matrix_relative_to(instance, camera_global_position)
+        );
+    }
+
+    auto commands = device.create_command_list();
+    if (!commands ||
+        !streaming.models.upload(*commands, camera_relative_models, &result.diagnostics) ||
+        !streaming.selector.select(
+            *commands,
+            gpu_plan.plan,
+            streaming.models.result(),
+            frustum,
+            camera.camera.vertical_fov_radians,
+            static_cast<float>(metrics.drawable_height),
+            runtime_virtual_geometry_default_max_error_pixels,
+            &result.diagnostics
+        ) || !streaming.feedback.capture(
+            *commands,
+            streaming.selector.result(),
+            &result.diagnostics
+        )) {
+        result.scene = {};
+        if (result.diagnostics.empty()) {
+            result.diagnostics = "Runtime virtual geometry could not encode GPU frontier feedback.";
+        }
+        return result;
+    }
+    const auto submission = device.submit(std::move(commands));
+    if (submission == render::invalid_submission || !device.wait_for_submission(submission)) {
+        result.scene = {};
+        result.diagnostics = "Runtime virtual geometry GPU frontier submission failed.";
+        return result;
+    }
+
+    const auto feedback = streaming.feedback.read(gpu_plan.plan);
+    if (!feedback) {
+        result.scene = {};
+        result.diagnostics = feedback.diagnostics;
+        return result;
+    }
+    auto streamed = build_runtime_virtual_geometry_submission(
+        result.scene.meshes,
+        catalog.records(),
+        gpu_plan.plan,
+        feedback,
+        streaming.resident_pool
+    );
+    if (!streamed) {
+        result.scene = {};
+        result.diagnostics = streamed.diagnostics;
+        return result;
+    }
+
+    for (auto& geometry : streamed.geometry) {
+        const auto* existing = catalog.find(geometry.resource_id);
+        if (existing != nullptr && !existing->runtime_generated) {
             result.scene = {};
-            result.diagnostics = "Runtime virtual geometry variant collides with an authored mesh resource.";
+            result.diagnostics = "Runtime streamed virtual geometry collides with an authored mesh resource.";
             return result;
         }
-        if (!ensure_runtime_virtual_geometry_meshlet_alias(
+        if (!catalog.upsert_runtime_record(CookedMeshRecord{
+                .resource_id = geometry.resource_id,
+                .path = {},
+                .asset = std::move(geometry.asset),
+                .runtime_generated = true,
+            }, &result.diagnostics) ||
+            !ensure_runtime_virtual_geometry_meshlet_alias(
                 gpu_meshlet_plan,
-                variant_id,
+                geometry.resource_id,
                 &result.diagnostics
             )) {
             result.scene = {};
             return result;
         }
-
-        instance.mesh = variant_id;
-        instance.geometry_node_index = render::virtual_geometry_invalid_node;
     }
-    result.scene.meshes = std::move(selected_instances);
+
+    result.scene.meshes = std::move(streamed.instances);
     return result;
 }
 
@@ -247,8 +443,10 @@ bool RuntimeSceneRenderer::render(
         return render_legacy(world, swapchain, metrics, clear_color, diagnostics);
     }
     RuntimeVirtualGeometrySceneContext context{
+        .device = state_->device,
         .catalog = &state_->catalog,
         .gpu_meshlet_plan = &state_->gpu_meshlet_plan,
+        .resource_budgets = state_->resource_budgets,
         .metrics = metrics,
     };
     const RuntimeVirtualGeometrySceneScope scope{context};
