@@ -239,22 +239,22 @@ void vice_runtime_virtual_geometry_select_cs(uint3 dispatch_id : SV_DispatchThre
 
     uint node_output_index = 0U;
     InterlockedAdd(selected_node_count[0], 1U, node_output_index);
-    selected_node_requests[node_output_index] = (VirtualGeometryNodeRequest) {
-        candidate.scene_instance_index,
-        candidate.mesh_index,
-        candidate.local_node_index,
-        0U
-    };
+    VirtualGeometryNodeRequest node_request;
+    node_request.scene_instance_index = candidate.scene_instance_index;
+    node_request.mesh_index = candidate.mesh_index;
+    node_request.node_index = candidate.local_node_index;
+    node_request.reserved = 0U;
+    selected_node_requests[node_output_index] = node_request;
 
     if (node.child_count == 0U && node.page_count == 1U) {
         uint page_output_index = 0U;
         InterlockedAdd(page_request_count[0], 1U, page_output_index);
-        page_requests[page_output_index] = (VirtualGeometryPageRequest) {
-            candidate.scene_instance_index,
-            candidate.mesh_index,
-            candidate.local_node_index,
-            node.page_offset
-        };
+        VirtualGeometryPageRequest page_request;
+        page_request.scene_instance_index = candidate.scene_instance_index;
+        page_request.mesh_index = candidate.mesh_index;
+        page_request.node_index = candidate.local_node_index;
+        page_request.page_index = node.page_offset;
+        page_requests[page_output_index] = page_request;
     }
 }
 )";
