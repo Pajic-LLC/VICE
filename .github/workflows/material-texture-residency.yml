@@ -1,0 +1,34 @@
+name: Apply material texture residency
+
+on:
+  push:
+    branches:
+      - feat/250-resource-budgets
+    paths:
+      - scripts/apply_material_texture_residency.py
+      - .github/workflows/material-texture-residency.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/250-resource-budgets
+          fetch-depth: 0
+      - name: Apply guarded material residency patch
+        run: python3 scripts/apply_material_texture_residency.py
+      - name: Remove one-shot helpers
+        run: |
+          rm scripts/apply_material_texture_residency.py
+          rm .github/workflows/material-texture-residency.yml
+      - name: Commit material residency integration
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add engine/runtime/src/material_pipeline.cpp scripts/apply_material_texture_residency.py .github/workflows/material-texture-residency.yml
+          git commit -m "Make material textures demand-resident (#250)"
+          git push origin HEAD:feat/250-resource-budgets
