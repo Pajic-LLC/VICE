@@ -6,6 +6,7 @@
 #include <vice/world/persistent_id.hpp>
 #include <vice/world/resource.hpp>
 
+#include <array>
 #include <cassert>
 #include <cstddef>
 #include <cstdint>
