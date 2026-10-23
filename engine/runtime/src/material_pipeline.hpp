@@ -1,8 +1,9 @@
 #pragma once
 
+#include "texture_pipeline.hpp"
+
 #include <vice/render/rhi.hpp>
 #include <vice/runtime/scene.hpp>
-#include <vice/runtime/texture.hpp>
 
 #include <cstddef>
 #include <cstdint>
