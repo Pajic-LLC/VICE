@@ -27,6 +27,7 @@ target_sources(
     src/telemetry.cpp
     src/texture_asset.cpp
     src/virtual_geometry_proxy.cpp
+    src/virtual_texture_archive.cpp
 )
 target_link_libraries(vice_render PUBLIC VICE::Core VICE::Platform)
 target_compile_features(vice_render PUBLIC cxx_std_23)

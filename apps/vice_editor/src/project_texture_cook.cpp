@@ -1,5 +1,6 @@
 #include <vice/editor/project_texture_cook.hpp>
 
+#include <vice/render/virtual_texture_archive.hpp>
 #include <vice/tools/texture_cooker.hpp>
 
 #include <algorithm>
@@ -136,6 +137,12 @@ ProjectTextureCookResult cook_project_textures(const ProjectSession& session) {
             result.diagnostics = "Cooked project texture failed validation: " + decoded.diagnostics;
             return result;
         }
+        const auto tile_archive = render::encode_virtual_texture_archive(*decoded.asset);
+        if (!tile_archive) {
+            result.diagnostics = "Cooked project virtual texture archive failed validation: " +
+                tile_archive.diagnostics;
+            return result;
+        }
 
         auto relative = std::filesystem::relative(source_path, asset_root, error);
         if (error) {
@@ -148,6 +155,17 @@ ProjectTextureCookResult cook_project_textures(const ProjectSession& session) {
         if (!tools::texture_cooker::write_asset(output_path, cooked.bytes, &write_diagnostics)) {
             result.diagnostics = "Could not write cooked project texture `" + path_text(output_path) + "`: " +
                 write_diagnostics;
+            return result;
+        }
+        auto tile_output_path = output_path;
+        tile_output_path.replace_extension(".vtilec");
+        if (!tools::texture_cooker::write_asset(
+                tile_output_path,
+                tile_archive.bytes,
+                &write_diagnostics
+            )) {
+            result.diagnostics = "Could not write cooked virtual texture archive `" +
+                path_text(tile_output_path) + "`: " + write_diagnostics;
             return result;
         }
 

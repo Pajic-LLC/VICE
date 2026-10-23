@@ -1,3 +1,4 @@
+#include <vice/render/virtual_texture_archive.hpp>
 #include <vice/tools/texture_cooker.hpp>
 
 #include <cstddef>
@@ -79,8 +80,25 @@ int main(int argc, char** argv) {
         std::cerr << cooked.diagnostics << '\n';
         return 1;
     }
+    const auto decoded = vice::render::decode_texture_asset(cooked.bytes);
+    if (!decoded.asset.has_value()) {
+        std::cerr << decoded.diagnostics << '\n';
+        return 1;
+    }
+    const auto archive = vice::render::encode_virtual_texture_archive(*decoded.asset);
+    if (!archive) {
+        std::cerr << archive.diagnostics << '\n';
+        return 1;
+    }
+
     std::string diagnostics;
     if (!vice::tools::texture_cooker::write_asset(output_path, cooked.bytes, &diagnostics)) {
+        std::cerr << diagnostics << '\n';
+        return 1;
+    }
+    auto tile_output = output_path;
+    tile_output.replace_extension(".vtilec");
+    if (!vice::tools::texture_cooker::write_asset(tile_output, archive.bytes, &diagnostics)) {
         std::cerr << diagnostics << '\n';
         return 1;
     }
