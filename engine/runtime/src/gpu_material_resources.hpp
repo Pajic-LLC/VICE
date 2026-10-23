@@ -3,6 +3,7 @@
 #include "texture_pipeline.hpp"
 
 #include <vice/runtime/gpu_material_table.hpp>
+#include <vice/runtime/virtual_texture_sampling.hpp>
 
 #include <memory>
 #include <span>
@@ -43,6 +44,7 @@ public:
     );
 
     [[nodiscard]] RuntimeGpuMaterialResourceTableView view() const noexcept;
+    [[nodiscard]] std::span<const RuntimeGpuMaterialRecord> material_records() const noexcept;
 
 private:
     void clear() noexcept;
@@ -50,6 +52,11 @@ private:
     std::vector<render::Texture*> textures_;
     std::vector<std::unique_ptr<render::Sampler>> owned_samplers_;
     std::vector<render::Sampler*> samplers_;
+    std::vector<RuntimeGpuMaterialRecord> material_records_;
+    std::unique_ptr<RuntimeVirtualTextureResidentPool> virtual_resident_pool_;
+    RuntimeVirtualTextureSamplingPlan virtual_sampling_plan_;
+    std::unique_ptr<render::Texture> virtual_texture_descriptors_;
+    std::unique_ptr<render::Texture> virtual_texture_pages_;
 };
 
 } // namespace vice::runtime::detail

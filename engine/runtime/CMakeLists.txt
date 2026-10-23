@@ -33,6 +33,8 @@ add_library(
     src/virtual_geometry_gpu_arena.cpp
     src/virtual_geometry_streaming.cpp
     src/virtual_geometry_submission.cpp
+    src/virtual_texture_material_sampling.cpp
+    src/virtual_texture_sampling.cpp
     src/virtual_texture_streaming.cpp
     src/visibility.cpp
 )

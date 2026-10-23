@@ -16,6 +16,8 @@ namespace vice::runtime {
 
 inline constexpr std::uint32_t runtime_gpu_resource_unassigned =
     std::numeric_limits<std::uint32_t>::max();
+inline constexpr std::uint32_t runtime_gpu_virtual_texture_flag = 0x80000000U;
+inline constexpr std::uint32_t runtime_gpu_virtual_texture_index_mask = 0x7FFFFFFFU;
 
 enum class RuntimeGpuMaterialTextureChannel : std::uint8_t {
     base_color,
