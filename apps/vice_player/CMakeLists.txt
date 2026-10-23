@@ -1,6 +1,7 @@
 add_executable(
   vice_player
   app.cpp
+  package_metadata_slot.cpp
 )
 
 target_link_libraries(
