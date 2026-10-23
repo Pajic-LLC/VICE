@@ -332,14 +332,28 @@ CookResult cook(const MeshSource& source) {
         return result;
     }
 
+    const auto page_build = render::build_virtual_geometry_pages(meshlets);
+    if (!page_build) {
+        result.diagnostics = "Mesh source could not be partitioned into deterministic virtual geometry pages: " +
+            page_build.diagnostics;
+        return result;
+    }
+    const auto& pages = *page_build.page_table;
+    if (pages.pages.empty() || pages.pages.size() > std::numeric_limits<std::uint32_t>::max()) {
+        result.diagnostics = "Virtual geometry page metadata exceeds the 32-bit cooked mesh contract.";
+        return result;
+    }
+
+    constexpr std::size_t meshlet_descriptor_bytes = sizeof(std::uint32_t) * 4U + sizeof(float) * 4U;
+    constexpr std::size_t page_descriptor_bytes = sizeof(std::uint32_t) * 6U + sizeof(float) * 4U;
     std::vector<std::byte> payload;
-    const std::size_t descriptor_bytes = meshlets.meshlets.size() * 32U;
     payload.reserve(
         source.vertices.size() * sizeof(render::MeshVertex) +
         source.indices.size() * sizeof(std::uint32_t) +
-        descriptor_bytes +
+        meshlets.meshlets.size() * meshlet_descriptor_bytes +
         meshlets.vertex_indices.size() * sizeof(std::uint32_t) +
-        meshlets.triangle_indices.size()
+        meshlets.triangle_indices.size() +
+        pages.pages.size() * page_descriptor_bytes
     );
     for (const auto& vertex : source.vertices) {
         for (const float component : vertex.position) append_f32(payload, component);
@@ -360,11 +374,23 @@ CookResult cook(const MeshSource& source) {
     }
     for (const std::uint32_t index : meshlets.vertex_indices) append_u32(payload, index);
     for (const std::uint8_t index : meshlets.triangle_indices) append_u8(payload, index);
+    for (const auto& page : pages.pages) {
+        append_u32(payload, page.meshlet_offset);
+        append_u32(payload, page.meshlet_count);
+        append_u32(payload, page.vertex_index_offset);
+        append_u32(payload, page.vertex_index_count);
+        append_u32(payload, page.triangle_index_offset);
+        append_u32(payload, page.triangle_index_count);
+        append_f32(payload, page.bounds.center[0]);
+        append_f32(payload, page.bounds.center[1]);
+        append_f32(payload, page.bounds.center[2]);
+        append_f32(payload, page.bounds.radius);
+    }
 
     result.source_fingerprint = fingerprint(payload);
-    constexpr std::size_t v4_header_bytes = render::mesh_asset_magic_size +
-        sizeof(std::uint32_t) * 6U + sizeof(std::uint64_t) + render::mesh_stable_id_size;
-    result.bytes.reserve(v4_header_bytes + payload.size());
+    constexpr std::size_t v5_header_bytes = render::mesh_asset_magic_size +
+        sizeof(std::uint32_t) * 7U + sizeof(std::uint64_t) + render::mesh_stable_id_size;
+    result.bytes.reserve(v5_header_bytes + payload.size());
     constexpr std::string_view magic = "VICEMESH";
     for (const char value : magic) result.bytes.push_back(static_cast<std::byte>(value));
     append_u32(result.bytes, render::mesh_asset_format_version);
@@ -375,6 +401,7 @@ CookResult cook(const MeshSource& source) {
     append_u32(result.bytes, static_cast<std::uint32_t>(meshlets.meshlets.size()));
     append_u32(result.bytes, static_cast<std::uint32_t>(meshlets.vertex_indices.size()));
     append_u32(result.bytes, static_cast<std::uint32_t>(meshlets.triangle_indices.size()));
+    append_u32(result.bytes, static_cast<std::uint32_t>(pages.pages.size()));
     result.bytes.insert(result.bytes.end(), payload.begin(), payload.end());
 
     const auto decoded = render::decode_mesh_asset(result.bytes);
@@ -386,6 +413,11 @@ CookResult cook(const MeshSource& source) {
     if (decoded.asset->meshlet_geometry != meshlets) {
         result.bytes.clear();
         result.diagnostics = "Cooked mesh cluster metadata did not round-trip deterministically.";
+        return result;
+    }
+    if (decoded.asset->virtual_geometry_pages != pages) {
+        result.bytes.clear();
+        result.diagnostics = "Cooked virtual geometry page metadata did not round-trip deterministically.";
         return result;
     }
 
