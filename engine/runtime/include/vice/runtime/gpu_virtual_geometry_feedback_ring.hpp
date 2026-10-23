@@ -11,6 +11,8 @@
 
 namespace vice::runtime {
 
+inline constexpr std::uint32_t runtime_gpu_virtual_geometry_feedback_lane_count = 2U;
+
 struct RuntimeGpuVirtualGeometryFeedbackTicket {
     std::uint32_t slot = 0xFFFFFFFFU;
     std::uint64_t serial = 0U;
@@ -20,7 +22,7 @@ struct RuntimeGpuVirtualGeometryFeedbackTicket {
     }
 };
 
-struct RuntimeGpuVirtualGeometryFeedbackEncodeResult {
+struct RuntimeGpuVirtualGeometryFeedbackAcquireResult {
     std::optional<RuntimeGpuVirtualGeometryFeedbackTicket> ticket;
     std::string diagnostics;
 
@@ -72,11 +74,16 @@ public:
         std::span<const RenderMeshInstance> current_instances
     );
 
-    [[nodiscard]] RuntimeGpuVirtualGeometryFeedbackEncodeResult encode(
-        render::CommandList& commands,
-        const RuntimeGpuVirtualGeometrySelectionResult& selection,
+    [[nodiscard]] RuntimeGpuVirtualGeometryFeedbackAcquireResult acquire(
         const RuntimeGpuVirtualGeometryPlan& plan,
         std::span<const RenderMeshInstance> instances
+    );
+
+    [[nodiscard]] bool capture(
+        render::CommandList& commands,
+        const RuntimeGpuVirtualGeometrySelectionResult& selection,
+        RuntimeGpuVirtualGeometryFeedbackTicket ticket,
+        std::string* diagnostics = nullptr
     );
 
     [[nodiscard]] bool commit(
@@ -84,6 +91,8 @@ public:
         render::SubmissionId submission,
         std::string* diagnostics = nullptr
     );
+
+    void cancel(RuntimeGpuVirtualGeometryFeedbackTicket ticket) noexcept;
 
     [[nodiscard]] std::uint32_t in_flight_count() const noexcept;
 
