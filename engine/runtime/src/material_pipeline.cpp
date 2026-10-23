@@ -357,10 +357,10 @@ struct RuntimeMaterialLibrary::State {
         std::unique_ptr<render::ShaderModule> fragment_shader;
         std::unique_ptr<render::GraphicsPipeline> pipeline;
         std::unique_ptr<render::Buffer> constants;
-        render::Texture* base_color_texture = nullptr;
-        render::Texture* normal_texture = nullptr;
-        render::Texture* orm_texture = nullptr;
-        render::Texture* emissive_texture = nullptr;
+        world::ResourceId base_color_texture{};
+        world::ResourceId normal_texture{};
+        world::ResourceId orm_texture{};
+        world::ResourceId emissive_texture{};
         std::unique_ptr<render::Sampler> sampler;
         std::uint32_t directional_shadow_cascade_count = 0;
         std::uint32_t shadow_texture_binding_base = 1U;
@@ -395,7 +395,7 @@ bool RuntimeMaterialLibrary::initialize(
         set_diagnostics(diagnostics, state_->catalog.diagnostics());
         return false;
     }
-    if (!state_->textures.initialize(device, content_root, diagnostics)) return false;
+    if (!state_->textures.initialize(device, content_root, diagnostics, false)) return false;
 
     for (const auto& record : state_->catalog.records()) {
         const bool textured = record.asset.version >= render::render_material_asset_format_version_v2;
@@ -407,21 +407,19 @@ bool RuntimeMaterialLibrary::initialize(
             const world::ResourceId normal_id{world::PersistentId{record.asset.normal_texture}};
             const world::ResourceId orm_id{world::PersistentId{record.asset.orm_texture}};
             const world::ResourceId emissive_id{world::PersistentId{record.asset.emissive_texture}};
-            render::Texture* const base_color_texture = state_->textures.find(base_color_id);
-            render::Texture* const normal_texture = state_->textures.find(normal_id);
-            render::Texture* const orm_texture = state_->textures.find(orm_id);
-            render::Texture* const emissive_texture = state_->textures.find(emissive_id);
-            if (base_color_texture == nullptr || normal_texture == nullptr ||
-                orm_texture == nullptr || emissive_texture == nullptr) {
+            if (state_->textures.catalog().find(base_color_id) == nullptr ||
+                state_->textures.catalog().find(normal_id) == nullptr ||
+                state_->textures.catalog().find(orm_id) == nullptr ||
+                state_->textures.catalog().find(emissive_id) == nullptr) {
                 set_diagnostics(diagnostics, "Render material `" + record.resource_id.value.to_string() +
                     "` references one or more missing V4 GPU-scene PBR textures.");
                 return false;
             }
             state_->materials.emplace(record.resource_id, State::MaterialGpu{
-                .base_color_texture = base_color_texture,
-                .normal_texture = normal_texture,
-                .orm_texture = orm_texture,
-                .emissive_texture = emissive_texture,
+                .base_color_texture = base_color_id,
+                .normal_texture = normal_id,
+                .orm_texture = orm_id,
+                .emissive_texture = emissive_id,
             });
             continue;
         }
@@ -475,15 +473,15 @@ bool RuntimeMaterialLibrary::initialize(
             return false;
         }
 
-        render::Texture* base_color_texture = nullptr;
-        render::Texture* normal_texture = nullptr;
-        render::Texture* orm_texture = nullptr;
-        render::Texture* emissive_texture = nullptr;
+        world::ResourceId base_color_texture{};
+        world::ResourceId normal_texture{};
+        world::ResourceId orm_texture{};
+        world::ResourceId emissive_texture{};
         std::unique_ptr<render::Sampler> sampler;
         if (textured) {
             const world::ResourceId texture_id{world::PersistentId{record.asset.base_color_texture}};
-            base_color_texture = state_->textures.find(texture_id);
-            if (base_color_texture == nullptr) {
+            base_color_texture = texture_id;
+            if (state_->textures.catalog().find(texture_id) == nullptr) {
                 set_diagnostics(diagnostics, "Render material `" + record.resource_id.value.to_string() +
                     "` references missing cooked texture `" + texture_id.value.to_string() + "`.");
                 return false;
@@ -492,10 +490,12 @@ bool RuntimeMaterialLibrary::initialize(
                 const world::ResourceId normal_id{world::PersistentId{record.asset.normal_texture}};
                 const world::ResourceId orm_id{world::PersistentId{record.asset.orm_texture}};
                 const world::ResourceId emissive_id{world::PersistentId{record.asset.emissive_texture}};
-                normal_texture = state_->textures.find(normal_id);
-                orm_texture = state_->textures.find(orm_id);
-                emissive_texture = state_->textures.find(emissive_id);
-                if (normal_texture == nullptr || orm_texture == nullptr || emissive_texture == nullptr) {
+                normal_texture = normal_id;
+                orm_texture = orm_id;
+                emissive_texture = emissive_id;
+                if (state_->textures.catalog().find(normal_id) == nullptr ||
+                    state_->textures.catalog().find(orm_id) == nullptr ||
+                    state_->textures.catalog().find(emissive_id) == nullptr) {
                     set_diagnostics(diagnostics, "Render material `" + record.resource_id.value.to_string() +
                         "` references one or more missing V3 PBR textures.");
                     return false;
@@ -561,13 +561,16 @@ RuntimeMaterialBinding RuntimeMaterialLibrary::find(
     if (state_ == nullptr) return {};
     const auto found = state_->materials.find(resource_id);
     if (found == state_->materials.end()) return {};
+    const auto resolve = [&](const world::ResourceId texture, const RuntimeMaterialTextureChannel channel) {
+        return texture.valid() ? state_->textures.resolve(texture, channel) : nullptr;
+    };
     return RuntimeMaterialBinding{
         .pipeline = found->second.pipeline.get(),
         .constants = found->second.constants.get(),
-        .base_color_texture = found->second.base_color_texture,
-        .normal_texture = found->second.normal_texture,
-        .orm_texture = found->second.orm_texture,
-        .emissive_texture = found->second.emissive_texture,
+        .base_color_texture = resolve(found->second.base_color_texture, RuntimeMaterialTextureChannel::base_color),
+        .normal_texture = resolve(found->second.normal_texture, RuntimeMaterialTextureChannel::normal),
+        .orm_texture = resolve(found->second.orm_texture, RuntimeMaterialTextureChannel::orm),
+        .emissive_texture = resolve(found->second.emissive_texture, RuntimeMaterialTextureChannel::emissive),
         .sampler = found->second.sampler.get(),
         .constants_size = found->second.constants != nullptr ? sizeof(MaterialConstants) : 0U,
         .directional_shadow_cascade_count = found->second.directional_shadow_cascade_count,
@@ -578,8 +581,38 @@ RuntimeMaterialBinding RuntimeMaterialLibrary::find(
     };
 }
 
+bool RuntimeMaterialLibrary::set_texture_residency(
+    const std::span<const world::ResourceId> resources,
+    std::string* const diagnostics
+) {
+    if (state_ == nullptr) {
+        set_diagnostics(diagnostics, "Runtime material library state is unavailable.");
+        return false;
+    }
+    return state_->textures.set_residency(resources, diagnostics);
+}
+
+render::Texture* RuntimeMaterialLibrary::resolve_texture(
+    const world::ResourceId resource_id,
+    const RuntimeMaterialTextureChannel channel
+) const noexcept {
+    return state_ != nullptr ? state_->textures.resolve(resource_id, channel) : nullptr;
+}
+
 const CookedRenderMaterialCatalog& RuntimeMaterialLibrary::catalog() const noexcept {
     return state_->catalog;
+}
+
+const CookedTextureCatalog& RuntimeMaterialLibrary::texture_catalog() const noexcept {
+    return state_->textures.catalog();
+}
+
+std::uint64_t RuntimeMaterialLibrary::texture_residency_generation() const noexcept {
+    return state_ != nullptr ? state_->textures.residency_generation() : 0U;
+}
+
+std::uint64_t RuntimeMaterialLibrary::resident_texture_bytes() const noexcept {
+    return state_ != nullptr ? state_->textures.resident_bytes() : 0U;
 }
 
 } // namespace detail
