@@ -125,39 +125,29 @@ jobs:
             exit $LASTEXITCODE
           }
 
-          $bytes = [System.IO.File]::ReadAllBytes($target)
-          $start = [System.Text.Encoding]::ASCII.GetBytes("VICEPKG1")
-          $end = [System.Text.Encoding]::ASCII.GetBytes("1GKPECIV")
-          $matches = @()
-          for ($offset = 0; $offset -le $bytes.Length - 320; $offset++) {
-            $startMatch = $true
-            for ($index = 0; $index -lt 8; $index++) {
-              if ($bytes[$offset + $index] -ne $start[$index]) {
-                $startMatch = $false
-                break
-              }
-            }
-            if (-not $startMatch) {
-              continue
-            }
+          $env:VICE_SIGN_TEST = $target
+          @'
+          import os
+          from pathlib import Path
 
-            $endMatch = $true
-            for ($index = 0; $index -lt 8; $index++) {
-              if ($bytes[$offset + 312 + $index] -ne $end[$index]) {
-                $endMatch = $false
-                break
-              }
-            }
-            if ($endMatch) {
-              $matches += $offset
-            }
+          path = Path(os.environ["VICE_SIGN_TEST"])
+          data = bytearray(path.read_bytes())
+          start = b"VICEPKG1"
+          end = b"1GKPECIV"
+          matches = [
+              index
+              for index in range(0, len(data) - 319)
+              if data[index:index + 8] == start
+              and data[index + 312:index + 320] == end
+          ]
+          if len(matches) != 1:
+              raise SystemExit(f"expected one VICE package record, found {len(matches)}")
+          data[matches[0] + 20] ^= 1
+          path.write_bytes(data)
+          '@ | python -
+          if ($LASTEXITCODE -ne 0) {
+            exit $LASTEXITCODE
           }
-          if ($matches.Count -ne 1) {
-            throw "Expected one VICE package record, found $($matches.Count)."
-          }
-
-          $bytes[$matches[0] + 20] = $bytes[$matches[0] + 20] -bxor 1
-          [System.IO.File]::WriteAllBytes($target, $bytes)
 
           & $signtool.FullName verify /pa /all /v $target
           if ($LASTEXITCODE -eq 0) {
