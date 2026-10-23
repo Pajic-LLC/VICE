@@ -337,6 +337,12 @@ if(VICE_BUILD_TOOLS)
   vice_enable_warnings(vice_mesh_asset_tests)
   add_test(NAME vice_mesh_asset_tests COMMAND vice_mesh_asset_tests)
 
+  add_executable(vice_mesh_asset_v5_tests mesh_asset_v5_tests.cpp)
+  target_link_libraries(vice_mesh_asset_v5_tests PRIVATE VICE::MeshCooker VICE::Render)
+  target_compile_features(vice_mesh_asset_v5_tests PRIVATE cxx_std_23)
+  vice_enable_warnings(vice_mesh_asset_v5_tests)
+  add_test(NAME vice_mesh_asset_v5_tests COMMAND vice_mesh_asset_v5_tests)
+
   if(VICE_ENABLE_JOLT_RIGID_BODY)
     add_executable(vice_collision_cooker_tests collision_cooker_tests.cpp)
     target_link_libraries(vice_collision_cooker_tests PRIVATE VICE::CollisionCooker)
