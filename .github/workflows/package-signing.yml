@@ -79,14 +79,13 @@ jobs:
             exit 1
           fi
 
-      - name: Sign and tamper Windows package
+      - name: Prepare Windows signing certificate
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
 
           $player = Resolve-Path "build/apps/vice_player/Release/vice_player.exe"
-          $signer = Resolve-Path "build/tools/package_signer/Release/vice_package_signer.exe"
           $target = Join-Path $PWD "build/vice-sign-test.exe"
           Copy-Item $player $target -Force
 
@@ -111,21 +110,34 @@ jobs:
           $root.Add($cert)
           $root.Close()
 
+          "VICE_SIGN_TEST=$target" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "SIGNTOOL_PATH=$($signtool.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "CERT_SHA1=$($cert.Thumbprint)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Sign Windows package
+        if: runner.os == 'Windows'
+        timeout-minutes: 2
+        shell: pwsh
+        run: |
+          $signer = Resolve-Path "build/tools/package_signer/Release/vice_package_signer.exe"
           & $signer `
-            --executable $target `
+            --executable $env:VICE_SIGN_TEST `
             --stamp-asset com.pajic.vice `
-            --signtool $signtool.FullName `
-            --certificate-sha1 $cert.Thumbprint
+            --signtool $env:SIGNTOOL_PATH `
+            --certificate-sha1 $env:CERT_SHA1
           if ($LASTEXITCODE -ne 0) {
             exit $LASTEXITCODE
           }
 
-          & $signtool.FullName verify /pa /all /v $target
+      - name: Verify and tamper Windows package
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          & $env:SIGNTOOL_PATH verify /pa /all /v $env:VICE_SIGN_TEST
           if ($LASTEXITCODE -ne 0) {
             exit $LASTEXITCODE
           }
 
-          $env:VICE_SIGN_TEST = $target
           @'
           import os
           from pathlib import Path
@@ -149,7 +161,7 @@ jobs:
             exit $LASTEXITCODE
           }
 
-          & $signtool.FullName verify /pa /all /v $target
+          & $env:SIGNTOOL_PATH verify /pa /all /v $env:VICE_SIGN_TEST
           if ($LASTEXITCODE -eq 0) {
             throw "Tampered Windows package still passed Authenticode verification."
           }
