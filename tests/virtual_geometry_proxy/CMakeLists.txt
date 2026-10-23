@@ -1,0 +1,11 @@
+add_executable(
+  vice_virtual_geometry_proxy_tests
+  virtual_geometry_proxy_tests.cpp
+)
+target_link_libraries(vice_virtual_geometry_proxy_tests PRIVATE VICE::Render)
+target_compile_features(vice_virtual_geometry_proxy_tests PRIVATE cxx_std_23)
+vice_enable_warnings(vice_virtual_geometry_proxy_tests)
+add_test(
+  NAME vice_virtual_geometry_proxy_tests
+  COMMAND vice_virtual_geometry_proxy_tests
+)
