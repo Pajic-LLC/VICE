@@ -2,6 +2,7 @@
 #include <vice/render/meshlet.hpp>
 #include <vice/tools/mesh_cooker.hpp>
 
+#include <algorithm>
 #include <bit>
 #include <cassert>
 #include <cmath>
@@ -17,8 +18,8 @@ namespace {
 
 constexpr std::uint64_t fnv_offset_basis = 14'695'981'039'346'656'037ULL;
 constexpr std::uint64_t fnv_prime = 1'099'511'628'211ULL;
-constexpr std::size_t mesh_v4_header_size = vice::render::mesh_asset_magic_size +
-    sizeof(std::uint32_t) * 6U + sizeof(std::uint64_t) + vice::render::mesh_stable_id_size;
+constexpr std::size_t mesh_v5_header_size = vice::render::mesh_asset_magic_size +
+    sizeof(std::uint32_t) * 7U + sizeof(std::uint64_t) + vice::render::mesh_stable_id_size;
 constexpr std::size_t mesh_fingerprint_offset = vice::render::mesh_asset_magic_size +
     sizeof(std::uint32_t) * 3U;
 constexpr std::size_t meshlet_descriptor_bytes = sizeof(std::uint32_t) * 4U + sizeof(float) * 4U;
@@ -182,22 +183,23 @@ triangle 1 2 3
     assert(render::valid(parsed_v1.source->stable_id));
     assert(std::abs(parsed_v1.source->vertices[0].normal[1]) > 0.1F);
 
-    const auto cooked_v4 = tools::mesh_cooker::cook(*parsed_v1.source);
-    const auto cooked_v4_repeat = tools::mesh_cooker::cook(*parsed_v1.source);
-    assert(cooked_v4.success);
-    assert(cooked_v4_repeat.success);
-    assert(cooked_v4.bytes == cooked_v4_repeat.bytes);
-    const auto decoded_v4 = render::decode_mesh_asset(cooked_v4.bytes);
-    assert(decoded_v4.asset.has_value());
-    assert(decoded_v4.asset->version == render::mesh_asset_format_version_v4);
-    assert(decoded_v4.asset->stable_id == parsed_v1.source->stable_id);
-    assert(decoded_v4.asset->vertices.size() == 4U);
-    assert(!decoded_v4.asset->meshlet_geometry.meshlets.empty());
-    assert(reconstruct_meshlet_indices(decoded_v4.asset->meshlet_geometry) ==
+    const auto cooked_v5 = tools::mesh_cooker::cook(*parsed_v1.source);
+    const auto cooked_v5_repeat = tools::mesh_cooker::cook(*parsed_v1.source);
+    assert(cooked_v5.success);
+    assert(cooked_v5_repeat.success);
+    assert(cooked_v5.bytes == cooked_v5_repeat.bytes);
+    const auto decoded_v5 = render::decode_mesh_asset(cooked_v5.bytes);
+    assert(decoded_v5.asset.has_value());
+    assert(decoded_v5.asset->version == render::mesh_asset_format_version_v5);
+    assert(decoded_v5.asset->stable_id == parsed_v1.source->stable_id);
+    assert(decoded_v5.asset->vertices.size() == 4U);
+    assert(!decoded_v5.asset->meshlet_geometry.meshlets.empty());
+    assert(!decoded_v5.asset->virtual_geometry_pages.pages.empty());
+    assert(reconstruct_meshlet_indices(decoded_v5.asset->meshlet_geometry) ==
         parsed_v1.source->indices);
     assert_meshlet_bounds_contain_vertices(
-        decoded_v4.asset->vertices,
-        decoded_v4.asset->meshlet_geometry
+        decoded_v5.asset->vertices,
+        decoded_v5.asset->meshlet_geometry
     );
 
     constexpr std::string_view source_v2 = R"(
@@ -218,11 +220,12 @@ triangle 0 1 2
     assert(cooked_surface.success);
     const auto decoded_surface = render::decode_mesh_asset(cooked_surface.bytes);
     assert(decoded_surface.asset.has_value());
-    assert(decoded_surface.asset->version == render::mesh_asset_format_version_v4);
+    assert(decoded_surface.asset->version == render::mesh_asset_format_version_v5);
     assert(nearly_equal(decoded_surface.asset->vertices[2].uv[1], 1.0F));
     assert(nearly_equal(decoded_surface.asset->vertices[0].normal[1], 1.0F));
     assert(reconstruct_meshlet_indices(decoded_surface.asset->meshlet_geometry) ==
         parsed_v2.source->indices);
+    assert(decoded_surface.asset->virtual_geometry_pages.pages.size() == 1U);
 
     const auto legacy_v1 = legacy_mesh(
         render::mesh_asset_format_version_v1,
@@ -237,6 +240,7 @@ triangle 0 1 2
     assert(nearly_equal(decoded_legacy_v1.asset->vertices[0].normal[1], 1.0F));
     assert(nearly_equal(decoded_legacy_v1.asset->vertices[0].uv[0], 0.0F));
     assert(decoded_legacy_v1.asset->meshlet_geometry.meshlets.empty());
+    assert(decoded_legacy_v1.asset->virtual_geometry_pages.pages.empty());
 
     const auto legacy_v2 = legacy_mesh(
         render::mesh_asset_format_version_v2,
@@ -249,6 +253,7 @@ triangle 0 1 2
     assert(decoded_legacy_v2.asset->version == render::mesh_asset_format_version_v2);
     assert(decoded_legacy_v2.asset->stable_id == parsed_v1.source->stable_id);
     assert(decoded_legacy_v2.asset->meshlet_geometry.meshlets.empty());
+    assert(decoded_legacy_v2.asset->virtual_geometry_pages.pages.empty());
 
     const auto legacy_v3 = legacy_mesh(
         render::mesh_asset_format_version_v3,
@@ -261,20 +266,21 @@ triangle 0 1 2
     assert(decoded_legacy_v3.asset->version == render::mesh_asset_format_version_v3);
     assert(decoded_legacy_v3.asset->stable_id == parsed_v1.source->stable_id);
     assert(decoded_legacy_v3.asset->meshlet_geometry.meshlets.empty());
+    assert(decoded_legacy_v3.asset->virtual_geometry_pages.pages.empty());
     assert(nearly_equal(
         decoded_legacy_v3.asset->vertices[0].normal[1],
         parsed_v1.source->vertices[0].normal[1]
     ));
 
-    auto corrupted = cooked_v4.bytes;
+    auto corrupted = cooked_v5.bytes;
     corrupted.back() ^= std::byte{0x01U};
     assert(!render::decode_mesh_asset(corrupted).asset.has_value());
 
-    auto semantic_corruption = cooked_v4.bytes;
-    const auto& cooked_geometry = decoded_v4.asset->meshlet_geometry;
-    const std::size_t local_triangle_stream_offset = mesh_v4_header_size +
-        decoded_v4.asset->vertices.size() * sizeof(render::MeshVertex) +
-        decoded_v4.asset->indices.size() * sizeof(std::uint32_t) +
+    auto semantic_corruption = cooked_v5.bytes;
+    const auto& cooked_geometry = decoded_v5.asset->meshlet_geometry;
+    const std::size_t local_triangle_stream_offset = mesh_v5_header_size +
+        decoded_v5.asset->vertices.size() * sizeof(render::MeshVertex) +
+        decoded_v5.asset->indices.size() * sizeof(std::uint32_t) +
         cooked_geometry.meshlets.size() * meshlet_descriptor_bytes +
         cooked_geometry.vertex_indices.size() * sizeof(std::uint32_t);
     assert(local_triangle_stream_offset < semantic_corruption.size());
@@ -282,7 +288,7 @@ triangle 0 1 2
     overwrite_u64(
         semantic_corruption,
         mesh_fingerprint_offset,
-        fingerprint(std::span<const std::byte>{semantic_corruption}.subspan(mesh_v4_header_size))
+        fingerprint(std::span<const std::byte>{semantic_corruption}.subspan(mesh_v5_header_size))
     );
     assert(!render::decode_mesh_asset(semantic_corruption).asset.has_value());
 

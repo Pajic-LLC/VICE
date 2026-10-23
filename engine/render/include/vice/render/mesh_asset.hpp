@@ -15,7 +15,8 @@ inline constexpr std::uint32_t mesh_asset_format_version_v1 = 1U;
 inline constexpr std::uint32_t mesh_asset_format_version_v2 = 2U;
 inline constexpr std::uint32_t mesh_asset_format_version_v3 = 3U;
 inline constexpr std::uint32_t mesh_asset_format_version_v4 = 4U;
-inline constexpr std::uint32_t mesh_asset_format_version = mesh_asset_format_version_v4;
+inline constexpr std::uint32_t mesh_asset_format_version_v5 = 5U;
+inline constexpr std::uint32_t mesh_asset_format_version = mesh_asset_format_version_v5;
 inline constexpr std::uint32_t mesh_asset_min_supported_version = mesh_asset_format_version_v1;
 inline constexpr std::size_t mesh_asset_magic_size = 8U;
 inline constexpr std::size_t mesh_stable_id_size = 16U;
@@ -91,6 +92,7 @@ struct MeshAsset {
     std::vector<MeshVertex> vertices;
     std::vector<std::uint32_t> indices;
     MeshletGeometry meshlet_geometry;
+    VirtualGeometryPageTable virtual_geometry_pages;
 };
 
 struct MeshAssetDecodeResult {

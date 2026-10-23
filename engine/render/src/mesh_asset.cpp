@@ -25,9 +25,12 @@ constexpr std::size_t header_size_v1 = mesh_asset_magic_size + sizeof(std::uint3
     sizeof(std::uint64_t);
 constexpr std::size_t header_size_v2 = header_size_v1 + mesh_stable_id_size;
 constexpr std::size_t header_size_v4 = header_size_v2 + sizeof(std::uint32_t) * 3U;
+constexpr std::size_t header_size_v5 = header_size_v4 + sizeof(std::uint32_t);
 constexpr std::size_t legacy_vertex_bytes = sizeof(float) * 6U;
 constexpr std::size_t vertex_bytes_v3 = sizeof(MeshVertex);
 constexpr std::size_t meshlet_descriptor_bytes = sizeof(std::uint32_t) * 4U + sizeof(float) * 4U;
+constexpr std::size_t virtual_geometry_page_descriptor_bytes =
+    sizeof(std::uint32_t) * 6U + sizeof(float) * 4U;
 constexpr std::uint32_t max_vertices = 4'000'000U;
 constexpr std::uint32_t max_indices = 12'000'000U;
 constexpr std::uint32_t max_meshlets = max_indices / 3U;
@@ -147,15 +150,33 @@ private:
         distance <= static_cast<double>(bounds.radius) + tolerance;
 }
 
+[[nodiscard]] bool bound_contains_bound(
+    const MeshletBounds& outer,
+    const MeshletBounds& inner
+) noexcept {
+    if (!finite_bounds(outer) || !finite_bounds(inner)) return false;
+    const double dx = static_cast<double>(inner.center[0]) - outer.center[0];
+    const double dy = static_cast<double>(inner.center[1]) - outer.center[1];
+    const double dz = static_cast<double>(inner.center[2]) - outer.center[2];
+    const double center_distance = std::sqrt(dx * dx + dy * dy + dz * dz);
+    const double tolerance = std::max(
+        1.0e-4,
+        static_cast<double>(outer.radius) * 1.0e-5
+    );
+    return std::isfinite(center_distance) &&
+        center_distance + static_cast<double>(inner.radius) <=
+            static_cast<double>(outer.radius) + tolerance;
+}
+
 [[nodiscard]] bool validate_meshlets(MeshAsset& asset, std::string& diagnostics) {
     const auto& geometry = asset.meshlet_geometry;
     if (geometry.meshlets.empty() || geometry.vertex_indices.empty() ||
         geometry.triangle_indices.empty()) {
-        diagnostics = "Mesh asset v4 cluster payload is empty.";
+        diagnostics = "Mesh asset v4+ cluster payload is empty.";
         return false;
     }
     if (geometry.triangle_indices.size() != asset.indices.size()) {
-        diagnostics = "Mesh asset v4 cluster triangle stream does not match the mesh index count.";
+        diagnostics = "Mesh asset v4+ cluster triangle stream does not match the mesh index count.";
         return false;
     }
 
@@ -165,16 +186,16 @@ private:
     for (const auto& meshlet : geometry.meshlets) {
         if (meshlet.vertex_count == 0U || meshlet.vertex_count > meshlet_max_vertices ||
             meshlet.triangle_count == 0U || meshlet.triangle_count > meshlet_max_triangles) {
-            diagnostics = "Mesh asset v4 contains an invalid cluster vertex or triangle count.";
+            diagnostics = "Mesh asset v4+ contains an invalid cluster vertex or triangle count.";
             return false;
         }
         if (meshlet.vertex_offset != expected_vertex_offset ||
             meshlet.triangle_offset != expected_triangle_offset) {
-            diagnostics = "Mesh asset v4 cluster offsets are not canonical and contiguous.";
+            diagnostics = "Mesh asset v4+ cluster offsets are not canonical and contiguous.";
             return false;
         }
         if (!finite_bounds(meshlet.bounds)) {
-            diagnostics = "Mesh asset v4 contains invalid cluster bounds.";
+            diagnostics = "Mesh asset v4+ contains invalid cluster bounds.";
             return false;
         }
 
@@ -183,7 +204,7 @@ private:
         const std::size_t triangle_end = expected_triangle_offset + triangle_bytes;
         if (vertex_end > geometry.vertex_indices.size() ||
             triangle_end > geometry.triangle_indices.size()) {
-            diagnostics = "Mesh asset v4 cluster ranges exceed their metadata streams.";
+            diagnostics = "Mesh asset v4+ cluster ranges exceed their metadata streams.";
             return false;
         }
 
@@ -194,7 +215,7 @@ private:
                     static_cast<std::size_t>(triangle) * 3U + corner;
                 const std::uint8_t local_index = geometry.triangle_indices[local_triangle_offset];
                 if (local_index >= meshlet.vertex_count) {
-                    diagnostics = "Mesh asset v4 cluster contains an out-of-range local vertex index.";
+                    diagnostics = "Mesh asset v4+ cluster contains an out-of-range local vertex index.";
                     return false;
                 }
                 used_vertices[local_index] = true;
@@ -202,12 +223,12 @@ private:
                     expected_vertex_offset + local_index
                 ];
                 if (global_index >= asset.vertices.size()) {
-                    diagnostics = "Mesh asset v4 cluster remap contains an out-of-range global vertex index.";
+                    diagnostics = "Mesh asset v4+ cluster remap contains an out-of-range global vertex index.";
                     return false;
                 }
                 if (reconstructed_offset >= asset.indices.size() ||
                     global_index != asset.indices[reconstructed_offset]) {
-                    diagnostics = "Mesh asset v4 cluster geometry does not reconstruct the authoritative index stream.";
+                    diagnostics = "Mesh asset v4+ cluster geometry does not reconstruct the authoritative index stream.";
                     return false;
                 }
                 ++reconstructed_offset;
@@ -216,14 +237,14 @@ private:
 
         for (std::uint32_t local_index = 0U; local_index < meshlet.vertex_count; ++local_index) {
             if (!used_vertices[local_index]) {
-                diagnostics = "Mesh asset v4 cluster contains an unused vertex remap entry.";
+                diagnostics = "Mesh asset v4+ cluster contains an unused vertex remap entry.";
                 return false;
             }
             const std::uint32_t global_index = geometry.vertex_indices[
                 expected_vertex_offset + local_index
             ];
             if (!bound_contains_vertex(meshlet.bounds, asset.vertices[global_index])) {
-                diagnostics = "Mesh asset v4 cluster bounds do not conservatively contain referenced vertices.";
+                diagnostics = "Mesh asset v4+ cluster bounds do not conservatively contain referenced vertices.";
                 return false;
             }
         }
@@ -235,7 +256,91 @@ private:
     if (expected_vertex_offset != geometry.vertex_indices.size() ||
         expected_triangle_offset != geometry.triangle_indices.size() ||
         reconstructed_offset != asset.indices.size()) {
-        diagnostics = "Mesh asset v4 cluster streams contain trailing or missing geometry.";
+        diagnostics = "Mesh asset v4+ cluster streams contain trailing or missing geometry.";
+        return false;
+    }
+    return true;
+}
+
+[[nodiscard]] bool validate_virtual_geometry_pages(
+    MeshAsset& asset,
+    std::string& diagnostics
+) {
+    const auto& geometry = asset.meshlet_geometry;
+    const auto& pages = asset.virtual_geometry_pages.pages;
+    if (geometry.meshlets.empty() || pages.empty()) {
+        diagnostics = "Mesh asset v5 virtual geometry page table is empty.";
+        return false;
+    }
+
+    const std::size_t expected_page_count =
+        (geometry.meshlets.size() + virtual_geometry_page_max_meshlets - 1U) /
+        virtual_geometry_page_max_meshlets;
+    if (pages.size() != expected_page_count) {
+        diagnostics = "Mesh asset v5 virtual geometry page count is not canonical.";
+        return false;
+    }
+
+    std::size_t expected_meshlet_offset = 0U;
+    std::size_t expected_vertex_offset = 0U;
+    std::size_t expected_triangle_offset = 0U;
+    for (const auto& page : pages) {
+        const std::size_t remaining_meshlets = geometry.meshlets.size() - expected_meshlet_offset;
+        const std::size_t canonical_meshlet_count = std::min<std::size_t>(
+            virtual_geometry_page_max_meshlets,
+            remaining_meshlets
+        );
+        if (page.meshlet_offset != expected_meshlet_offset ||
+            page.meshlet_count != canonical_meshlet_count) {
+            diagnostics = "Mesh asset v5 virtual geometry page meshlet ranges are not canonical.";
+            return false;
+        }
+        if (!finite_bounds(page.bounds)) {
+            diagnostics = "Mesh asset v5 virtual geometry page contains invalid bounds.";
+            return false;
+        }
+
+        const auto& first = geometry.meshlets[expected_meshlet_offset];
+        const auto& last = geometry.meshlets[
+            expected_meshlet_offset + canonical_meshlet_count - 1U
+        ];
+        const std::size_t canonical_vertex_end =
+            static_cast<std::size_t>(last.vertex_offset) + last.vertex_count;
+        const std::size_t canonical_triangle_end =
+            static_cast<std::size_t>(last.triangle_offset) +
+            static_cast<std::size_t>(last.triangle_count) * 3U;
+        const std::size_t canonical_vertex_count = canonical_vertex_end - first.vertex_offset;
+        const std::size_t canonical_triangle_count = canonical_triangle_end - first.triangle_offset;
+
+        if (page.vertex_index_offset != expected_vertex_offset ||
+            page.vertex_index_offset != first.vertex_offset ||
+            page.vertex_index_count != canonical_vertex_count ||
+            page.triangle_index_offset != expected_triangle_offset ||
+            page.triangle_index_offset != first.triangle_offset ||
+            page.triangle_index_count != canonical_triangle_count) {
+            diagnostics = "Mesh asset v5 virtual geometry page stream ranges are not canonical.";
+            return false;
+        }
+
+        for (std::size_t local = 0U; local < canonical_meshlet_count; ++local) {
+            if (!bound_contains_bound(
+                    page.bounds,
+                    geometry.meshlets[expected_meshlet_offset + local].bounds
+                )) {
+                diagnostics = "Mesh asset v5 virtual geometry page bounds are not conservative.";
+                return false;
+            }
+        }
+
+        expected_meshlet_offset += canonical_meshlet_count;
+        expected_vertex_offset += canonical_vertex_count;
+        expected_triangle_offset += canonical_triangle_count;
+    }
+
+    if (expected_meshlet_offset != geometry.meshlets.size() ||
+        expected_vertex_offset != geometry.vertex_indices.size() ||
+        expected_triangle_offset != geometry.triangle_indices.size()) {
+        diagnostics = "Mesh asset v5 virtual geometry pages do not exactly cover the cluster streams.";
         return false;
     }
     return true;
@@ -286,13 +391,22 @@ MeshAssetDecodeResult decode_mesh_asset(const std::span<const std::byte> bytes) 
         (!reader.read_u32(meshlet_count) ||
          !reader.read_u32(meshlet_vertex_index_count) ||
          !reader.read_u32(meshlet_triangle_index_count))) {
-        result.diagnostics = "Mesh asset v4 cluster header is incomplete.";
+        result.diagnostics = "Mesh asset v4+ cluster header is incomplete.";
         return result;
     }
 
-    const std::size_t header_size = version >= mesh_asset_format_version_v4
-        ? header_size_v4
-        : (version >= mesh_asset_format_version_v2 ? header_size_v2 : header_size_v1);
+    std::uint32_t virtual_geometry_page_count = 0U;
+    if (version >= mesh_asset_format_version_v5 &&
+        !reader.read_u32(virtual_geometry_page_count)) {
+        result.diagnostics = "Mesh asset v5 virtual geometry page header is incomplete.";
+        return result;
+    }
+
+    const std::size_t header_size = version >= mesh_asset_format_version_v5
+        ? header_size_v5
+        : (version >= mesh_asset_format_version_v4
+            ? header_size_v4
+            : (version >= mesh_asset_format_version_v2 ? header_size_v2 : header_size_v1));
     if (bytes.size() < header_size) {
         result.diagnostics = "Mesh asset header is incomplete.";
         return result;
@@ -307,8 +421,19 @@ MeshAssetDecodeResult decode_mesh_asset(const std::span<const std::byte> bytes) 
         (meshlet_count == 0U || meshlet_count > max_meshlets ||
          meshlet_vertex_index_count < 3U || meshlet_vertex_index_count > index_count ||
          meshlet_triangle_index_count != index_count)) {
-        result.diagnostics = "Mesh asset v4 has invalid cluster stream counts.";
+        result.diagnostics = "Mesh asset v4+ has invalid cluster stream counts.";
         return result;
+    }
+    if (version >= mesh_asset_format_version_v5) {
+        const std::uint32_t canonical_page_count =
+            (meshlet_count + virtual_geometry_page_max_meshlets - 1U) /
+            virtual_geometry_page_max_meshlets;
+        if (virtual_geometry_page_count == 0U ||
+            virtual_geometry_page_count != canonical_page_count ||
+            virtual_geometry_page_count > meshlet_count) {
+            result.diagnostics = "Mesh asset v5 has an invalid virtual geometry page count.";
+            return result;
+        }
     }
 
     const std::size_t stored_vertex_bytes = version >= mesh_asset_format_version_v3
@@ -328,7 +453,18 @@ MeshAssetDecodeResult decode_mesh_asset(const std::span<const std::byte> bytes) 
             !checked_multiply(meshlet_vertex_index_count, sizeof(std::uint32_t), section_bytes) ||
             !checked_add(expected_payload, section_bytes, expected_payload) ||
             !checked_add(expected_payload, meshlet_triangle_index_count, expected_payload)) {
-            result.diagnostics = "Mesh asset v4 cluster payload size overflows the host address space.";
+            result.diagnostics = "Mesh asset v4+ cluster payload size overflows the host address space.";
+            return result;
+        }
+    }
+    if (version >= mesh_asset_format_version_v5) {
+        if (!checked_multiply(
+                virtual_geometry_page_count,
+                virtual_geometry_page_descriptor_bytes,
+                section_bytes
+            ) ||
+            !checked_add(expected_payload, section_bytes, expected_payload)) {
+            result.diagnostics = "Mesh asset v5 page payload size overflows the host address space.";
             return result;
         }
     }
@@ -413,27 +549,51 @@ MeshAssetDecodeResult decode_mesh_asset(const std::span<const std::byte> bytes) 
                 !reader.read_f32(meshlet.bounds.center[1]) ||
                 !reader.read_f32(meshlet.bounds.center[2]) ||
                 !reader.read_f32(meshlet.bounds.radius)) {
-                result.diagnostics = "Mesh asset v4 contains an incomplete cluster descriptor.";
+                result.diagnostics = "Mesh asset v4+ contains an incomplete cluster descriptor.";
                 return result;
             }
         }
         for (auto& global_index : geometry.vertex_indices) {
             if (!reader.read_u32(global_index)) {
-                result.diagnostics = "Mesh asset v4 contains an incomplete cluster vertex remap.";
+                result.diagnostics = "Mesh asset v4+ contains an incomplete cluster vertex remap.";
                 return result;
             }
         }
         for (auto& local_index : geometry.triangle_indices) {
             if (!reader.read_u8(local_index)) {
-                result.diagnostics = "Mesh asset v4 contains an incomplete cluster triangle stream.";
+                result.diagnostics = "Mesh asset v4+ contains an incomplete cluster triangle stream.";
                 return result;
             }
         }
-        if (reader.remaining() != 0U) {
-            result.diagnostics = "Mesh asset v4 contains trailing cluster payload data.";
-            return result;
-        }
         if (!validate_meshlets(asset, result.diagnostics)) return result;
+    }
+
+    if (version >= mesh_asset_format_version_v5) {
+        auto& pages = asset.virtual_geometry_pages.pages;
+        pages.resize(virtual_geometry_page_count);
+        for (auto& page : pages) {
+            if (!reader.read_u32(page.meshlet_offset) ||
+                !reader.read_u32(page.meshlet_count) ||
+                !reader.read_u32(page.vertex_index_offset) ||
+                !reader.read_u32(page.vertex_index_count) ||
+                !reader.read_u32(page.triangle_index_offset) ||
+                !reader.read_u32(page.triangle_index_count) ||
+                !reader.read_f32(page.bounds.center[0]) ||
+                !reader.read_f32(page.bounds.center[1]) ||
+                !reader.read_f32(page.bounds.center[2]) ||
+                !reader.read_f32(page.bounds.radius)) {
+                result.diagnostics = "Mesh asset v5 contains an incomplete virtual geometry page descriptor.";
+                return result;
+            }
+        }
+        if (!validate_virtual_geometry_pages(asset, result.diagnostics)) return result;
+    }
+
+    if (reader.remaining() != 0U) {
+        result.diagnostics = version >= mesh_asset_format_version_v5
+            ? "Mesh asset v5 contains trailing virtual geometry payload data."
+            : "Mesh asset v4 contains trailing cluster payload data.";
+        return result;
     }
 
     result.asset = std::move(asset);
