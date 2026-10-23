@@ -135,13 +135,15 @@ void copy_id(const vice::world::PersistentId id, std::array<std::uint8_t, Size>&
 
     if (forward.plan.material_ids != reverse.plan.material_ids ||
         forward.plan.texture_ids != reverse.plan.texture_ids ||
+        forward.plan.texture_channels != reverse.plan.texture_channels ||
         forward.plan.samplers != reverse.plan.samplers ||
         !same_records(forward.plan.records, reverse.plan.records)) {
         std::cerr << "GPU material plan depends on input enumeration order.\n";
         return false;
     }
     if (forward.plan.records.size() != 3U ||
-        forward.plan.texture_ids.size() != 2U ||
+        forward.plan.texture_ids.size() != 4U ||
+        forward.plan.texture_channels.size() != 4U ||
         forward.plan.samplers.size() != 2U) {
         std::cerr << "GPU material plan did not deduplicate resources as expected.\n";
         return false;
@@ -192,7 +194,7 @@ void copy_id(const vice::world::PersistentId id, std::array<std::uint8_t, Size>&
 
     const RuntimeGpuMaterialTableBuildResult empty = build_runtime_gpu_material_table_plan({});
     if (!empty || !empty.plan.records.empty() || !empty.plan.texture_ids.empty() ||
-        !empty.plan.samplers.empty()) {
+        !empty.plan.texture_channels.empty() || !empty.plan.samplers.empty()) {
         std::cerr << "Empty GPU material plan is not safe.\n";
         return false;
     }

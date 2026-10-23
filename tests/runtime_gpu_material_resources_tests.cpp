@@ -109,6 +109,43 @@ int main() {
     std::string diagnostics;
     assert(textures.initialize(*device, root, &diagnostics));
     assert(diagnostics.empty());
+    const world::ResourceId texture_a_resource{texture_a_id};
+    const world::ResourceId texture_b_resource{texture_b_id};
+    const world::ResourceId missing_resource{missing_id};
+    assert(textures.resident(texture_a_resource));
+    assert(textures.resident(texture_b_resource));
+    assert(textures.resident_bytes() == 8U);
+    const auto initial_generation = textures.residency_generation();
+    assert(textures.set_residency({}, &diagnostics));
+    assert(textures.residency_generation() == initial_generation + 1U);
+    assert(textures.find(texture_a_resource) == nullptr);
+    assert(textures.find(texture_b_resource) == nullptr);
+    assert(textures.resident_bytes() == 0U);
+    auto* const fallback_base = textures.resolve(
+        texture_a_resource, detail::RuntimeMaterialTextureChannel::base_color
+    );
+    auto* const fallback_normal = textures.resolve(
+        texture_b_resource, detail::RuntimeMaterialTextureChannel::normal
+    );
+    assert(fallback_base != nullptr);
+    assert(fallback_normal != nullptr);
+    assert(fallback_base != fallback_normal);
+    assert(textures.resolve(
+        missing_resource, detail::RuntimeMaterialTextureChannel::base_color
+    ) == nullptr);
+    const std::array resident_a{texture_a_resource};
+    assert(textures.set_residency(resident_a, &diagnostics));
+    assert(textures.find(texture_a_resource) != nullptr);
+    assert(textures.find(texture_b_resource) == nullptr);
+    assert(textures.resident_bytes() == 4U);
+    assert(textures.resolve(
+        texture_b_resource, detail::RuntimeMaterialTextureChannel::normal
+    ) == fallback_normal);
+    const std::array resident_all{texture_a_resource, texture_b_resource};
+    assert(textures.set_residency(resident_all, &diagnostics));
+    assert(textures.find(texture_a_resource) != nullptr);
+    assert(textures.find(texture_b_resource) != nullptr);
+    assert(textures.resident_bytes() == 8U);
 
     RuntimeGpuMaterialSampler linear_repeat;
     RuntimeGpuMaterialSampler nearest_clamp;
@@ -193,6 +230,10 @@ int main() {
         world::ResourceId{texture_b_id},
         world::ResourceId{texture_a_id},
     };
+    resident_plan.texture_channels = {
+        RuntimeGpuMaterialTextureChannel::normal,
+        RuntimeGpuMaterialTextureChannel::base_color,
+    };
     resident_plan.samplers = {linear_repeat};
     assert(resources.initialize(*device, resident_plan, materials, &diagnostics));
     assert(diagnostics.empty());
@@ -200,6 +241,19 @@ int main() {
     assert(view.textures.size() == 2U);
     assert(view.textures[0] == gpu_scene_binding.normal_texture);
     assert(view.textures[1] == gpu_scene_binding.base_color_texture);
+
+    assert(materials.set_texture_residency(resident_all, &diagnostics));
+    const detail::RuntimeMaterialBinding resident_binding = materials.find(world::ResourceId{material_id});
+    assert(resident_binding.base_color_texture != nullptr);
+    assert(resident_binding.normal_texture != nullptr);
+    assert(resident_binding.base_color_texture != gpu_scene_binding.base_color_texture);
+    assert(resident_binding.normal_texture != gpu_scene_binding.normal_texture);
+    assert(materials.resident_texture_bytes() == 8U);
+    assert(resources.initialize(*device, resident_plan, materials, &diagnostics));
+    assert(diagnostics.empty());
+    view = resources.view();
+    assert(view.textures[0] == resident_binding.normal_texture);
+    assert(view.textures[1] == resident_binding.base_color_texture);
     assert(view.samplers.size() == 1U);
     assert(view.samplers.front() != nullptr);
 
