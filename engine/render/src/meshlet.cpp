@@ -88,9 +88,9 @@ namespace {
 }
 
 [[nodiscard]] std::optional<MeshletBounds> aggregate_bounds(
-    const std::span<const Meshlet> meshlets
+    const std::span<const MeshletBounds> bounds
 ) noexcept {
-    if (meshlets.empty()) return std::nullopt;
+    if (bounds.empty()) return std::nullopt;
 
     std::array<double, 3U> minimum{
         std::numeric_limits<double>::infinity(),
@@ -103,11 +103,11 @@ namespace {
         -std::numeric_limits<double>::infinity(),
     };
 
-    for (const auto& meshlet : meshlets) {
-        if (!finite_bounds(meshlet.bounds)) return std::nullopt;
-        const double radius = static_cast<double>(meshlet.bounds.radius);
+    for (const auto& bound : bounds) {
+        if (!finite_bounds(bound)) return std::nullopt;
+        const double radius = static_cast<double>(bound.radius);
         for (std::size_t axis = 0U; axis < 3U; ++axis) {
-            const double center = static_cast<double>(meshlet.bounds.center[axis]);
+            const double center = static_cast<double>(bound.center[axis]);
             minimum[axis] = std::min(minimum[axis], center - radius);
             maximum[axis] = std::max(maximum[axis], center + radius);
         }
@@ -123,14 +123,14 @@ namespace {
     }
 
     double radius = 0.0;
-    for (const auto& meshlet : meshlets) {
+    for (const auto& bound : bounds) {
         double distance_squared = 0.0;
         for (std::size_t axis = 0U; axis < 3U; ++axis) {
-            const double delta = static_cast<double>(meshlet.bounds.center[axis]) - center[axis];
+            const double delta = static_cast<double>(bound.center[axis]) - center[axis];
             distance_squared += delta * delta;
         }
         const double candidate = std::sqrt(distance_squared) +
-            static_cast<double>(meshlet.bounds.radius);
+            static_cast<double>(bound.radius);
         radius = std::max(radius, candidate);
     }
     if (!std::isfinite(radius) || radius > max_float) return std::nullopt;
@@ -143,6 +143,49 @@ namespace {
         },
         .radius = static_cast<float>(radius),
     };
+}
+
+[[nodiscard]] std::optional<MeshletBounds> aggregate_bounds(
+    const std::span<const Meshlet> meshlets
+) noexcept {
+    if (meshlets.empty()) return std::nullopt;
+    std::vector<MeshletBounds> bounds;
+    bounds.reserve(meshlets.size());
+    for (const auto& meshlet : meshlets) bounds.push_back(meshlet.bounds);
+    return aggregate_bounds(bounds);
+}
+
+struct HierarchyBuildNode {
+    std::uint32_t page_offset = 0U;
+    std::uint32_t page_count = 0U;
+    MeshletBounds bounds{};
+    float geometric_error = 0.0F;
+};
+
+[[nodiscard]] std::optional<float> hierarchy_parent_error(
+    const MeshletBounds& parent_bounds,
+    const std::span<const HierarchyBuildNode> children
+) noexcept {
+    if (!finite_bounds(parent_bounds) || children.empty()) return std::nullopt;
+    double error = 0.0;
+    constexpr double max_float = static_cast<double>(std::numeric_limits<float>::max());
+    for (const auto& child : children) {
+        if (!finite_bounds(child.bounds) || !std::isfinite(child.geometric_error) ||
+            child.geometric_error < 0.0F) {
+            return std::nullopt;
+        }
+        double distance_squared = 0.0;
+        for (std::size_t axis = 0U; axis < 3U; ++axis) {
+            const double delta = static_cast<double>(child.bounds.center[axis]) -
+                parent_bounds.center[axis];
+            distance_squared += delta * delta;
+        }
+        const double extent_error = std::sqrt(distance_squared) +
+            static_cast<double>(child.bounds.radius);
+        error = std::max(error, std::max(extent_error, static_cast<double>(child.geometric_error)));
+    }
+    if (!std::isfinite(error) || error > max_float) return std::nullopt;
+    return static_cast<float>(error);
 }
 
 } // namespace
@@ -369,6 +412,197 @@ VirtualGeometryPageBuildResult build_virtual_geometry_pages(const MeshletGeometr
     }
 
     result.page_table = std::move(page_table);
+    return result;
+}
+
+VirtualGeometryHierarchyBuildResult build_virtual_geometry_hierarchy(
+    const VirtualGeometryPageTable& page_table
+) {
+    VirtualGeometryHierarchyBuildResult result;
+    const auto& pages = page_table.pages;
+    if (pages.empty()) {
+        result.diagnostics = "Virtual geometry hierarchy input must contain at least one page.";
+        return result;
+    }
+    if (pages.size() > std::numeric_limits<std::uint32_t>::max()) {
+        result.diagnostics = "Virtual geometry hierarchy exceeds the 32-bit page contract.";
+        return result;
+    }
+
+    std::uint64_t expected_meshlet_offset = 0U;
+    std::uint64_t expected_vertex_offset = 0U;
+    std::uint64_t expected_triangle_offset = 0U;
+    for (std::size_t index = 0U; index < pages.size(); ++index) {
+        const auto& page = pages[index];
+        const bool final_page = index + 1U == pages.size();
+        if (page.meshlet_count == 0U ||
+            page.meshlet_count > virtual_geometry_page_max_meshlets ||
+            (!final_page && page.meshlet_count != virtual_geometry_page_max_meshlets)) {
+            result.diagnostics = "Virtual geometry hierarchy input has a non-canonical page meshlet count.";
+            return result;
+        }
+        if (page.vertex_index_count == 0U || page.triangle_index_count == 0U) {
+            result.diagnostics = "Virtual geometry hierarchy input contains an empty page stream range.";
+            return result;
+        }
+        if (page.meshlet_offset != expected_meshlet_offset ||
+            page.vertex_index_offset != expected_vertex_offset ||
+            page.triangle_index_offset != expected_triangle_offset) {
+            result.diagnostics = "Virtual geometry hierarchy page ranges must be canonical and contiguous.";
+            return result;
+        }
+        if (!finite_bounds(page.bounds)) {
+            result.diagnostics = "Virtual geometry hierarchy input contains invalid page bounds.";
+            return result;
+        }
+
+        expected_meshlet_offset += page.meshlet_count;
+        expected_vertex_offset += page.vertex_index_count;
+        expected_triangle_offset += page.triangle_index_count;
+        if (expected_meshlet_offset > std::numeric_limits<std::uint32_t>::max() ||
+            expected_vertex_offset > std::numeric_limits<std::uint32_t>::max() ||
+            expected_triangle_offset > std::numeric_limits<std::uint32_t>::max()) {
+            result.diagnostics = "Virtual geometry hierarchy page ranges overflow the 32-bit contract.";
+            return result;
+        }
+    }
+
+    std::vector<std::vector<HierarchyBuildNode>> levels;
+    levels.emplace_back();
+    levels.back().reserve(pages.size());
+    for (std::size_t index = 0U; index < pages.size(); ++index) {
+        levels.back().push_back(HierarchyBuildNode{
+            .page_offset = static_cast<std::uint32_t>(index),
+            .page_count = 1U,
+            .bounds = pages[index].bounds,
+            .geometric_error = 0.0F,
+        });
+    }
+
+    std::size_t total_node_count = levels.back().size();
+    while (levels.back().size() > 1U) {
+        const auto& children = levels.back();
+        std::vector<HierarchyBuildNode> parents;
+        parents.reserve(
+            (children.size() + virtual_geometry_hierarchy_fanout - 1U) /
+            virtual_geometry_hierarchy_fanout
+        );
+
+        for (std::size_t child_offset = 0U; child_offset < children.size();
+             child_offset += virtual_geometry_hierarchy_fanout) {
+            const std::size_t child_count = std::min<std::size_t>(
+                virtual_geometry_hierarchy_fanout,
+                children.size() - child_offset
+            );
+            const auto child_group = std::span<const HierarchyBuildNode>{
+                children.data() + child_offset, child_count
+            };
+
+            std::array<MeshletBounds, virtual_geometry_hierarchy_fanout> child_bounds{};
+            std::uint64_t page_count = 0U;
+            for (std::size_t local = 0U; local < child_count; ++local) {
+                child_bounds[local] = child_group[local].bounds;
+                page_count += child_group[local].page_count;
+            }
+            if (page_count == 0U || page_count > std::numeric_limits<std::uint32_t>::max()) {
+                result.diagnostics = "Virtual geometry hierarchy parent page range is invalid.";
+                return result;
+            }
+
+            const auto bounds = aggregate_bounds(std::span<const MeshletBounds>{
+                child_bounds.data(), child_count
+            });
+            if (!bounds.has_value()) {
+                result.diagnostics = "Virtual geometry hierarchy parent bounds are not finite.";
+                return result;
+            }
+            const auto error = hierarchy_parent_error(*bounds, child_group);
+            if (!error.has_value()) {
+                result.diagnostics = "Virtual geometry hierarchy parent error is not finite.";
+                return result;
+            }
+
+            parents.push_back(HierarchyBuildNode{
+                .page_offset = child_group.front().page_offset,
+                .page_count = static_cast<std::uint32_t>(page_count),
+                .bounds = *bounds,
+                .geometric_error = *error,
+            });
+        }
+
+        if (total_node_count > std::numeric_limits<std::uint32_t>::max() - parents.size()) {
+            result.diagnostics = "Virtual geometry hierarchy exceeds the 32-bit node contract.";
+            return result;
+        }
+        total_node_count += parents.size();
+        levels.push_back(std::move(parents));
+    }
+
+    std::vector<std::size_t> level_offsets(levels.size(), 0U);
+    std::size_t flattened_offset = 0U;
+    for (std::size_t level = levels.size(); level-- > 0U;) {
+        level_offsets[level] = flattened_offset;
+        flattened_offset += levels[level].size();
+    }
+    if (flattened_offset != total_node_count ||
+        total_node_count > std::numeric_limits<std::uint32_t>::max()) {
+        result.diagnostics = "Virtual geometry hierarchy flattening exceeded the node contract.";
+        return result;
+    }
+
+    VirtualGeometryHierarchy hierarchy;
+    hierarchy.nodes.reserve(total_node_count);
+    hierarchy.root_index = 0U;
+    for (std::size_t level = levels.size(); level-- > 0U;) {
+        const auto& level_nodes = levels[level];
+        const std::uint32_t depth = static_cast<std::uint32_t>(levels.size() - 1U - level);
+        for (std::size_t index = 0U; index < level_nodes.size(); ++index) {
+            const auto& source = level_nodes[index];
+            const bool is_root = level + 1U == levels.size();
+            const bool is_leaf = level == 0U;
+
+            std::uint32_t parent_index = virtual_geometry_invalid_node;
+            if (!is_root) {
+                parent_index = static_cast<std::uint32_t>(
+                    level_offsets[level + 1U] + index / virtual_geometry_hierarchy_fanout
+                );
+            }
+
+            std::uint32_t first_child = virtual_geometry_invalid_node;
+            std::uint32_t child_count = 0U;
+            if (!is_leaf) {
+                const std::size_t first_child_index = index * virtual_geometry_hierarchy_fanout;
+                const std::size_t available_children = levels[level - 1U].size() - first_child_index;
+                child_count = static_cast<std::uint32_t>(std::min<std::size_t>(
+                    virtual_geometry_hierarchy_fanout,
+                    available_children
+                ));
+                first_child = static_cast<std::uint32_t>(
+                    level_offsets[level - 1U] + first_child_index
+                );
+            }
+
+            hierarchy.nodes.push_back(VirtualGeometryHierarchyNode{
+                .parent_index = parent_index,
+                .first_child = first_child,
+                .child_count = child_count,
+                .page_offset = source.page_offset,
+                .page_count = source.page_count,
+                .depth = depth,
+                .bounds = source.bounds,
+                .geometric_error = source.geometric_error,
+            });
+        }
+    }
+
+    if (hierarchy.nodes.empty() || hierarchy.nodes.front().parent_index != virtual_geometry_invalid_node ||
+        hierarchy.nodes.front().page_offset != 0U ||
+        hierarchy.nodes.front().page_count != pages.size()) {
+        result.diagnostics = "Virtual geometry hierarchy root metadata is invalid.";
+        return result;
+    }
+
+    result.hierarchy = std::move(hierarchy);
     return result;
 }
 

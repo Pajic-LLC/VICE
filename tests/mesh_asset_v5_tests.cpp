@@ -1,4 +1,5 @@
 #include <vice/render/mesh_asset.hpp>
+#include <vice/render/meshlet.hpp>
 #include <vice/tools/mesh_cooker.hpp>
 
 #include <algorithm>
@@ -7,6 +8,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <span>
 #include <vector>
 
@@ -92,6 +94,38 @@ vice::tools::mesh_cooker::MeshSource make_multi_page_source() {
     return source;
 }
 
+vice::render::VirtualGeometryPageTable make_page_table(const std::uint32_t page_count) {
+    using namespace vice;
+    render::VirtualGeometryPageTable table;
+    table.pages.reserve(page_count);
+    std::uint32_t meshlet_offset = 0U;
+    std::uint32_t vertex_offset = 0U;
+    std::uint32_t triangle_offset = 0U;
+    for (std::uint32_t index = 0U; index < page_count; ++index) {
+        const bool final_page = index + 1U == page_count;
+        const std::uint32_t meshlet_count = final_page
+            ? 7U
+            : render::virtual_geometry_page_max_meshlets;
+        const std::uint32_t stream_count = meshlet_count * 3U;
+        table.pages.push_back(render::VirtualGeometryPage{
+            .meshlet_offset = meshlet_offset,
+            .meshlet_count = meshlet_count,
+            .vertex_index_offset = vertex_offset,
+            .vertex_index_count = stream_count,
+            .triangle_index_offset = triangle_offset,
+            .triangle_index_count = stream_count,
+            .bounds = render::MeshletBounds{
+                .center = {static_cast<float>(index) * 10.0F, 0.0F, 0.0F},
+                .radius = 1.0F,
+            },
+        });
+        meshlet_offset += meshlet_count;
+        vertex_offset += stream_count;
+        triangle_offset += stream_count;
+    }
+    return table;
+}
+
 bool contains(
     const vice::render::MeshletBounds& outer,
     const vice::render::MeshletBounds& inner
@@ -106,6 +140,61 @@ bool contains(
     );
     return distance + static_cast<double>(inner.radius) <=
         static_cast<double>(outer.radius) + tolerance;
+}
+
+void assert_hierarchy_valid(
+    const vice::render::VirtualGeometryHierarchy& hierarchy,
+    const std::uint32_t page_count
+) {
+    using namespace vice;
+    assert(hierarchy.root_index == 0U);
+    assert(!hierarchy.nodes.empty());
+    assert(hierarchy.nodes[0].parent_index == render::virtual_geometry_invalid_node);
+    assert(hierarchy.nodes[0].page_offset == 0U);
+    assert(hierarchy.nodes[0].page_count == page_count);
+
+    std::uint32_t leaf_count = 0U;
+    for (std::size_t index = 0U; index < hierarchy.nodes.size(); ++index) {
+        const auto& node = hierarchy.nodes[index];
+        assert(node.page_count > 0U);
+        assert(node.page_offset + node.page_count <= page_count);
+        assert(std::isfinite(node.bounds.center[0]));
+        assert(std::isfinite(node.bounds.center[1]));
+        assert(std::isfinite(node.bounds.center[2]));
+        assert(std::isfinite(node.bounds.radius));
+        assert(node.bounds.radius >= 0.0F);
+        assert(std::isfinite(node.geometric_error));
+        assert(node.geometric_error >= 0.0F);
+
+        if (node.child_count == 0U) {
+            ++leaf_count;
+            assert(node.first_child == render::virtual_geometry_invalid_node);
+            assert(node.page_count == 1U);
+            assert(node.geometric_error == 0.0F);
+            continue;
+        }
+
+        assert(node.first_child != render::virtual_geometry_invalid_node);
+        assert(node.child_count <= render::virtual_geometry_hierarchy_fanout);
+        assert(static_cast<std::size_t>(node.first_child) + node.child_count <=
+            hierarchy.nodes.size());
+
+        std::uint32_t expected_page_offset = node.page_offset;
+        std::uint32_t covered_pages = 0U;
+        for (std::uint32_t local = 0U; local < node.child_count; ++local) {
+            const std::uint32_t child_index = node.first_child + local;
+            const auto& child = hierarchy.nodes[child_index];
+            assert(child.parent_index == index);
+            assert(child.depth == node.depth + 1U);
+            assert(child.page_offset == expected_page_offset);
+            assert(contains(node.bounds, child.bounds));
+            assert(node.geometric_error + 0.0001F >= child.geometric_error);
+            expected_page_offset += child.page_count;
+            covered_pages += child.page_count;
+        }
+        assert(covered_pages == node.page_count);
+    }
+    assert(leaf_count == page_count);
 }
 
 std::vector<std::byte> downgrade_to_v4(
@@ -170,6 +259,67 @@ int main() {
     assert(meshlet_coverage == geometry.meshlets.size());
     assert(vertex_coverage == geometry.vertex_indices.size());
     assert(triangle_coverage == geometry.triangle_indices.size());
+
+    const auto decoded_hierarchy = render::build_virtual_geometry_hierarchy(
+        decoded.asset->virtual_geometry_pages
+    );
+    assert(decoded_hierarchy);
+    assert_hierarchy_valid(*decoded_hierarchy.hierarchy, 2U);
+    assert(decoded_hierarchy.hierarchy->nodes.size() == 3U);
+
+    const auto one_page = make_page_table(1U);
+    const auto one_page_hierarchy = render::build_virtual_geometry_hierarchy(one_page);
+    assert(one_page_hierarchy);
+    assert(one_page_hierarchy.hierarchy->nodes.size() == 1U);
+    assert(one_page_hierarchy.hierarchy->nodes[0].child_count == 0U);
+    assert(one_page_hierarchy.hierarchy->nodes[0].depth == 0U);
+    assert(one_page_hierarchy.hierarchy->nodes[0].geometric_error == 0.0F);
+    assert_hierarchy_valid(*one_page_hierarchy.hierarchy, 1U);
+
+    const auto five_pages = make_page_table(5U);
+    const auto five_page_hierarchy = render::build_virtual_geometry_hierarchy(five_pages);
+    const auto five_page_repeat = render::build_virtual_geometry_hierarchy(five_pages);
+    assert(five_page_hierarchy);
+    assert(five_page_repeat);
+    assert(*five_page_hierarchy.hierarchy == *five_page_repeat.hierarchy);
+    assert(five_page_hierarchy.hierarchy->nodes.size() == 8U);
+    assert(five_page_hierarchy.hierarchy->nodes[0].first_child == 1U);
+    assert(five_page_hierarchy.hierarchy->nodes[0].child_count == 2U);
+    assert(five_page_hierarchy.hierarchy->nodes[1].page_offset == 0U);
+    assert(five_page_hierarchy.hierarchy->nodes[1].page_count == 4U);
+    assert(five_page_hierarchy.hierarchy->nodes[2].page_offset == 4U);
+    assert(five_page_hierarchy.hierarchy->nodes[2].page_count == 1U);
+    assert(five_page_hierarchy.hierarchy->nodes[3].depth == 2U);
+    assert(five_page_hierarchy.hierarchy->nodes[0].geometric_error > 0.0F);
+    assert_hierarchy_valid(*five_page_hierarchy.hierarchy, 5U);
+
+    const auto seventeen_pages = make_page_table(17U);
+    const auto seventeen_page_hierarchy = render::build_virtual_geometry_hierarchy(seventeen_pages);
+    assert(seventeen_page_hierarchy);
+    assert(seventeen_page_hierarchy.hierarchy->nodes.size() == 25U);
+    assert(seventeen_page_hierarchy.hierarchy->nodes[0].child_count == 2U);
+    assert_hierarchy_valid(*seventeen_page_hierarchy.hierarchy, 17U);
+
+    auto gapped_pages = five_pages;
+    gapped_pages.pages[1].meshlet_offset += 1U;
+    assert(!render::build_virtual_geometry_hierarchy(gapped_pages));
+
+    auto overlapping_pages = five_pages;
+    overlapping_pages.pages[1].vertex_index_offset -= 1U;
+    assert(!render::build_virtual_geometry_hierarchy(overlapping_pages));
+
+    auto noncanonical_pages = five_pages;
+    noncanonical_pages.pages[0].meshlet_count = 31U;
+    assert(!render::build_virtual_geometry_hierarchy(noncanonical_pages));
+
+    auto invalid_bounds = five_pages;
+    invalid_bounds.pages[0].bounds.radius = std::numeric_limits<float>::infinity();
+    assert(!render::build_virtual_geometry_hierarchy(invalid_bounds));
+
+    auto empty_stream = five_pages;
+    empty_stream.pages[0].triangle_index_count = 0U;
+    assert(!render::build_virtual_geometry_hierarchy(empty_stream));
+    assert(!render::build_virtual_geometry_hierarchy(render::VirtualGeometryPageTable{}));
 
     const auto legacy_v4 = downgrade_to_v4(cooked.bytes, pages.size());
     const auto decoded_v4 = render::decode_mesh_asset(legacy_v4);
