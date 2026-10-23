@@ -40,6 +40,15 @@ struct RuntimeVirtualGeometryBufferBuildResult {
     }
 };
 
+struct RuntimeVirtualGeometryVariantBuildResult {
+    std::optional<render::MeshAsset> asset;
+    std::string diagnostics;
+
+    [[nodiscard]] explicit operator bool() const noexcept {
+        return asset.has_value();
+    }
+};
+
 struct RuntimeVirtualGeometryInstanceBuildResult {
     std::vector<RenderMeshInstance> instances;
     std::string diagnostics;
@@ -53,8 +62,18 @@ struct RuntimeVirtualGeometryInstanceBuildResult {
     const RenderMeshInstance& instance
 ) noexcept;
 
+[[nodiscard]] world::ResourceId runtime_virtual_geometry_variant_resource_id(
+    world::ResourceId mesh,
+    std::uint32_t node_index
+) noexcept;
+
 [[nodiscard]] RuntimeVirtualGeometryBufferBuildResult build_runtime_virtual_geometry_buffer_plan(
     const render::MeshAsset& asset
+);
+
+[[nodiscard]] RuntimeVirtualGeometryVariantBuildResult build_runtime_virtual_geometry_variant_asset(
+    const render::MeshAsset& asset,
+    std::uint32_t node_index
 );
 
 [[nodiscard]] std::optional<RuntimeGpuDrawBatch> runtime_virtual_geometry_draw_batch(
