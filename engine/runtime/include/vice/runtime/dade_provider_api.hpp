@@ -3,6 +3,12 @@
 #include <cstddef>
 #include <cstdint>
 
+#if defined(_WIN32)
+#define VICE_DADE_PROVIDER_EXPORT __declspec(dllexport)
+#else
+#define VICE_DADE_PROVIDER_EXPORT __attribute__((visibility("default")))
+#endif
+
 namespace vice::runtime::dade {
 
 inline constexpr std::uint32_t abi_version = 1;
