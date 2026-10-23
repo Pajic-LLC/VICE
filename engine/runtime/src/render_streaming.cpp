@@ -3,6 +3,7 @@
 #include <vice/math/math.hpp>
 
 #include <optional>
+#include <utility>
 
 namespace vice::runtime {
 namespace {
