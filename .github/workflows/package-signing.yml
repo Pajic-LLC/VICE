@@ -135,16 +135,19 @@ jobs:
             $cert.Export([System.Security.Cryptography.X509Certificates.X509ContentType]::Cert)
           )
 
-          $securePassword = ConvertTo-SecureString $password -AsPlainText -Force
-          $imported = Import-PfxCertificate `
-            -FilePath $pfx `
-            -Password $securePassword `
-            -CertStoreLocation "Cert:\CurrentUser\My"
-          Import-Certificate -FilePath $cer -CertStoreLocation "Cert:\CurrentUser\Root" | Out-Null
+          $publicCert = [System.Security.Cryptography.X509Certificates.X509Certificate2]::new($cer)
+          $root = [System.Security.Cryptography.X509Certificates.X509Store]::new(
+            "Root",
+            [System.Security.Cryptography.X509Certificates.StoreLocation]::CurrentUser
+          )
+          $root.Open([System.Security.Cryptography.X509Certificates.OpenFlags]::ReadWrite)
+          $root.Add($publicCert)
+          $root.Close()
 
           "VICE_SIGN_TEST=$target" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           "SIGNTOOL_PATH=$($signtool.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-          "CERT_SHA1=$($imported.Thumbprint)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "CERT_FILE=$pfx" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "CERT_PASSWORD=$password" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
       - name: Sign Windows package
         if: runner.os == 'Windows'
@@ -156,7 +159,8 @@ jobs:
             --executable $env:VICE_SIGN_TEST `
             --stamp-asset com.pajic.vice `
             --signtool $env:SIGNTOOL_PATH `
-            --certificate-sha1 $env:CERT_SHA1
+            --certificate-file $env:CERT_FILE `
+            --certificate-password $env:CERT_PASSWORD
           if ($LASTEXITCODE -ne 0) {
             exit $LASTEXITCODE
           }
