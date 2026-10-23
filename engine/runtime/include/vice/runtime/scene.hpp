@@ -61,6 +61,7 @@ struct RenderMeshInstance {
     std::optional<world::ResourceId> material;
     world::SpatialState spatial{};
     world::AuthoredTransform authored{};
+    std::uint32_t geometry_node_index = render::virtual_geometry_invalid_node;
 };
 
 struct RuntimeCameraView {
