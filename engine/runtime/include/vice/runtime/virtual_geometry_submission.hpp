@@ -1,6 +1,7 @@
 #pragma once
 
 #include <vice/runtime/gpu_virtual_geometry_feedback.hpp>
+#include <vice/runtime/virtual_geometry.hpp>
 #include <vice/runtime/virtual_geometry_streaming.hpp>
 
 #include <cstdint>
