@@ -42,7 +42,6 @@ struct CookResult {
     bool success = false;
     std::uint64_t source_fingerprint = 0U;
     std::vector<std::byte> bytes;
-    std::vector<std::byte> tile_archive_bytes;
     std::string diagnostics;
 };
 
