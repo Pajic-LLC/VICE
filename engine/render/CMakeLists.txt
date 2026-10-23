@@ -7,6 +7,12 @@ target_include_directories(
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
 )
 
+set_source_files_properties(
+  src/mesh_asset.cpp
+  PROPERTIES
+    COMPILE_DEFINITIONS "decode_mesh_asset=decode_mesh_asset_v1_v5;load_mesh_asset=load_mesh_asset_v1_v5"
+)
+
 target_sources(
   vice_render
   PRIVATE
@@ -14,6 +20,7 @@ target_sources(
     src/environment_asset.cpp
     src/material_asset.cpp
     src/mesh_asset.cpp
+    src/mesh_asset_v6.cpp
     src/meshlet.cpp
     src/pipeline_layout.cpp
     src/shader_asset.cpp
