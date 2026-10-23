@@ -10,6 +10,7 @@
 #include <fstream>
 #include <span>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace vice::runtime {
@@ -170,7 +171,7 @@ void write_u32_le(
     return digest;
 }
 
-[[nodiscard]] bool read_stamp(
+[[nodiscard]] bool read_unique_stamp(
     const std::filesystem::path& executable,
     std::array<std::uint8_t, stamp_size>& stamp,
     std::string& diagnostics
@@ -182,23 +183,58 @@ void write_u32_le(
     }
 
     const auto end = input.tellg();
-    if (end < static_cast<std::streamoff>(stamp_size)) {
+    if (end < 0 || end < static_cast<std::streamoff>(stamp_size)) {
         diagnostics = "Staged executable is missing VICE package metadata.";
         return false;
     }
-    input.seekg(end - static_cast<std::streamoff>(stamp_size));
-    if (!input) {
-        diagnostics = "Could not seek to VICE package metadata.";
-        return false;
-    }
+    const auto size = static_cast<std::size_t>(end);
+    std::vector<std::uint8_t> bytes(size);
+    input.seekg(0, std::ios::beg);
     input.read(
-        reinterpret_cast<char*>(stamp.data()),
-        static_cast<std::streamsize>(stamp.size())
+        reinterpret_cast<char*>(bytes.data()),
+        static_cast<std::streamsize>(bytes.size())
     );
-    if (input.gcount() != static_cast<std::streamsize>(stamp.size())) {
-        diagnostics = "Could not read complete VICE package metadata.";
+    if (!input || input.gcount() != static_cast<std::streamsize>(bytes.size())) {
+        diagnostics = "Could not read staged executable metadata.";
         return false;
     }
+
+    std::size_t match_offset = 0U;
+    std::size_t match_count = 0U;
+    for (std::size_t offset = 0U; offset + stamp_size <= bytes.size(); ++offset) {
+        if (!std::equal(
+                start_magic.begin(),
+                start_magic.end(),
+                bytes.begin() + static_cast<std::ptrdiff_t>(offset)
+            )) {
+            continue;
+        }
+        if (!std::equal(
+                end_magic.begin(),
+                end_magic.end(),
+                bytes.begin() + static_cast<std::ptrdiff_t>(offset + end_magic_offset)
+            )) {
+            continue;
+        }
+        match_offset = offset;
+        ++match_count;
+        if (match_count > 1U) break;
+    }
+
+    if (match_count == 0U) {
+        diagnostics = "Staged executable is missing VICE package metadata.";
+        return false;
+    }
+    if (match_count != 1U) {
+        diagnostics = "Staged executable contains multiple VICE package metadata records.";
+        return false;
+    }
+
+    std::copy_n(
+        bytes.begin() + static_cast<std::ptrdiff_t>(match_offset),
+        stamp_size,
+        stamp.begin()
+    );
     return true;
 }
 
@@ -261,19 +297,10 @@ bool stamp_staged_package_metadata(
 StagedPackageMetadata load_staged_package_metadata(const std::filesystem::path& executable) {
     StagedPackageMetadata result;
     std::array<std::uint8_t, stamp_size> stamp{};
-    if (!read_stamp(executable, stamp, result.diagnostics)) {
+    if (!read_unique_stamp(executable, stamp, result.diagnostics)) {
         return result;
     }
 
-    if (!std::equal(start_magic.begin(), start_magic.end(), stamp.begin()) ||
-        !std::equal(
-            end_magic.begin(),
-            end_magic.end(),
-            stamp.begin() + static_cast<std::ptrdiff_t>(end_magic_offset)
-        )) {
-        result.diagnostics = "Staged executable is missing valid VICE package metadata.";
-        return result;
-    }
     if (read_u32_le(stamp, 8U) != stamp_version) {
         result.diagnostics = "Staged executable uses an unsupported VICE package metadata version.";
         return result;
