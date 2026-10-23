@@ -8,6 +8,10 @@
 #include <iostream>
 #include <string_view>
 
+#ifndef VICE_EDITOR_TEST_RUNTIME_HOST
+#error VICE_EDITOR_TEST_RUNTIME_HOST must be defined
+#endif
+
 namespace {
 
 void require(const bool condition, const std::string_view message) {
@@ -77,21 +81,8 @@ int main() {
     require(session.has_value(), "project session opens");
     require(diagnostics.empty(), "project session diagnostics");
 
-#ifdef _WIN32
-    const auto runtime_host = root / "bin" / "vice_player.exe";
-#else
-    const auto runtime_host = root / "bin" / "vice_player";
-#endif
-    write_text(runtime_host, "VICE runtime host placeholder\n");
-    const auto permissions = std::filesystem::status(runtime_host, error).permissions();
-    require(!error, "runtime host permissions read");
-    std::filesystem::permissions(
-        runtime_host,
-        permissions | std::filesystem::perms::owner_exec,
-        std::filesystem::perm_options::replace,
-        error
-    );
-    require(!error, "runtime host permissions write");
+    const auto runtime_host = std::filesystem::path{VICE_EDITOR_TEST_RUNTIME_HOST};
+    require(std::filesystem::is_regular_file(runtime_host), "real vice_player runtime host exists");
 
     const auto built = editor::build_game_target(*session, runtime_host);
     require(static_cast<bool>(built), "game target with mesh builds");
