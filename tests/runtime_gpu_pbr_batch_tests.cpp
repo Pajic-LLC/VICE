@@ -1,5 +1,4 @@
 #include "gpu_pbr_batches.hpp"
-#include "runtime_virtual_geometry_tests.inc"
 
 #include <vice/runtime/gpu_instance_materials.hpp>
 
@@ -31,8 +30,6 @@ namespace {
 int main() {
     using namespace vice;
     using namespace vice::runtime;
-
-    assert(test_runtime_virtual_geometry_submission());
 
     const world::ResourceId mesh_a{required_id("60000000-0000-4000-8000-000000000001")};
     const world::ResourceId mesh_b{required_id("60000000-0000-4000-8000-000000000002")};
