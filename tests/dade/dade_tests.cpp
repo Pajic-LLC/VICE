@@ -50,13 +50,26 @@ void copy_player(const std::filesystem::path& destination) {
     input.read(bytes.data(), static_cast<std::streamsize>(bytes.size()));
     require(static_cast<bool>(input), "package executable read");
 
-    constexpr std::string_view marker = "VICEPKG1";
-    const auto found = std::search(bytes.begin(), bytes.end(), marker.begin(), marker.end());
-    require(found != bytes.end(), "package stamp marker");
-    const auto offset = static_cast<std::size_t>(std::distance(bytes.begin(), found));
-    const auto duplicate = std::search(found + 1, bytes.end(), marker.begin(), marker.end());
-    require(duplicate == bytes.end(), "unique package stamp marker");
-    return offset;
+    constexpr std::string_view start = "VICEPKG1";
+    constexpr std::string_view finish = "1GKPECIV";
+    std::size_t match_offset = 0U;
+    std::size_t match_count = 0U;
+    for (std::size_t offset = 0U; offset + 320U <= bytes.size(); ++offset) {
+        if (!std::equal(start.begin(), start.end(), bytes.begin() + static_cast<std::ptrdiff_t>(offset))) {
+            continue;
+        }
+        if (!std::equal(
+                finish.begin(),
+                finish.end(),
+                bytes.begin() + static_cast<std::ptrdiff_t>(offset + 312U)
+            )) {
+            continue;
+        }
+        match_offset = offset;
+        ++match_count;
+    }
+    require(match_count == 1U, "unique package metadata record");
+    return match_offset;
 }
 
 void overwrite_byte(
