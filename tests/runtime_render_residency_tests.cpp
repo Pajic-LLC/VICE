@@ -3,6 +3,7 @@
 
 #include <cstdlib>
 #include <iostream>
+#include <optional>
 #include <string_view>
 
 namespace {
@@ -201,7 +202,6 @@ int main() {
     };
     require(small_world.register_region(small_region), "small-world region registers");
     require(small_world.create_resource(mesh_resource).has_value(), "small-world mesh resource registers");
-    add_mesh; // keep the main-world helper lifetime explicit; no effect on small_world
     const auto small_entity = small_world.create_entity(required_id("81000000-0000-4000-8000-000000000090"));
     require(small_entity.has_value(), "small-world entity creates");
     require(small_world.set_spatial_state(*small_entity, world::SpatialState{

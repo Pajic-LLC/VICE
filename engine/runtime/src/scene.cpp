@@ -10,6 +10,7 @@
 #include <vice/runtime/hiz.hpp>
 #include <vice/runtime/hiz_occlusion.hpp>
 #include <vice/runtime/post_process.hpp>
+#include <vice/runtime/render_streaming.hpp>
 #include <vice/runtime/visibility.hpp>
 
 #include "bloom_shaders.hpp"
@@ -2992,7 +2993,13 @@ bool RuntimeSceneRenderer::render(
         return false;
     }
 
-    const auto instances = collect_render_mesh_instances(world);
+    auto resident_scene_build = build_runtime_render_resident_scene(world);
+    if (!resident_scene_build) {
+        set_diagnostics(diagnostics, resident_scene_build.diagnostics);
+        return false;
+    }
+    const auto& resident_scene = resident_scene_build.scene;
+    const auto& instances = resident_scene.meshes;
     for (const auto& instance : instances) {
         if (!state_->meshes.contains(instance.mesh)) {
             set_diagnostics(
@@ -3067,7 +3074,7 @@ bool RuntimeSceneRenderer::render(
         ? state_->depth_history[1U - state_->history_write_index].get()
         : current_depth;
 
-    const auto authored_lights = collect_runtime_lights(world);
+    const auto& authored_lights = resident_scene.lights;
     const auto shadow_view = directional_shadow_view(runtime_camera, authored_lights);
     auto runtime_lights = authored_lights;
     if (runtime_lights.empty()) {
@@ -3098,7 +3105,7 @@ bool RuntimeSceneRenderer::render(
         runtime_lights
     );
     const auto global_environment = state_->environment.binding();
-    const auto reflection_probes = collect_runtime_reflection_probes(world);
+    const auto& reflection_probes = resident_scene.reflection_probes;
     for (const auto& probe : reflection_probes) {
         const auto binding = state_->environment.binding(probe.environment);
         if (!binding.available || binding.scope != render::EnvironmentScope::local_probe) {
