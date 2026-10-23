@@ -21,6 +21,7 @@ add_library(
     src/module_paths.cpp
     src/post_process.cpp
     src/render_residency.cpp
+    src/render_streaming.cpp
     src/runtime.cpp
     src/scene.cpp
     src/texture_pipeline.cpp
