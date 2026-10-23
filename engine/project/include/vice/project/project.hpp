@@ -13,6 +13,7 @@ namespace vice::project {
 inline constexpr std::uint32_t project_manifest_version = 1;
 inline constexpr std::size_t project_id_size = 16;
 inline constexpr std::size_t game_target_max_size = 64;
+inline constexpr std::size_t dade_asset_id_max_size = 255;
 
 struct ProjectId {
     std::array<std::uint8_t, project_id_size> bytes{};
@@ -36,6 +37,7 @@ struct Manifest {
     std::string name;
     std::string game_name;
     std::string game_target;
+    std::string dade_asset_id;
     std::filesystem::path asset_root;
     std::filesystem::path startup_world;
 
@@ -49,6 +51,7 @@ struct LoadResult {
 
 [[nodiscard]] bool valid_relative_path(const std::filesystem::path& path) noexcept;
 [[nodiscard]] bool valid_game_target(std::string_view target) noexcept;
+[[nodiscard]] bool valid_dade_asset_id(std::string_view asset_id) noexcept;
 [[nodiscard]] std::string default_game_target(std::string_view display_name);
 [[nodiscard]] bool validate(const Manifest& manifest, std::string* diagnostics = nullptr);
 [[nodiscard]] LoadResult parse_manifest(std::string_view text);
