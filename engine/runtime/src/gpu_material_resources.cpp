@@ -131,16 +131,16 @@ template <typename TextureResolver>
     return true;
 }
 
-void reset_virtual_material_indices(RuntimeGpuMaterialTablePlan& plan) noexcept {
-    for (auto& record : plan.records) {
-        record.virtual_base_color_texture = runtime_gpu_resource_unassigned;
-        record.virtual_normal_texture = runtime_gpu_resource_unassigned;
-        record.virtual_orm_texture = runtime_gpu_resource_unassigned;
-        record.virtual_emissive_texture = runtime_gpu_resource_unassigned;
-        record.reserved[0] = runtime_gpu_resource_unassigned;
-        record.reserved[1] = runtime_gpu_resource_unassigned;
-        record.reserved[2] = runtime_gpu_resource_unassigned;
-    }
+[[nodiscard]] bool virtual_tagged(const std::uint32_t index) noexcept {
+    return index != runtime_gpu_resource_unassigned &&
+        (index & runtime_gpu_virtual_texture_flag) != 0U;
+}
+
+[[nodiscard]] bool record_uses_virtual_texture(const RuntimeGpuMaterialRecord& record) noexcept {
+    return virtual_tagged(record.base_color_texture) ||
+        virtual_tagged(record.normal_texture) ||
+        virtual_tagged(record.orm_texture) ||
+        virtual_tagged(record.emissive_texture);
 }
 
 [[nodiscard]] std::vector<world::ResourceId> virtual_candidate_textures(
@@ -259,16 +259,18 @@ void reset_virtual_material_indices(RuntimeGpuMaterialTablePlan& plan) noexcept 
 
 void build_virtual_resources(
     render::Device& device,
-    RuntimeGpuMaterialTablePlan& material_plan,
+    const RuntimeGpuMaterialTablePlan& conventional_plan,
     const RuntimeMaterialLibrary& material_library,
+    std::vector<RuntimeGpuMaterialRecord>& gpu_records,
     std::vector<render::Texture*>& material_textures,
     std::unique_ptr<RuntimeVirtualTextureResidentPool>& resident_pool,
     RuntimeVirtualTextureSamplingPlan& sampling_plan,
     std::unique_ptr<render::Texture>& descriptor_table,
     std::unique_ptr<render::Texture>& page_table
 ) {
-    reset_virtual_material_indices(material_plan);
-    const auto candidates = virtual_candidate_textures(material_plan, material_library.texture_catalog());
+    const auto candidates = virtual_candidate_textures(
+        conventional_plan, material_library.texture_catalog()
+    );
     if (candidates.empty()) return;
     const auto requests = bootstrap_requests(material_library.texture_catalog(), candidates);
     if (requests.empty()) return;
@@ -280,14 +282,13 @@ void build_virtual_resources(
         material_library.texture_catalog(), *next_pool, candidates
     );
     if (!next_sampling) return;
-    if (!apply_runtime_virtual_texture_sampling(material_plan, next_sampling, nullptr)) return;
+
+    RuntimeGpuMaterialTablePlan tagged_plan = conventional_plan;
+    if (!apply_runtime_virtual_texture_sampling(tagged_plan, next_sampling, nullptr)) return;
 
     const std::uint64_t conventional_count = material_textures.size();
     const std::uint64_t physical_count = next_sampling.physical_textures.size();
-    if (conventional_count + physical_count + 2U > std::numeric_limits<std::uint32_t>::max()) {
-        reset_virtual_material_indices(material_plan);
-        return;
-    }
+    if (conventional_count + physical_count + 2U > std::numeric_limits<std::uint32_t>::max()) return;
     const auto descriptor_slot = static_cast<std::uint32_t>(conventional_count + physical_count);
     const auto page_slot = descriptor_slot + 1U;
 
@@ -304,7 +305,6 @@ void build_virtual_resources(
     for (const auto& page : next_sampling.pages) {
         if (page.physical_slot == runtime_virtual_texture_invalid_index ||
             conventional_count + page.physical_slot > std::numeric_limits<std::uint32_t>::max()) {
-            reset_virtual_material_indices(material_plan);
             return;
         }
         page_words.push_back(static_cast<std::uint32_t>(conventional_count + page.physical_slot));
@@ -319,18 +319,10 @@ void build_virtual_resources(
     auto next_pages = create_uint_table_texture(
         device, page_words, "VICE Runtime virtual texture page table"
     );
-    if (!next_descriptors || !next_pages) {
-        reset_virtual_material_indices(material_plan);
-        return;
-    }
+    if (!next_descriptors || !next_pages) return;
 
-    for (auto& record : material_plan.records) {
-        if (record.virtual_base_color_texture == runtime_gpu_resource_unassigned &&
-            record.virtual_normal_texture == runtime_gpu_resource_unassigned &&
-            record.virtual_orm_texture == runtime_gpu_resource_unassigned &&
-            record.virtual_emissive_texture == runtime_gpu_resource_unassigned) {
-            continue;
-        }
+    for (auto& record : tagged_plan.records) {
+        if (!record_uses_virtual_texture(record)) continue;
         record.reserved[0] = descriptor_slot;
         record.reserved[1] = page_slot;
         record.reserved[2] = runtime_gpu_resource_unassigned;
@@ -343,6 +335,7 @@ void build_virtual_resources(
     );
     material_textures.push_back(next_descriptors.get());
     material_textures.push_back(next_pages.get());
+    gpu_records = std::move(tagged_plan.records);
     resident_pool = std::move(next_pool);
     sampling_plan = std::move(next_sampling);
     descriptor_table = std::move(next_descriptors);
@@ -355,6 +348,7 @@ void RuntimeGpuMaterialResourceTable::clear() noexcept {
     textures_.clear();
     samplers_.clear();
     owned_samplers_.clear();
+    material_records_.clear();
     virtual_texture_descriptors_.reset();
     virtual_texture_pages_.reset();
     virtual_sampling_plan_ = {};
@@ -368,6 +362,7 @@ bool RuntimeGpuMaterialResourceTable::initialize(
     std::string* const diagnostics
 ) {
     clear();
+    material_records_ = plan.records;
     return build_resources(
         device,
         plan,
@@ -383,12 +378,12 @@ bool RuntimeGpuMaterialResourceTable::initialize(
 
 bool RuntimeGpuMaterialResourceTable::initialize(
     render::Device& device,
-    RuntimeGpuMaterialTablePlan& plan,
+    const RuntimeGpuMaterialTablePlan& plan,
     const RuntimeMaterialLibrary& material_library,
     std::string* const diagnostics
 ) {
     clear();
-    reset_virtual_material_indices(plan);
+    material_records_ = plan.records;
     if (!build_resources(
             device,
             plan,
@@ -406,6 +401,7 @@ bool RuntimeGpuMaterialResourceTable::initialize(
         device,
         plan,
         material_library,
+        material_records_,
         textures_,
         virtual_resident_pool_,
         virtual_sampling_plan_,
@@ -421,6 +417,10 @@ RuntimeGpuMaterialResourceTableView RuntimeGpuMaterialResourceTable::view() cons
         .textures = textures_,
         .samplers = samplers_,
     };
+}
+
+std::span<const RuntimeGpuMaterialRecord> RuntimeGpuMaterialResourceTable::material_records() const noexcept {
+    return material_records_;
 }
 
 } // namespace vice::runtime::detail
