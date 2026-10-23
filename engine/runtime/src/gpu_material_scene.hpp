@@ -43,6 +43,12 @@ public:
         std::string* diagnostics = nullptr
     );
 
+    [[nodiscard]] bool refresh_resources(
+        render::Device& device,
+        const RuntimeMaterialLibrary& material_library,
+        std::string* diagnostics = nullptr
+    );
+
     [[nodiscard]] bool upload(
         render::CommandList& commands,
         std::span<const RenderMeshInstance> instances,
