@@ -5,6 +5,7 @@
 #include <vice/runtime/gpu_material_table.hpp>
 #include <vice/runtime/virtual_texture_sampling.hpp>
 
+#include <cstddef>
 #include <memory>
 #include <span>
 #include <string>
@@ -43,8 +44,17 @@ public:
         std::string* diagnostics = nullptr
     );
 
+    [[nodiscard]] bool apply_virtual_texture_feedback(
+        render::Device& device,
+        const RuntimeGpuMaterialTablePlan& plan,
+        const RuntimeMaterialLibrary& material_library,
+        std::span<const RuntimeVirtualTextureTileKey> requests,
+        std::string* diagnostics = nullptr
+    );
+
     [[nodiscard]] RuntimeGpuMaterialResourceTableView view() const noexcept;
     [[nodiscard]] std::span<const RuntimeGpuMaterialRecord> material_records() const noexcept;
+    [[nodiscard]] const RuntimeVirtualTextureSamplingPlan& virtual_sampling_plan() const noexcept;
 
 private:
     void clear() noexcept;
@@ -53,6 +63,9 @@ private:
     std::vector<std::unique_ptr<render::Sampler>> owned_samplers_;
     std::vector<render::Sampler*> samplers_;
     std::vector<RuntimeGpuMaterialRecord> material_records_;
+    std::size_t conventional_texture_count_ = 0U;
+    std::vector<world::ResourceId> virtual_candidate_textures_;
+    std::vector<RuntimeVirtualTextureTileKey> virtual_bootstrap_requests_;
     std::unique_ptr<RuntimeVirtualTextureResidentPool> virtual_resident_pool_;
     RuntimeVirtualTextureSamplingPlan virtual_sampling_plan_;
     std::unique_ptr<render::Texture> virtual_texture_descriptors_;
