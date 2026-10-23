@@ -1,0 +1,34 @@
+name: Apply texture eviction order
+
+on:
+  push:
+    branches:
+      - feat/250-resource-budgets
+    paths:
+      - scripts/apply_texture_eviction_order.py
+      - .github/workflows/texture-eviction-order.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/250-resource-budgets
+          fetch-depth: 0
+      - name: Apply guarded texture eviction-order patch
+        run: python3 scripts/apply_texture_eviction_order.py
+      - name: Remove one-shot helpers
+        run: |
+          rm scripts/apply_texture_eviction_order.py
+          rm .github/workflows/texture-eviction-order.yml
+      - name: Commit texture eviction ordering
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add engine/runtime/src/texture_pipeline.cpp scripts/apply_texture_eviction_order.py .github/workflows/texture-eviction-order.yml
+          git commit -m "Evict stale textures before residency uploads (#250)"
+          git push origin HEAD:feat/250-resource-budgets
