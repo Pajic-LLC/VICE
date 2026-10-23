@@ -1,5 +1,6 @@
 #include <vice/render/mesh_asset.hpp>
 #include <vice/render/meshlet.hpp>
+#include <vice/render/virtual_geometry_selection.hpp>
 #include <vice/tools/mesh_cooker.hpp>
 
 #include <algorithm>
@@ -124,6 +125,25 @@ vice::render::VirtualGeometryPageTable make_page_table(const std::uint32_t page_
         triangle_offset += stream_count;
     }
     return table;
+}
+
+vice::render::VirtualGeometrySelectionView make_selection_view(
+    const float right_extent = 100.0F
+) {
+    using namespace vice;
+    render::VirtualGeometrySelectionView view;
+    view.frustum_planes = {
+        render::VirtualGeometryFrustumPlane{.normal = {1.0F, 0.0F, 0.0F}, .distance = 100.0F},
+        render::VirtualGeometryFrustumPlane{.normal = {-1.0F, 0.0F, 0.0F}, .distance = right_extent},
+        render::VirtualGeometryFrustumPlane{.normal = {0.0F, 1.0F, 0.0F}, .distance = 100.0F},
+        render::VirtualGeometryFrustumPlane{.normal = {0.0F, -1.0F, 0.0F}, .distance = 100.0F},
+        render::VirtualGeometryFrustumPlane{.normal = {0.0F, 0.0F, 1.0F}, .distance = -1.0F},
+        render::VirtualGeometryFrustumPlane{.normal = {0.0F, 0.0F, -1.0F}, .distance = 10'000.0F},
+    };
+    view.vertical_fov_radians = 1.0471975512F;
+    view.viewport_height_pixels = 1080.0F;
+    view.max_projected_error_pixels = 5.0F;
+    return view;
 }
 
 bool contains(
@@ -299,6 +319,106 @@ int main() {
     assert(seventeen_page_hierarchy.hierarchy->nodes.size() == 25U);
     assert(seventeen_page_hierarchy.hierarchy->nodes[0].child_count == 2U);
     assert_hierarchy_valid(*seventeen_page_hierarchy.hierarchy, 17U);
+
+    const auto view = make_selection_view();
+    render::VirtualGeometrySelectionTransform one_page_transform;
+    one_page_transform.translation = {0.0F, 0.0F, 10.0F};
+    const auto one_page_selection = render::select_virtual_geometry(
+        *one_page_hierarchy.hierarchy, view, one_page_transform
+    );
+    assert(one_page_selection);
+    assert(one_page_selection.selection->selected_node_indices == std::vector<std::uint32_t>{0U});
+    assert(one_page_selection.selection->authoritative_page_indices == std::vector<std::uint32_t>{0U});
+
+    render::VirtualGeometrySelectionTransform far_transform;
+    far_transform.translation = {0.0F, 0.0F, 5'000.0F};
+    const auto far_selection = render::select_virtual_geometry(
+        *five_page_hierarchy.hierarchy, view, far_transform
+    );
+    const auto far_selection_repeat = render::select_virtual_geometry(
+        *five_page_hierarchy.hierarchy, view, far_transform
+    );
+    assert(far_selection);
+    assert(far_selection_repeat);
+    assert(*far_selection.selection == *far_selection_repeat.selection);
+    assert(far_selection.selection->selected_node_indices == std::vector<std::uint32_t>{0U});
+    assert(far_selection.selection->authoritative_page_indices ==
+        (std::vector<std::uint32_t>{0U, 1U, 2U, 3U, 4U}));
+
+    render::VirtualGeometrySelectionTransform near_transform;
+    near_transform.translation = {0.0F, 0.0F, 20.0F};
+    auto strict_view = view;
+    strict_view.max_projected_error_pixels = 0.0F;
+    const auto near_selection = render::select_virtual_geometry(
+        *five_page_hierarchy.hierarchy, strict_view, near_transform
+    );
+    assert(near_selection);
+    assert(near_selection.selection->selected_node_indices.size() == 5U);
+    assert(near_selection.selection->authoritative_page_indices ==
+        (std::vector<std::uint32_t>{0U, 1U, 2U, 3U, 4U}));
+    for (const std::uint32_t node_index : near_selection.selection->selected_node_indices) {
+        assert(five_page_hierarchy.hierarchy->nodes[node_index].child_count == 0U);
+    }
+
+    auto clipped_view = view;
+    clipped_view.frustum_planes[1].distance = 25.0F;
+    const auto clipped_far_selection = render::select_virtual_geometry(
+        *five_page_hierarchy.hierarchy, clipped_view, far_transform
+    );
+    assert(clipped_far_selection);
+    assert(clipped_far_selection.selection->selected_node_indices ==
+        std::vector<std::uint32_t>{0U});
+    assert(clipped_far_selection.selection->authoritative_page_indices ==
+        (std::vector<std::uint32_t>{0U, 1U, 2U}));
+
+    render::VirtualGeometrySelectionTransform outside_transform;
+    outside_transform.translation = {1'000.0F, 0.0F, 5'000.0F};
+    const auto outside_selection = render::select_virtual_geometry(
+        *five_page_hierarchy.hierarchy, view, outside_transform
+    );
+    assert(outside_selection);
+    assert(outside_selection.selection->selected_node_indices.empty());
+    assert(outside_selection.selection->authoritative_page_indices.empty());
+
+    render::VirtualGeometrySelectionTransform behind_near_transform;
+    behind_near_transform.translation = {0.0F, 0.0F, -5.0F};
+    const auto behind_near_selection = render::select_virtual_geometry(
+        *one_page_hierarchy.hierarchy, view, behind_near_transform
+    );
+    assert(behind_near_selection);
+    assert(behind_near_selection.selection->selected_node_indices.empty());
+    assert(behind_near_selection.selection->authoritative_page_indices.empty());
+
+    auto invalid_view = view;
+    invalid_view.vertical_fov_radians = 0.0F;
+    assert(!render::select_virtual_geometry(
+        *five_page_hierarchy.hierarchy, invalid_view, far_transform
+    ));
+    invalid_view = view;
+    invalid_view.viewport_height_pixels = 0.0F;
+    assert(!render::select_virtual_geometry(
+        *five_page_hierarchy.hierarchy, invalid_view, far_transform
+    ));
+    invalid_view = view;
+    invalid_view.max_projected_error_pixels = -1.0F;
+    assert(!render::select_virtual_geometry(
+        *five_page_hierarchy.hierarchy, invalid_view, far_transform
+    ));
+    invalid_view = view;
+    invalid_view.frustum_planes[0].normal = {2.0F, 0.0F, 0.0F};
+    assert(!render::select_virtual_geometry(
+        *five_page_hierarchy.hierarchy, invalid_view, far_transform
+    ));
+
+    auto invalid_transform = far_transform;
+    invalid_transform.linear[0] = std::numeric_limits<float>::infinity();
+    assert(!render::select_virtual_geometry(
+        *five_page_hierarchy.hierarchy, view, invalid_transform
+    ));
+
+    auto invalid_hierarchy = *five_page_hierarchy.hierarchy;
+    invalid_hierarchy.nodes[1].parent_index = render::virtual_geometry_invalid_node;
+    assert(!render::select_virtual_geometry(invalid_hierarchy, view, far_transform));
 
     auto gapped_pages = five_pages;
     gapped_pages.pages[1].meshlet_offset += 1U;
