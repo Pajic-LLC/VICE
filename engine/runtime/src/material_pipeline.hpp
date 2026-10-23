@@ -53,6 +53,10 @@ public:
     );
 
     [[nodiscard]] RuntimeMaterialBinding find(world::ResourceId resource_id) const noexcept;
+    [[nodiscard]] render::Texture* resolve_texture(
+        world::ResourceId resource_id,
+        RuntimeMaterialTextureChannel channel
+    ) const noexcept;
     [[nodiscard]] const CookedRenderMaterialCatalog& catalog() const noexcept;
     [[nodiscard]] const CookedTextureCatalog& texture_catalog() const noexcept;
     [[nodiscard]] std::uint64_t texture_residency_generation() const noexcept;
