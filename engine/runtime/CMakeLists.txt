@@ -24,6 +24,7 @@ add_library(
     src/material_pipeline.cpp
     src/module_loader.cpp
     src/module_paths.cpp
+    src/package_metadata.cpp
     src/post_process.cpp
     src/render_residency.cpp
     src/render_streaming.cpp

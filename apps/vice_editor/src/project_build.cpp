@@ -6,6 +6,8 @@
 
 #include <vice/platform/dynamic_library.hpp>
 #include <vice/project/project.hpp>
+#include <vice/runtime/dade.hpp>
+#include <vice/runtime/package_metadata.hpp>
 #include <vice/tools/world_cooker.hpp>
 #include <vice/world/snapshot_file.hpp>
 
@@ -547,6 +549,11 @@ ProjectBuildResult build_game_target(
         );
     }
 
+    const auto dade_requirement = runtime::load_dade_requirement(session.manifest_path());
+    if (!dade_requirement) {
+        return fail_build("Could not read DADE ownership settings: " + dade_requirement.diagnostics);
+    }
+
     const auto output_root = session.game_output_root();
     if (output_root.empty()) {
         return fail_build("Project game output root could not be resolved.");
@@ -602,6 +609,17 @@ ProjectBuildResult build_game_target(
         return fail_build(
             "Could not preserve game target executable permissions: " + message
         );
+    }
+
+    std::string package_diagnostics;
+    if (!runtime::stamp_staged_package_metadata(
+            staged_executable,
+            dade_requirement.required,
+            dade_requirement.asset_id,
+            &package_diagnostics
+        )) {
+        cleanup_staging();
+        return fail_build("Could not protect staged package metadata: " + package_diagnostics);
     }
 
     const auto staged_manifest = staging_root / "vice.runtime.viceproj";
