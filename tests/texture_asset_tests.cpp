@@ -147,8 +147,9 @@ color_space srgb
     assert(decoded.asset->mip_levels[1].payload_offset == 8U);
     assert(decoded.asset->mip_levels[1].payload_size == 4U);
 
-    const auto odd_cooked = tools::texture_cooker::cook(*parsed.source, make_p6(257U, 129U));
-    const auto odd_repeat = tools::texture_cooker::cook(*parsed.source, make_p6(257U, 129U));
+    const auto odd_source = make_p6(257U, 129U);
+    const auto odd_cooked = tools::texture_cooker::cook(*parsed.source, odd_source);
+    const auto odd_repeat = tools::texture_cooker::cook(*parsed.source, odd_source);
     assert(odd_cooked.success);
     assert(odd_repeat.success);
     assert(odd_repeat.bytes == odd_cooked.bytes);
@@ -162,13 +163,14 @@ color_space srgb
     assert(odd.asset->virtual_tiles.size() == 16U);
     assert(odd.asset->mip_levels[0].first_tile == 0U);
     assert(odd.asset->mip_levels[0].tile_count == 6U);
-    assert(odd.asset->virtual_tiles[5] == render::VirtualTextureTile{
+    const render::VirtualTextureTile expected_edge_tile{
         .mip_level = 0U,
         .tile_x = 2U,
         .tile_y = 1U,
         .width = 1U,
         .height = 1U,
-    });
+    };
+    assert(odd.asset->virtual_tiles[5] == expected_edge_tile);
     assert(odd.asset->mip_levels[1].first_tile == 6U);
     assert(odd.asset->mip_levels[1].tile_count == 2U);
     assert(odd.asset->virtual_tiles[7].width == 1U);
