@@ -13,6 +13,7 @@ add_library(
     src/gpu_meshlet_table.cpp
     src/gpu_pbr_batches.cpp
     src/gpu_shadow_batches.cpp
+    src/gpu_virtual_geometry.cpp
     src/gpu_visibility_set.cpp
     src/hiz.cpp
     src/hiz_occlusion.cpp
