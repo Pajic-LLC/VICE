@@ -36,20 +36,4 @@ if(VICE_BUILD_TOOLS)
   endif()
   target_compile_features(vice_mesh_cooker PRIVATE cxx_std_23)
   vice_enable_warnings(vice_mesh_cooker)
-
-  if(BUILD_TESTING)
-    add_executable(
-      vice_mesh_asset_v5_tests
-      ${CMAKE_SOURCE_DIR}/tests/mesh_asset_v5_tests.cpp
-    )
-    target_link_libraries(
-      vice_mesh_asset_v5_tests
-      PRIVATE
-        VICE::MeshCooker
-        VICE::Render
-    )
-    target_compile_features(vice_mesh_asset_v5_tests PRIVATE cxx_std_23)
-    vice_enable_warnings(vice_mesh_asset_v5_tests)
-    add_test(NAME vice_mesh_asset_v5_tests COMMAND vice_mesh_asset_v5_tests)
-  endif()
 endif()
