@@ -69,4 +69,22 @@ if(VICE_BUILD_TOOLS)
     NAME vice_mesh_asset_v7_streaming_tests
     COMMAND vice_mesh_asset_v7_streaming_tests
   )
+
+  add_executable(
+    vice_runtime_virtual_geometry_submission_tests
+    runtime_virtual_geometry_submission_tests.cpp
+  )
+  target_link_libraries(
+    vice_runtime_virtual_geometry_submission_tests
+    PRIVATE
+      VICE::MeshCooker
+      VICE::Render
+      VICE::Runtime
+  )
+  target_compile_features(vice_runtime_virtual_geometry_submission_tests PRIVATE cxx_std_23)
+  vice_enable_warnings(vice_runtime_virtual_geometry_submission_tests)
+  add_test(
+    NAME vice_runtime_virtual_geometry_submission_tests
+    COMMAND vice_runtime_virtual_geometry_submission_tests
+  )
 endif()
