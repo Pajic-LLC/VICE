@@ -6,6 +6,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -17,6 +18,8 @@ struct Options {
     std::string macos_identity = "-";
     std::filesystem::path signtool = "signtool.exe";
     std::string certificate_sha1;
+    std::filesystem::path certificate_file;
+    std::string certificate_password;
     std::string timestamp_url;
 };
 
@@ -27,7 +30,8 @@ void usage() {
 #if defined(__APPLE__)
         << "    [--identity <codesign identity>]\n";
 #elif defined(_WIN32)
-        << "    --certificate-sha1 <thumbprint> [--signtool <path>] [--timestamp-url <url>]\n";
+        << "    (--certificate-sha1 <thumbprint> | --certificate-file <pfx>)\n"
+        << "    [--certificate-password <password>] [--signtool <path>] [--timestamp-url <url>]\n";
 #else
         << "\n";
 #endif
@@ -69,6 +73,14 @@ void usage() {
             auto value = take_value(argument);
             if (!value.has_value()) return std::nullopt;
             options.certificate_sha1 = std::move(*value);
+        } else if (argument == "--certificate-file") {
+            auto value = take_value(argument);
+            if (!value.has_value()) return std::nullopt;
+            options.certificate_file = *value;
+        } else if (argument == "--certificate-password") {
+            auto value = take_value(argument);
+            if (!value.has_value()) return std::nullopt;
+            options.certificate_password = std::move(*value);
         } else if (argument == "--timestamp-url") {
             auto value = take_value(argument);
             if (!value.has_value()) return std::nullopt;
@@ -88,8 +100,14 @@ void usage() {
         return std::nullopt;
     }
 #if defined(_WIN32)
-    if (options.certificate_sha1.empty()) {
-        std::cerr << "--certificate-sha1 is required on Windows.\n";
+    const bool uses_thumbprint = !options.certificate_sha1.empty();
+    const bool uses_file = !options.certificate_file.empty();
+    if (uses_thumbprint == uses_file) {
+        std::cerr << "Use exactly one of --certificate-sha1 or --certificate-file on Windows.\n";
+        return std::nullopt;
+    }
+    if (!uses_file && !options.certificate_password.empty()) {
+        std::cerr << "--certificate-password requires --certificate-file.\n";
         return std::nullopt;
     }
 #endif
@@ -146,11 +164,20 @@ void usage() {
         "sign",
         "/fd",
         "SHA256",
-        "/s",
-        "My",
-        "/sha1",
-        options.certificate_sha1,
     };
+    if (!options.certificate_file.empty()) {
+        sign_arguments.push_back("/f");
+        sign_arguments.push_back(options.certificate_file.generic_string());
+        if (!options.certificate_password.empty()) {
+            sign_arguments.push_back("/p");
+            sign_arguments.push_back(options.certificate_password);
+        }
+    } else {
+        sign_arguments.push_back("/s");
+        sign_arguments.push_back("My");
+        sign_arguments.push_back("/sha1");
+        sign_arguments.push_back(options.certificate_sha1);
+    }
     if (!options.timestamp_url.empty()) {
         sign_arguments.push_back("/tr");
         sign_arguments.push_back(options.timestamp_url);
