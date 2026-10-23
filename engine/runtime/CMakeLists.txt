@@ -15,6 +15,7 @@ add_library(
     src/gpu_shadow_batches.cpp
     src/gpu_virtual_geometry.cpp
     src/gpu_virtual_geometry_feedback.cpp
+    src/gpu_virtual_geometry_feedback_ring.cpp
     src/gpu_visibility_set.cpp
     src/hiz.cpp
     src/hiz_occlusion.cpp
@@ -29,6 +30,7 @@ add_library(
     src/scene.cpp
     src/texture_pipeline.cpp
     src/virtual_geometry.cpp
+    src/virtual_geometry_gpu_arena.cpp
     src/virtual_geometry_streaming.cpp
     src/virtual_geometry_submission.cpp
     src/visibility.cpp

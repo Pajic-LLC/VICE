@@ -7,6 +7,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <memory>
 #include <span>
 #include <string_view>
@@ -556,6 +557,14 @@ public:
     [[nodiscard]] virtual MemoryLocation memory_location() const noexcept = 0;
     virtual bool write(std::uint64_t offset, std::span<const std::byte> data) = 0;
     virtual bool read(std::uint64_t offset, std::span<std::byte> data) = 0;
+
+    [[nodiscard]] virtual Buffer& binding_buffer() noexcept {
+        return *this;
+    }
+
+    [[nodiscard]] virtual std::uint64_t binding_offset() const noexcept {
+        return 0U;
+    }
 };
 
 class Texture {
@@ -641,6 +650,29 @@ public:
         (void)offset;
         return false;
     }
+
+    bool set_vertex_buffer_resolved(
+        const std::uint32_t slot,
+        Buffer& buffer,
+        const std::uint64_t offset = 0U
+    ) {
+        if (offset > buffer.size()) return false;
+        const std::uint64_t base = buffer.binding_offset();
+        if (base > std::numeric_limits<std::uint64_t>::max() - offset) return false;
+        return set_vertex_buffer(slot, buffer.binding_buffer(), base + offset);
+    }
+
+    bool set_index_buffer_resolved(
+        Buffer& buffer,
+        const IndexFormat format,
+        const std::uint64_t offset = 0U
+    ) {
+        if (offset > buffer.size()) return false;
+        const std::uint64_t base = buffer.binding_offset();
+        if (base > std::numeric_limits<std::uint64_t>::max() - offset) return false;
+        return set_index_buffer(buffer.binding_buffer(), format, base + offset);
+    }
+
     virtual bool set_graphics_constant_buffer(
         const ShaderBindingKey& binding,
         Buffer& buffer,
