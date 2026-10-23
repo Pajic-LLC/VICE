@@ -15,6 +15,7 @@
 #include <string_view>
 #include <system_error>
 #include <utility>
+#include <vector>
 
 namespace vice::tools::texture_cooker {
 namespace {
@@ -136,6 +137,110 @@ private:
     const std::uint64_t pixels = static_cast<std::uint64_t>(width) * height;
     if (pixels > std::numeric_limits<std::size_t>::max() / 3U) return false;
     rgb_bytes = static_cast<std::size_t>(pixels * 3U);
+    return true;
+}
+
+[[nodiscard]] constexpr std::uint32_t next_mip_extent(const std::uint32_t extent) noexcept {
+    return extent > 1U ? (extent + 1U) / 2U : 1U;
+}
+
+[[nodiscard]] std::vector<std::byte> downsample_rgba8(
+    const std::span<const std::byte> source,
+    const std::uint32_t source_width,
+    const std::uint32_t source_height
+) {
+    const std::uint32_t width = next_mip_extent(source_width);
+    const std::uint32_t height = next_mip_extent(source_height);
+    std::vector<std::byte> output(static_cast<std::size_t>(width) * height * 4U);
+    for (std::uint32_t y = 0U; y < height; ++y) {
+        for (std::uint32_t x = 0U; x < width; ++x) {
+            std::uint32_t sums[4]{};
+            std::uint32_t sample_count = 0U;
+            for (std::uint32_t dy = 0U; dy < 2U; ++dy) {
+                const std::uint32_t source_y = y * 2U + dy;
+                if (source_y >= source_height) continue;
+                for (std::uint32_t dx = 0U; dx < 2U; ++dx) {
+                    const std::uint32_t source_x = x * 2U + dx;
+                    if (source_x >= source_width) continue;
+                    const std::size_t source_pixel =
+                        (static_cast<std::size_t>(source_y) * source_width + source_x) * 4U;
+                    for (std::size_t channel = 0U; channel < 4U; ++channel) {
+                        sums[channel] += std::to_integer<std::uint8_t>(source[source_pixel + channel]);
+                    }
+                    ++sample_count;
+                }
+            }
+            const std::size_t destination_pixel =
+                (static_cast<std::size_t>(y) * width + x) * 4U;
+            for (std::size_t channel = 0U; channel < 4U; ++channel) {
+                output[destination_pixel + channel] = static_cast<std::byte>(
+                    (sums[channel] + sample_count / 2U) / sample_count
+                );
+            }
+        }
+    }
+    return output;
+}
+
+[[nodiscard]] bool build_virtual_texture_payload(
+    const ImageData& image,
+    render::TextureAsset& asset
+) {
+    asset.version = render::texture_asset_format_version_v2;
+    asset.rgba8.clear();
+    asset.mip_levels.clear();
+    asset.virtual_tiles.clear();
+
+    std::uint32_t width = image.width;
+    std::uint32_t height = image.height;
+    std::vector<std::byte> mip = image.rgba8;
+    std::uint32_t mip_level = 0U;
+    for (;;) {
+        if (asset.rgba8.size() > std::numeric_limits<std::uint64_t>::max() - mip.size() ||
+            asset.virtual_tiles.size() > std::numeric_limits<std::uint32_t>::max()) {
+            return false;
+        }
+        const std::uint64_t payload_offset = static_cast<std::uint64_t>(asset.rgba8.size());
+        const std::uint32_t first_tile = static_cast<std::uint32_t>(asset.virtual_tiles.size());
+        const std::uint32_t columns = (width + render::virtual_texture_tile_extent - 1U) /
+            render::virtual_texture_tile_extent;
+        const std::uint32_t rows = (height + render::virtual_texture_tile_extent - 1U) /
+            render::virtual_texture_tile_extent;
+        const std::uint64_t tile_count_64 = static_cast<std::uint64_t>(columns) * rows;
+        if (tile_count_64 > std::numeric_limits<std::uint32_t>::max() ||
+            static_cast<std::uint64_t>(first_tile) + tile_count_64 >
+                std::numeric_limits<std::uint32_t>::max()) {
+            return false;
+        }
+        for (std::uint32_t tile_y = 0U; tile_y < rows; ++tile_y) {
+            for (std::uint32_t tile_x = 0U; tile_x < columns; ++tile_x) {
+                const std::uint32_t pixel_x = tile_x * render::virtual_texture_tile_extent;
+                const std::uint32_t pixel_y = tile_y * render::virtual_texture_tile_extent;
+                asset.virtual_tiles.push_back(render::VirtualTextureTile{
+                    .mip_level = mip_level,
+                    .tile_x = tile_x,
+                    .tile_y = tile_y,
+                    .width = std::min(render::virtual_texture_tile_extent, width - pixel_x),
+                    .height = std::min(render::virtual_texture_tile_extent, height - pixel_y),
+                });
+            }
+        }
+        asset.mip_levels.push_back(render::TextureMipLevel{
+            .width = width,
+            .height = height,
+            .payload_offset = payload_offset,
+            .payload_size = static_cast<std::uint64_t>(mip.size()),
+            .first_tile = first_tile,
+            .tile_count = static_cast<std::uint32_t>(tile_count_64),
+        });
+        asset.rgba8.insert(asset.rgba8.end(), mip.begin(), mip.end());
+
+        if (width == 1U && height == 1U) break;
+        mip = downsample_rgba8(mip, width, height);
+        width = next_mip_extent(width);
+        height = next_mip_extent(height);
+        ++mip_level;
+    }
     return true;
 }
 
@@ -337,7 +442,10 @@ CookResult cook(
     asset.width = decoded.image->width;
     asset.height = decoded.image->height;
     asset.color_space = source.color_space;
-    asset.rgba8 = decoded.image->rgba8;
+    if (!build_virtual_texture_payload(*decoded.image, asset)) {
+        result.diagnostics = "Texture mip/tile cooking exceeded the virtual texture layout contract.";
+        return result;
+    }
     const auto encoded = render::encode_texture_asset(asset);
     if (!encoded) {
         result.diagnostics = encoded.diagnostics;
