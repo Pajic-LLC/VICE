@@ -1,0 +1,34 @@
+name: Apply resource residency regression updates
+
+on:
+  push:
+    branches:
+      - feat/250-resource-budgets
+    paths:
+      - scripts/apply_resource_residency_test_updates.py
+      - .github/workflows/resource-residency-test-updates.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/250-resource-budgets
+          fetch-depth: 0
+      - name: Apply guarded residency regression updates
+        run: python3 scripts/apply_resource_residency_test_updates.py
+      - name: Remove one-shot helpers
+        run: |
+          rm scripts/apply_resource_residency_test_updates.py
+          rm .github/workflows/resource-residency-test-updates.yml
+      - name: Commit residency regression updates
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add tests/runtime_gpu_material_table_tests.cpp tests/runtime_gpu_material_resources_tests.cpp scripts/apply_resource_residency_test_updates.py .github/workflows/resource-residency-test-updates.yml
+          git commit -m "Test Runtime texture residency transitions (#250)"
+          git push origin HEAD:feat/250-resource-budgets
