@@ -26,6 +26,7 @@ add_library(
     src/runtime.cpp
     src/scene.cpp
     src/texture_pipeline.cpp
+    src/virtual_geometry.cpp
     src/visibility.cpp
 )
 

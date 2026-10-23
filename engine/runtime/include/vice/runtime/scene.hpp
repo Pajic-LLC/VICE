@@ -23,6 +23,7 @@ struct CookedMeshRecord {
     world::ResourceId resource_id{};
     std::filesystem::path path;
     render::MeshAsset asset;
+    bool runtime_generated = false;
 };
 
 class CookedMeshCatalog final {
@@ -31,6 +32,10 @@ public:
     [[nodiscard]] const CookedMeshRecord* find(world::ResourceId resource_id) const noexcept;
     [[nodiscard]] std::span<const CookedMeshRecord> records() const noexcept;
     [[nodiscard]] const std::string& diagnostics() const noexcept;
+    [[nodiscard]] bool upsert_runtime_record(
+        CookedMeshRecord record,
+        std::string* diagnostics = nullptr
+    );
 
 private:
     std::vector<CookedMeshRecord> records_;
@@ -61,6 +66,7 @@ struct RenderMeshInstance {
     std::optional<world::ResourceId> material;
     world::SpatialState spatial{};
     world::AuthoredTransform authored{};
+    std::uint32_t geometry_node_index = render::virtual_geometry_invalid_node;
 };
 
 struct RuntimeCameraView {
@@ -301,6 +307,14 @@ public:
     );
 
 private:
+    [[nodiscard]] bool render_legacy(
+        const world::World& world,
+        render::Swapchain& swapchain,
+        platform::WindowMetrics metrics,
+        render::Color clear_color,
+        std::string* diagnostics
+    );
+
     struct State;
     std::unique_ptr<State> state_;
 };
