@@ -98,10 +98,11 @@ struct RuntimeGpuVirtualGeometryFeedbackRing::State {
         render::SubmissionId submission = render::invalid_submission;
         std::uint64_t serial = 0U;
         bool reserved = false;
+        bool captured = false;
     };
 
     render::Device* device = nullptr;
-    std::array<Slot, 2U> slots{};
+    std::array<Slot, runtime_gpu_virtual_geometry_feedback_lane_count> slots{};
     std::uint64_t next_serial = 1U;
 };
 
@@ -130,6 +131,7 @@ bool RuntimeGpuVirtualGeometryFeedbackRing::initialize(
         slot.submission = render::invalid_submission;
         slot.serial = 0U;
         slot.reserved = false;
+        slot.captured = false;
     }
     state_->device = &device;
     state_->next_serial = 1U;
@@ -157,7 +159,7 @@ RuntimeGpuVirtualGeometryFeedbackPollResult RuntimeGpuVirtualGeometryFeedbackRin
     std::uint64_t selected_serial = 0U;
     for (std::size_t index = 0U; index < state_->slots.size(); ++index) {
         const auto& slot = state_->slots[index];
-        if (slot.reserved || slot.submission == render::invalid_submission ||
+        if (slot.reserved || !slot.captured || slot.submission == render::invalid_submission ||
             slot.submission > completed) {
             continue;
         }
@@ -184,27 +186,26 @@ RuntimeGpuVirtualGeometryFeedbackPollResult RuntimeGpuVirtualGeometryFeedbackRin
             slot.identities.clear();
             slot.submission = render::invalid_submission;
             slot.serial = 0U;
+            slot.captured = false;
         }
     }
     return result;
 }
 
-RuntimeGpuVirtualGeometryFeedbackEncodeResult RuntimeGpuVirtualGeometryFeedbackRing::encode(
-    render::CommandList& commands,
-    const RuntimeGpuVirtualGeometrySelectionResult& selection,
+RuntimeGpuVirtualGeometryFeedbackAcquireResult RuntimeGpuVirtualGeometryFeedbackRing::acquire(
     const RuntimeGpuVirtualGeometryPlan& plan,
     const std::span<const RenderMeshInstance> instances
 ) {
-    RuntimeGpuVirtualGeometryFeedbackEncodeResult result;
+    RuntimeGpuVirtualGeometryFeedbackAcquireResult result;
     if (state_ == nullptr || state_->device == nullptr) {
         result.diagnostics = "Runtime GPU virtual geometry feedback ring is not initialized.";
         return result;
     }
     if (instances.size() != plan.scene_instance_count) {
-        result.diagnostics = "Runtime GPU virtual geometry feedback capture received incompatible scene identity input.";
+        result.diagnostics = "Runtime GPU virtual geometry feedback acquisition received incompatible scene identity input.";
         return result;
     }
-    if (selection.candidate_count == 0U) return result;
+    if (plan.candidates.empty()) return result;
 
     std::size_t slot_index = state_->slots.size();
     for (std::size_t index = 0U; index < state_->slots.size(); ++index) {
@@ -214,29 +215,46 @@ RuntimeGpuVirtualGeometryFeedbackEncodeResult RuntimeGpuVirtualGeometryFeedbackR
             break;
         }
     }
-    if (slot_index == state_->slots.size()) {
-        return result;
-    }
-
-    auto& slot = state_->slots[slot_index];
-    std::string diagnostics;
-    if (!slot.feedback.capture(commands, selection, &diagnostics)) {
-        result.diagnostics = std::move(diagnostics);
-        return result;
-    }
+    if (slot_index == state_->slots.size()) return result;
     if (state_->next_serial == std::numeric_limits<std::uint64_t>::max()) {
         result.diagnostics = "Runtime GPU virtual geometry feedback serial overflowed.";
         return result;
     }
+
+    auto& slot = state_->slots[slot_index];
     slot.plan = plan;
     slot.identities = scene_identity(instances);
     slot.serial = state_->next_serial++;
     slot.reserved = true;
+    slot.captured = false;
     result.ticket = RuntimeGpuVirtualGeometryFeedbackTicket{
         .slot = static_cast<std::uint32_t>(slot_index),
         .serial = slot.serial,
     };
     return result;
+}
+
+bool RuntimeGpuVirtualGeometryFeedbackRing::capture(
+    render::CommandList& commands,
+    const RuntimeGpuVirtualGeometrySelectionResult& selection,
+    const RuntimeGpuVirtualGeometryFeedbackTicket ticket,
+    std::string* const diagnostics
+) {
+    if (state_ == nullptr || state_->device == nullptr || !ticket.valid() ||
+        ticket.slot >= state_->slots.size()) {
+        set_diagnostics(diagnostics, "Runtime GPU virtual geometry feedback capture received an invalid ticket.");
+        return false;
+    }
+    auto& slot = state_->slots[ticket.slot];
+    if (!slot.reserved || slot.serial != ticket.serial || slot.captured ||
+        slot.submission != render::invalid_submission) {
+        set_diagnostics(diagnostics, "Runtime GPU virtual geometry feedback capture ticket is stale or already used.");
+        return false;
+    }
+    if (!slot.feedback.capture(commands, selection, diagnostics)) return false;
+    slot.captured = true;
+    if (diagnostics != nullptr) diagnostics->clear();
+    return true;
 }
 
 bool RuntimeGpuVirtualGeometryFeedbackRing::commit(
@@ -250,15 +268,31 @@ bool RuntimeGpuVirtualGeometryFeedbackRing::commit(
         return false;
     }
     auto& slot = state_->slots[ticket.slot];
-    if (!slot.reserved || slot.serial != ticket.serial ||
+    if (!slot.reserved || !slot.captured || slot.serial != ticket.serial ||
         slot.submission != render::invalid_submission) {
-        set_diagnostics(diagnostics, "Runtime GPU virtual geometry feedback ticket is stale or already committed.");
+        set_diagnostics(diagnostics, "Runtime GPU virtual geometry feedback ticket is stale or incomplete.");
         return false;
     }
     slot.submission = submission;
     slot.reserved = false;
     if (diagnostics != nullptr) diagnostics->clear();
     return true;
+}
+
+void RuntimeGpuVirtualGeometryFeedbackRing::cancel(
+    const RuntimeGpuVirtualGeometryFeedbackTicket ticket
+) noexcept {
+    if (state_ == nullptr || !ticket.valid() || ticket.slot >= state_->slots.size()) return;
+    auto& slot = state_->slots[ticket.slot];
+    if (!slot.reserved || slot.serial != ticket.serial ||
+        slot.submission != render::invalid_submission) {
+        return;
+    }
+    slot.plan = {};
+    slot.identities.clear();
+    slot.serial = 0U;
+    slot.reserved = false;
+    slot.captured = false;
 }
 
 std::uint32_t RuntimeGpuVirtualGeometryFeedbackRing::in_flight_count() const noexcept {
