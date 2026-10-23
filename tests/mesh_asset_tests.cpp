@@ -382,6 +382,72 @@ triangle 0 1 2
     assert(triangle_limited.geometry->meshlets[1].triangle_count == 1U);
     assert(reconstruct_meshlet_indices(*triangle_limited.geometry) == triangle_limit_indices);
 
+    render::MeshletGeometry page_geometry;
+    for (std::uint32_t index = 0U; index < 33U; ++index) {
+        page_geometry.meshlets.push_back(render::Meshlet{
+            .vertex_offset = index * 3U,
+            .vertex_count = 3U,
+            .triangle_offset = index * 3U,
+            .triangle_count = 1U,
+            .bounds = render::MeshletBounds{
+                .center = {static_cast<float>(index), 0.0F, 0.0F},
+                .radius = 0.25F,
+            },
+        });
+        page_geometry.vertex_indices.push_back(index * 3U);
+        page_geometry.vertex_indices.push_back(index * 3U + 1U);
+        page_geometry.vertex_indices.push_back(index * 3U + 2U);
+        page_geometry.triangle_indices.push_back(0U);
+        page_geometry.triangle_indices.push_back(1U);
+        page_geometry.triangle_indices.push_back(2U);
+    }
+
+    const auto page_build = render::build_virtual_geometry_pages(page_geometry);
+    const auto page_build_repeat = render::build_virtual_geometry_pages(page_geometry);
+    assert(page_build);
+    assert(page_build_repeat);
+    assert(*page_build.page_table == *page_build_repeat.page_table);
+    assert(page_build.page_table->pages.size() == 2U);
+
+    const auto& first_page = page_build.page_table->pages[0];
+    assert(first_page.meshlet_offset == 0U);
+    assert(first_page.meshlet_count == render::virtual_geometry_page_max_meshlets);
+    assert(first_page.vertex_index_offset == 0U);
+    assert(first_page.vertex_index_count == 96U);
+    assert(first_page.triangle_index_offset == 0U);
+    assert(first_page.triangle_index_count == 96U);
+    assert(nearly_equal(first_page.bounds.center[0], 15.5F));
+    assert(nearly_equal(first_page.bounds.center[1], 0.0F));
+    assert(nearly_equal(first_page.bounds.center[2], 0.0F));
+    assert(nearly_equal(first_page.bounds.radius, 15.75F));
+
+    const auto& second_page = page_build.page_table->pages[1];
+    assert(second_page.meshlet_offset == 32U);
+    assert(second_page.meshlet_count == 1U);
+    assert(second_page.vertex_index_offset == 96U);
+    assert(second_page.vertex_index_count == 3U);
+    assert(second_page.triangle_index_offset == 96U);
+    assert(second_page.triangle_index_count == 3U);
+    assert(nearly_equal(second_page.bounds.center[0], 32.0F));
+    assert(nearly_equal(second_page.bounds.radius, 0.25F));
+
+    auto noncanonical_page_geometry = page_geometry;
+    noncanonical_page_geometry.meshlets[1].vertex_offset += 1U;
+    assert(!render::build_virtual_geometry_pages(noncanonical_page_geometry));
+
+    auto invalid_page_bounds = page_geometry;
+    invalid_page_bounds.meshlets[0].bounds.radius = std::numeric_limits<float>::infinity();
+    assert(!render::build_virtual_geometry_pages(invalid_page_bounds));
+
+    auto invalid_page_local_index = page_geometry;
+    invalid_page_local_index.triangle_indices[0] = 3U;
+    assert(!render::build_virtual_geometry_pages(invalid_page_local_index));
+
+    auto trailing_page_stream = page_geometry;
+    trailing_page_stream.vertex_indices.push_back(999U);
+    assert(!render::build_virtual_geometry_pages(trailing_page_stream));
+    assert(!render::build_virtual_geometry_pages(render::MeshletGeometry{}));
+
     auto invalid_vertices = triangle_limit_vertices;
     invalid_vertices[0].position[0] = std::numeric_limits<float>::infinity();
     assert(!render::build_meshlets(invalid_vertices, triangle_limit_indices));
