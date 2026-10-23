@@ -26,6 +26,15 @@ struct VirtualGeometryPageBuildResult {
     }
 };
 
+struct VirtualGeometryHierarchyBuildResult {
+    std::optional<VirtualGeometryHierarchy> hierarchy;
+    std::string diagnostics;
+
+    [[nodiscard]] explicit operator bool() const noexcept {
+        return hierarchy.has_value();
+    }
+};
+
 [[nodiscard]] MeshletBuildResult build_meshlets(
     std::span<const MeshVertex> vertices,
     std::span<const std::uint32_t> indices
@@ -33,6 +42,10 @@ struct VirtualGeometryPageBuildResult {
 
 [[nodiscard]] VirtualGeometryPageBuildResult build_virtual_geometry_pages(
     const MeshletGeometry& geometry
+);
+
+[[nodiscard]] VirtualGeometryHierarchyBuildResult build_virtual_geometry_hierarchy(
+    const VirtualGeometryPageTable& page_table
 );
 
 } // namespace vice::render
