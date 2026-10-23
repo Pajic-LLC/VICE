@@ -25,6 +25,8 @@ struct DadeDecision {
     std::string detail;
 };
 
+struct DadeProviderLoadResult;
+
 class DadeProvider final {
 public:
     ~DadeProvider();
@@ -47,7 +49,6 @@ private:
 
     std::unique_ptr<Impl> impl_;
 
-    friend struct DadeProviderLoadResult;
     friend DadeProviderLoadResult load_dade_provider(const std::filesystem::path& path);
 };
 
