@@ -176,14 +176,16 @@ RuntimeVirtualTextureSamplingPlan build_runtime_virtual_texture_sampling_plan(
         };
         result.textures.push_back(descriptor);
         result.pages.reserve(result.pages.size() + record->asset.virtual_tiles.size());
+        result.page_keys.reserve(result.page_keys.size() + record->asset.virtual_tiles.size());
 
         for (const auto& tile : record->asset.virtual_tiles) {
-            RuntimeVirtualTextureTileKey resolved{
+            const RuntimeVirtualTextureTileKey desired{
                 .texture = texture_id,
                 .mip_level = tile.mip_level,
                 .tile_x = tile.tile_x,
                 .tile_y = tile.tile_y,
             };
+            RuntimeVirtualTextureTileKey resolved = desired;
             std::uint32_t slot = physical_slot(result.physical_keys, resolved);
             while (slot == runtime_virtual_texture_invalid_index && resolved.mip_level + 1U < mip_count) {
                 ++resolved.mip_level;
@@ -195,6 +197,7 @@ RuntimeVirtualTextureSamplingPlan build_runtime_virtual_texture_sampling_plan(
                 result.diagnostics = "Runtime virtual texture page could not resolve a resident ancestor.";
                 return result;
             }
+            result.page_keys.push_back(desired);
             result.pages.push_back(RuntimeGpuVirtualTexturePage{
                 .physical_slot = slot,
                 .resolved_mip = resolved.mip_level,
@@ -204,7 +207,8 @@ RuntimeVirtualTextureSamplingPlan build_runtime_virtual_texture_sampling_plan(
         }
     }
 
-    if (result.pages.size() > std::numeric_limits<std::uint32_t>::max()) {
+    if (result.pages.size() > std::numeric_limits<std::uint32_t>::max() ||
+        result.page_keys.size() != result.pages.size()) {
         result.diagnostics = "Runtime virtual texture page table exceeds the GPU index contract.";
         return result;
     }
