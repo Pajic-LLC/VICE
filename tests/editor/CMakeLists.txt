@@ -86,6 +86,14 @@ if(TARGET vice_editor_project_build)
     ../editor_project_mesh_build_tests.cpp
   )
   target_link_libraries(vice_editor_project_mesh_build_tests PRIVATE VICE::EditorProjectBuild)
+  if(TARGET vice_player)
+    add_dependencies(vice_editor_project_mesh_build_tests vice_player)
+    target_compile_definitions(
+      vice_editor_project_mesh_build_tests
+      PRIVATE
+        VICE_EDITOR_TEST_RUNTIME_HOST="$<TARGET_FILE:vice_player>"
+    )
+  endif()
   target_compile_features(vice_editor_project_mesh_build_tests PRIVATE cxx_std_23)
   vice_enable_warnings(vice_editor_project_mesh_build_tests)
   add_test(NAME vice_editor_project_mesh_build_tests COMMAND vice_editor_project_mesh_build_tests)
