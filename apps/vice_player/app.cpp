@@ -4,7 +4,6 @@
 
 #include <filesystem>
 #include <iostream>
-#include <memory>
 #include <string>
 #include <string_view>
 
@@ -66,7 +65,6 @@ int main(const int argc, char** argv) {
         return 3;
     }
 
-    std::unique_ptr<vice::runtime::DadeProvider> dade_provider;
     if (dade_requirement.required) {
         const auto provider_path = vice::runtime::staged_dade_provider_path(
             std::filesystem::path{argv[0]}
@@ -96,7 +94,6 @@ int main(const int argc, char** argv) {
                       << '\n';
             return 3;
         }
-        dade_provider = std::move(provider.provider);
     }
 
     DefaultGameModule default_game;
