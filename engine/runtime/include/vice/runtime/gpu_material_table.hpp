@@ -16,6 +16,8 @@ namespace vice::runtime {
 
 inline constexpr std::uint32_t runtime_gpu_resource_unassigned =
     std::numeric_limits<std::uint32_t>::max();
+inline constexpr std::uint32_t runtime_gpu_virtual_texture_flag = 0x80000000U;
+inline constexpr std::uint32_t runtime_gpu_virtual_texture_index_mask = 0x7FFFFFFFU;
 
 enum class RuntimeGpuMaterialTextureChannel : std::uint8_t {
     base_color,
@@ -51,13 +53,9 @@ struct RuntimeGpuMaterialRecord {
     std::uint32_t emissive_texture = runtime_gpu_resource_unassigned;
     std::uint32_t sampler = runtime_gpu_resource_unassigned;
     std::uint32_t reserved[3]{};
-    std::uint32_t virtual_base_color_texture = runtime_gpu_resource_unassigned;
-    std::uint32_t virtual_normal_texture = runtime_gpu_resource_unassigned;
-    std::uint32_t virtual_orm_texture = runtime_gpu_resource_unassigned;
-    std::uint32_t virtual_emissive_texture = runtime_gpu_resource_unassigned;
 };
 
-static_assert(sizeof(RuntimeGpuMaterialRecord) == 96U);
+static_assert(sizeof(RuntimeGpuMaterialRecord) == 80U);
 
 struct RuntimeGpuMaterialTablePlan {
     std::vector<RuntimeGpuMaterialRecord> records;
