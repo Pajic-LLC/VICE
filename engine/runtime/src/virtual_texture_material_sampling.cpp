@@ -11,16 +11,19 @@ void set_diagnostics(std::string* const diagnostics, std::string message) {
     if (diagnostics != nullptr) *diagnostics = std::move(message);
 }
 
-[[nodiscard]] std::uint32_t virtual_index_for_slot(
+[[nodiscard]] std::uint32_t tagged_virtual_index_for_slot(
     const RuntimeGpuMaterialTablePlan& materials,
     const RuntimeVirtualTextureSamplingPlan& virtual_textures,
     const std::uint32_t slot
 ) noexcept {
     if (slot == runtime_gpu_resource_unassigned || slot >= materials.texture_ids.size()) {
-        return runtime_gpu_resource_unassigned;
+        return slot;
     }
     const auto index = virtual_textures.texture_index(materials.texture_ids[slot]);
-    return index.has_value() ? *index : runtime_gpu_resource_unassigned;
+    if (!index.has_value() || *index > runtime_gpu_virtual_texture_index_mask) {
+        return slot;
+    }
+    return runtime_gpu_virtual_texture_flag | *index;
 }
 
 } // namespace
@@ -41,10 +44,9 @@ bool apply_runtime_virtual_texture_sampling(
     }
 
     for (auto& record : materials.records) {
-        record.virtual_base_color_texture = runtime_gpu_resource_unassigned;
-        record.virtual_normal_texture = runtime_gpu_resource_unassigned;
-        record.virtual_orm_texture = runtime_gpu_resource_unassigned;
-        record.virtual_emissive_texture = runtime_gpu_resource_unassigned;
+        record.reserved[0] = runtime_gpu_resource_unassigned;
+        record.reserved[1] = runtime_gpu_resource_unassigned;
+        record.reserved[2] = runtime_gpu_resource_unassigned;
 
         if (record.sampler == runtime_gpu_resource_unassigned || record.sampler >= materials.samplers.size()) {
             set_diagnostics(diagnostics, "Runtime GPU material record references an invalid sampler index.");
@@ -56,16 +58,16 @@ bool apply_runtime_virtual_texture_sampling(
             continue;
         }
 
-        record.virtual_base_color_texture = virtual_index_for_slot(
+        record.base_color_texture = tagged_virtual_index_for_slot(
             materials, virtual_textures, record.base_color_texture
         );
-        record.virtual_normal_texture = virtual_index_for_slot(
+        record.normal_texture = tagged_virtual_index_for_slot(
             materials, virtual_textures, record.normal_texture
         );
-        record.virtual_orm_texture = virtual_index_for_slot(
+        record.orm_texture = tagged_virtual_index_for_slot(
             materials, virtual_textures, record.orm_texture
         );
-        record.virtual_emissive_texture = virtual_index_for_slot(
+        record.emissive_texture = tagged_virtual_index_for_slot(
             materials, virtual_textures, record.emissive_texture
         );
     }
