@@ -1,5 +1,6 @@
 #include <vice/runtime/dade.hpp>
 #include <vice/runtime/module_loader.hpp>
+#include <vice/runtime/package_metadata.hpp>
 #include <vice/runtime/runtime.hpp>
 
 #include <filesystem>
@@ -52,17 +53,25 @@ int main(const int argc, char** argv) {
         return 1;
     }
 
-    auto loaded = vice::runtime::load_project(launch);
-    if (!loaded.project.has_value()) {
-        std::cerr << "VICE Runtime could not boot the game project: " << loaded.diagnostics << '\n';
-        return 1;
-    }
-
-    const auto dade_requirement = vice::runtime::load_dade_requirement(launch.manifest);
-    if (!dade_requirement) {
-        std::cerr << "VICE Runtime could not read DADE ownership settings: "
-                  << dade_requirement.diagnostics << '\n';
-        return 3;
+    vice::runtime::DadeRequirement dade_requirement;
+    if (staged_mode) {
+        const auto package = vice::runtime::load_staged_package_metadata(
+            std::filesystem::path{argv[0]}
+        );
+        if (!package) {
+            std::cerr << "VICE Runtime rejected staged package metadata: "
+                      << package.diagnostics << '\n';
+            return 3;
+        }
+        dade_requirement.required = package.dade_required;
+        dade_requirement.asset_id = package.dade_asset_id;
+    } else {
+        dade_requirement = vice::runtime::load_dade_requirement(launch.manifest);
+        if (!dade_requirement) {
+            std::cerr << "VICE Runtime could not read DADE ownership settings: "
+                      << dade_requirement.diagnostics << '\n';
+            return 3;
+        }
     }
 
     if (dade_requirement.required) {
@@ -94,6 +103,12 @@ int main(const int argc, char** argv) {
                       << '\n';
             return 3;
         }
+    }
+
+    auto loaded = vice::runtime::load_project(launch);
+    if (!loaded.project.has_value()) {
+        std::cerr << "VICE Runtime could not boot the game project: " << loaded.diagnostics << '\n';
+        return 1;
     }
 
     DefaultGameModule default_game;
