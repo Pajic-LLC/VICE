@@ -177,6 +177,8 @@ namespace {
 
 } // namespace
 
+#include "runtime_virtual_geometry_tests.inc"
+
 int main() {
-    return test_visibility_to_batches() ? 0 : 1;
+    return test_visibility_to_batches() && test_runtime_virtual_geometry_submission() ? 0 : 1;
 }
