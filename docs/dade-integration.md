@@ -24,11 +24,11 @@ If it is present, VICE requires a DADE provider and fails closed if ownership ca
 
 ## Staged package metadata
 
-Every staged VICE executable carries a fixed package metadata stamp at the end of the executable. The stamp records whether DADE is required and, when it is required, the exact DADE asset ID.
+Every staged VICE executable carries a fixed package metadata stamp in the executable. The stamp records whether DADE is required and, when it is required, the exact DADE asset ID.
 
-The Editor writes this stamp after it copies the runtime host into the game output. Non-DADE games are stamped too. This means deleting package metadata cannot turn a DADE game into a non-DADE game. A staged executable with missing, truncated, unsupported, or corrupted package metadata is rejected.
+The Editor writes this stamp after it copies the runtime host into the game output. Non-DADE games are stamped too. This means deleting package metadata cannot turn a DADE game into a non-DADE game. A staged executable with missing, truncated, duplicated, unsupported, or corrupted package metadata is rejected.
 
-The stamp includes a SHA-256 integrity value for the stamped fields. VICE checks the stamp before it parses the staged project manifest, before it loads the DADE provider, and before it loads project game code.
+The stamp includes a SHA-256 integrity value for the stamped fields. VICE finds exactly one valid stamp in the executable, so platform signing data may be added after the stamp. VICE checks the stamp before it parses the staged project manifest, before it loads the DADE provider, and before it loads project game code.
 
 Development launches that explicitly pass a project manifest still read `dade.asset` directly. They do not require a staged package stamp.
 
@@ -73,9 +73,9 @@ The provider is responsible for using the DADE ownership proof stack and locally
 
 The staged DADE requirement now lives inside the executable instead of a removable text file. Changing the requirement means changing the executable itself.
 
-The SHA-256 value inside the stamp detects damaged or casually edited metadata. It is not a substitute for executable signing because someone who can deliberately rewrite the executable can also rewrite the stamp and its hash.
+The SHA-256 value inside the stamp detects damaged or casually edited metadata. It is not a substitute for executable signing because someone who can deliberately rewrite an unsigned executable can also rewrite the stamp and its hash.
 
-A retail pipeline should stamp first and code-sign the final executable after that. The platform signature is the outer trust boundary for the executable bytes. VICE then treats missing or invalid package metadata as a boot failure.
+A retail pipeline should stamp first and code-sign the final executable after that. The loader accepts platform signature data after the stamp, while still requiring exactly one package metadata record. The platform signature is the outer trust boundary for the executable bytes. VICE then treats missing or invalid package metadata as a boot failure.
 
 This layer does not claim that a general-purpose executable cannot be patched. Its job is narrower: the DADE requirement cannot be disabled by deleting or editing a loose package-side setting while leaving the executable untouched.
 
