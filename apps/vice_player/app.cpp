@@ -1,13 +1,28 @@
+#include <vice/runtime/dade.hpp>
 #include <vice/runtime/module_loader.hpp>
 #include <vice/runtime/runtime.hpp>
 
 #include <filesystem>
 #include <iostream>
+#include <memory>
 #include <string>
+#include <string_view>
 
 namespace {
 
 class DefaultGameModule final : public vice::runtime::GameModule {};
+
+[[nodiscard]] constexpr std::string_view dade_platform() noexcept {
+#if defined(_WIN32)
+    return "windows";
+#elif defined(__APPLE__)
+    return "macos";
+#elif defined(__linux__)
+    return "linux";
+#else
+    return "unknown";
+#endif
+}
 
 } // namespace
 
@@ -42,6 +57,46 @@ int main(const int argc, char** argv) {
     if (!loaded.project.has_value()) {
         std::cerr << "VICE Runtime could not boot the game project: " << loaded.diagnostics << '\n';
         return 1;
+    }
+
+    const auto dade_requirement = vice::runtime::load_dade_requirement(launch.manifest);
+    if (!dade_requirement) {
+        std::cerr << "VICE Runtime could not read DADE ownership settings: "
+                  << dade_requirement.diagnostics << '\n';
+        return 3;
+    }
+
+    std::unique_ptr<vice::runtime::DadeProvider> dade_provider;
+    if (dade_requirement.required) {
+        const auto provider_path = vice::runtime::staged_dade_provider_path(
+            std::filesystem::path{argv[0]}
+        );
+        auto provider = vice::runtime::load_dade_provider(provider_path);
+        if (!provider) {
+            std::cerr << "VICE Runtime cannot verify ownership for DADE asset `"
+                      << dade_requirement.asset_id
+                      << "`: "
+                      << provider.diagnostics
+                      << '\n';
+            return 3;
+        }
+
+        const auto decision = provider.provider->verify(
+            dade_requirement.asset_id,
+            dade_platform(),
+            launch.manifest.parent_path()
+        );
+        if (!decision.allowed) {
+            std::cerr << "VICE Runtime denied DADE ownership for `"
+                      << dade_requirement.asset_id
+                      << "` ["
+                      << vice::runtime::dade_decision_code(decision.code)
+                      << "]: "
+                      << decision.detail
+                      << '\n';
+            return 3;
+        }
+        dade_provider = std::move(provider.provider);
     }
 
     DefaultGameModule default_game;
