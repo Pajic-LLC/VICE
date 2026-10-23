@@ -66,14 +66,17 @@ constexpr std::uint64_t fnv_prime = 1'099'511'628'211ULL;
     std::uint32_t width,
     std::uint32_t height
 ) noexcept {
-    std::uint32_t count = 0U;
-    do {
-        ++count;
+    if (width == 0U || height == 0U || width > max_texture_dimension || height > max_texture_dimension) {
+        return 0U;
+    }
+    std::uint32_t count = 1U;
+    while (width != 1U || height != 1U) {
+        if (count >= max_texture_mip_levels) return 0U;
         width = next_mip_extent(width);
         height = next_mip_extent(height);
-    } while ((width != 1U || height != 1U) && count < max_texture_mip_levels);
-    if (width == 1U && height == 1U) return count + (count == 0U ? 1U : 0U);
-    return 0U;
+        ++count;
+    }
+    return count;
 }
 
 [[nodiscard]] bool expected_virtual_tile_count(
@@ -132,7 +135,8 @@ constexpr std::uint64_t fnv_prime = 1'099'511'628'211ULL;
             virtual_texture_tile_extent;
         const std::uint64_t mip_tile_count_64 = static_cast<std::uint64_t>(columns) * rows;
         if (mip_tile_count_64 > std::numeric_limits<std::uint32_t>::max() ||
-            first_tile > std::numeric_limits<std::uint32_t>::max() - mip_tile_count_64) {
+            static_cast<std::uint64_t>(first_tile) + mip_tile_count_64 >
+                std::numeric_limits<std::uint32_t>::max()) {
             return false;
         }
         const std::uint32_t mip_tile_count = static_cast<std::uint32_t>(mip_tile_count_64);
@@ -163,7 +167,8 @@ constexpr std::uint64_t fnv_prime = 1'099'511'628'211ULL;
         width = next_mip_extent(width);
         height = next_mip_extent(height);
     }
-    return tile_cursor == asset.virtual_tiles.size() && payload_offset == asset.rgba8.size();
+    return tile_cursor == asset.virtual_tiles.size() &&
+        payload_offset == static_cast<std::uint64_t>(asset.rgba8.size());
 }
 
 void append_u8(std::vector<std::byte>& bytes, const std::uint8_t value) {
@@ -247,7 +252,8 @@ std::span<const std::byte> texture_mip_rgba8(
     if (asset.version == texture_asset_format_version_v1) {
         if (mip_level != 0U) return {};
         std::uint64_t expected = 0U;
-        if (!mip_payload_size(asset.width, asset.height, expected) || expected != asset.rgba8.size()) {
+        if (!mip_payload_size(asset.width, asset.height, expected) ||
+            expected != static_cast<std::uint64_t>(asset.rgba8.size())) {
             return {};
         }
         return asset.rgba8;
@@ -256,7 +262,8 @@ std::span<const std::byte> texture_mip_rgba8(
         return {};
     }
     const auto& mip = asset.mip_levels[mip_level];
-    if (mip.payload_offset > asset.rgba8.size() || mip.payload_size > asset.rgba8.size() - mip.payload_offset ||
+    const std::uint64_t payload_bytes = static_cast<std::uint64_t>(asset.rgba8.size());
+    if (mip.payload_offset > payload_bytes || mip.payload_size > payload_bytes - mip.payload_offset ||
         mip.payload_offset > std::numeric_limits<std::size_t>::max() ||
         mip.payload_size > std::numeric_limits<std::size_t>::max()) {
         return {};
@@ -277,7 +284,8 @@ TextureAssetEncodeResult encode_texture_asset(const TextureAsset& asset) {
 
     if (asset.version == texture_asset_format_version_v1) {
         std::uint64_t expected = 0U;
-        if (!mip_payload_size(asset.width, asset.height, expected) || asset.rgba8.size() != expected ||
+        if (!mip_payload_size(asset.width, asset.height, expected) ||
+            static_cast<std::uint64_t>(asset.rgba8.size()) != expected ||
             !asset.mip_levels.empty() || !asset.virtual_tiles.empty()) {
             result.diagnostics = "Texture v1 asset contains invalid dimensions, pixel data, or virtual metadata.";
             return result;
