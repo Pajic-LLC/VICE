@@ -3,6 +3,7 @@
 #include "texture_pipeline.hpp"
 
 #include <vice/runtime/gpu_material_table.hpp>
+#include <vice/runtime/virtual_texture_sampling.hpp>
 
 #include <memory>
 #include <span>
@@ -37,7 +38,7 @@ public:
 
     [[nodiscard]] bool initialize(
         render::Device& device,
-        const RuntimeGpuMaterialTablePlan& plan,
+        RuntimeGpuMaterialTablePlan& plan,
         const RuntimeMaterialLibrary& material_library,
         std::string* diagnostics = nullptr
     );
@@ -50,6 +51,10 @@ private:
     std::vector<render::Texture*> textures_;
     std::vector<std::unique_ptr<render::Sampler>> owned_samplers_;
     std::vector<render::Sampler*> samplers_;
+    std::unique_ptr<RuntimeVirtualTextureResidentPool> virtual_resident_pool_;
+    RuntimeVirtualTextureSamplingPlan virtual_sampling_plan_;
+    std::unique_ptr<render::Texture> virtual_texture_descriptors_;
+    std::unique_ptr<render::Texture> virtual_texture_pages_;
 };
 
 } // namespace vice::runtime::detail
