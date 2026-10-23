@@ -93,12 +93,15 @@ namespace {
     render::Device& device,
     const CookedTextureRecord& record
 ) {
+    const std::uint32_t mip_count = render::texture_mip_count(record.asset);
+    if (mip_count == 0U) return nullptr;
+
     render::TextureDesc desc;
     desc.dimension = render::TextureDimension::d2;
     desc.width = record.asset.width;
     desc.height = record.asset.height;
     desc.depth = 1U;
-    desc.mip_levels = 1U;
+    desc.mip_levels = mip_count;
     desc.array_layers = 1U;
     desc.sample_count = 1U;
     desc.format = record.asset.color_space == render::TextureColorSpace::srgb
@@ -108,8 +111,21 @@ namespace {
     desc.debug_name = "VICE Runtime project texture";
     auto texture = device.create_texture(desc);
     if (!texture) return nullptr;
-    const std::uint64_t row_bytes = static_cast<std::uint64_t>(record.asset.width) * 4U;
-    if (!texture->write_2d(record.asset.rgba8, row_bytes)) return nullptr;
+
+    for (std::uint32_t mip_level = 0U; mip_level < mip_count; ++mip_level) {
+        const auto pixels = render::texture_mip_rgba8(record.asset, mip_level);
+        const std::uint32_t width = record.asset.version == render::texture_asset_format_version_v2
+            ? record.asset.mip_levels[mip_level].width
+            : record.asset.width;
+        const std::uint32_t height = record.asset.version == render::texture_asset_format_version_v2
+            ? record.asset.mip_levels[mip_level].height
+            : record.asset.height;
+        const std::uint64_t expected_size = static_cast<std::uint64_t>(width) * height * 4U;
+        if (pixels.empty() || pixels.size() != expected_size ||
+            !texture->write_2d(pixels, static_cast<std::uint64_t>(width) * 4U, mip_level)) {
+            return nullptr;
+        }
+    }
     return texture;
 }
 
@@ -255,7 +271,7 @@ bool RuntimeTextureLibrary::set_residency(
         const auto* const record = state_->catalog.find(resource);
         auto texture = create_texture(*state_->device, *record);
         if (!texture) {
-            return fail("Could not upload resident GPU texture `" + resource.value.to_string() + "`.");
+            return fail("Could not upload resident GPU texture `" + resource.value.to_string() + "`." );
         }
         state_->textures.emplace(resource, std::move(texture));
     }
