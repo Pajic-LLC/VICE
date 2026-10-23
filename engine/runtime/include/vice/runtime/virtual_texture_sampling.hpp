@@ -44,6 +44,7 @@ struct RuntimeVirtualTextureSamplingPlan {
     std::vector<world::ResourceId> texture_ids;
     std::vector<RuntimeGpuVirtualTextureDescriptor> textures;
     std::vector<RuntimeGpuVirtualTexturePage> pages;
+    std::vector<RuntimeVirtualTextureTileKey> page_keys;
     std::vector<RuntimeVirtualTextureTileKey> physical_keys;
     std::vector<render::Texture*> physical_textures;
     std::string diagnostics;
