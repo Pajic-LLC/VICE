@@ -279,7 +279,7 @@ render::Texture* RuntimeTextureLibrary::resolve(
     const world::ResourceId resource_id,
     const RuntimeMaterialTextureChannel channel
 ) const noexcept {
-    if (state_ == nullptr) return nullptr;
+    if (state_ == nullptr || state_->catalog.find(resource_id) == nullptr) return nullptr;
     if (auto* const texture = find(resource_id); texture != nullptr) return texture;
     return state_->fallbacks[channel_index(channel)].get();
 }
