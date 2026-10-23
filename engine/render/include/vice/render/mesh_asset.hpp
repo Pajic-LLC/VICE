@@ -17,7 +17,8 @@ inline constexpr std::uint32_t mesh_asset_format_version_v2 = 2U;
 inline constexpr std::uint32_t mesh_asset_format_version_v3 = 3U;
 inline constexpr std::uint32_t mesh_asset_format_version_v4 = 4U;
 inline constexpr std::uint32_t mesh_asset_format_version_v5 = 5U;
-inline constexpr std::uint32_t mesh_asset_format_version = mesh_asset_format_version_v5;
+inline constexpr std::uint32_t mesh_asset_format_version_v6 = 6U;
+inline constexpr std::uint32_t mesh_asset_format_version = mesh_asset_format_version_v6;
 inline constexpr std::uint32_t mesh_asset_min_supported_version = mesh_asset_format_version_v1;
 inline constexpr std::size_t mesh_asset_magic_size = 8U;
 inline constexpr std::size_t mesh_stable_id_size = 16U;
@@ -42,6 +43,8 @@ struct MeshVertex {
     float color[3]{1.0F, 1.0F, 1.0F};
     float normal[3]{0.0F, 1.0F, 0.0F};
     float uv[2]{};
+
+    friend bool operator==(const MeshVertex&, const MeshVertex&) = default;
 };
 
 static_assert(sizeof(MeshVertex) == 44U);
@@ -109,6 +112,23 @@ struct VirtualGeometryHierarchy {
     friend bool operator==(const VirtualGeometryHierarchy&, const VirtualGeometryHierarchy&) = default;
 };
 
+struct VirtualGeometryProxyMesh {
+    std::uint32_t node_index = virtual_geometry_invalid_node;
+    std::uint32_t source_triangle_count = 0U;
+    float direct_geometric_error = 0.0F;
+    std::vector<MeshVertex> vertices;
+    std::vector<std::uint32_t> indices;
+
+    friend bool operator==(const VirtualGeometryProxyMesh&, const VirtualGeometryProxyMesh&) = default;
+};
+
+struct VirtualGeometryProxySet {
+    VirtualGeometryHierarchy hierarchy;
+    std::vector<VirtualGeometryProxyMesh> proxies;
+
+    friend bool operator==(const VirtualGeometryProxySet&, const VirtualGeometryProxySet&) = default;
+};
+
 struct MeshAsset {
     std::uint32_t version = mesh_asset_format_version;
     MeshStableId stable_id{};
@@ -117,6 +137,7 @@ struct MeshAsset {
     std::vector<std::uint32_t> indices;
     MeshletGeometry meshlet_geometry;
     VirtualGeometryPageTable virtual_geometry_pages;
+    VirtualGeometryProxySet virtual_geometry_proxies;
 };
 
 struct MeshAssetDecodeResult {
