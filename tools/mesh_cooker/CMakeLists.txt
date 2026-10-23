@@ -2,7 +2,7 @@ add_library(
   vice_mesh_cooker_lib
   STATIC
     src/mesh_cooker.cpp
-    src/mesh_cooker_v6.cpp
+    src/mesh_cooker_v7.cpp
 )
 add_library(VICE::MeshCooker ALIAS vice_mesh_cooker_lib)
 

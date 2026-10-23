@@ -11,6 +11,9 @@
 #include <vector>
 
 namespace vice::tools::mesh_cooker {
+
+CookResult cook_v6_fixture(const MeshSource& source);
+
 namespace {
 
 constexpr std::uint64_t fnv_offset_basis = 14'695'981'039'346'656'037ULL;
@@ -73,7 +76,7 @@ void append_u64(std::vector<std::byte>& bytes, const std::uint64_t value) {
 } // namespace
 
 CookResult cook_v5_fixture(const MeshSource& source) {
-    CookResult result = cook(source);
+    CookResult result = cook_v6_fixture(source);
     if (!result.success || result.bytes.size() < v6_header_size) return result;
     const auto source_bytes = std::span<const std::byte>{result.bytes};
     if (read_u32(source_bytes, render::mesh_asset_magic_size) != render::mesh_asset_format_version_v6) {

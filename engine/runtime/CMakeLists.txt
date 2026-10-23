@@ -28,6 +28,7 @@ add_library(
     src/scene.cpp
     src/texture_pipeline.cpp
     src/virtual_geometry.cpp
+    src/virtual_geometry_streaming.cpp
     src/visibility.cpp
 )
 
