@@ -50,6 +50,18 @@ bool RuntimeGpuMaterialSceneResources::initialize(
     return true;
 }
 
+bool RuntimeGpuMaterialSceneResources::refresh_resources(
+    render::Device& device,
+    const RuntimeMaterialLibrary& material_library,
+    std::string* const diagnostics
+) {
+    if (!initialized_) {
+        set_diagnostics(diagnostics, "Runtime GPU material scene resources are not initialized.");
+        return false;
+    }
+    return resources_.initialize(device, plan_, material_library, diagnostics);
+}
+
 bool RuntimeGpuMaterialSceneResources::upload(
     render::CommandList& commands,
     const std::span<const RenderMeshInstance> instances,
