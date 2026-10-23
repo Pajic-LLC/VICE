@@ -2,8 +2,15 @@ add_library(
   vice_mesh_cooker_lib
   STATIC
     src/mesh_cooker.cpp
+    src/mesh_cooker_v6.cpp
 )
 add_library(VICE::MeshCooker ALIAS vice_mesh_cooker_lib)
+
+set_source_files_properties(
+  src/mesh_cooker.cpp
+  PROPERTIES
+    COMPILE_DEFINITIONS "cook=cook_v1_v5"
+)
 
 target_include_directories(
   vice_mesh_cooker_lib
