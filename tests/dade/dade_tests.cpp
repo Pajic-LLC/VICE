@@ -107,7 +107,7 @@ int main() {
     {
         std::fstream file{tampered_executable, std::ios::binary | std::ios::in | std::ios::out};
         require(static_cast<bool>(file), "tampered executable open");
-        file.seekp(-300, std::ios::end);
+        file.seekp(static_cast<std::streamoff>(-300), std::ios::end);
         require(static_cast<bool>(file), "tampered executable seek");
         file.put('x');
         require(static_cast<bool>(file), "tampered executable write");
@@ -129,6 +129,17 @@ int main() {
     require(!error, "truncate package metadata");
     const auto truncated_package = load_staged_package_metadata(truncated_executable);
     require(!static_cast<bool>(truncated_package), "removed package metadata rejected");
+
+    {
+        std::ofstream signed_file{protected_executable, std::ios::binary | std::ios::app};
+        require(static_cast<bool>(signed_file), "signed executable append open");
+        signed_file << "simulated-platform-signature-data";
+        require(static_cast<bool>(signed_file), "signed executable append");
+    }
+    const auto signed_package = load_staged_package_metadata(protected_executable);
+    require(static_cast<bool>(signed_package), "package metadata survives trailing signature data");
+    require(signed_package.dade_required, "signed package still requires DADE");
+    require(signed_package.dade_asset_id == "com.pajic.vice", "signed package keeps asset ID");
 
     require(
         !stamp_staged_package_metadata(
