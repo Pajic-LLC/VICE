@@ -200,6 +200,22 @@ add_test(
 )
 
 add_executable(
+  vice_runtime_gpu_virtual_geometry_tests
+  ../runtime_gpu_virtual_geometry_tests.cpp
+)
+target_link_libraries(
+  vice_runtime_gpu_virtual_geometry_tests
+  PRIVATE
+    VICE::Runtime
+)
+target_compile_features(vice_runtime_gpu_virtual_geometry_tests PRIVATE cxx_std_23)
+vice_enable_warnings(vice_runtime_gpu_virtual_geometry_tests)
+add_test(
+  NAME vice_runtime_gpu_virtual_geometry_tests
+  COMMAND vice_runtime_gpu_virtual_geometry_tests
+)
+
+add_executable(
   vice_runtime_gpu_cluster_instance_remap_tests
   ../runtime_gpu_cluster_instance_remap_tests.cpp
 )
