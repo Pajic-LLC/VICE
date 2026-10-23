@@ -20,7 +20,7 @@ target_sources(
     src/environment_asset.cpp
     src/material_asset.cpp
     src/mesh_asset.cpp
-    src/mesh_asset_v6.cpp
+    src/mesh_asset_v7.cpp
     src/meshlet.cpp
     src/pipeline_layout.cpp
     src/shader_asset.cpp
