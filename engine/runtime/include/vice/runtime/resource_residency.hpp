@@ -10,16 +10,6 @@
 
 namespace vice::runtime {
 
-inline constexpr std::uint64_t default_runtime_geometry_residency_budget = 512ULL * 1024ULL * 1024ULL;
-inline constexpr std::uint64_t default_runtime_texture_residency_budget = 1024ULL * 1024ULL * 1024ULL;
-
-struct RuntimeRenderResourceBudgets {
-    std::uint64_t geometry_bytes = default_runtime_geometry_residency_budget;
-    std::uint64_t texture_bytes = default_runtime_texture_residency_budget;
-
-    friend bool operator==(const RuntimeRenderResourceBudgets&, const RuntimeRenderResourceBudgets&) = default;
-};
-
 struct RuntimeResourceResidencyCandidate {
     world::ResourceId resource{};
     std::uint64_t bytes = 0U;
