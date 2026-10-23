@@ -9,6 +9,7 @@
 
 #include <array>
 #include <cstdint>
+#include <exception>
 #include <iostream>
 #include <memory>
 #include <span>
