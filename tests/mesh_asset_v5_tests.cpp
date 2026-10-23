@@ -1,6 +1,7 @@
 #include <vice/render/mesh_asset.hpp>
 #include <vice/tools/mesh_cooker.hpp>
 
+#include <algorithm>
 #include <bit>
 #include <cassert>
 #include <cmath>
