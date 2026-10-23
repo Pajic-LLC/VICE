@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <limits>
 #include <span>
+#include <utility>
 #include <vector>
 
 namespace vice::tools::mesh_cooker {
