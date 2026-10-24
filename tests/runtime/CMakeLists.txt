@@ -446,3 +446,20 @@ add_test(
   NAME vice_runtime_resource_residency_tests
   COMMAND vice_runtime_resource_residency_tests
 )
+
+add_executable(
+  vice_runtime_pre_pbr_motion_tests
+  ../runtime_pre_pbr_motion_tests.cpp
+)
+target_compile_features(vice_runtime_pre_pbr_motion_tests PRIVATE cxx_std_23)
+target_compile_definitions(
+  vice_runtime_pre_pbr_motion_tests
+  PRIVATE
+    VICE_RUNTIME_SCENE_LEGACY_SOURCE="${CMAKE_SOURCE_DIR}/engine/runtime/src/scene_legacy.inc"
+)
+vice_enable_warnings(vice_runtime_pre_pbr_motion_tests)
+add_test(
+  NAME vice_runtime_pre_pbr_motion_tests
+  COMMAND vice_runtime_pre_pbr_motion_tests
+)
+
