@@ -3799,6 +3799,92 @@ bool RuntimeSceneRenderer::render(
         }
     }
 
+    bool motion_vectors_encoded = false;
+    const auto encode_motion_vectors = [&]() -> bool {
+        render::RenderPassDesc motion_pass;
+        motion_pass.clear_color = render::Color{0.0F, 0.0F, 0.0F, 0.0F};
+        motion_pass.depth_attachment = current_depth;
+        motion_pass.clear_depth = 1.0F;
+        motion_pass.clear_depth_attachment = false;
+        if (!commands->begin_render_pass(*state_->motion_vectors, motion_pass) ||
+            !commands->set_viewport(render::Viewport{
+                .width = static_cast<float>(metrics.drawable_width),
+                .height = static_cast<float>(metrics.drawable_height),
+            }) ||
+            !commands->set_scissor_rect(render::ScissorRect{
+                .width = metrics.drawable_width,
+                .height = metrics.drawable_height,
+            }) ||
+            !commands->set_graphics_pipeline(*state_->motion_pipeline)) {
+            set_diagnostics(diagnostics, "VICE Runtime could not begin the motion-vector render pass.");
+            return false;
+        }
+
+        if (!gpu_shadow_plan.batches.empty()) {
+            const auto current_instance_table = state_->gpu_instances.result();
+            const auto previous_instance_table = state_->gpu_previous_instances.result();
+            if (current_instance_table.models == nullptr ||
+                previous_instance_table.models == nullptr ||
+                gpu_motion_batch_result.compacted_instance_indices == nullptr ||
+                gpu_motion_batch_result.indirect_arguments == nullptr) {
+                set_diagnostics(diagnostics, "VICE Runtime GPU motion-vector batch resources are unavailable.");
+                return false;
+            }
+            const render::BufferViewDesc motion_model_view{
+                .offset = 0U,
+                .size = static_cast<std::uint64_t>(instances.size()) * sizeof(math::Mat4),
+                .structure_stride = sizeof(math::Mat4),
+            };
+            const render::BufferViewDesc motion_compacted_view{
+                .offset = 0U,
+                .size = static_cast<std::uint64_t>(instances.size()) * sizeof(std::uint32_t),
+                .structure_stride = sizeof(std::uint32_t),
+            };
+            if (!commands->set_graphics_constant_buffer(
+                    frame_binding,
+                    *state_->gpu_motion_frame,
+                    0U,
+                    sizeof(MotionConstants)
+                ) || !commands->set_graphics_buffer(
+                    gpu_model_table_binding,
+                    *current_instance_table.models,
+                    motion_model_view
+                ) || !commands->set_graphics_buffer(
+                    gpu_motion_previous_model_binding,
+                    *previous_instance_table.models,
+                    motion_model_view
+                ) || !commands->set_graphics_buffer(
+                    gpu_motion_compacted_instance_binding,
+                    *gpu_motion_batch_result.compacted_instance_indices,
+                    motion_compacted_view
+                )) {
+                set_diagnostics(diagnostics, "VICE Runtime could not bind GPU motion-vector resources.");
+                return false;
+            }
+            for (std::size_t batch_index = 0U; batch_index < gpu_shadow_plan.batches.size(); ++batch_index) {
+                auto& mesh = state_->meshes.at(gpu_shadow_plan.batch_meshes[batch_index]);
+                const std::uint64_t argument_offset = static_cast<std::uint64_t>(batch_index) *
+                    sizeof(render::IndexedIndirectDrawArguments);
+                if (!commands->set_vertex_buffer(0U, *mesh.vertices) ||
+                    !commands->set_index_buffer(*mesh.indices, render::IndexFormat::uint32) ||
+                    !commands->draw_indexed_indirect(
+                        *gpu_motion_batch_result.indirect_arguments,
+                        argument_offset
+                    )) {
+                    set_diagnostics(diagnostics, "VICE Runtime could not encode a GPU-driven motion-vector batch.");
+                    return false;
+                }
+            }
+        }
+        if (!commands->end_render_pass()) {
+            set_diagnostics(diagnostics, "VICE Runtime could not finish the motion-vector render pass.");
+            return false;
+        }
+
+        motion_vectors_encoded = true;
+        return true;
+    };
+
     if (use_camera_depth_prepass) {
         const GpuDefaultFrame depth_frame{.view_projection = view_projection};
         if (!state_->gpu_default_frame->write(
@@ -3864,6 +3950,9 @@ bool RuntimeSceneRenderer::render(
             set_diagnostics(diagnostics, "VICE Runtime could not finish the camera depth prepass.");
             return false;
         }
+        // Current depth is authoritative here, so Stage E temporal consumers can use the
+        // same motion texture before forward PBR without a second motion representation.
+        if (!encode_motion_vectors()) return false;
     }
 
     const math::Vec3 camera_right = math::normalize(math::cross(runtime_camera.forward, runtime_camera.up));
@@ -4582,83 +4671,8 @@ bool RuntimeSceneRenderer::render(
     }
 
 
-    render::RenderPassDesc motion_pass;
-    motion_pass.clear_color = render::Color{0.0F, 0.0F, 0.0F, 0.0F};
-    motion_pass.depth_attachment = current_depth;
-    motion_pass.clear_depth = 1.0F;
-    motion_pass.clear_depth_attachment = false;
-    if (!commands->begin_render_pass(*state_->motion_vectors, motion_pass) ||
-        !commands->set_viewport(render::Viewport{
-            .width = static_cast<float>(metrics.drawable_width),
-            .height = static_cast<float>(metrics.drawable_height),
-        }) ||
-        !commands->set_scissor_rect(render::ScissorRect{
-            .width = metrics.drawable_width,
-            .height = metrics.drawable_height,
-        }) ||
-        !commands->set_graphics_pipeline(*state_->motion_pipeline)) {
-        set_diagnostics(diagnostics, "VICE Runtime could not begin the motion-vector render pass.");
-        return false;
-    }
-
-    if (!gpu_shadow_plan.batches.empty()) {
-        const auto current_instance_table = state_->gpu_instances.result();
-        const auto previous_instance_table = state_->gpu_previous_instances.result();
-        if (current_instance_table.models == nullptr ||
-            previous_instance_table.models == nullptr ||
-            gpu_motion_batch_result.compacted_instance_indices == nullptr ||
-            gpu_motion_batch_result.indirect_arguments == nullptr) {
-            set_diagnostics(diagnostics, "VICE Runtime GPU motion-vector batch resources are unavailable.");
-            return false;
-        }
-        const render::BufferViewDesc motion_model_view{
-            .offset = 0U,
-            .size = static_cast<std::uint64_t>(instances.size()) * sizeof(math::Mat4),
-            .structure_stride = sizeof(math::Mat4),
-        };
-        const render::BufferViewDesc motion_compacted_view{
-            .offset = 0U,
-            .size = static_cast<std::uint64_t>(instances.size()) * sizeof(std::uint32_t),
-            .structure_stride = sizeof(std::uint32_t),
-        };
-        if (!commands->set_graphics_constant_buffer(
-                frame_binding,
-                *state_->gpu_motion_frame,
-                0U,
-                sizeof(MotionConstants)
-            ) || !commands->set_graphics_buffer(
-                gpu_model_table_binding,
-                *current_instance_table.models,
-                motion_model_view
-            ) || !commands->set_graphics_buffer(
-                gpu_motion_previous_model_binding,
-                *previous_instance_table.models,
-                motion_model_view
-            ) || !commands->set_graphics_buffer(
-                gpu_motion_compacted_instance_binding,
-                *gpu_motion_batch_result.compacted_instance_indices,
-                motion_compacted_view
-            )) {
-            set_diagnostics(diagnostics, "VICE Runtime could not bind GPU motion-vector resources.");
-            return false;
-        }
-        for (std::size_t batch_index = 0U; batch_index < gpu_shadow_plan.batches.size(); ++batch_index) {
-            auto& mesh = state_->meshes.at(gpu_shadow_plan.batch_meshes[batch_index]);
-            const std::uint64_t argument_offset = static_cast<std::uint64_t>(batch_index) *
-                sizeof(render::IndexedIndirectDrawArguments);
-            if (!commands->set_vertex_buffer(0U, *mesh.vertices) ||
-                !commands->set_index_buffer(*mesh.indices, render::IndexFormat::uint32) ||
-                !commands->draw_indexed_indirect(
-                    *gpu_motion_batch_result.indirect_arguments,
-                    argument_offset
-                )) {
-                set_diagnostics(diagnostics, "VICE Runtime could not encode a GPU-driven motion-vector batch.");
-                return false;
-            }
-        }
-    }
-    if (!commands->end_render_pass()) {
-        set_diagnostics(diagnostics, "VICE Runtime could not finish the motion-vector render pass.");
+    // Frames without a camera depth prepass preserve the legacy post-HDR motion timing.
+    if (!motion_vectors_encoded && !encode_motion_vectors()) {
         return false;
     }
 
