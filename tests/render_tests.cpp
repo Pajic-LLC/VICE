@@ -1,9 +1,11 @@
 #include <vice/render/compute.hpp>
+#include <vice/render/ray_tracing.hpp>
 #include <vice/render/rhi.hpp>
 
 #include <array>
 #include <cassert>
 #include <cstddef>
+#include <limits>
 
 namespace {
 
@@ -14,6 +16,41 @@ public:
 
 private:
     vice::render::ShaderStage stage_;
+};
+
+class TestBuffer final : public vice::render::Buffer {
+public:
+    TestBuffer(const std::uint64_t size, const vice::render::BufferUsage usage)
+        : size_{size}, usage_{usage} {}
+
+    [[nodiscard]] std::uint64_t size() const noexcept override { return size_; }
+    [[nodiscard]] vice::render::BufferUsage usage() const noexcept override { return usage_; }
+    [[nodiscard]] vice::render::MemoryLocation memory_location() const noexcept override {
+        return vice::render::MemoryLocation::gpu_only;
+    }
+    bool write(std::uint64_t, std::span<const std::byte>) override { return false; }
+    bool read(std::uint64_t, std::span<std::byte>) override { return false; }
+
+private:
+    std::uint64_t size_ = 0U;
+    vice::render::BufferUsage usage_ = vice::render::BufferUsage::none;
+};
+
+class TestAccelerationStructure final : public vice::render::AccelerationStructure {
+public:
+    TestAccelerationStructure(
+        const vice::render::AccelerationStructureType type,
+        const std::uint64_t size
+    ) : type_{type}, size_{size} {}
+
+    [[nodiscard]] vice::render::AccelerationStructureType type() const noexcept override {
+        return type_;
+    }
+    [[nodiscard]] std::uint64_t size() const noexcept override { return size_; }
+
+private:
+    vice::render::AccelerationStructureType type_;
+    std::uint64_t size_ = 0U;
 };
 
 } // namespace
@@ -35,12 +72,17 @@ int main() {
     assert(!capabilities.unified_memory);
     assert(!capabilities.ray_tracing);
     assert(!capabilities.mesh_shaders);
+    assert(!supports_acceleration_structures(capabilities));
     assert(capabilities.max_sampler_anisotropy == 16U);
     assert(capabilities.max_texture_dimension_1d == 0U);
     assert(capabilities.max_texture_dimension_2d == 0U);
     assert(capabilities.max_texture_dimension_3d == 0U);
     assert(capabilities.max_texture_array_layers == 0U);
     assert(capabilities.recommended_frames_in_flight == 2U);
+
+    DeviceCapabilities ray_capabilities{};
+    ray_capabilities.ray_tracing = true;
+    assert(supports_acceleration_structures(ray_capabilities));
 
     constexpr Color black{};
     static_assert(black.red == 0.0F);
@@ -82,6 +124,91 @@ int main() {
         .debug_name = {},
     };
     static_assert(!is_valid(invalid_readback));
+
+    TestBuffer ray_vertices{1024U, BufferUsage::vertex};
+    TestBuffer ray_indices{512U, BufferUsage::index};
+    AccelerationStructureTriangleGeometryDesc ray_geometry{
+        .vertex_buffer = &ray_vertices,
+        .vertex_offset = 0U,
+        .vertex_count = 24U,
+        .vertex_stride = 32U,
+        .vertex_format = VertexFormat::float32x3,
+        .index_buffer = &ray_indices,
+        .index_offset = 0U,
+        .index_count = 36U,
+        .index_format = IndexFormat::uint32,
+        .opaque = true,
+    };
+    assert(is_valid(ray_geometry));
+
+    auto invalid_ray_geometry = ray_geometry;
+    invalid_ray_geometry.vertex_format = VertexFormat::float32x4;
+    assert(!is_valid(invalid_ray_geometry));
+
+    invalid_ray_geometry = ray_geometry;
+    invalid_ray_geometry.index_count = 35U;
+    assert(!is_valid(invalid_ray_geometry));
+
+    invalid_ray_geometry = ray_geometry;
+    invalid_ray_geometry.vertex_offset = ray_vertices.size();
+    assert(!is_valid(invalid_ray_geometry));
+
+    constexpr auto conflicting_build_flags =
+        AccelerationStructureBuildFlags::prefer_fast_trace |
+        AccelerationStructureBuildFlags::prefer_fast_build;
+    static_assert(!is_valid(conflicting_build_flags));
+    static_assert(is_valid(AccelerationStructureBuildFlags::allow_update |
+        AccelerationStructureBuildFlags::prefer_fast_trace));
+
+    const std::array ray_geometries{ray_geometry};
+    const AccelerationStructureBuildDesc bottom_level_build{
+        .type = AccelerationStructureType::bottom_level,
+        .flags = AccelerationStructureBuildFlags::allow_update |
+            AccelerationStructureBuildFlags::prefer_fast_trace,
+        .geometries = ray_geometries,
+        .instances = {},
+    };
+    assert(is_valid(bottom_level_build));
+
+    TestAccelerationStructure bottom_level{AccelerationStructureType::bottom_level, 4096U};
+    AccelerationStructureInstanceDesc ray_instance{
+        .bottom_level = &bottom_level,
+        .instance_id = 17U,
+        .mask = 0x7FU,
+    };
+    assert(is_valid(ray_instance));
+
+    auto invalid_ray_instance = ray_instance;
+    invalid_ray_instance.instance_id = acceleration_structure_instance_id_max + 1U;
+    assert(!is_valid(invalid_ray_instance));
+
+    invalid_ray_instance = ray_instance;
+    invalid_ray_instance.mask = acceleration_structure_instance_mask_max + 1U;
+    assert(!is_valid(invalid_ray_instance));
+
+    invalid_ray_instance = ray_instance;
+    invalid_ray_instance.transform[0] = std::numeric_limits<float>::infinity();
+    assert(!is_valid(invalid_ray_instance));
+
+    const std::array ray_instances{ray_instance};
+    const AccelerationStructureBuildDesc top_level_build{
+        .type = AccelerationStructureType::top_level,
+        .flags = AccelerationStructureBuildFlags::prefer_fast_trace,
+        .geometries = {},
+        .instances = ray_instances,
+    };
+    assert(is_valid(top_level_build));
+
+    auto invalid_top_level_build = top_level_build;
+    invalid_top_level_build.geometries = ray_geometries;
+    assert(!is_valid(invalid_top_level_build));
+
+    constexpr AccelerationStructureBuildSizes ray_build_sizes{
+        .result_size = 4096U,
+        .build_scratch_size = 2048U,
+        .update_scratch_size = 1024U,
+    };
+    static_assert(is_valid(ray_build_sizes));
 
     constexpr TextureDesc color_texture{
         .dimension = TextureDimension::d2,
