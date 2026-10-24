@@ -8,6 +8,11 @@ target_link_libraries(
     VICE::Runtime
 )
 target_compile_features(vice_runtime_ray_ambient_occlusion_tests PRIVATE cxx_std_23)
+target_compile_definitions(
+  vice_runtime_ray_ambient_occlusion_tests
+  PRIVATE
+    VICE_RUNTIME_SCENE_SOURCE="${CMAKE_SOURCE_DIR}/engine/runtime/src/scene.cpp"
+)
 vice_enable_warnings(vice_runtime_ray_ambient_occlusion_tests)
 add_test(
   NAME vice_runtime_ray_ambient_occlusion_tests

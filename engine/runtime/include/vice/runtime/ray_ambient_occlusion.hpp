@@ -41,6 +41,13 @@ enum class RuntimeRayAmbientOcclusionNeighbor : std::int8_t {
     positive = 1,
 };
 
+[[nodiscard]] constexpr bool runtime_ray_ambient_occlusion_needs_camera_depth_prepass(
+    const bool enabled,
+    const bool pass_available
+) noexcept {
+    return enabled && pass_available;
+}
+
 [[nodiscard]] float runtime_ray_ambient_occlusion_linear_depth(
     float device_depth,
     float near_plane,
