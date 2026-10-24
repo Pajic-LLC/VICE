@@ -54,6 +54,7 @@ if(VICE_BUILD_EDITOR OR VICE_BUILD_TOOLS)
 endif()
 
 if(VICE_BUILD_TOOLS)
+  add_subdirectory(tools/package_signer)
   if(VICE_ENABLE_JOLT_RIGID_BODY)
     add_subdirectory(tools/collision_cooker)
     add_subdirectory(tools/collision_import)

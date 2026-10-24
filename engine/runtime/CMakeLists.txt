@@ -25,6 +25,7 @@ add_library(
     src/module_loader.cpp
     src/module_paths.cpp
     src/package_metadata.cpp
+    src/package_metadata_slot.cpp
     src/post_process.cpp
     src/ray_tracing_scene.cpp
     src/ray_tracing_scene_executor.cpp
@@ -42,6 +43,13 @@ add_library(
     src/virtual_texture_sampling.cpp
     src/virtual_texture_streaming.cpp
     src/visibility.cpp
+)
+
+set_source_files_properties(
+  src/package_metadata.cpp
+  PROPERTIES
+    COMPILE_DEFINITIONS
+      "stamp_staged_package_metadata=append_staged_package_metadata_internal;load_staged_package_metadata=load_staged_package_metadata_internal"
 )
 
 add_library(VICE::Runtime ALIAS vice_runtime)
