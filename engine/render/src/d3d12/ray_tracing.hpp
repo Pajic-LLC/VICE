@@ -1,5 +1,9 @@
 #pragma once
 
+#ifdef DeviceCapabilities
+#undef DeviceCapabilities
+#endif
+
 #include <vice/render/ray_tracing.hpp>
 
 #include <d3d12.h>
