@@ -3,6 +3,7 @@
 #include <vice/render/ray_tracing.hpp>
 
 #include <d3d12.h>
+#include <dxgi1_6.h>
 #include <wrl/client.h>
 
 #include <array>
@@ -13,6 +14,8 @@
 #include <span>
 
 namespace {
+
+using Microsoft::WRL::ComPtr;
 
 class TestBuffer final : public vice::render::Buffer {
 public:
@@ -56,12 +59,39 @@ private:
     return (static_cast<UINT>(value) & static_cast<UINT>(flag)) != 0U;
 }
 
+[[nodiscard]] ComPtr<ID3D12Device> create_test_device() {
+    ComPtr<ID3D12Device> device;
+    if (SUCCEEDED(D3D12CreateDevice(
+        nullptr,
+        D3D_FEATURE_LEVEL_11_0,
+        IID_PPV_ARGS(&device)
+    ))) {
+        return device;
+    }
+
+    ComPtr<IDXGIFactory4> factory;
+    if (FAILED(CreateDXGIFactory2(0U, IID_PPV_ARGS(&factory))) || factory == nullptr) {
+        return {};
+    }
+    ComPtr<IDXGIAdapter> warp;
+    if (FAILED(factory->EnumWarpAdapter(IID_PPV_ARGS(&warp))) || warp == nullptr) {
+        return {};
+    }
+    if (FAILED(D3D12CreateDevice(
+        warp.Get(),
+        D3D_FEATURE_LEVEL_11_0,
+        IID_PPV_ARGS(&device)
+    ))) {
+        return {};
+    }
+    return device;
+}
+
 } // namespace
 
 int main() {
     using namespace vice::render;
     using namespace vice::render::d3d12;
-    using Microsoft::WRL::ComPtr;
 
     TestBuffer vertices{4096U, BufferUsage::vertex};
     TestBuffer indices{2048U, BufferUsage::index};
@@ -183,13 +213,7 @@ int main() {
     assert(tlas_inputs.NumDescs == 1U);
     assert(tlas_inputs.InstanceDescs == instance_buffer_address);
 
-    ComPtr<ID3D12Device> device;
-    const HRESULT device_result = D3D12CreateDevice(
-        nullptr,
-        D3D_FEATURE_LEVEL_11_0,
-        IID_PPV_ARGS(&device)
-    );
-    assert(SUCCEEDED(device_result));
+    const auto device = create_test_device();
     assert(device != nullptr);
 
     const bool dxr_supported = supports_ray_tracing(*device);
