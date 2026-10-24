@@ -572,7 +572,8 @@ public:
 
     [[nodiscard]] bool has_binding(
         const ShaderBindingKey& key,
-        const ShaderRegisterClass expected_class
+        const ShaderRegisterClass expected_class,
+        const ShaderResourceKind expected_kind = ShaderResourceKind::generic
     ) const noexcept {
         if (key.register_class != expected_class) {
             return false;
@@ -582,7 +583,8 @@ public:
             layout_.resources.end(),
             [&](const PipelineResourceBinding& resource) {
                 if (resource.register_class != key.register_class ||
-                    resource.binding != key.binding || resource.space != key.space) {
+                    resource.binding != key.binding || resource.space != key.space ||
+                    resource.kind != expected_kind) {
                     return false;
                 }
                 return resource.unbounded || key.array_element < resource.count;
@@ -634,7 +636,8 @@ public:
 
     [[nodiscard]] bool has_binding(
         const ShaderBindingKey& key,
-        const ShaderRegisterClass expected_class
+        const ShaderRegisterClass expected_class,
+        const ShaderResourceKind expected_kind = ShaderResourceKind::generic
     ) const noexcept {
         if (key.register_class != expected_class) {
             return false;
@@ -644,7 +647,8 @@ public:
             layout_.resources.end(),
             [&](const PipelineResourceBinding& resource) {
                 if (resource.register_class != key.register_class ||
-                    resource.binding != key.binding || resource.space != key.space) {
+                    resource.binding != key.binding || resource.space != key.space ||
+                    resource.kind != expected_kind) {
                     return false;
                 }
                 return resource.unbounded || key.array_element < resource.count;
@@ -771,6 +775,7 @@ enum class MetalBoundKind : std::uint8_t {
     texture,
     storage_texture,
     sampler,
+    acceleration_structure,
 };
 
 struct MetalBoundResource {
@@ -779,6 +784,7 @@ struct MetalBoundResource {
     MetalBuffer* buffer = nullptr;
     MetalTexture* texture = nullptr;
     MetalSampler* sampler = nullptr;
+    MetalAccelerationStructure* acceleration_structure = nullptr;
     std::uint64_t offset = 0;
     std::uint64_t size = 0;
 };
@@ -1303,6 +1309,27 @@ public:
         return true;
     }
 
+    bool set_compute_acceleration_structure(
+        const ShaderBindingKey& binding,
+        AccelerationStructure& acceleration_structure
+    ) override {
+        auto* native = dynamic_cast<MetalAccelerationStructure*>(&acceleration_structure);
+        if (!compute_binding_allowed(
+                binding,
+                ShaderRegisterClass::shader_resource,
+                ShaderResourceKind::acceleration_structure
+            ) || native == nullptr || native->type() != AccelerationStructureType::top_level ||
+            native->native() == nil) {
+            return false;
+        }
+        upsert_compute_bound(MetalBoundResource{
+            .key = binding,
+            .kind = MetalBoundKind::acceleration_structure,
+            .acceleration_structure = native,
+        });
+        return true;
+    }
+
     bool set_compute_storage_buffer(
         const ShaderBindingKey& binding,
         Buffer& buffer,
@@ -1563,19 +1590,21 @@ public:
 private:
     [[nodiscard]] bool binding_allowed(
         const ShaderBindingKey& binding,
-        const ShaderRegisterClass expected_class
+        const ShaderRegisterClass expected_class,
+        const ShaderResourceKind expected_kind = ShaderResourceKind::generic
     ) const noexcept {
         return render_encoder_ != nil && pipeline_bound_ && active_pipeline_ != nullptr &&
-            active_pipeline_->has_binding(binding, expected_class);
+            active_pipeline_->has_binding(binding, expected_class, expected_kind);
     }
 
     [[nodiscard]] bool compute_binding_allowed(
         const ShaderBindingKey& binding,
-        const ShaderRegisterClass expected_class
+        const ShaderRegisterClass expected_class,
+        const ShaderResourceKind expected_kind = ShaderResourceKind::generic
     ) const noexcept {
         return render_encoder_ == nil && compute_pipeline_bound_ &&
             active_compute_pipeline_ != nullptr &&
-            active_compute_pipeline_->has_binding(binding, expected_class);
+            active_compute_pipeline_->has_binding(binding, expected_class, expected_kind);
     }
 
     [[nodiscard]] bool all_vertex_buffers_bound() const noexcept {
@@ -2237,6 +2266,19 @@ private:
             [encoder setSamplerState:bound.sampler->native() atIndex:index];
             [retained_samplers_ addObject:bound.sampler->native()];
             return true;
+        case MetalBoundKind::acceleration_structure:
+            if (bound.acceleration_structure == nullptr ||
+                bound.acceleration_structure->type() != AccelerationStructureType::top_level ||
+                bound.acceleration_structure->native() == nil) {
+                return false;
+            }
+            if (@available(macOS 11.0, *)) {
+                [encoder setAccelerationStructure:bound.acceleration_structure->native()
+                                    atBufferIndex:index];
+                [encoder useResource:bound.acceleration_structure->native() usage:MTLResourceUsageRead];
+                return true;
+            }
+            return false;
         }
         return false;
     }
@@ -2397,6 +2439,15 @@ private:
             }
             entry.gpu_address = bound.sampler->native().gpuResourceID._impl;
             [retained_samplers_ addObject:bound.sampler->native()];
+            return true;
+        case MetalBoundKind::acceleration_structure:
+            if (bound.acceleration_structure == nullptr ||
+                bound.acceleration_structure->type() != AccelerationStructureType::top_level ||
+                bound.acceleration_structure->native() == nil) {
+                return false;
+            }
+            entry.gpu_address = bound.acceleration_structure->native().gpuResourceID._impl;
+            [encoder useResource:bound.acceleration_structure->native() usage:MTLResourceUsageRead];
             return true;
         }
         return false;

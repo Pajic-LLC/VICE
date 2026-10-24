@@ -201,17 +201,26 @@ int main() {
         .count = 1,
         .unbounded = false,
     };
+    constexpr ShaderResourceBindingDesc compute_tlas{
+        .register_class = ShaderRegisterClass::shader_resource,
+        .binding = 5,
+        .space = 2,
+        .count = 1,
+        .unbounded = false,
+        .kind = ShaderResourceKind::acceleration_structure,
+    };
     constexpr std::array compute_resources{
         compute_constants,
         compute_input,
         compute_output,
+        compute_tlas,
     };
     const PipelineLayout compute_layout = compile_compute_pipeline_layout(compute_resources);
     assert(compute_layout.valid);
 
     const D3D12RootSignatureResult compute_root = serialize_d3d12_root_signature(compute_layout);
     assert(compute_root.success);
-    assert(compute_root.bindings.size() == 3U);
+    assert(compute_root.bindings.size() == 4U);
     assert(compute_root.tables.size() == 3U);
 
     ComPtr<ID3D12RootSignatureDeserializer> compute_deserializer;
@@ -238,6 +247,17 @@ int main() {
         .array_element = 0,
     };
     assert(find_d3d12_binding_location(compute_root, compute_uav_key) != nullptr);
+
+    const ShaderBindingKey compute_tlas_key{
+        .register_class = ShaderRegisterClass::shader_resource,
+        .binding = 5,
+        .space = 2,
+        .array_element = 0,
+    };
+    const auto* compute_tlas_location = find_d3d12_binding_location(compute_root, compute_tlas_key);
+    assert(compute_tlas_location != nullptr);
+    assert(compute_tlas_location->kind == ShaderResourceKind::acceleration_structure);
+    assert(compute_tlas_location->register_class == ShaderRegisterClass::shader_resource);
 
     PipelineLayout invalid_layout;
     invalid_layout.valid = false;

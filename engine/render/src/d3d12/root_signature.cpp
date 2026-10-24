@@ -152,6 +152,7 @@ D3D12RootSignatureResult serialize_d3d12_root_signature(const PipelineLayout& la
                 .space = resource.space,
                 .count = resource.count,
                 .unbounded = resource.unbounded,
+                .kind = resource.kind,
                 .root_parameter_index = table.root_parameter_index,
                 .table_offset = table_offset,
             });

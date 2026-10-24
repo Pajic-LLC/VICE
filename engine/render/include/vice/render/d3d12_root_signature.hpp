@@ -28,6 +28,7 @@ struct D3D12BindingLocation {
     std::uint32_t space = 0;
     std::uint32_t count = 1;
     bool unbounded = false;
+    ShaderResourceKind kind = ShaderResourceKind::generic;
     std::uint32_t root_parameter_index = 0;
     std::uint32_t table_offset = 0;
 };

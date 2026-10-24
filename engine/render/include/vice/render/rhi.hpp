@@ -518,6 +518,7 @@ struct ScissorRect {
 
 class ShaderModule;
 class Texture;
+class AccelerationStructure;
 
 struct GraphicsPipelineDesc {
     ShaderModule* vertex_shader = nullptr;
@@ -768,6 +769,14 @@ public:
     virtual bool set_compute_sampler(const ShaderBindingKey& binding, Sampler& sampler) {
         (void)binding;
         (void)sampler;
+        return false;
+    }
+    virtual bool set_compute_acceleration_structure(
+        const ShaderBindingKey& binding,
+        AccelerationStructure& acceleration_structure
+    ) {
+        (void)binding;
+        (void)acceleration_structure;
         return false;
     }
     virtual bool dispatch(const ComputeDispatchDesc& dispatch_desc) {
