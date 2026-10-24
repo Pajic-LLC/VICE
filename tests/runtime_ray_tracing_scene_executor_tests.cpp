@@ -229,6 +229,9 @@ int main() {
     plan.instances.push_back(planned_instance(2U, 18U, 0U, 8.0F, 0xFFU));
 
     RuntimeRayTracingSceneExecutor executor;
+    assert(executor.active_tlas() == nullptr);
+    const RuntimeRayTracingSceneExecutor& const_executor = executor;
+    assert(const_executor.active_tlas() == nullptr);
     TestRayCommandList commands;
     TestDevice unsupported;
     const auto unsupported_result = executor.execute(unsupported, commands, plan, geometry);
@@ -237,6 +240,7 @@ int main() {
     assert(commands.builds.empty());
     assert(executor.cached_blas_count() == 0U);
     assert(!executor.has_tlas());
+    assert(executor.active_tlas() == nullptr);
 
     TestRayDevice device;
     const auto first = executor.execute(device, commands, plan, geometry);
@@ -256,6 +260,9 @@ int main() {
     assert(commands.builds[1].transforms[1][3] == 8.0F);
     assert(executor.cached_blas_count() == 1U);
     assert(executor.has_tlas());
+    assert(executor.active_tlas() != nullptr);
+    assert(executor.active_tlas()->type() == AccelerationStructureType::top_level);
+    assert(const_executor.active_tlas() == executor.active_tlas());
 
     const auto unchanged = executor.execute(device, commands, plan, geometry);
     assert(unchanged);
@@ -263,6 +270,7 @@ int main() {
     assert(unchanged.counters.tlas_reuses == 1U);
     assert(device.create_count == 2U);
     assert(commands.builds.size() == 2U);
+    assert(executor.active_tlas() != nullptr);
 
     auto moved_plan = plan;
     moved_plan.instances[0].transform[3] = 12.0F;
@@ -275,6 +283,8 @@ int main() {
     assert(commands.builds.back().type == AccelerationStructureType::top_level);
     assert(commands.builds.back().update);
     assert(commands.builds.back().transforms[0][3] == 12.0F);
+    assert(executor.active_tlas() != nullptr);
+    assert(executor.active_tlas()->type() == AccelerationStructureType::top_level);
 
     auto regenerated_plan = moved_plan;
     regenerated_plan.blases[0].key.source_fingerprint = 999U;
@@ -289,6 +299,7 @@ int main() {
     assert(commands.builds[3].type == AccelerationStructureType::bottom_level);
     assert(commands.builds[4].type == AccelerationStructureType::top_level);
     assert(!commands.builds[4].update);
+    assert(executor.active_tlas() != nullptr);
 
     const RuntimeRayTracingScenePlan empty_plan{};
     const auto emptied = executor.execute(device, commands, empty_plan, geometry);
@@ -296,11 +307,22 @@ int main() {
     assert(emptied.counters.blas_evictions == 1U);
     assert(executor.cached_blas_count() == 0U);
     assert(!executor.has_tlas());
+    assert(executor.active_tlas() == nullptr);
 
     const auto disabled_again = executor.execute(unsupported, commands, plan, geometry);
     assert(disabled_again);
     assert(!disabled_again.active);
     assert(executor.cached_blas_count() == 0U);
+    assert(!executor.has_tlas());
+    assert(executor.active_tlas() == nullptr);
+
+    TestRayCommandList reset_commands;
+    const auto before_reset = executor.execute(device, reset_commands, plan, geometry);
+    assert(before_reset);
+    assert(before_reset.active);
+    assert(executor.active_tlas() != nullptr);
+    executor.reset();
+    assert(executor.active_tlas() == nullptr);
     assert(!executor.has_tlas());
 
     return 0;
