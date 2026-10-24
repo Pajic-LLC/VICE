@@ -1461,6 +1461,11 @@ RuntimeDirectionalShadowTelemetry RuntimeSceneRenderer::directional_shadow_telem
     return directional_shadow_telemetry_;
 }
 
+RuntimeRayTracingTelemetry RuntimeSceneRenderer::ray_tracing_telemetry() const noexcept {
+    if (state_ == nullptr) return {};
+    return state_->ray_tracing_scene.telemetry();
+}
+
 bool RuntimeSceneRenderer::render(
     const world::World& world,
     render::Swapchain& swapchain,
