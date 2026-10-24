@@ -12,6 +12,7 @@ target_link_libraries(
   PRIVATE
     VICE::Render
     d3d12
+    dxgi
 )
 target_compile_features(vice_d3d12_ray_tracing_tests PRIVATE cxx_std_23)
 vice_enable_warnings(vice_d3d12_ray_tracing_tests)
