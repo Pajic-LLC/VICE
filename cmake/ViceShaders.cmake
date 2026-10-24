@@ -66,7 +66,7 @@ endfunction()
 
 function(vice_add_cooked_shader)
   set(options)
-  set(one_value_args NAME INPUT OUTPUT ENTRY STAGE TARGET DXC METAL_SHADER_CONVERTER)
+  set(one_value_args NAME INPUT OUTPUT ENTRY STAGE TARGET SHADER_MODEL DXC METAL_SHADER_CONVERTER)
   cmake_parse_arguments(VICE_SHADER "${options}" "${one_value_args}" "" ${ARGN})
 
   foreach(required NAME INPUT OUTPUT ENTRY STAGE TARGET)
@@ -99,6 +99,9 @@ function(vice_add_cooked_shader)
     --stage "${VICE_SHADER_STAGE}"
     --target "${VICE_SHADER_TARGET}"
   )
+  if(VICE_SHADER_SHADER_MODEL)
+    list(APPEND _vice_shader_command --shader-model "${VICE_SHADER_SHADER_MODEL}")
+  endif()
   if(VICE_SHADER_DXC)
     list(APPEND _vice_shader_command --dxc "${VICE_SHADER_DXC}")
   endif()
