@@ -37,6 +37,25 @@ struct RuntimeRayTracingExecutionCounters {
     std::uint32_t tlas_builds = 0U;
     std::uint32_t tlas_refits = 0U;
     std::uint32_t tlas_reuses = 0U;
+
+    friend bool operator==(
+        const RuntimeRayTracingExecutionCounters&,
+        const RuntimeRayTracingExecutionCounters&
+    ) = default;
+};
+
+struct RuntimeRayTracingTelemetry {
+    bool supported = false;
+    bool scene_active = false;
+    std::size_t blas_count = 0U;
+    std::size_t tlas_instance_count = 0U;
+    std::uint64_t blas_bytes = 0U;
+    std::uint64_t tlas_bytes = 0U;
+    std::uint64_t total_bytes = 0U;
+    RuntimeRayTracingExecutionCounters last_successful_execution{};
+    RuntimeRayTracingExecutionCounters cumulative{};
+
+    friend bool operator==(const RuntimeRayTracingTelemetry&, const RuntimeRayTracingTelemetry&) = default;
 };
 
 struct RuntimeRayTracingExecutionResult {
@@ -64,6 +83,7 @@ public:
     [[nodiscard]] bool has_tlas() const noexcept { return tlas_ != nullptr; }
     [[nodiscard]] render::AccelerationStructure* active_tlas() noexcept { return tlas_.get(); }
     [[nodiscard]] const render::AccelerationStructure* active_tlas() const noexcept { return tlas_.get(); }
+    [[nodiscard]] const RuntimeRayTracingTelemetry& telemetry() const noexcept { return telemetry_; }
 
 private:
     struct CachedBlas {
@@ -71,10 +91,16 @@ private:
         std::shared_ptr<render::AccelerationStructure> structure;
     };
 
+    void refresh_telemetry(
+        bool supported,
+        const RuntimeRayTracingExecutionCounters& last_successful_execution
+    ) noexcept;
+
     std::vector<CachedBlas> blases_;
     std::shared_ptr<render::AccelerationStructure> tlas_;
     std::vector<RuntimeRayTracingBlasKey> previous_blas_keys_;
     std::vector<RuntimeRayTracingInstancePlan> previous_instances_;
+    RuntimeRayTracingTelemetry telemetry_{};
 };
 
 } // namespace vice::runtime
