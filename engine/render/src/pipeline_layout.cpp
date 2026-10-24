@@ -39,7 +39,8 @@ namespace {
     const PipelineResourceBinding& left,
     const ShaderResourceBindingDesc& right
 ) noexcept {
-    return left.count == right.count && left.unbounded == right.unbounded;
+    return left.count == right.count && left.unbounded == right.unbounded &&
+        left.kind == right.kind;
 }
 
 [[nodiscard]] bool add_resources(
@@ -77,6 +78,7 @@ namespace {
             .space = resource.space,
             .count = resource.count,
             .unbounded = resource.unbounded,
+            .kind = resource.kind,
             .stages = stage,
         });
     }

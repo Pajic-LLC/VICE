@@ -1003,6 +1003,7 @@ enum class PendingBindingKind : std::uint8_t {
     texture,
     storage_texture,
     sampler,
+    acceleration_structure,
 };
 
 struct PendingBinding {
@@ -1011,6 +1012,7 @@ struct PendingBinding {
     D3D12Buffer* buffer = nullptr;
     D3D12Texture* texture = nullptr;
     D3D12Sampler* sampler = nullptr;
+    D3D12AccelerationStructure* acceleration_structure = nullptr;
     BufferViewDesc view{};
     std::uint64_t constant_offset = 0;
     std::uint64_t constant_size = 0;
@@ -1594,6 +1596,26 @@ public:
         return true;
     }
 
+    bool set_compute_acceleration_structure(
+        const ShaderBindingKey& binding,
+        AccelerationStructure& acceleration_structure
+    ) override {
+        auto* native = dynamic_cast<D3D12AccelerationStructure*>(&acceleration_structure);
+        if (!compute_binding_allowed(
+                binding,
+                ShaderRegisterClass::shader_resource,
+                ShaderResourceKind::acceleration_structure
+            ) || native == nullptr || native->type() != AccelerationStructureType::top_level) {
+            return false;
+        }
+        PendingBinding pending;
+        pending.key = binding;
+        pending.kind = PendingBindingKind::acceleration_structure;
+        pending.acceleration_structure = native;
+        upsert_binding(pending_compute_bindings_, compute_bindings_dirty_, std::move(pending));
+        return true;
+    }
+
     bool set_compute_storage_buffer(
         const ShaderBindingKey& binding,
         Buffer& buffer,
@@ -1794,6 +1816,31 @@ public:
             return false;
         }
 
+        if (desc.type == AccelerationStructureType::bottom_level) {
+            for (const auto& geometry : desc.geometries) {
+                if (geometry.vertex_buffer == nullptr) {
+                    return false;
+                }
+                auto* vertex_buffer = dynamic_cast<D3D12Buffer*>(
+                    &geometry.vertex_buffer->binding_buffer()
+                );
+                if (vertex_buffer == nullptr) {
+                    return false;
+                }
+                transition(*vertex_buffer, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+
+                if (geometry.index_buffer != nullptr) {
+                    auto* index_buffer = dynamic_cast<D3D12Buffer*>(
+                        &geometry.index_buffer->binding_buffer()
+                    );
+                    if (index_buffer == nullptr) {
+                        return false;
+                    }
+                    transition(*index_buffer, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+                }
+            }
+        }
+
         auto plan = d3d12::build_acceleration_structure_plan(
             desc,
             d3d12_buffer_address,
@@ -1844,21 +1891,28 @@ public:
 private:
     [[nodiscard]] bool binding_allowed(
         const ShaderBindingKey& binding,
-        const ShaderRegisterClass expected_class
+        const ShaderRegisterClass expected_class,
+        const ShaderResourceKind expected_kind = ShaderResourceKind::generic
     ) const noexcept {
-        return render_pass_active_ && pipeline_bound_ && active_pipeline_ != nullptr &&
-            binding.register_class == expected_class &&
-            active_pipeline_->binding_location(binding) != nullptr;
+        if (!render_pass_active_ || !pipeline_bound_ || active_pipeline_ == nullptr ||
+            binding.register_class != expected_class) {
+            return false;
+        }
+        const auto* location = active_pipeline_->binding_location(binding);
+        return location != nullptr && location->kind == expected_kind;
     }
 
     [[nodiscard]] bool compute_binding_allowed(
         const ShaderBindingKey& binding,
-        const ShaderRegisterClass expected_class
+        const ShaderRegisterClass expected_class,
+        const ShaderResourceKind expected_kind = ShaderResourceKind::generic
     ) const noexcept {
-        return !render_pass_active_ && compute_pipeline_bound_ &&
-            active_compute_pipeline_ != nullptr &&
-            binding.register_class == expected_class &&
-            active_compute_pipeline_->binding_location(binding) != nullptr;
+        if (render_pass_active_ || !compute_pipeline_bound_ || active_compute_pipeline_ == nullptr ||
+            binding.register_class != expected_class) {
+            return false;
+        }
+        const auto* location = active_compute_pipeline_->binding_location(binding);
+        return location != nullptr && location->kind == expected_kind;
     }
 
     [[nodiscard]] bool all_vertex_buffers_bound() const noexcept {
@@ -2239,6 +2293,27 @@ private:
         return desc;
     }
 
+    [[nodiscard]] bool create_acceleration_structure_srv(
+        const PendingBinding& pending,
+        const D3D12_CPU_DESCRIPTOR_HANDLE handle
+    ) {
+        if (pending.acceleration_structure == nullptr ||
+            pending.acceleration_structure->type() != AccelerationStructureType::top_level) {
+            return false;
+        }
+        const auto address = d3d12_acceleration_structure_address(*pending.acceleration_structure);
+        if (!address) {
+            return false;
+        }
+        D3D12_SHADER_RESOURCE_VIEW_DESC desc{};
+        desc.Format = DXGI_FORMAT_UNKNOWN;
+        desc.ViewDimension = D3D12_SRV_DIMENSION_RAYTRACING_ACCELERATION_STRUCTURE;
+        desc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+        desc.RaytracingAccelerationStructure.Location = *address;
+        device_->CreateShaderResourceView(nullptr, &desc, handle);
+        return true;
+    }
+
     [[nodiscard]] bool create_texture_srv(
         const PendingBinding& pending,
         const D3D12_CPU_DESCRIPTOR_HANDLE handle
@@ -2292,6 +2367,8 @@ private:
             }
             device_->CreateSampler(&pending.sampler->native_desc(), handle);
             return true;
+        case PendingBindingKind::acceleration_structure:
+            return create_acceleration_structure_srv(pending, handle);
         }
         return false;
     }

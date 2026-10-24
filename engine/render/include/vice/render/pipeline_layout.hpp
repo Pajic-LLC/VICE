@@ -52,6 +52,7 @@ struct PipelineResourceBinding {
     std::uint32_t space = 0;
     std::uint32_t count = 1;
     bool unbounded = false;
+    ShaderResourceKind kind = ShaderResourceKind::generic;
     ShaderStageMask stages = ShaderStageMask::none;
 };
 

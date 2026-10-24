@@ -168,7 +168,37 @@ int main() {
     assert(compute.resources.size() == 3U);
     for (const auto& resource : compute.resources) {
         assert(resource.stages == ShaderStageMask::compute);
+        assert(resource.kind == ShaderResourceKind::generic);
     }
+
+    constexpr ShaderResourceBindingDesc compute_tlas{
+        .register_class = ShaderRegisterClass::shader_resource,
+        .binding = 9,
+        .space = 4,
+        .count = 1,
+        .unbounded = false,
+        .kind = ShaderResourceKind::acceleration_structure,
+    };
+    constexpr std::array compute_rt_resources{compute_tlas};
+    const PipelineLayout compute_rt = compile_compute_pipeline_layout(compute_rt_resources);
+    assert(compute_rt.valid);
+    assert(compute_rt.resources.size() == 1U);
+    assert(compute_rt.resources[0].kind == ShaderResourceKind::acceleration_structure);
+    assert(compute_rt.resources[0].stages == ShaderStageMask::compute);
+
+    constexpr ShaderResourceBindingDesc generic_tlas_slot{
+        .register_class = ShaderRegisterClass::shader_resource,
+        .binding = 9,
+        .space = 4,
+        .count = 1,
+        .unbounded = false,
+        .kind = ShaderResourceKind::generic,
+    };
+    constexpr std::array rt_vertex{compute_tlas};
+    constexpr std::array rt_fragment{generic_tlas_slot};
+    const PipelineLayout kind_conflict = compile_graphics_pipeline_layout(rt_vertex, rt_fragment);
+    assert(!kind_conflict.valid);
+    assert(!kind_conflict.diagnostics.empty());
 
     constexpr ShaderResourceBindingDesc compute_overlap_a{
         .register_class = ShaderRegisterClass::unordered_access,
