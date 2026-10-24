@@ -1,5 +1,6 @@
 #include <vice/render/ray_tracing.hpp>
 #include <vice/runtime/ray_tracing_scene.hpp>
+#include <vice/runtime/resource_residency.hpp>
 
 #include <algorithm>
 #include <array>
@@ -138,6 +139,59 @@ int main() {
     );
     assert(!duplicate);
     assert(!duplicate.diagnostics.empty());
+
+    runtime::RuntimeResourceResidencyPlan only_mesh_one;
+    only_mesh_one.resources = {resource_id(1U)};
+    const auto resident_mesh_one = runtime::filter_runtime_resident_geometry(
+        instances,
+        only_mesh_one
+    );
+    assert(resident_mesh_one.size() == 2U);
+    const auto resident_plan = runtime::build_runtime_ray_tracing_scene_plan(
+        resident_mesh_one,
+        meshes
+    );
+    assert(resident_plan);
+    assert(resident_plan.blases.size() == 1U);
+    assert(resident_plan.instances.size() == 2U);
+    assert(resident_plan.blases[0].key.mesh == resource_id(1U));
+    assert(std::none_of(
+        resident_plan.instances.begin(),
+        resident_plan.instances.end(),
+        [&](const auto& planned) { return planned.entity == persistent_id(2U); }
+    ));
+
+    runtime::RuntimeResourceResidencyPlan all_meshes;
+    all_meshes.resources = {resource_id(1U), resource_id(2U)};
+    const auto streamed_back = runtime::filter_runtime_resident_geometry(instances, all_meshes);
+    const auto streamed_back_plan = runtime::build_runtime_ray_tracing_scene_plan(
+        streamed_back,
+        meshes
+    );
+    assert(streamed_back_plan);
+    const auto before_identity = std::find_if(
+        plan.instances.begin(),
+        plan.instances.end(),
+        [&](const auto& planned) { return planned.entity == persistent_id(2U); }
+    );
+    const auto after_identity = std::find_if(
+        streamed_back_plan.instances.begin(),
+        streamed_back_plan.instances.end(),
+        [&](const auto& planned) { return planned.entity == persistent_id(2U); }
+    );
+    assert(before_identity != plan.instances.end());
+    assert(after_identity != streamed_back_plan.instances.end());
+    assert(before_identity->instance_id == after_identity->instance_id);
+
+    auto reordered_resident = streamed_back;
+    std::reverse(reordered_resident.begin(), reordered_resident.end());
+    const auto reordered_resident_plan = runtime::build_runtime_ray_tracing_scene_plan(
+        reordered_resident,
+        meshes
+    );
+    assert(reordered_resident_plan);
+    assert(reordered_resident_plan.blases == streamed_back_plan.blases);
+    assert(reordered_resident_plan.instances == streamed_back_plan.instances);
 
     return 0;
 }

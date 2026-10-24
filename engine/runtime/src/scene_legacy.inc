@@ -10,6 +10,8 @@
 #include <vice/runtime/hiz.hpp>
 #include <vice/runtime/hiz_occlusion.hpp>
 #include <vice/runtime/post_process.hpp>
+#include <vice/runtime/ray_tracing_scene.hpp>
+#include <vice/runtime/ray_tracing_scene_executor.hpp>
 #include <vice/runtime/render_streaming.hpp>
 #include <vice/runtime/resource_residency.hpp>
 #include <vice/runtime/visibility.hpp>
@@ -2058,6 +2060,8 @@ struct RuntimeSceneRenderer::State {
     RuntimeGpuInstanceTable gpu_instances;
     RuntimeGpuInstanceTable gpu_cluster_instances;
     RuntimeGpuInstanceTable gpu_previous_instances;
+    RuntimeRayTracingSceneExecutor ray_tracing_scene;
+    RuntimeRayTracingExecutionCounters ray_tracing_counters{};
     std::array<RuntimeGpuInstanceTable, runtime_point_shadow_light_count> gpu_point_shadow_instances;
     detail::RuntimeGpuMaterialSceneResources gpu_material_scene;
     std::unique_ptr<render::Buffer> gpu_default_frame;
@@ -3179,6 +3183,42 @@ bool RuntimeSceneRenderer::render(
         set_diagnostics(diagnostics, "VICE Runtime could not create scene commands.");
         return false;
     }
+
+    const auto ray_tracing_plan = build_runtime_ray_tracing_scene_plan(
+        instances,
+        state_->catalog.records()
+    );
+    if (!ray_tracing_plan) {
+        set_diagnostics(diagnostics, ray_tracing_plan.diagnostics);
+        return false;
+    }
+    const auto ray_tracing_execution = state_->ray_tracing_scene.execute(
+        *state_->device,
+        *commands,
+        ray_tracing_plan,
+        [&](const RuntimeRayTracingBlasKey& key)
+            -> std::optional<RuntimeRayTracingGeometryBinding> {
+            const auto found = state_->meshes.find(key.mesh);
+            if (found == state_->meshes.end() || !found->second.vertices || !found->second.indices) {
+                return std::nullopt;
+            }
+            return RuntimeRayTracingGeometryBinding{
+                .vertex_buffer = found->second.vertices.get(),
+                .vertex_offset = 0U,
+                .vertex_stride = static_cast<std::uint32_t>(sizeof(render::MeshVertex)),
+                .vertex_format = render::VertexFormat::float32x3,
+                .index_buffer = found->second.indices.get(),
+                .index_offset = 0U,
+                .index_format = render::IndexFormat::uint32,
+                .opaque = true,
+            };
+        }
+    );
+    if (!ray_tracing_execution) {
+        set_diagnostics(diagnostics, ray_tracing_execution.diagnostics);
+        return false;
+    }
+    state_->ray_tracing_counters = ray_tracing_execution.counters;
 
     if (instances.size() > std::numeric_limits<std::uint32_t>::max()) {
         set_diagnostics(diagnostics, "Runtime scene instance count exceeds the GPU visibility contract.");
