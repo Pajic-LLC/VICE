@@ -216,8 +216,8 @@ int main() {
     const auto device = create_test_device();
     assert(device != nullptr);
 
-    const bool dxr_supported = supports_ray_tracing(*device);
-    const auto sizes = query_acceleration_structure_build_sizes(*device, blas_plan);
+    const bool dxr_supported = supports_ray_tracing(*device.Get());
+    const auto sizes = query_acceleration_structure_build_sizes(*device.Get(), blas_plan);
     if (dxr_supported) {
         assert(sizes);
         assert(is_valid(sizes.sizes));
