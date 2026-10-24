@@ -13,7 +13,7 @@ int main() {
 ;
 ; Name                                 Type  Format         Dim      ID      HLSL Bind  Count
 ; ------------------------------ ---------- ------- ----------- ------- -------------- ------
-; Scene                    RTAccelerationStructure      NA          NA      T0             t0     1
+; Scene                                   SRV      NA        ras      T0             t0     1
 ; Albedo                                  texture    f32          2d      T1             t1     1
 ;
 )DXC";
@@ -21,6 +21,8 @@ int main() {
     assert(reflected.valid);
     assert(reflected.resources.size() == 2U);
     assert(reflected.resources[0].register_class == cooker::ShaderRegisterClass::shader_resource);
+    assert(reflected.resources[0].type == "SRV");
+    assert(reflected.resources[0].dimension == "ras");
     assert(reflected.resources[0].kind == cooker::ShaderResourceKind::acceleration_structure);
     assert(reflected.resources[0].binding == 0U);
     assert(reflected.resources[1].kind == cooker::ShaderResourceKind::generic);

@@ -766,7 +766,17 @@ ShaderReflection parse_dxc_resource_bindings(const std::string_view assembly) {
                 return static_cast<char>(std::tolower(character));
             }
         );
-        if (normalized_type.find("accelerationstructure") != std::string::npos) {
+        std::string normalized_dimension = resource.dimension;
+        std::transform(
+            normalized_dimension.begin(),
+            normalized_dimension.end(),
+            normalized_dimension.begin(),
+            [](const unsigned char character) {
+                return static_cast<char>(std::tolower(character));
+            }
+        );
+        if (normalized_type.find("accelerationstructure") != std::string::npos ||
+            normalized_dimension == "ras") {
             if (resource.register_class != ShaderRegisterClass::shader_resource) {
                 reflection.diagnostics =
                     "DXC acceleration-structure reflection must use an SRV register.";
@@ -804,7 +814,7 @@ std::string make_cache_key(
 ) {
     std::string material;
     material.reserve(source.size() + 512);
-    hash_append(material, "VICE_SHADER_ASSET_V5_METAL_EXPLICIT_TABLES2_RESOURCE_KINDS1");
+    hash_append(material, "VICE_SHADER_ASSET_V5_METAL_EXPLICIT_TABLES2_RESOURCE_KINDS3");
     hash_append(material, source);
     hash_append(material, request.entry_point);
     hash_append(material, shader_stage_name(request.stage));
