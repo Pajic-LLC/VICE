@@ -122,31 +122,61 @@ jobs:
           }
 
           $password = "vice-ci-signing"
-          $key = Join-Path $PWD "build/vice-ci-signing.key.pem"
-          $pem = Join-Path $PWD "build/vice-ci-signing.cert.pem"
+          $rootKey = Join-Path $PWD "build/vice-ci-root.key.pem"
+          $rootPem = Join-Path $PWD "build/vice-ci-root.cert.pem"
+          $rootCer = Join-Path $PWD "build/vice-ci-root.cer"
+          $leafKey = Join-Path $PWD "build/vice-ci-signing.key.pem"
+          $leafCsr = Join-Path $PWD "build/vice-ci-signing.csr.pem"
+          $leafPem = Join-Path $PWD "build/vice-ci-signing.cert.pem"
+          $leafExtensions = Join-Path $PWD "build/vice-ci-signing.ext"
           $pfx = Join-Path $PWD "build/vice-ci-signing.pfx"
-          $cer = Join-Path $PWD "build/vice-ci-signing.cer"
 
           & $openssl.Source req -x509 -newkey rsa:2048 -sha256 -nodes `
-            -subj "/CN=VICE CI Package Signing" `
-            -addext "keyUsage=digitalSignature" `
-            -addext "extendedKeyUsage=codeSigning" `
+            -subj "/CN=VICE CI Test Root" `
+            -addext "basicConstraints=critical,CA:TRUE" `
+            -addext "keyUsage=critical,keyCertSign,cRLSign" `
             -days 1 `
-            -keyout $key `
-            -out $pem
+            -keyout $rootKey `
+            -out $rootPem
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+          & $openssl.Source req -new -newkey rsa:2048 -sha256 -nodes `
+            -subj "/CN=VICE CI Package Signing" `
+            -keyout $leafKey `
+            -out $leafCsr
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+          @"
+          basicConstraints=critical,CA:FALSE
+          keyUsage=critical,digitalSignature
+          extendedKeyUsage=codeSigning
+          subjectKeyIdentifier=hash
+          authorityKeyIdentifier=keyid,issuer
+          "@ | Set-Content -Path $leafExtensions -Encoding ascii
+
+          & $openssl.Source x509 -req `
+            -in $leafCsr `
+            -CA $rootPem `
+            -CAkey $rootKey `
+            -CAcreateserial `
+            -days 1 `
+            -sha256 `
+            -extfile $leafExtensions `
+            -out $leafPem
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
           & $openssl.Source pkcs12 -export `
             -out $pfx `
-            -inkey $key `
-            -in $pem `
+            -inkey $leafKey `
+            -in $leafPem `
+            -certfile $rootPem `
             -passout "pass:$password"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-          & $openssl.Source x509 -in $pem -outform der -out $cer
+          & $openssl.Source x509 -in $rootPem -outform der -out $rootCer
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-          & $certmgr.FullName -add $cer -s -r localMachine root
+          & $certmgr.FullName -add $rootCer -s -r localMachine root
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
           "VICE_SIGN_TEST=$target" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
