@@ -49,6 +49,13 @@ private:
     std::uint64_t size_ = 0U;
 };
 
+[[nodiscard]] bool native_flag_set(
+    const D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAGS value,
+    const D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAGS flag
+) noexcept {
+    return (static_cast<UINT>(value) & static_cast<UINT>(flag)) != 0U;
+}
+
 } // namespace
 
 int main() {
@@ -92,8 +99,14 @@ int main() {
     assert(blas_plan.type == AccelerationStructureType::bottom_level);
     assert(blas_plan.geometries.size() == 1U);
     assert(blas_plan.instances.empty());
-    assert((blas_plan.flags & D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_ALLOW_UPDATE) != 0);
-    assert((blas_plan.flags & D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_PREFER_FAST_TRACE) != 0);
+    assert(native_flag_set(
+        blas_plan.flags,
+        D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_ALLOW_UPDATE
+    ));
+    assert(native_flag_set(
+        blas_plan.flags,
+        D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_PREFER_FAST_TRACE
+    ));
 
     const auto& native_geometry = blas_plan.geometries.front();
     assert(native_geometry.Type == D3D12_RAYTRACING_GEOMETRY_TYPE_TRIANGLES);
@@ -149,7 +162,10 @@ int main() {
     assert(tlas_plan.type == AccelerationStructureType::top_level);
     assert(tlas_plan.geometries.empty());
     assert(tlas_plan.instances.size() == 1U);
-    assert((tlas_plan.flags & D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_PREFER_FAST_BUILD) != 0);
+    assert(native_flag_set(
+        tlas_plan.flags,
+        D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_PREFER_FAST_BUILD
+    ));
 
     const auto& native_instance = tlas_plan.instances.front();
     assert(native_instance.InstanceID == 17U);
