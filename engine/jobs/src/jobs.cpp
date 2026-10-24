@@ -139,12 +139,14 @@ struct Scheduler::Impl {
     }
 
     void complete_task(const std::shared_ptr<detail::TaskState>& state, const Status result) {
-        state->status.store(result, std::memory_order_release);
         running_tasks.fetch_sub(1, std::memory_order_acq_rel);
         total_completed.fetch_add(1, std::memory_order_relaxed);
         if (result == Status::failed) {
             total_failed.fetch_add(1, std::memory_order_relaxed);
         }
+
+        const std::size_t previous = outstanding.fetch_sub(1, std::memory_order_acq_rel);
+        state->status.store(result, std::memory_order_release);
 
         {
             std::lock_guard lock{state->completion_mutex};
@@ -171,7 +173,6 @@ struct Scheduler::Impl {
             enqueue(dependent);
         }
 
-        const std::size_t previous = outstanding.fetch_sub(1, std::memory_order_acq_rel);
         if (previous == 1) {
             idle_cv.notify_all();
         }
