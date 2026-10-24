@@ -3,6 +3,7 @@
 #include <vice/runtime/gpu_virtual_geometry.hpp>
 #include <vice/runtime/gpu_virtual_geometry_feedback.hpp>
 #include <vice/runtime/gpu_virtual_geometry_feedback_ring.hpp>
+#include <vice/runtime/ray_ambient_occlusion.hpp>
 #include <vice/runtime/ray_tracing_scene_executor.hpp>
 #include <vice/runtime/render_streaming.hpp>
 #include <vice/runtime/scene.hpp>
@@ -44,13 +45,29 @@ struct RuntimeDirectionalRayShadowRenderContext {
     bool direct_visibility_marker_ready = false;
 };
 
+struct RuntimeRayAmbientOcclusionRenderContext {
+    RuntimeRayAmbientOcclusionPass* pass = nullptr;
+    RuntimeRayTracingSceneExecutor* ray_scene = nullptr;
+    render::Texture* camera_depth = nullptr;
+    RuntimeRayAmbientOcclusionConstants constants{};
+    std::string* diagnostics = nullptr;
+    bool enabled = false;
+    bool camera_depth_active = false;
+    bool constants_ready = false;
+    bool visibility_ready = false;
+};
+
 extern thread_local RuntimeDirectionalRayShadowRenderContext*
     active_directional_ray_shadow_render_context;
+extern thread_local RuntimeRayAmbientOcclusionRenderContext*
+    active_ray_ambient_occlusion_render_context;
 
 [[nodiscard]] RuntimeDirectionalShadowPath runtime_resolve_directional_shadow_path(
     RuntimeDirectionalShadowMode requested_mode,
     bool ray_tracing_supported
 ) noexcept;
+
+[[nodiscard]] bool runtime_ray_ambient_occlusion_needs_camera_depth_prepass() noexcept;
 
 [[nodiscard]] bool runtime_directional_ray_shadow_after_begin_depth(
     render::Texture& depth_attachment,
@@ -68,7 +85,23 @@ extern thread_local RuntimeDirectionalRayShadowRenderContext*
     bool has_gpu_pbr
 ) noexcept;
 
+[[nodiscard]] bool runtime_ray_ambient_occlusion_after_begin_depth(
+    render::Texture& depth_attachment,
+    float clear_depth,
+    bool clear,
+    render::Texture* current_depth,
+    RuntimeRayTracingSceneExecutor* ray_scene,
+    const RuntimeCameraView& camera,
+    float jitter_x_ndc,
+    float jitter_y_ndc,
+    platform::WindowMetrics metrics
+) noexcept;
+
 [[nodiscard]] bool runtime_directional_ray_shadow_after_end_render_pass(
+    render::CommandList& commands
+) noexcept;
+
+[[nodiscard]] bool runtime_ray_ambient_occlusion_after_end_render_pass(
     render::CommandList& commands
 ) noexcept;
 
@@ -92,6 +125,12 @@ extern thread_local RuntimeDirectionalRayShadowRenderContext*
 #define set_index_buffer(...) set_index_buffer_resolved(__VA_ARGS__)
 #define resolve_runtime_directional_shadow_path(requested_mode, ray_tracing_supported) \
     detail::runtime_resolve_directional_shadow_path((requested_mode), (ray_tracing_supported))
+// Intentionally unparenthesized. The legacy expression is
+// `shadow_view.has_value() && runtime_directional_shadow_requires_depth_prepass(path)`;
+// `&&` binds before this `||`, so RTAO can request current depth even without a shadow view.
+#define runtime_directional_shadow_requires_depth_prepass(path) \
+    ::vice::runtime::runtime_directional_shadow_requires_depth_prepass((path)) || \
+        detail::runtime_ray_ambient_occlusion_needs_camera_depth_prepass()
 #define begin_depth_render_pass(...) \
     begin_depth_render_pass(__VA_ARGS__) || \
         !detail::runtime_directional_ray_shadow_after_begin_depth( \
@@ -106,10 +145,20 @@ extern thread_local RuntimeDirectionalRayShadowRenderContext*
             jitter.y_ndc, \
             metrics, \
             !gpu_pbr_plan.batches.empty() || !gpu_cluster_pbr_plan.batches.empty() \
+        ) || \
+        !detail::runtime_ray_ambient_occlusion_after_begin_depth( \
+            __VA_ARGS__, \
+            current_depth, \
+            &state_->ray_tracing_scene, \
+            runtime_camera, \
+            jitter.x_ndc, \
+            jitter.y_ndc, \
+            metrics \
         )
 #define end_render_pass(...) \
     end_render_pass(__VA_ARGS__) || \
-        !detail::runtime_directional_ray_shadow_after_end_render_pass(*commands)
+        !detail::runtime_directional_ray_shadow_after_end_render_pass(*commands) || \
+        !detail::runtime_ray_ambient_occlusion_after_end_render_pass(*commands)
 #define set_graphics_constant_buffer(binding, buffer, offset, size) \
     set_graphics_constant_buffer( \
         (binding), \
@@ -129,6 +178,7 @@ extern thread_local RuntimeDirectionalRayShadowRenderContext*
 #undef set_graphics_constant_buffer
 #undef end_render_pass
 #undef begin_depth_render_pass
+#undef runtime_directional_shadow_requires_depth_prepass
 #undef resolve_runtime_directional_shadow_path
 #undef set_index_buffer
 #undef set_vertex_buffer
@@ -139,6 +189,8 @@ namespace vice::runtime::detail {
 
 thread_local RuntimeDirectionalRayShadowRenderContext*
     active_directional_ray_shadow_render_context = nullptr;
+thread_local RuntimeRayAmbientOcclusionRenderContext*
+    active_ray_ambient_occlusion_render_context = nullptr;
 
 class RuntimeDirectionalRayShadowRenderScope final {
 public:
@@ -160,6 +212,26 @@ private:
     RuntimeDirectionalRayShadowRenderContext* previous_ = nullptr;
 };
 
+class RuntimeRayAmbientOcclusionRenderScope final {
+public:
+    explicit RuntimeRayAmbientOcclusionRenderScope(
+        RuntimeRayAmbientOcclusionRenderContext& context
+    ) noexcept
+        : previous_{active_ray_ambient_occlusion_render_context} {
+        active_ray_ambient_occlusion_render_context = &context;
+    }
+
+    ~RuntimeRayAmbientOcclusionRenderScope() {
+        active_ray_ambient_occlusion_render_context = previous_;
+    }
+
+    RuntimeRayAmbientOcclusionRenderScope(const RuntimeRayAmbientOcclusionRenderScope&) = delete;
+    RuntimeRayAmbientOcclusionRenderScope& operator=(const RuntimeRayAmbientOcclusionRenderScope&) = delete;
+
+private:
+    RuntimeRayAmbientOcclusionRenderContext* previous_ = nullptr;
+};
+
 RuntimeDirectionalShadowPath runtime_resolve_directional_shadow_path(
     const RuntimeDirectionalShadowMode requested_mode,
     const bool ray_tracing_supported
@@ -169,6 +241,15 @@ RuntimeDirectionalShadowPath runtime_resolve_directional_shadow_path(
         context == nullptr ? requested_mode : context->requested_mode,
         ray_tracing_supported
     );
+}
+
+bool runtime_ray_ambient_occlusion_needs_camera_depth_prepass() noexcept {
+    const auto* const context = active_ray_ambient_occlusion_render_context;
+    return context != nullptr &&
+        ::vice::runtime::runtime_ray_ambient_occlusion_needs_camera_depth_prepass(
+            context->enabled,
+            context->pass != nullptr && context->pass->available()
+        );
 }
 
 bool runtime_directional_ray_shadow_after_begin_depth(
@@ -247,6 +328,62 @@ bool runtime_directional_ray_shadow_after_begin_depth(
     return true;
 }
 
+bool runtime_ray_ambient_occlusion_after_begin_depth(
+    render::Texture& depth_attachment,
+    const float,
+    const bool,
+    render::Texture* const current_depth,
+    RuntimeRayTracingSceneExecutor* const ray_scene,
+    const RuntimeCameraView& camera,
+    const float jitter_x_ndc,
+    const float jitter_y_ndc,
+    const platform::WindowMetrics metrics
+) noexcept {
+    auto* const context = active_ray_ambient_occlusion_render_context;
+    if (context == nullptr || !context->enabled || context->pass == nullptr ||
+        &depth_attachment != current_depth) {
+        return true;
+    }
+
+    context->camera_depth_active = true;
+    context->constants_ready = false;
+    context->visibility_ready = false;
+    context->ray_scene = ray_scene;
+    context->camera_depth = current_depth;
+
+    if (!context->pass->available() || ray_scene == nullptr || current_depth == nullptr ||
+        metrics.drawable_width == 0U || metrics.drawable_height == 0U) {
+        return true;
+    }
+
+    const RuntimeRayAmbientOcclusionCamera ray_camera{
+        .position = camera.position,
+        .forward = camera.forward,
+        .up = camera.up,
+        .vertical_fov_radians = camera.camera.vertical_fov_radians,
+        .aspect_ratio = camera.aspect_ratio,
+        .near_plane = camera.camera.near_plane,
+        .far_plane = camera.camera.far_plane,
+        .jitter_x_ndc = jitter_x_ndc,
+        .jitter_y_ndc = jitter_y_ndc,
+    };
+    const auto constants = make_runtime_ray_ambient_occlusion_constants(
+        ray_camera,
+        metrics.drawable_width,
+        metrics.drawable_height
+    );
+    if (!constants.has_value()) {
+        if (context->diagnostics != nullptr) {
+            *context->diagnostics = "VICE Runtime could not build ray ambient-occlusion camera constants.";
+        }
+        return false;
+    }
+
+    context->constants = *constants;
+    context->constants_ready = true;
+    return true;
+}
+
 bool runtime_directional_ray_shadow_after_end_render_pass(
     render::CommandList& commands
 ) noexcept {
@@ -307,6 +444,40 @@ bool runtime_directional_ray_shadow_after_end_render_pass(
         context->gpu_pbr_visibility_marker_ready = true;
     }
 
+    return true;
+}
+
+bool runtime_ray_ambient_occlusion_after_end_render_pass(
+    render::CommandList& commands
+) noexcept {
+    auto* const context = active_ray_ambient_occlusion_render_context;
+    if (context == nullptr || !context->camera_depth_active) return true;
+    context->camera_depth_active = false;
+
+    if (!context->constants_ready || context->pass == nullptr ||
+        context->ray_scene == nullptr || context->camera_depth == nullptr) {
+        return true;
+    }
+    auto* const tlas = context->ray_scene->active_tlas();
+    if (tlas == nullptr) return true;
+
+    if (!context->pass->dispatch(
+            commands,
+            *context->camera_depth,
+            *tlas,
+            context->constants,
+            context->diagnostics
+        )) {
+        return false;
+    }
+    if (context->pass->visibility() == nullptr) {
+        if (context->diagnostics != nullptr) {
+            *context->diagnostics = "VICE Runtime ray ambient-occlusion visibility is unavailable.";
+        }
+        return false;
+    }
+
+    context->visibility_ready = true;
     return true;
 }
 
@@ -423,7 +594,14 @@ struct RuntimeDirectionalRayShadowSceneState {
     std::unique_ptr<RuntimeDirectionalRayShadowPass> pass;
 };
 
+struct RuntimeRayAmbientOcclusionSceneState {
+    void* owner = nullptr;
+    render::Device* device = nullptr;
+    std::unique_ptr<RuntimeRayAmbientOcclusionPass> pass;
+};
+
 thread_local RuntimeDirectionalRayShadowSceneState directional_ray_shadow_scene_state;
+thread_local RuntimeRayAmbientOcclusionSceneState ray_ambient_occlusion_scene_state;
 
 [[nodiscard]] bool ensure_directional_ray_shadow_pass(
     void* const owner,
@@ -444,6 +622,35 @@ thread_local RuntimeDirectionalRayShadowSceneState directional_ray_shadow_scene_
     if (!state.pass->initialize(
             device,
             VICE_RUNTIME_DIRECTIONAL_RAY_SHADOW_MANIFEST,
+            diagnostics
+        )) {
+        return false;
+    }
+#else
+    if (!state.pass->initialize(device, {}, diagnostics)) return false;
+#endif
+    return true;
+}
+
+[[nodiscard]] bool ensure_ray_ambient_occlusion_pass(
+    void* const owner,
+    render::Device& device,
+    std::string* const diagnostics
+) {
+    auto& state = ray_ambient_occlusion_scene_state;
+    if (state.owner == owner && state.device == &device && state.pass != nullptr) {
+        if (diagnostics != nullptr) diagnostics->clear();
+        return true;
+    }
+
+    state.pass.reset();
+    state.owner = owner;
+    state.device = &device;
+    state.pass = std::make_unique<RuntimeRayAmbientOcclusionPass>();
+#ifdef VICE_RUNTIME_RAY_AMBIENT_OCCLUSION_MANIFEST
+    if (!state.pass->initialize(
+            device,
+            VICE_RUNTIME_RAY_AMBIENT_OCCLUSION_MANIFEST,
             diagnostics
         )) {
         return false;
@@ -1043,6 +1250,31 @@ bool RuntimeSceneRenderer::render(
     const bool ray_tracing_supported = state_->device != nullptr &&
         state_->device->capabilities().ray_tracing;
     directional_shadow_telemetry_.ray_tracing_supported = ray_tracing_supported;
+
+    detail::RuntimeRayAmbientOcclusionRenderContext ambient_occlusion_context{
+        .diagnostics = diagnostics,
+        .enabled = ray_tracing_supported,
+    };
+    if (metrics.drawable_width != 0U && metrics.drawable_height != 0U &&
+        ray_tracing_supported && state_->device != nullptr) {
+        if (!ensure_ray_ambient_occlusion_pass(state_.get(), *state_->device, diagnostics)) {
+            return false;
+        }
+        auto& ambient_occlusion_state = ray_ambient_occlusion_scene_state;
+        if (ambient_occlusion_state.pass != nullptr && ambient_occlusion_state.pass->available()) {
+            if (!ambient_occlusion_state.pass->resize(
+                    metrics.drawable_width,
+                    metrics.drawable_height,
+                    diagnostics
+                )) {
+                return false;
+            }
+            ambient_occlusion_context.pass = ambient_occlusion_state.pass.get();
+        }
+    }
+    const detail::RuntimeRayAmbientOcclusionRenderScope ambient_occlusion_scope{
+        ambient_occlusion_context
+    };
 
     detail::RuntimeDirectionalRayShadowRenderContext ray_shadow_context{
         .requested_mode = directional_shadow_mode_,

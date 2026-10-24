@@ -2,7 +2,10 @@
 
 #include <cmath>
 #include <cstdint>
+#include <fstream>
 #include <iostream>
+#include <iterator>
+#include <string>
 
 #define CHECK(condition) do { \
     if (!(condition)) { \
@@ -21,11 +24,25 @@ namespace {
     return std::abs(left - right) <= epsilon;
 }
 
+[[nodiscard]] std::string read_text_file(const char* const path) {
+    std::ifstream input{path, std::ios::binary};
+    if (!input.good()) return {};
+    return std::string{
+        std::istreambuf_iterator<char>{input},
+        std::istreambuf_iterator<char>{}
+    };
+}
+
 } // namespace
 
 int main() {
     using namespace vice;
     using namespace vice::runtime;
+
+    CHECK(!runtime_ray_ambient_occlusion_needs_camera_depth_prepass(false, false));
+    CHECK(!runtime_ray_ambient_occlusion_needs_camera_depth_prepass(false, true));
+    CHECK(!runtime_ray_ambient_occlusion_needs_camera_depth_prepass(true, false));
+    CHECK(runtime_ray_ambient_occlusion_needs_camera_depth_prepass(true, true));
 
     constexpr float near_plane = 0.1F;
     constexpr float far_plane = 100.0F;
@@ -137,6 +154,18 @@ int main() {
     CHECK(!make_runtime_ray_ambient_occlusion_constants(
         camera, 1920U, 1080U, 1.0F, 1.0F
     ).has_value());
+
+#ifdef VICE_RUNTIME_SCENE_SOURCE
+    const std::string scene_source = read_text_file(VICE_RUNTIME_SCENE_SOURCE);
+    CHECK(!scene_source.empty());
+    CHECK(scene_source.find("runtime_ray_ambient_occlusion_needs_camera_depth_prepass()") != std::string::npos);
+    CHECK(scene_source.find("runtime_ray_ambient_occlusion_after_begin_depth(") != std::string::npos);
+    CHECK(scene_source.find("runtime_directional_ray_shadow_after_end_render_pass(*commands)") != std::string::npos);
+    CHECK(scene_source.find("runtime_ray_ambient_occlusion_after_end_render_pass(*commands)") != std::string::npos);
+    const auto shadow_dispatch = scene_source.find("runtime_directional_ray_shadow_after_end_render_pass(*commands)");
+    const auto ao_dispatch = scene_source.find("runtime_ray_ambient_occlusion_after_end_render_pass(*commands)");
+    CHECK(shadow_dispatch < ao_dispatch);
+#endif
 
     return 0;
 }
