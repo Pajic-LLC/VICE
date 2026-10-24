@@ -64,6 +64,47 @@ elseif(VICE_BUILD_EDITOR)
   add_subdirectory(tools/mesh_cooker)
 endif()
 
+if(TARGET vice_shader_cooker)
+  include(ViceShaders)
+  vice_find_dxc(_vice_runtime_ray_shadow_dxc)
+  vice_find_metal_shader_converter(_vice_runtime_ray_shadow_metal_converter)
+
+  set(_vice_runtime_ray_shadow_target "")
+  if(WIN32 AND _vice_runtime_ray_shadow_dxc)
+    set(_vice_runtime_ray_shadow_target d3d12)
+  elseif(APPLE AND _vice_runtime_ray_shadow_dxc AND _vice_runtime_ray_shadow_metal_converter)
+    set(_vice_runtime_ray_shadow_target metal)
+  endif()
+
+  if(_vice_runtime_ray_shadow_target)
+    set(
+      _vice_runtime_ray_shadow_output
+      "${CMAKE_BINARY_DIR}/cooked/vice_runtime_directional_ray_shadow"
+    )
+    set(
+      VICE_RUNTIME_DIRECTIONAL_RAY_SHADOW_MANIFEST_PATH
+      "${_vice_runtime_ray_shadow_output}/shader.vice.json"
+    )
+    vice_add_cooked_shader(
+      NAME vice_runtime_directional_ray_shadow_shader
+      INPUT "${PROJECT_SOURCE_DIR}/assets/shaders/vice_directional_ray_shadow.hlsl"
+      OUTPUT "${_vice_runtime_ray_shadow_output}"
+      ENTRY vice_directional_ray_shadow_cs
+      STAGE compute
+      TARGET "${_vice_runtime_ray_shadow_target}"
+      SHADER_MODEL 6.6
+      DXC "${_vice_runtime_ray_shadow_dxc}"
+      METAL_SHADER_CONVERTER "${_vice_runtime_ray_shadow_metal_converter}"
+    )
+    add_dependencies(vice_runtime vice_runtime_directional_ray_shadow_shader)
+    target_compile_definitions(
+      vice_runtime
+      PRIVATE
+        VICE_RUNTIME_DIRECTIONAL_RAY_SHADOW_MANIFEST="${VICE_RUNTIME_DIRECTIONAL_RAY_SHADOW_MANIFEST_PATH}"
+    )
+  endif()
+endif()
+
 if(VICE_BUILD_LAB)
   add_subdirectory(apps/vice_lab)
 endif()
@@ -92,6 +133,7 @@ if(VICE_BUILD_TESTS)
   add_subdirectory(tests/rigid_material_assets)
   add_subdirectory(tests/ray_tracing_rhi)
   add_subdirectory(tests/runtime_ray_tracing_scene)
+  add_subdirectory(tests/runtime_directional_ray_shadow)
   if(APPLE)
     add_subdirectory(tests/metal_ray_tracing)
   endif()
