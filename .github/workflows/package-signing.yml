@@ -81,7 +81,7 @@ jobs:
 
       - name: Prepare Windows signing certificate
         if: runner.os == 'Windows'
-        timeout-minutes: 2
+        timeout-minutes: 1
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
@@ -133,8 +133,17 @@ jobs:
           & $openssl.Source x509 -in $pem -outform der -out $cer
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-          & certutil.exe -user -addstore -f Root $cer
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $publicCert = [System.Security.Cryptography.X509Certificates.X509Certificate2]::new($cer)
+          $trustedPeople = [System.Security.Cryptography.X509Certificates.X509Store]::new(
+            "TrustedPeople",
+            [System.Security.Cryptography.X509Certificates.StoreLocation]::CurrentUser
+          )
+          $trustedPeople.Open([System.Security.Cryptography.X509Certificates.OpenFlags]::ReadWrite)
+          try {
+            $trustedPeople.Add($publicCert)
+          } finally {
+            $trustedPeople.Close()
+          }
 
           "VICE_SIGN_TEST=$target" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           "SIGNTOOL_PATH=$($signtool.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
