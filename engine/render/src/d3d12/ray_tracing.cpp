@@ -4,11 +4,9 @@
 
 #include <wrl/client.h>
 
-#include <algorithm>
 #include <cstdint>
 #include <cstring>
 #include <limits>
-#include <utility>
 
 namespace vice::render::d3d12 {
 namespace {
@@ -18,8 +16,7 @@ using Microsoft::WRL::ComPtr;
 [[nodiscard]] D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAGS native_flags(
     const AccelerationStructureBuildFlags flags
 ) noexcept {
-    D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAGS result =
-        D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_NONE;
+    UINT result = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_NONE;
     if (has_flag(flags, AccelerationStructureBuildFlags::allow_update)) {
         result |= D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_ALLOW_UPDATE;
     }
@@ -32,7 +29,7 @@ using Microsoft::WRL::ComPtr;
     if (has_flag(flags, AccelerationStructureBuildFlags::minimize_memory)) {
         result |= D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_MINIMIZE_MEMORY;
     }
-    return result;
+    return static_cast<D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAGS>(result);
 }
 
 [[nodiscard]] DXGI_FORMAT native_index_format(const IndexFormat format) noexcept {
