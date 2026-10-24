@@ -49,12 +49,18 @@ struct RuntimeRayAmbientOcclusionRenderContext {
     RuntimeRayAmbientOcclusionPass* pass = nullptr;
     RuntimeRayTracingSceneExecutor* ray_scene = nullptr;
     render::Texture* camera_depth = nullptr;
+    render::Buffer* pbr_frame = nullptr;
+    render::Texture* cascade_shadow = nullptr;
+    render::Buffer* direct_frame = nullptr;
+    std::uint64_t direct_frame_offset = 0U;
     RuntimeRayAmbientOcclusionConstants constants{};
     std::string* diagnostics = nullptr;
     bool enabled = false;
     bool camera_depth_active = false;
     bool constants_ready = false;
     bool visibility_ready = false;
+    bool gpu_pbr_visibility_marker_ready = false;
+    bool binding_failed = false;
 };
 
 extern thread_local RuntimeDirectionalRayShadowRenderContext*
@@ -103,6 +109,19 @@ extern thread_local RuntimeRayAmbientOcclusionRenderContext*
 
 [[nodiscard]] bool runtime_ray_ambient_occlusion_after_end_render_pass(
     render::CommandList& commands
+) noexcept;
+
+[[nodiscard]] render::Buffer& runtime_ray_ambient_occlusion_prepare_graphics_constants(
+    const render::ShaderBindingKey& binding,
+    render::Buffer& buffer,
+    std::uint64_t offset,
+    std::uint64_t size
+) noexcept;
+
+[[nodiscard]] render::Texture& runtime_ray_ambient_occlusion_prepare_graphics_texture(
+    render::CommandList& commands,
+    const render::ShaderBindingKey& binding,
+    render::Texture& texture
 ) noexcept;
 
 [[nodiscard]] render::Buffer& runtime_directional_ray_shadow_prepare_graphics_constants(
@@ -162,8 +181,13 @@ extern thread_local RuntimeRayAmbientOcclusionRenderContext*
 #define set_graphics_constant_buffer(binding, buffer, offset, size) \
     set_graphics_constant_buffer( \
         (binding), \
-        detail::runtime_directional_ray_shadow_prepare_graphics_constants( \
-            (binding), (buffer), (offset), (size) \
+        detail::runtime_ray_ambient_occlusion_prepare_graphics_constants( \
+            (binding), \
+            detail::runtime_directional_ray_shadow_prepare_graphics_constants( \
+                (binding), (buffer), (offset), (size) \
+            ), \
+            (offset), \
+            (size) \
         ), \
         (offset), \
         (size) \
@@ -171,7 +195,12 @@ extern thread_local RuntimeRayAmbientOcclusionRenderContext*
 #define set_graphics_texture(binding, texture) \
     set_graphics_texture( \
         (binding), \
-        detail::runtime_directional_shadow_texture_override((binding), (texture)) \
+        detail::runtime_directional_shadow_texture_override( \
+            (binding), \
+            detail::runtime_ray_ambient_occlusion_prepare_graphics_texture( \
+                *commands, (binding), (texture) \
+            ) \
+        ) \
     )
 #include "scene_legacy.inc"
 #undef set_graphics_texture
@@ -451,7 +480,9 @@ bool runtime_ray_ambient_occlusion_after_end_render_pass(
     render::CommandList& commands
 ) noexcept {
     auto* const context = active_ray_ambient_occlusion_render_context;
-    if (context == nullptr || !context->camera_depth_active) return true;
+    if (context == nullptr) return true;
+    if (context->binding_failed) return false;
+    if (!context->camera_depth_active) return true;
     context->camera_depth_active = false;
 
     if (!context->constants_ready || context->pass == nullptr ||
@@ -478,7 +509,98 @@ bool runtime_ray_ambient_occlusion_after_end_render_pass(
     }
 
     context->visibility_ready = true;
+    if (context->pbr_frame != nullptr) {
+        constexpr std::size_t ao_offset =
+            offsetof(GpuPbrSceneConstants, ambient_occlusion_metadata);
+        const float ao_enabled = 1.0F;
+        if (!context->pbr_frame->write(
+                ao_offset,
+                std::as_bytes(std::span{&ao_enabled, 1})
+            )) {
+            if (context->diagnostics != nullptr) {
+                *context->diagnostics =
+                    "VICE Runtime could not enable ray ambient occlusion for GPU PBR.";
+            }
+            return false;
+        }
+        context->gpu_pbr_visibility_marker_ready = true;
+    }
     return true;
+}
+
+render::Buffer& runtime_ray_ambient_occlusion_prepare_graphics_constants(
+    const render::ShaderBindingKey& binding,
+    render::Buffer& buffer,
+    const std::uint64_t offset,
+    const std::uint64_t size
+) noexcept {
+    auto* const context = active_ray_ambient_occlusion_render_context;
+    if (context == nullptr ||
+        binding.register_class != render::ShaderRegisterClass::constant_buffer ||
+        binding.binding != 0U || binding.space != 0U || binding.array_element != 0U) {
+        return buffer;
+    }
+
+    context->direct_frame = nullptr;
+    context->direct_frame_offset = 0U;
+    if (size == sizeof(SceneConstants)) {
+        context->direct_frame = &buffer;
+        context->direct_frame_offset = offset;
+    }
+    return buffer;
+}
+
+render::Texture& runtime_ray_ambient_occlusion_prepare_graphics_texture(
+    render::CommandList& commands,
+    const render::ShaderBindingKey& binding,
+    render::Texture& texture
+) noexcept {
+    auto* const context = active_ray_ambient_occlusion_render_context;
+    if (context == nullptr || context->cascade_shadow != &texture ||
+        binding.register_class != render::ShaderRegisterClass::shader_resource ||
+        binding.array_element != 0U) {
+        return texture;
+    }
+
+    const bool gpu_pbr_binding = binding.binding == 0U && binding.space == 2U;
+    const bool direct_material_binding = binding.space == 0U;
+    if (!gpu_pbr_binding && !direct_material_binding) return texture;
+
+    render::Texture* ao_texture = nullptr;
+    const bool visibility_marker_ready = gpu_pbr_binding
+        ? context->gpu_pbr_visibility_marker_ready
+        : true;
+    if (context->visibility_ready && visibility_marker_ready && context->pass != nullptr) {
+        ao_texture = context->pass->visibility();
+    }
+    render::Texture& resource = ao_texture == nullptr ? texture : *ao_texture;
+    const render::ShaderBindingKey ao_binding{
+        .register_class = render::ShaderRegisterClass::shader_resource,
+        .binding = gpu_pbr_binding ? 25U : 17U,
+        .space = gpu_pbr_binding ? 2U : 0U,
+        .array_element = 0U,
+    };
+
+    if (!commands.set_graphics_texture(ao_binding, resource)) {
+        if (gpu_pbr_binding) {
+            context->binding_failed = true;
+            if (context->diagnostics != nullptr) {
+                *context->diagnostics =
+                    "VICE Runtime could not bind ray ambient occlusion for GPU PBR.";
+            }
+        }
+        return texture;
+    }
+
+    if (direct_material_binding && ao_texture != nullptr && context->direct_frame != nullptr) {
+        constexpr std::size_t ao_offset = offsetof(SceneConstants, ambient_occlusion_metadata);
+        const float ao_enabled = 1.0F;
+        (void)context->direct_frame->write(
+            context->direct_frame_offset + ao_offset,
+            std::as_bytes(std::span{&ao_enabled, 1})
+        );
+    }
+    return texture;
 }
 
 render::Buffer& runtime_directional_ray_shadow_prepare_graphics_constants(
@@ -1252,6 +1374,8 @@ bool RuntimeSceneRenderer::render(
     directional_shadow_telemetry_.ray_tracing_supported = ray_tracing_supported;
 
     detail::RuntimeRayAmbientOcclusionRenderContext ambient_occlusion_context{
+        .pbr_frame = state_->gpu_pbr_frame.get(),
+        .cascade_shadow = state_->shadow_maps[0].get(),
         .diagnostics = diagnostics,
         .enabled = ray_tracing_supported,
     };

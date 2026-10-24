@@ -448,6 +448,7 @@ struct SceneConstants {
     float atmosphere_secondary[4]{};
     float atmosphere_ground_albedo[4]{};
     std::array<ScenePointShadowConstants, runtime_point_shadow_light_count> point_shadows{};
+    float ambient_occlusion_metadata[4]{};
 };
 
 struct GpuPbrSceneConstants {
@@ -471,6 +472,7 @@ struct GpuPbrSceneConstants {
     float atmosphere_secondary[4]{};
     float atmosphere_ground_albedo[4]{};
     std::array<ScenePointShadowConstants, runtime_point_shadow_light_count> point_shadows{};
+    float ambient_occlusion_metadata[4]{};
 };
 
 struct MotionConstants {
@@ -493,8 +495,8 @@ static_assert(sizeof(BloomConstants) == 32U);
 static_assert(sizeof(SceneLightConstants) == 48U);
 static_assert(sizeof(SceneReflectionProjectionConstants) == 96U);
 static_assert(sizeof(ScenePointShadowConstants) == 464U);
-static_assert(sizeof(SceneConstants) == 2256U);
-static_assert(sizeof(GpuPbrSceneConstants) == 2192U);
+static_assert(sizeof(SceneConstants) == 2272U);
+static_assert(sizeof(GpuPbrSceneConstants) == 2208U);
 static_assert(sizeof(MotionConstants) == 128U);
 static_assert(sizeof(TaaConstants) == 32U);
 

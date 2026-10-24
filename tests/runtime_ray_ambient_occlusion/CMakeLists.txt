@@ -36,6 +36,9 @@ if(DEFINED VICE_RUNTIME_RAY_AMBIENT_OCCLUSION_MANIFEST_PATH AND
     PRIVATE
       VICE_RAY_AMBIENT_OCCLUSION_MANIFEST="${VICE_RUNTIME_RAY_AMBIENT_OCCLUSION_MANIFEST_PATH}"
       VICE_RAY_AMBIENT_OCCLUSION_SOURCE="${CMAKE_SOURCE_DIR}/assets/shaders/vice_ray_ambient_occlusion.hlsl"
+      VICE_GPU_PBR_SURFACE_SOURCE="${CMAKE_SOURCE_DIR}/assets/shaders/vice_gpu_pbr_surface.hlsl"
+      VICE_PROJECT_SURFACE_SOURCE="${CMAKE_SOURCE_DIR}/assets/shaders/vice_project_surface.hlsl"
+      VICE_RUNTIME_SCENE_LEGACY_SOURCE="${CMAKE_SOURCE_DIR}/engine/runtime/src/scene_legacy.inc"
   )
   add_dependencies(
     vice_runtime_ray_ambient_occlusion_shader_tests

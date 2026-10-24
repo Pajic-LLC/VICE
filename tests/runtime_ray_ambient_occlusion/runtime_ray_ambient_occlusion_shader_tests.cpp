@@ -81,6 +81,33 @@ int main() {
     CHECK(source.find("COMMITTED_TRIANGLE_HIT ? 0.0 : 1.0") != std::string::npos);
 #endif
 
+#ifdef VICE_GPU_PBR_SURFACE_SOURCE
+    const std::string gpu_pbr_source = read_text_file(VICE_GPU_PBR_SURFACE_SOURCE);
+    CHECK(!gpu_pbr_source.empty());
+    CHECK(gpu_pbr_source.find("register(t25, space2)") != std::string::npos);
+    CHECK(gpu_pbr_source.find("ambient_occlusion_metadata.x < 0.5") != std::string::npos);
+    CHECK(gpu_pbr_source.find("environment *= ray_ambient_occlusion") != std::string::npos);
+    CHECK(gpu_pbr_source.find("0.035 * occlusion * ray_ambient_occlusion") != std::string::npos);
+    CHECK(gpu_pbr_source.find("ray_ambient_occlusion * evaluate_light") == std::string::npos);
+#endif
+
+#ifdef VICE_PROJECT_SURFACE_SOURCE
+    const std::string project_source = read_text_file(VICE_PROJECT_SURFACE_SOURCE);
+    CHECK(!project_source.empty());
+    CHECK(project_source.find("register(t17, space0)") != std::string::npos);
+    CHECK(project_source.find("ambient_occlusion_metadata.x < 0.5") != std::string::npos);
+    CHECK(project_source.find("albedo * 0.035 * ray_ambient_occlusion") != std::string::npos);
+    CHECK(project_source.find("ray_ambient_occlusion * evaluate_light") == std::string::npos);
+#endif
+
+#ifdef VICE_RUNTIME_SCENE_LEGACY_SOURCE
+    const std::string legacy_source = read_text_file(VICE_RUNTIME_SCENE_LEGACY_SOURCE);
+    CHECK(!legacy_source.empty());
+    CHECK(legacy_source.find("float ambient_occlusion_metadata[4]{}") != std::string::npos);
+    CHECK(legacy_source.find("sizeof(SceneConstants) == 2272U") != std::string::npos);
+    CHECK(legacy_source.find("sizeof(GpuPbrSceneConstants) == 2208U") != std::string::npos);
+#endif
+
     return 0;
 #endif
 }
