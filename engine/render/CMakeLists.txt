@@ -39,6 +39,7 @@ if(APPLE)
     vice_render
     PRIVATE
       src/metal/compute_pipeline.mm
+      src/metal/ray_tracing.mm
       src/metal/rhi.mm
   )
   set_target_properties(
@@ -50,6 +51,7 @@ if(APPLE)
   )
   set_source_files_properties(
     src/metal/compute_pipeline.mm
+    src/metal/ray_tracing.mm
     src/metal/rhi.mm
     PROPERTIES COMPILE_OPTIONS "-fobjc-arc"
   )
