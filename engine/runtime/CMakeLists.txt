@@ -2,6 +2,7 @@ add_library(
   vice_runtime
   STATIC
     src/dade.cpp
+    src/directional_ray_shadow.cpp
     src/environment_pipeline.cpp
     src/gpu_cluster_instance_remap.cpp
     src/gpu_cluster_visibility.cpp

@@ -1,3 +1,4 @@
+#include <vice/runtime/directional_ray_shadow.hpp>
 #include <vice/runtime/gpu_instance_table.hpp>
 #include <vice/runtime/gpu_virtual_geometry.hpp>
 #include <vice/runtime/gpu_virtual_geometry_feedback.hpp>
@@ -89,6 +90,43 @@ struct RuntimeVirtualGeometryStreamingState {
 };
 
 thread_local std::unique_ptr<RuntimeVirtualGeometryStreamingState> virtual_geometry_streaming_state;
+
+struct RuntimeDirectionalRayShadowSceneState {
+    void* owner = nullptr;
+    render::Device* device = nullptr;
+    std::unique_ptr<RuntimeDirectionalRayShadowPass> pass;
+};
+
+thread_local RuntimeDirectionalRayShadowSceneState directional_ray_shadow_scene_state;
+
+[[nodiscard]] bool ensure_directional_ray_shadow_pass(
+    void* const owner,
+    render::Device& device,
+    std::string* const diagnostics
+) {
+    auto& state = directional_ray_shadow_scene_state;
+    if (state.owner == owner && state.device == &device && state.pass != nullptr) {
+        if (diagnostics != nullptr) diagnostics->clear();
+        return true;
+    }
+
+    state.pass.reset();
+    state.owner = owner;
+    state.device = &device;
+    state.pass = std::make_unique<RuntimeDirectionalRayShadowPass>();
+#ifdef VICE_RUNTIME_DIRECTIONAL_RAY_SHADOW_MANIFEST
+    if (!state.pass->initialize(
+            device,
+            VICE_RUNTIME_DIRECTIONAL_RAY_SHADOW_MANIFEST,
+            diagnostics
+        )) {
+        return false;
+    }
+#else
+    if (!state.pass->initialize(device, {}, diagnostics)) return false;
+#endif
+    return true;
+}
 
 [[nodiscard]] world::GlobalPosition runtime_camera_global_position(
     const world::World& world,
@@ -655,7 +693,113 @@ bool RuntimeSceneRenderer::render(
         .install_packed_geometry = install_packed,
     };
     const RuntimeVirtualGeometrySceneScope scope{context};
-    return render_legacy(world, swapchain, metrics, clear_color, diagnostics);
+    const std::uint64_t temporal_frame_index = state_->temporal_history.completed_frames();
+    if (!render_legacy(world, swapchain, metrics, clear_color, diagnostics)) {
+        return false;
+    }
+
+    if (metrics.drawable_width == 0U || metrics.drawable_height == 0U ||
+        state_->device == nullptr || !state_->device->capabilities().ray_tracing) {
+        if (diagnostics != nullptr) diagnostics->clear();
+        return true;
+    }
+    if (!ensure_directional_ray_shadow_pass(state_.get(), *state_->device, diagnostics)) {
+        return false;
+    }
+    auto& ray_shadow_state = directional_ray_shadow_scene_state;
+    if (ray_shadow_state.pass == nullptr || !ray_shadow_state.pass->available()) {
+        if (diagnostics != nullptr) diagnostics->clear();
+        return true;
+    }
+
+    auto* const tlas = state_->ray_tracing_scene.active_tlas();
+    if (tlas == nullptr) {
+        if (diagnostics != nullptr) diagnostics->clear();
+        return true;
+    }
+
+    const std::size_t written_depth_index = 1U - state_->history_write_index;
+    auto* const current_depth = state_->depth_history[written_depth_index].get();
+    if (current_depth == nullptr) {
+        set_diagnostics(diagnostics, "VICE Runtime directional ray-shadow depth is unavailable.");
+        return false;
+    }
+
+    const float aspect = static_cast<float>(metrics.drawable_width) /
+        static_cast<float>(std::max(1U, metrics.drawable_height));
+    const auto authored_camera = primary_camera_view(world, aspect);
+    const auto render_instances = collect_render_mesh_instances(world);
+    const RuntimeCameraView camera = authored_camera.has_value()
+        ? *authored_camera
+        : fallback_camera(render_instances, state_->catalog, aspect);
+    const auto lights = collect_runtime_lights(world);
+    const auto shadow_view = directional_shadow_view(camera, lights);
+    if (!shadow_view.has_value() || shadow_view->light_index >= lights.size()) {
+        if (diagnostics != nullptr) diagnostics->clear();
+        return true;
+    }
+
+    const auto& shadow_light = lights[shadow_view->light_index];
+    const auto jitter = runtime_taa_jitter(
+        temporal_frame_index,
+        metrics.drawable_width,
+        metrics.drawable_height
+    );
+    const RuntimeDirectionalRayShadowCamera ray_camera{
+        .position = camera.position,
+        .forward = camera.forward,
+        .up = camera.up,
+        .vertical_fov_radians = camera.camera.vertical_fov_radians,
+        .aspect_ratio = camera.aspect_ratio,
+        .near_plane = camera.camera.near_plane,
+        .far_plane = camera.camera.far_plane,
+        .jitter_x_ndc = jitter.x_ndc,
+        .jitter_y_ndc = jitter.y_ndc,
+    };
+    const auto ray_shadow_constants = make_runtime_directional_ray_shadow_constants(
+        ray_camera,
+        math::Vec3{
+            -shadow_light.direction.x,
+            -shadow_light.direction.y,
+            -shadow_light.direction.z,
+        },
+        metrics.drawable_width,
+        metrics.drawable_height
+    );
+    if (!ray_shadow_constants.has_value()) {
+        set_diagnostics(diagnostics, "VICE Runtime could not build directional ray-shadow camera constants.");
+        return false;
+    }
+    if (!ray_shadow_state.pass->resize(
+            metrics.drawable_width,
+            metrics.drawable_height,
+            diagnostics
+        )) {
+        return false;
+    }
+
+    auto commands = state_->device->create_command_list();
+    if (!commands || !ray_shadow_state.pass->dispatch(
+            *commands,
+            *current_depth,
+            *tlas,
+            *ray_shadow_constants,
+            diagnostics
+        )) {
+        if (diagnostics != nullptr && diagnostics->empty()) {
+            *diagnostics = "VICE Runtime could not encode directional ray-shadow visibility.";
+        }
+        return false;
+    }
+    const auto submission = state_->device->submit(std::move(commands));
+    if (submission == render::invalid_submission ||
+        !state_->device->wait_for_submission(submission)) {
+        set_diagnostics(diagnostics, "VICE Runtime directional ray-shadow submission failed.");
+        return false;
+    }
+
+    if (diagnostics != nullptr) diagnostics->clear();
+    return true;
 }
 
 } // namespace vice::runtime
