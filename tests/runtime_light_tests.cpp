@@ -1,3 +1,4 @@
+#include <vice/runtime/directional_shadow.hpp>
 #include <vice/runtime/scene.hpp>
 #include <vice/world/world.hpp>
 
@@ -25,6 +26,37 @@ vice::world::PersistentId id(const std::size_t index) {
     assert(parsed.has_value());
     return *parsed;
 }
+
+static_assert(
+    vice::runtime::resolve_runtime_directional_shadow_path(
+        vice::runtime::RuntimeDirectionalShadowMode::automatic,
+        false
+    ) == vice::runtime::RuntimeDirectionalShadowPath::cascaded
+);
+static_assert(
+    vice::runtime::resolve_runtime_directional_shadow_path(
+        vice::runtime::RuntimeDirectionalShadowMode::automatic,
+        true
+    ) == vice::runtime::RuntimeDirectionalShadowPath::ray_traced
+);
+static_assert(
+    vice::runtime::resolve_runtime_directional_shadow_path(
+        vice::runtime::RuntimeDirectionalShadowMode::cascaded,
+        true
+    ) == vice::runtime::RuntimeDirectionalShadowPath::cascaded
+);
+static_assert(
+    vice::runtime::resolve_runtime_directional_shadow_path(
+        vice::runtime::RuntimeDirectionalShadowMode::ray_traced,
+        false
+    ) == vice::runtime::RuntimeDirectionalShadowPath::cascaded
+);
+static_assert(
+    vice::runtime::resolve_runtime_directional_shadow_path(
+        vice::runtime::RuntimeDirectionalShadowMode::ray_traced,
+        true
+    ) == vice::runtime::RuntimeDirectionalShadowPath::ray_traced
+);
 
 } // namespace
 
