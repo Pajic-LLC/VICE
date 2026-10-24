@@ -69,6 +69,7 @@ elseif(WIN32)
     vice_render
     PRIVATE
       src/d3d12/compute_pipeline.cpp
+      src/d3d12/ray_tracing.cpp
       src/d3d12/rhi.cpp
       src/d3d12/root_signature.cpp
   )
