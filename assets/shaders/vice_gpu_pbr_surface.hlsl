@@ -730,7 +730,13 @@ float4 vice_gpu_pbr_fs(VertexOut input) : SV_Target0 {
         float visibility = 1.0;
         if (shadow_metadata.x >= 0.5 && index == shadow_light_index &&
             lights[index].position_or_direction.w < 0.5) {
-            visibility = directional_shadow_visibility(input.world_position, normal);
+            if (shadow_camera_forward.w > 0.5) {
+                visibility = saturate(
+                    directional_shadow_map.Load(int3(int2(input.position.xy), 0))
+                );
+            } else {
+                visibility = directional_shadow_visibility(input.world_position, normal);
+            }
         } else if (lights[index].position_or_direction.w >= 0.5) {
             if (point_shadow_metadata_0.x >= 0.5 && index == (uint)point_shadow_metadata_0.y) {
                 visibility = point_shadow_visibility(0, input.world_position);
