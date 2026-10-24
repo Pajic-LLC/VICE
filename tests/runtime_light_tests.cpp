@@ -58,6 +58,13 @@ static_assert(
     ) == vice::runtime::RuntimeDirectionalShadowPath::ray_traced
 );
 
+static_assert(!vice::runtime::runtime_directional_shadow_requires_depth_prepass(
+    vice::runtime::RuntimeDirectionalShadowPath::cascaded
+));
+static_assert(vice::runtime::runtime_directional_shadow_requires_depth_prepass(
+    vice::runtime::RuntimeDirectionalShadowPath::ray_traced
+));
+
 } // namespace
 
 int main() {
