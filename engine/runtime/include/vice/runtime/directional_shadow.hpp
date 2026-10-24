@@ -28,4 +28,10 @@ enum class RuntimeDirectionalShadowPath : std::uint8_t {
     return RuntimeDirectionalShadowPath::ray_traced;
 }
 
+[[nodiscard]] constexpr bool runtime_directional_shadow_requires_depth_prepass(
+    const RuntimeDirectionalShadowPath path
+) noexcept {
+    return path == RuntimeDirectionalShadowPath::ray_traced;
+}
+
 } // namespace vice::runtime
