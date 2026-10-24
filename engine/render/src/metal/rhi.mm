@@ -1,4 +1,5 @@
 #import "compute_pipeline.hpp"
+#import "ray_tracing.hpp"
 
 #import <AppKit/AppKit.h>
 #import <Metal/Metal.h>
@@ -344,6 +345,51 @@ private:
     MemoryLocation memory_ = MemoryLocation::gpu_only;
     id<MTLBuffer> buffer_ = nil;
 };
+
+
+class MetalAccelerationStructure final : public AccelerationStructure {
+public:
+    explicit MetalAccelerationStructure(metal::AccelerationStructureResources resources)
+        : resources_{std::move(resources)} {}
+
+    [[nodiscard]] AccelerationStructureType type() const noexcept override {
+        return resources_.type;
+    }
+    [[nodiscard]] std::uint64_t size() const noexcept override {
+        return resources_.sizes.result_size;
+    }
+    [[nodiscard]] id<MTLAccelerationStructure> native() const noexcept {
+        return resources_.result;
+    }
+    [[nodiscard]] metal::AccelerationStructureResources& resources() noexcept {
+        return resources_;
+    }
+    [[nodiscard]] const metal::AccelerationStructureResources& resources() const noexcept {
+        return resources_;
+    }
+
+private:
+    metal::AccelerationStructureResources resources_{};
+};
+
+[[nodiscard]] metal::BufferBinding resolve_metal_buffer_binding(const Buffer& buffer) noexcept {
+    Buffer& binding = const_cast<Buffer&>(buffer).binding_buffer();
+    const auto* native = dynamic_cast<const MetalBuffer*>(&binding);
+    if (native == nullptr || native->native() == nil || buffer.binding_offset() > binding.size()) {
+        return {};
+    }
+    return metal::BufferBinding{
+        .buffer = native->native(),
+        .offset = buffer.binding_offset(),
+    };
+}
+
+[[nodiscard]] id<MTLAccelerationStructure> resolve_metal_acceleration_structure(
+    const AccelerationStructure& structure
+) noexcept {
+    const auto* native = dynamic_cast<const MetalAccelerationStructure*>(&structure);
+    return native != nullptr ? native->native() : nil;
+}
 
 class MetalTexture final : public Texture {
 public:
@@ -737,7 +783,7 @@ struct MetalBoundResource {
     std::uint64_t size = 0;
 };
 
-class MetalCommandList final : public CommandList {
+class MetalCommandList final : public CommandList, public RayTracingCommandList {
 public:
     MetalCommandList(id<MTLDevice> device, id<MTLCommandBuffer> command_buffer)
         : device_{device}, command_buffer_{command_buffer},
@@ -1447,6 +1493,58 @@ public:
         reset_mesh_state();
         pipeline_bound_ = false;
         return true;
+    }
+
+
+    bool build_acceleration_structure(
+        AccelerationStructure& destination,
+        const AccelerationStructureBuildDesc& desc,
+        AccelerationStructure* source
+    ) override {
+        if (render_encoder_ != nil || command_buffer_ == nil || present_scheduled_ ||
+            !is_valid(desc)) {
+            return false;
+        }
+        auto* destination_native = dynamic_cast<MetalAccelerationStructure*>(&destination);
+        auto* source_native = source != nullptr
+            ? dynamic_cast<MetalAccelerationStructure*>(source)
+            : nullptr;
+        if (destination_native == nullptr || destination_native->type() != desc.type ||
+            (source != nullptr && source_native == nullptr) ||
+            (source != nullptr && !has_flag(
+                destination_native->resources().flags,
+                AccelerationStructureBuildFlags::allow_update
+            ))) {
+            return false;
+        }
+
+        auto plan = metal::build_acceleration_structure_plan(
+            device_,
+            desc,
+            resolve_metal_buffer_binding,
+            resolve_metal_acceleration_structure
+        );
+        if (!plan) {
+            if (!plan.diagnostics.empty()) {
+                core::log(core::LogLevel::error, plan.diagnostics);
+            }
+            return false;
+        }
+
+        std::string diagnostics;
+        const bool refit = source_native != nullptr;
+        const bool encoded = metal::encode_acceleration_structure_build(
+            command_buffer_,
+            plan,
+            destination_native->resources(),
+            refit,
+            refit ? &source_native->resources() : nullptr,
+            &diagnostics
+        );
+        if (!encoded && !diagnostics.empty()) {
+            core::log(core::LogLevel::error, diagnostics);
+        }
+        return encoded;
     }
 
     bool present(Swapchain& swapchain) override {
@@ -2339,7 +2437,7 @@ private:
     bool present_scheduled_ = false;
 };
 
-class MetalDevice final : public Device {
+class MetalDevice final : public Device, public RayTracingDevice {
 public:
     MetalDevice() : device_{MTLCreateSystemDefaultDevice()} {
         if (device_ == nil) {
@@ -2356,6 +2454,7 @@ public:
         if (@available(macOS 10.15, *)) {
             capabilities_.unified_memory = [device_ hasUnifiedMemory];
         }
+        capabilities_.ray_tracing = metal::supports_ray_tracing(device_);
     }
 
     [[nodiscard]] bool valid() const noexcept { return device_ != nil && command_queue_ != nil; }
@@ -2726,6 +2825,71 @@ public:
                 : std::vector<MetalShaderResourceLocationDesc>{},
             std::move(vertex_streams)
         );
+    }
+
+
+    bool query_acceleration_structure_build_sizes(
+        const AccelerationStructureBuildDesc& desc,
+        AccelerationStructureBuildSizes& sizes
+    ) override {
+        sizes = {};
+        if (!capabilities_.ray_tracing || !is_valid(desc)) {
+            return false;
+        }
+        auto plan = metal::build_acceleration_structure_plan(
+            device_,
+            desc,
+            resolve_metal_buffer_binding,
+            resolve_metal_acceleration_structure
+        );
+        if (!plan) {
+            if (!plan.diagnostics.empty()) {
+                core::log(core::LogLevel::error, plan.diagnostics);
+            }
+            return false;
+        }
+        auto result = metal::query_acceleration_structure_build_sizes(device_, plan);
+        if (!result) {
+            if (!result.diagnostics.empty()) {
+                core::log(core::LogLevel::error, result.diagnostics);
+            }
+            return false;
+        }
+        sizes = result.sizes;
+        return true;
+    }
+
+    [[nodiscard]] std::unique_ptr<AccelerationStructure> create_acceleration_structure(
+        const AccelerationStructureBuildDesc& desc,
+        const AccelerationStructureBuildSizes& sizes
+    ) override {
+        if (!capabilities_.ray_tracing || !is_valid(desc) || !is_valid(sizes)) {
+            return nullptr;
+        }
+        auto plan = metal::build_acceleration_structure_plan(
+            device_,
+            desc,
+            resolve_metal_buffer_binding,
+            resolve_metal_acceleration_structure
+        );
+        if (!plan) {
+            if (!plan.diagnostics.empty()) {
+                core::log(core::LogLevel::error, plan.diagnostics);
+            }
+            return nullptr;
+        }
+        auto resources = metal::allocate_acceleration_structure_resources(
+            device_,
+            plan,
+            sizes
+        );
+        if (!resources) {
+            if (!resources.diagnostics.empty()) {
+                core::log(core::LogLevel::error, resources.diagnostics);
+            }
+            return nullptr;
+        }
+        return std::make_unique<MetalAccelerationStructure>(std::move(resources));
     }
 
     [[nodiscard]] std::unique_ptr<CommandList> create_command_list() override {

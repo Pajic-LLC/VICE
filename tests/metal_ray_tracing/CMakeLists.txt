@@ -33,3 +33,19 @@ add_test(
   NAME vice_metal_ray_tracing_tests
   COMMAND vice_metal_ray_tracing_tests
 )
+
+add_executable(
+  vice_metal_public_ray_tracing_rhi_tests
+  public_rhi_tests.cpp
+)
+target_link_libraries(
+  vice_metal_public_ray_tracing_rhi_tests
+  PRIVATE
+    VICE::Render
+)
+target_compile_features(vice_metal_public_ray_tracing_rhi_tests PRIVATE cxx_std_23)
+vice_enable_warnings(vice_metal_public_ray_tracing_rhi_tests)
+add_test(
+  NAME vice_metal_public_ray_tracing_rhi_tests
+  COMMAND vice_metal_public_ray_tracing_rhi_tests
+)
