@@ -3,6 +3,7 @@
 #include <vice/runtime/gpu_virtual_geometry.hpp>
 #include <vice/runtime/gpu_virtual_geometry_feedback.hpp>
 #include <vice/runtime/gpu_virtual_geometry_feedback_ring.hpp>
+#include <vice/runtime/ray_tracing_scene_executor.hpp>
 #include <vice/runtime/render_streaming.hpp>
 #include <vice/runtime/scene.hpp>
 #include <vice/runtime/virtual_geometry.hpp>
@@ -13,6 +14,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cstddef>
 #include <cstdint>
 #include <limits>
 #include <memory>
@@ -23,6 +25,48 @@
 namespace vice::runtime::detail {
 [[nodiscard]] RuntimeRenderResidentSceneBuildResult
 build_runtime_render_resident_scene_with_virtual_geometry(const world::World& world);
+
+struct RuntimeDirectionalRayShadowRenderContext {
+    RuntimeDirectionalRayShadowPass* pass = nullptr;
+    RuntimeRayTracingSceneExecutor* ray_scene = nullptr;
+    render::Texture* camera_depth = nullptr;
+    render::Buffer* pbr_frame = nullptr;
+    render::Texture* cascade_shadow = nullptr;
+    RuntimeDirectionalRayShadowConstants constants{};
+    std::string* diagnostics = nullptr;
+    bool camera_depth_active = false;
+    bool constants_ready = false;
+    bool visibility_ready = false;
+    bool pbr_visibility_bound = false;
+};
+
+extern thread_local RuntimeDirectionalRayShadowRenderContext*
+    active_directional_ray_shadow_render_context;
+
+[[nodiscard]] bool runtime_directional_ray_shadow_after_begin_depth(
+    render::Texture& depth_attachment,
+    float clear_depth,
+    bool clear,
+    render::Texture* current_depth,
+    RuntimeRayTracingSceneExecutor* ray_scene,
+    render::Buffer* pbr_frame,
+    render::Texture* cascade_shadow,
+    const RuntimeCameraView& camera,
+    std::span<const RuntimeLight> lights,
+    float jitter_x_ndc,
+    float jitter_y_ndc,
+    platform::WindowMetrics metrics,
+    bool has_gpu_pbr
+) noexcept;
+
+[[nodiscard]] bool runtime_directional_ray_shadow_after_end_render_pass(
+    render::CommandList& commands
+) noexcept;
+
+[[nodiscard]] render::Texture& runtime_directional_shadow_texture_override(
+    const render::ShaderBindingKey& binding,
+    render::Texture& texture
+) noexcept;
 } // namespace vice::runtime::detail
 
 #define build_runtime_render_resident_scene(...) \
@@ -30,11 +74,204 @@ build_runtime_render_resident_scene_with_virtual_geometry(const world::World& wo
 #define render(...) render_legacy(__VA_ARGS__)
 #define set_vertex_buffer(...) set_vertex_buffer_resolved(__VA_ARGS__)
 #define set_index_buffer(...) set_index_buffer_resolved(__VA_ARGS__)
+#define begin_depth_render_pass(...) \
+    begin_depth_render_pass(__VA_ARGS__) || \
+        !detail::runtime_directional_ray_shadow_after_begin_depth( \
+            __VA_ARGS__, \
+            current_depth, \
+            &state_->ray_tracing_scene, \
+            state_->gpu_pbr_frame.get(), \
+            state_->shadow_maps[0].get(), \
+            runtime_camera, \
+            std::span<const RuntimeLight>{authored_lights}, \
+            jitter.x_ndc, \
+            jitter.y_ndc, \
+            metrics, \
+            !gpu_pbr_plan.batches.empty() || !gpu_cluster_pbr_plan.batches.empty() \
+        )
+#define end_render_pass(...) \
+    end_render_pass(__VA_ARGS__) || \
+        !detail::runtime_directional_ray_shadow_after_end_render_pass(*commands)
+#define set_graphics_texture(binding, texture) \
+    set_graphics_texture( \
+        (binding), \
+        detail::runtime_directional_shadow_texture_override((binding), (texture)) \
+    )
 #include "scene_legacy.inc"
+#undef set_graphics_texture
+#undef end_render_pass
+#undef begin_depth_render_pass
 #undef set_index_buffer
 #undef set_vertex_buffer
 #undef render
 #undef build_runtime_render_resident_scene
+
+namespace vice::runtime::detail {
+
+thread_local RuntimeDirectionalRayShadowRenderContext*
+    active_directional_ray_shadow_render_context = nullptr;
+
+class RuntimeDirectionalRayShadowRenderScope final {
+public:
+    explicit RuntimeDirectionalRayShadowRenderScope(
+        RuntimeDirectionalRayShadowRenderContext& context
+    ) noexcept
+        : previous_{active_directional_ray_shadow_render_context} {
+        active_directional_ray_shadow_render_context = &context;
+    }
+
+    ~RuntimeDirectionalRayShadowRenderScope() {
+        active_directional_ray_shadow_render_context = previous_;
+    }
+
+    RuntimeDirectionalRayShadowRenderScope(const RuntimeDirectionalRayShadowRenderScope&) = delete;
+    RuntimeDirectionalRayShadowRenderScope& operator=(const RuntimeDirectionalRayShadowRenderScope&) = delete;
+
+private:
+    RuntimeDirectionalRayShadowRenderContext* previous_ = nullptr;
+};
+
+bool runtime_directional_ray_shadow_after_begin_depth(
+    render::Texture& depth_attachment,
+    const float,
+    const bool,
+    render::Texture* const current_depth,
+    RuntimeRayTracingSceneExecutor* const ray_scene,
+    render::Buffer* const pbr_frame,
+    render::Texture* const cascade_shadow,
+    const RuntimeCameraView& camera,
+    const std::span<const RuntimeLight> lights,
+    const float jitter_x_ndc,
+    const float jitter_y_ndc,
+    const platform::WindowMetrics metrics,
+    const bool has_gpu_pbr
+) noexcept {
+    auto* const context = active_directional_ray_shadow_render_context;
+    if (context == nullptr || context->pass == nullptr || &depth_attachment != current_depth) {
+        return true;
+    }
+
+    context->camera_depth_active = true;
+    context->constants_ready = false;
+    context->visibility_ready = false;
+    context->pbr_visibility_bound = false;
+    context->ray_scene = ray_scene;
+    context->camera_depth = current_depth;
+    context->pbr_frame = pbr_frame;
+    context->cascade_shadow = cascade_shadow;
+
+    if (!has_gpu_pbr || !context->pass->available() || ray_scene == nullptr ||
+        current_depth == nullptr || pbr_frame == nullptr || cascade_shadow == nullptr ||
+        metrics.drawable_width == 0U || metrics.drawable_height == 0U) {
+        return true;
+    }
+
+    const auto shadow_view = directional_shadow_view(camera, lights);
+    if (!shadow_view.has_value() || shadow_view->light_index >= lights.size()) {
+        return true;
+    }
+    const auto& shadow_light = lights[shadow_view->light_index];
+    const RuntimeDirectionalRayShadowCamera ray_camera{
+        .position = camera.position,
+        .forward = camera.forward,
+        .up = camera.up,
+        .vertical_fov_radians = camera.camera.vertical_fov_radians,
+        .aspect_ratio = camera.aspect_ratio,
+        .near_plane = camera.camera.near_plane,
+        .far_plane = camera.camera.far_plane,
+        .jitter_x_ndc = jitter_x_ndc,
+        .jitter_y_ndc = jitter_y_ndc,
+    };
+    const auto constants = make_runtime_directional_ray_shadow_constants(
+        ray_camera,
+        math::Vec3{
+            -shadow_light.direction.x,
+            -shadow_light.direction.y,
+            -shadow_light.direction.z,
+        },
+        metrics.drawable_width,
+        metrics.drawable_height
+    );
+    if (!constants.has_value()) {
+        if (context->diagnostics != nullptr) {
+            *context->diagnostics =
+                "VICE Runtime could not build directional ray-shadow camera constants.";
+        }
+        return false;
+    }
+
+    context->constants = *constants;
+    context->constants_ready = true;
+    return true;
+}
+
+bool runtime_directional_ray_shadow_after_end_render_pass(
+    render::CommandList& commands
+) noexcept {
+    auto* const context = active_directional_ray_shadow_render_context;
+    if (context == nullptr || !context->camera_depth_active) return true;
+    context->camera_depth_active = false;
+
+    if (!context->constants_ready || context->pass == nullptr ||
+        context->ray_scene == nullptr || context->camera_depth == nullptr ||
+        context->pbr_frame == nullptr) {
+        return true;
+    }
+    auto* const tlas = context->ray_scene->active_tlas();
+    if (tlas == nullptr) return true;
+
+    if (!context->pass->dispatch(
+            commands,
+            *context->camera_depth,
+            *tlas,
+            context->constants,
+            context->diagnostics
+        )) {
+        return false;
+    }
+    if (context->pass->visibility() == nullptr) {
+        if (context->diagnostics != nullptr) {
+            *context->diagnostics = "VICE Runtime directional ray-shadow visibility is unavailable.";
+        }
+        return false;
+    }
+
+    constexpr std::size_t mode_offset =
+        offsetof(GpuPbrSceneConstants, shadow_camera_forward) + sizeof(float) * 3U;
+    const float ray_traced_mode = 1.0F;
+    if (!context->pbr_frame->write(
+            mode_offset,
+            std::as_bytes(std::span{&ray_traced_mode, 1})
+        )) {
+        if (context->diagnostics != nullptr) {
+            *context->diagnostics =
+                "VICE Runtime could not select ray-traced directional shadows for GPU PBR.";
+        }
+        return false;
+    }
+
+    context->visibility_ready = true;
+    return true;
+}
+
+render::Texture& runtime_directional_shadow_texture_override(
+    const render::ShaderBindingKey& binding,
+    render::Texture& texture
+) noexcept {
+    auto* const context = active_directional_ray_shadow_render_context;
+    if (context == nullptr || !context->visibility_ready || context->pbr_visibility_bound ||
+        context->pass == nullptr || context->cascade_shadow != &texture ||
+        binding.register_class != render::ShaderRegisterClass::shader_resource ||
+        binding.binding != 0U || binding.space != 2U || binding.array_element != 0U) {
+        return texture;
+    }
+    auto* const visibility = context->pass->visibility();
+    if (visibility == nullptr) return texture;
+    context->pbr_visibility_bound = true;
+    return *visibility;
+}
+
+} // namespace vice::runtime::detail
 
 namespace vice::runtime {
 namespace {
@@ -693,108 +930,30 @@ bool RuntimeSceneRenderer::render(
         .install_packed_geometry = install_packed,
     };
     const RuntimeVirtualGeometrySceneScope scope{context};
-    const std::uint64_t temporal_frame_index = state_->temporal_history.completed_frames();
-    if (!render_legacy(world, swapchain, metrics, clear_color, diagnostics)) {
-        return false;
-    }
 
-    if (metrics.drawable_width == 0U || metrics.drawable_height == 0U ||
-        state_->device == nullptr || !state_->device->capabilities().ray_tracing) {
-        if (diagnostics != nullptr) diagnostics->clear();
-        return true;
-    }
-    if (!ensure_directional_ray_shadow_pass(state_.get(), *state_->device, diagnostics)) {
-        return false;
-    }
-    auto& ray_shadow_state = directional_ray_shadow_scene_state;
-    if (ray_shadow_state.pass == nullptr || !ray_shadow_state.pass->available()) {
-        if (diagnostics != nullptr) diagnostics->clear();
-        return true;
-    }
-
-    auto* const tlas = state_->ray_tracing_scene.active_tlas();
-    if (tlas == nullptr) {
-        if (diagnostics != nullptr) diagnostics->clear();
-        return true;
-    }
-
-    const std::size_t written_depth_index = 1U - state_->history_write_index;
-    auto* const current_depth = state_->depth_history[written_depth_index].get();
-    if (current_depth == nullptr) {
-        set_diagnostics(diagnostics, "VICE Runtime directional ray-shadow depth is unavailable.");
-        return false;
-    }
-
-    const float aspect = static_cast<float>(metrics.drawable_width) /
-        static_cast<float>(std::max(1U, metrics.drawable_height));
-    const auto authored_camera = primary_camera_view(world, aspect);
-    const auto render_instances = collect_render_mesh_instances(world);
-    const RuntimeCameraView camera = authored_camera.has_value()
-        ? *authored_camera
-        : fallback_camera(render_instances, state_->catalog, aspect);
-    const auto lights = collect_runtime_lights(world);
-    const auto shadow_view = directional_shadow_view(camera, lights);
-    if (!shadow_view.has_value() || shadow_view->light_index >= lights.size()) {
-        if (diagnostics != nullptr) diagnostics->clear();
-        return true;
-    }
-
-    const auto& shadow_light = lights[shadow_view->light_index];
-    const auto jitter = runtime_taa_jitter(
-        temporal_frame_index,
-        metrics.drawable_width,
-        metrics.drawable_height
-    );
-    const RuntimeDirectionalRayShadowCamera ray_camera{
-        .position = camera.position,
-        .forward = camera.forward,
-        .up = camera.up,
-        .vertical_fov_radians = camera.camera.vertical_fov_radians,
-        .aspect_ratio = camera.aspect_ratio,
-        .near_plane = camera.camera.near_plane,
-        .far_plane = camera.camera.far_plane,
-        .jitter_x_ndc = jitter.x_ndc,
-        .jitter_y_ndc = jitter.y_ndc,
+    detail::RuntimeDirectionalRayShadowRenderContext ray_shadow_context{
+        .diagnostics = diagnostics,
     };
-    const auto ray_shadow_constants = make_runtime_directional_ray_shadow_constants(
-        ray_camera,
-        math::Vec3{
-            -shadow_light.direction.x,
-            -shadow_light.direction.y,
-            -shadow_light.direction.z,
-        },
-        metrics.drawable_width,
-        metrics.drawable_height
-    );
-    if (!ray_shadow_constants.has_value()) {
-        set_diagnostics(diagnostics, "VICE Runtime could not build directional ray-shadow camera constants.");
-        return false;
-    }
-    if (!ray_shadow_state.pass->resize(
-            metrics.drawable_width,
-            metrics.drawable_height,
-            diagnostics
-        )) {
-        return false;
-    }
-
-    auto commands = state_->device->create_command_list();
-    if (!commands || !ray_shadow_state.pass->dispatch(
-            *commands,
-            *current_depth,
-            *tlas,
-            *ray_shadow_constants,
-            diagnostics
-        )) {
-        if (diagnostics != nullptr && diagnostics->empty()) {
-            *diagnostics = "VICE Runtime could not encode directional ray-shadow visibility.";
+    if (metrics.drawable_width != 0U && metrics.drawable_height != 0U &&
+        state_->device != nullptr && state_->device->capabilities().ray_tracing) {
+        if (!ensure_directional_ray_shadow_pass(state_.get(), *state_->device, diagnostics)) {
+            return false;
         }
-        return false;
+        auto& ray_shadow_state = directional_ray_shadow_scene_state;
+        if (ray_shadow_state.pass != nullptr && ray_shadow_state.pass->available()) {
+            if (!ray_shadow_state.pass->resize(
+                    metrics.drawable_width,
+                    metrics.drawable_height,
+                    diagnostics
+                )) {
+                return false;
+            }
+            ray_shadow_context.pass = ray_shadow_state.pass.get();
+        }
     }
-    const auto submission = state_->device->submit(std::move(commands));
-    if (submission == render::invalid_submission ||
-        !state_->device->wait_for_submission(submission)) {
-        set_diagnostics(diagnostics, "VICE Runtime directional ray-shadow submission failed.");
+    const detail::RuntimeDirectionalRayShadowRenderScope ray_shadow_scope{ray_shadow_context};
+
+    if (!render_legacy(world, swapchain, metrics, clear_color, diagnostics)) {
         return false;
     }
 
