@@ -4,6 +4,7 @@
 #include <vice/runtime/gpu_virtual_geometry_feedback.hpp>
 #include <vice/runtime/gpu_virtual_geometry_feedback_ring.hpp>
 #include <vice/runtime/ray_ambient_occlusion.hpp>
+#include <vice/runtime/ray_ambient_occlusion_denoise.hpp>
 #include <vice/runtime/ray_tracing_scene_executor.hpp>
 #include <vice/runtime/render_streaming.hpp>
 #include <vice/runtime/scene.hpp>
@@ -47,6 +48,7 @@ struct RuntimeDirectionalRayShadowRenderContext {
 
 struct RuntimeRayAmbientOcclusionRenderContext {
     RuntimeRayAmbientOcclusionPass* pass = nullptr;
+    RuntimeRayAmbientOcclusionDenoisePass* denoise_pass = nullptr;
     RuntimeRayTracingSceneExecutor* ray_scene = nullptr;
     render::Texture* camera_depth = nullptr;
     render::Buffer* pbr_frame = nullptr;
@@ -59,6 +61,7 @@ struct RuntimeRayAmbientOcclusionRenderContext {
     bool camera_depth_active = false;
     bool constants_ready = false;
     bool visibility_ready = false;
+    bool denoised_visibility_ready = false;
     bool gpu_pbr_visibility_marker_ready = false;
     bool binding_failed = false;
 };
@@ -377,6 +380,7 @@ bool runtime_ray_ambient_occlusion_after_begin_depth(
     context->camera_depth_active = true;
     context->constants_ready = false;
     context->visibility_ready = false;
+    context->denoised_visibility_ready = false;
     context->ray_scene = ray_scene;
     context->camera_depth = current_depth;
 
@@ -509,6 +513,26 @@ bool runtime_ray_ambient_occlusion_after_end_render_pass(
     }
 
     context->visibility_ready = true;
+    context->denoised_visibility_ready = false;
+    if (context->denoise_pass != nullptr && context->denoise_pass->available()) {
+        const auto denoise_constants = make_runtime_ray_ambient_occlusion_denoise_constants(
+            static_cast<std::uint32_t>(context->constants.target_size_jitter[0]),
+            static_cast<std::uint32_t>(context->constants.target_size_jitter[1]),
+            context->constants.camera_position_near[3],
+            context->constants.camera_forward_far[3]
+        );
+        std::string denoise_diagnostics;
+        if (denoise_constants.has_value() &&
+            context->denoise_pass->dispatch(
+                commands,
+                *context->pass->visibility(),
+                *context->camera_depth,
+                *denoise_constants,
+                &denoise_diagnostics
+            ) && context->denoise_pass->visibility() != nullptr) {
+            context->denoised_visibility_ready = true;
+        }
+    }
     if (context->pbr_frame != nullptr) {
         constexpr std::size_t ao_offset =
             offsetof(GpuPbrSceneConstants, ambient_occlusion_metadata);
@@ -571,7 +595,9 @@ render::Texture& runtime_ray_ambient_occlusion_prepare_graphics_texture(
         ? context->gpu_pbr_visibility_marker_ready
         : true;
     if (context->visibility_ready && visibility_marker_ready && context->pass != nullptr) {
-        ao_texture = context->pass->visibility();
+        ao_texture = context->denoised_visibility_ready && context->denoise_pass != nullptr
+            ? context->denoise_pass->visibility()
+            : context->pass->visibility();
     }
     render::Texture& resource = ao_texture == nullptr ? texture : *ao_texture;
     const render::ShaderBindingKey ao_binding{
@@ -722,8 +748,15 @@ struct RuntimeRayAmbientOcclusionSceneState {
     std::unique_ptr<RuntimeRayAmbientOcclusionPass> pass;
 };
 
+struct RuntimeRayAmbientOcclusionDenoiseSceneState {
+    void* owner = nullptr;
+    render::Device* device = nullptr;
+    std::unique_ptr<RuntimeRayAmbientOcclusionDenoisePass> pass;
+};
+
 thread_local RuntimeDirectionalRayShadowSceneState directional_ray_shadow_scene_state;
 thread_local RuntimeRayAmbientOcclusionSceneState ray_ambient_occlusion_scene_state;
+thread_local RuntimeRayAmbientOcclusionDenoiseSceneState ray_ambient_occlusion_denoise_scene_state;
 
 [[nodiscard]] bool ensure_directional_ray_shadow_pass(
     void* const owner,
@@ -773,6 +806,35 @@ thread_local RuntimeRayAmbientOcclusionSceneState ray_ambient_occlusion_scene_st
     if (!state.pass->initialize(
             device,
             VICE_RUNTIME_RAY_AMBIENT_OCCLUSION_MANIFEST,
+            diagnostics
+        )) {
+        return false;
+    }
+#else
+    if (!state.pass->initialize(device, {}, diagnostics)) return false;
+#endif
+    return true;
+}
+
+[[nodiscard]] bool ensure_ray_ambient_occlusion_denoise_pass(
+    void* const owner,
+    render::Device& device,
+    std::string* const diagnostics
+) {
+    auto& state = ray_ambient_occlusion_denoise_scene_state;
+    if (state.owner == owner && state.device == &device && state.pass != nullptr) {
+        if (diagnostics != nullptr) diagnostics->clear();
+        return true;
+    }
+
+    state.pass.reset();
+    state.owner = owner;
+    state.device = &device;
+    state.pass = std::make_unique<RuntimeRayAmbientOcclusionDenoisePass>();
+#ifdef VICE_RUNTIME_RAY_AMBIENT_OCCLUSION_DENOISE_MANIFEST
+    if (!state.pass->initialize(
+            device,
+            VICE_RUNTIME_RAY_AMBIENT_OCCLUSION_DENOISE_MANIFEST,
             diagnostics
         )) {
         return false;
@@ -1394,6 +1456,22 @@ bool RuntimeSceneRenderer::render(
                 return false;
             }
             ambient_occlusion_context.pass = ambient_occlusion_state.pass.get();
+            if (!ensure_ray_ambient_occlusion_denoise_pass(
+                    state_.get(), *state_->device, diagnostics
+                ) && diagnostics != nullptr) {
+                diagnostics->clear();
+            }
+            auto& denoise_state = ray_ambient_occlusion_denoise_scene_state;
+            if (denoise_state.pass != nullptr && denoise_state.pass->available()) {
+                if (!denoise_state.pass->resize(
+                        metrics.drawable_width,
+                        metrics.drawable_height,
+                        diagnostics
+                    )) {
+                    return false;
+                }
+                ambient_occlusion_context.denoise_pass = denoise_state.pass.get();
+            }
         }
     }
     const detail::RuntimeRayAmbientOcclusionRenderScope ambient_occlusion_scope{
