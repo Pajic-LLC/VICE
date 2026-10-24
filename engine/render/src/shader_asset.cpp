@@ -355,6 +355,14 @@ private:
     return std::nullopt;
 }
 
+[[nodiscard]] std::optional<ShaderResourceKind> parse_resource_kind(
+    const std::string_view value
+) noexcept {
+    if (value == "generic") return ShaderResourceKind::generic;
+    if (value == "acceleration_structure") return ShaderResourceKind::acceleration_structure;
+    return std::nullopt;
+}
+
 [[nodiscard]] bool safe_artifact_name(const std::string_view value) noexcept {
     return !value.empty() && value != "." && value != ".." &&
         value.find('/') == std::string_view::npos &&
@@ -500,8 +508,12 @@ CookedShaderManifest parse_cooked_shader_manifest(const std::string_view json) {
     }
 
     const JsonValue* reflection = member(root, "reflection");
+    const auto reflection_version = reflection != nullptr
+        ? uint32_member(*reflection, "version")
+        : std::nullopt;
     if (reflection == nullptr || reflection->kind != JsonKind::object ||
-        uint32_member(*reflection, "version") != 1U) {
+        !reflection_version.has_value() ||
+        (*reflection_version != 1U && *reflection_version != 2U)) {
         manifest.diagnostics = "Shader manifest logical reflection is missing or unsupported.";
         return manifest;
     }
@@ -556,12 +568,27 @@ CookedShaderManifest parse_cooked_shader_manifest(const std::string_view json) {
             manifest.diagnostics = "Shader manifest contains an unknown resource class.";
             return manifest;
         }
+        ShaderResourceKind resource_kind = ShaderResourceKind::generic;
+        if (*reflection_version >= 2U) {
+            const std::string* kind_name = string_member(item, "kind");
+            if (kind_name == nullptr) {
+                manifest.diagnostics = "Shader manifest reflected resource is missing its kind.";
+                return manifest;
+            }
+            const auto parsed_kind = parse_resource_kind(*kind_name);
+            if (!parsed_kind.has_value()) {
+                manifest.diagnostics = "Shader manifest contains an unknown resource kind.";
+                return manifest;
+            }
+            resource_kind = *parsed_kind;
+        }
         ShaderResourceBindingDesc resource{
             .register_class = *register_class,
             .binding = *binding,
             .space = *space,
             .count = *count,
             .unbounded = *unbounded,
+            .kind = resource_kind,
         };
         if (!is_valid(resource)) {
             manifest.diagnostics = "Shader manifest contains an invalid reflected resource range.";

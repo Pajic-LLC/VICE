@@ -553,7 +553,7 @@ struct BindingLocation {
         << "    ]\n"
         << "  },\n"
         << "  \"reflection\": {\n"
-        << "    \"version\": 1,\n"
+        << "    \"version\": 2,\n"
         << "    \"thread_group_size\": ";
     if (reflection.thread_group_size.has_value()) {
         const auto& size = *reflection.thread_group_size;
@@ -575,6 +575,7 @@ struct BindingLocation {
             << "      {\n"
             << "        \"name\": \"" << json_escape(resource.name) << "\",\n"
             << "        \"class\": \"" << shader_register_class_name(resource.register_class) << "\",\n"
+            << "        \"kind\": \"" << shader_resource_kind_name(resource.kind) << "\",\n"
             << "        \"binding\": " << resource.binding << ",\n"
             << "        \"space\": " << resource.space << ",\n"
             << "        \"count\": " << resource.count << ",\n"
@@ -642,6 +643,14 @@ std::string_view shader_register_class_name(const ShaderRegisterClass register_c
     case ShaderRegisterClass::shader_resource: return "shader_resource";
     case ShaderRegisterClass::unordered_access: return "unordered_access";
     case ShaderRegisterClass::sampler: return "sampler";
+    }
+    return "unknown";
+}
+
+std::string_view shader_resource_kind_name(const ShaderResourceKind kind) noexcept {
+    switch (kind) {
+    case ShaderResourceKind::generic: return "generic";
+    case ShaderResourceKind::acceleration_structure: return "acceleration_structure";
     }
     return "unknown";
 }
@@ -748,6 +757,24 @@ ShaderReflection parse_dxc_resource_bindings(const std::string_view assembly) {
         resource.binding = location->binding;
         resource.space = location->space;
 
+        std::string normalized_type = resource.type;
+        std::transform(
+            normalized_type.begin(),
+            normalized_type.end(),
+            normalized_type.begin(),
+            [](const unsigned char character) {
+                return static_cast<char>(std::tolower(character));
+            }
+        );
+        if (normalized_type.find("accelerationstructure") != std::string::npos) {
+            if (resource.register_class != ShaderRegisterClass::shader_resource) {
+                reflection.diagnostics =
+                    "DXC acceleration-structure reflection must use an SRV register.";
+                return reflection;
+            }
+            resource.kind = ShaderResourceKind::acceleration_structure;
+        }
+
         if (count_token == "unbounded") {
             resource.count = 0;
             resource.unbounded = true;
@@ -777,7 +804,7 @@ std::string make_cache_key(
 ) {
     std::string material;
     material.reserve(source.size() + 512);
-    hash_append(material, "VICE_SHADER_ASSET_V5_METAL_EXPLICIT_TABLES2");
+    hash_append(material, "VICE_SHADER_ASSET_V5_METAL_EXPLICIT_TABLES2_RESOURCE_KINDS1");
     hash_append(material, source);
     hash_append(material, request.entry_point);
     hash_append(material, shader_stage_name(request.stage));
