@@ -1,5 +1,6 @@
 #import "ray_tracing.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -43,6 +44,14 @@ namespace {
     return true;
 }
 
+[[nodiscard]] bool native_size(const std::uint64_t value, NSUInteger& result) noexcept {
+    if (value == 0U || value > std::numeric_limits<NSUInteger>::max()) {
+        return false;
+    }
+    result = static_cast<NSUInteger>(value);
+    return true;
+}
+
 [[nodiscard]] MTLPackedFloat4x3 native_transform(
     const std::array<float, 12>& transform
 ) noexcept {
@@ -56,6 +65,10 @@ namespace {
     MTLPackedFloat4x3 result{};
     std::memcpy(&result, columns.data(), sizeof(result));
     return result;
+}
+
+void set_diagnostics(std::string* const diagnostics, const char* const message) {
+    if (diagnostics != nullptr) *diagnostics = message;
 }
 
 } // namespace
@@ -72,6 +85,7 @@ AccelerationStructureBuildPlan build_acceleration_structure_plan(
 ) {
     AccelerationStructureBuildPlan result;
     result.type = desc.type;
+    result.flags = desc.flags;
 
     if (device == nil || !is_valid(desc)) {
         result.diagnostics = "Invalid VICE acceleration-structure build description.";
@@ -212,6 +226,119 @@ AccelerationStructureBuildSizeResult query_acceleration_structure_build_sizes(
         result.sizes = {};
     }
     return result;
+}
+
+AccelerationStructureResources allocate_acceleration_structure_resources(
+    id<MTLDevice> device,
+    const AccelerationStructureBuildPlan& plan,
+    const AccelerationStructureBuildSizes& sizes
+) {
+    AccelerationStructureResources result;
+    result.type = plan.type;
+    result.flags = plan.flags;
+    result.sizes = sizes;
+
+    if (device == nil || !plan || !is_valid(sizes)) {
+        result.diagnostics = "Invalid Metal acceleration-structure allocation request.";
+        return result;
+    }
+    if (!supports_ray_tracing(device)) {
+        result.diagnostics = "The active Metal device does not support ray tracing.";
+        return result;
+    }
+
+    NSUInteger result_size = 0U;
+    const std::uint64_t scratch_requirement = std::max(
+        sizes.build_scratch_size,
+        has_flag(plan.flags, AccelerationStructureBuildFlags::allow_update)
+            ? sizes.update_scratch_size
+            : 0U
+    );
+    NSUInteger scratch_size = 0U;
+    if (!native_size(sizes.result_size, result_size) ||
+        !native_size(scratch_requirement, scratch_size)) {
+        result.diagnostics = "Metal acceleration-structure allocation size exceeds the native range.";
+        return result;
+    }
+
+    result.result = [device newAccelerationStructureWithSize:result_size];
+    result.scratch = [device newBufferWithLength:scratch_size options:MTLResourceStorageModePrivate];
+    result.instance_buffer = plan.instance_buffer;
+    if (result.result == nil || result.scratch == nil) {
+        result.diagnostics = "Metal could not allocate acceleration-structure result or scratch memory.";
+        result.result = nil;
+        result.scratch = nil;
+        result.instance_buffer = nil;
+    }
+    return result;
+}
+
+bool encode_acceleration_structure_build(
+    id<MTLCommandBuffer> command_buffer,
+    const AccelerationStructureBuildPlan& plan,
+    AccelerationStructureResources& resources,
+    const bool refit,
+    const AccelerationStructureResources* const source,
+    std::string* const diagnostics
+) {
+    if (diagnostics != nullptr) diagnostics->clear();
+    if (command_buffer == nil || !plan || !resources ||
+        plan.type != resources.type || !is_valid(resources.sizes)) {
+        set_diagnostics(diagnostics, "Invalid Metal acceleration-structure build resources.");
+        return false;
+    }
+    if (resources.result.size < resources.sizes.result_size) {
+        set_diagnostics(diagnostics, "Metal acceleration-structure result memory is undersized.");
+        return false;
+    }
+
+    const std::uint64_t required_scratch = refit
+        ? resources.sizes.update_scratch_size
+        : resources.sizes.build_scratch_size;
+    if (required_scratch > 0U && resources.scratch.length < required_scratch) {
+        set_diagnostics(diagnostics, "Metal acceleration-structure scratch memory is undersized.");
+        return false;
+    }
+
+    if (plan.type == AccelerationStructureType::top_level) {
+        if (plan.instance_buffer == nil) {
+            set_diagnostics(diagnostics, "Metal TLAS build is missing its instance descriptor buffer.");
+            return false;
+        }
+        resources.instance_buffer = plan.instance_buffer;
+    }
+
+    id<MTLAccelerationStructureCommandEncoder> encoder =
+        [command_buffer accelerationStructureCommandEncoder];
+    if (encoder == nil) {
+        set_diagnostics(diagnostics, "Metal could not create an acceleration-structure command encoder.");
+        return false;
+    }
+
+    if (refit) {
+        if (!has_flag(plan.flags, AccelerationStructureBuildFlags::allow_update) ||
+            source == nullptr || !*source || source->type != plan.type ||
+            !has_flag(source->flags, AccelerationStructureBuildFlags::allow_update)) {
+            [encoder endEncoding];
+            set_diagnostics(diagnostics, "Metal acceleration-structure refit was not enabled by the source build.");
+            return false;
+        }
+        id<MTLBuffer> scratch = resources.sizes.update_scratch_size > 0U
+            ? resources.scratch
+            : nil;
+        [encoder refitAccelerationStructure:source->result
+                                 descriptor:plan.descriptor
+                                destination:resources.result
+                              scratchBuffer:scratch
+                        scratchBufferOffset:0U];
+    } else {
+        [encoder buildAccelerationStructure:resources.result
+                                 descriptor:plan.descriptor
+                              scratchBuffer:resources.scratch
+                        scratchBufferOffset:0U];
+    }
+    [encoder endEncoding];
+    return true;
 }
 
 } // namespace vice::render::metal

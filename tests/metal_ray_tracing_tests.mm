@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <cstring>
 #include <span>
+#include <string>
 
 namespace {
 
@@ -128,10 +129,55 @@ int main() {
     const auto blas_sizes = query_acceleration_structure_build_sizes(device, blas_plan);
     if (!ray_tracing_supported) {
         assert(!blas_sizes);
+        assert(!allocate_acceleration_structure_resources(device, blas_plan, {
+            .result_size = 4096U,
+            .build_scratch_size = 2048U,
+            .update_scratch_size = 1024U,
+        }));
         return 0;
     }
     assert(blas_sizes);
     assert(is_valid(blas_sizes.sizes));
+
+    auto blas_resources = allocate_acceleration_structure_resources(
+        device,
+        blas_plan,
+        blas_sizes.sizes
+    );
+    auto updated_blas_resources = allocate_acceleration_structure_resources(
+        device,
+        blas_plan,
+        blas_sizes.sizes
+    );
+    assert(blas_resources);
+    assert(updated_blas_resources);
+    assert(blas_resources.result.size >= blas_sizes.sizes.result_size);
+    assert(blas_resources.scratch.length >= blas_sizes.sizes.build_scratch_size);
+
+    id<MTLCommandQueue> queue = [device newCommandQueue];
+    assert(queue != nil);
+    id<MTLCommandBuffer> command_buffer = [queue commandBuffer];
+    assert(command_buffer != nil);
+
+    std::string diagnostics;
+    assert(encode_acceleration_structure_build(
+        command_buffer,
+        blas_plan,
+        blas_resources,
+        false,
+        nullptr,
+        &diagnostics
+    ));
+    assert(diagnostics.empty());
+    assert(encode_acceleration_structure_build(
+        command_buffer,
+        blas_plan,
+        updated_blas_resources,
+        true,
+        &blas_resources,
+        &diagnostics
+    ));
+    assert(diagnostics.empty());
 
     id<MTLAccelerationStructure> native_blas =
         [device newAccelerationStructureWithSize:blas_sizes.sizes.result_size];
@@ -154,7 +200,8 @@ int main() {
     const std::array instances{instance};
     const AccelerationStructureBuildDesc tlas_desc{
         .type = AccelerationStructureType::top_level,
-        .flags = AccelerationStructureBuildFlags::prefer_fast_build,
+        .flags = AccelerationStructureBuildFlags::allow_update |
+            AccelerationStructureBuildFlags::prefer_fast_build,
         .geometries = {},
         .instances = instances,
     };
@@ -178,6 +225,7 @@ int main() {
     assert(instanced.instanceDescriptorStride == sizeof(MTLAccelerationStructureUserIDInstanceDescriptor));
     assert(instanced.instancedAccelerationStructures.count == 1U);
     assert(instanced.instancedAccelerationStructures[0] == native_blas);
+    assert(usage_set(instanced.usage, MTLAccelerationStructureUsageRefit));
     assert(usage_set(instanced.usage, MTLAccelerationStructureUsagePreferFastBuild));
 
     const auto* native_instance = static_cast<const MTLAccelerationStructureUserIDInstanceDescriptor*>(
@@ -202,6 +250,77 @@ int main() {
     const auto tlas_sizes = query_acceleration_structure_build_sizes(device, tlas_plan);
     assert(tlas_sizes);
     assert(is_valid(tlas_sizes.sizes));
+
+    const auto live_tlas_plan = build_acceleration_structure_plan(
+        device,
+        tlas_desc,
+        {},
+        [&](const AccelerationStructure& structure) -> id<MTLAccelerationStructure> {
+            return &structure == &bottom_level ? blas_resources.result : nil;
+        }
+    );
+    assert(live_tlas_plan);
+    auto tlas_resources = allocate_acceleration_structure_resources(
+        device,
+        live_tlas_plan,
+        tlas_sizes.sizes
+    );
+    auto updated_tlas_resources = allocate_acceleration_structure_resources(
+        device,
+        live_tlas_plan,
+        tlas_sizes.sizes
+    );
+    assert(tlas_resources);
+    assert(updated_tlas_resources);
+    assert(encode_acceleration_structure_build(
+        command_buffer,
+        live_tlas_plan,
+        tlas_resources,
+        false,
+        nullptr,
+        &diagnostics
+    ));
+    assert(diagnostics.empty());
+
+    auto moved_instance = instance;
+    moved_instance.transform[3] = 8.0F;
+    moved_instance.transform[7] = 9.0F;
+    moved_instance.mask = 0x3CU;
+    const std::array moved_instances{moved_instance};
+    const AccelerationStructureBuildDesc moved_tlas_desc{
+        .type = AccelerationStructureType::top_level,
+        .flags = AccelerationStructureBuildFlags::allow_update |
+            AccelerationStructureBuildFlags::prefer_fast_build,
+        .geometries = {},
+        .instances = moved_instances,
+    };
+    const auto moved_tlas_plan = build_acceleration_structure_plan(
+        device,
+        moved_tlas_desc,
+        {},
+        [&](const AccelerationStructure& structure) -> id<MTLAccelerationStructure> {
+            return &structure == &bottom_level ? blas_resources.result : nil;
+        }
+    );
+    assert(moved_tlas_plan);
+    assert(encode_acceleration_structure_build(
+        command_buffer,
+        moved_tlas_plan,
+        updated_tlas_resources,
+        true,
+        &tlas_resources,
+        &diagnostics
+    ));
+    assert(diagnostics.empty());
+    assert(updated_tlas_resources.instance_buffer == moved_tlas_plan.instance_buffer);
+
+    const auto* moved_native_instance =
+        static_cast<const MTLAccelerationStructureUserIDInstanceDescriptor*>(
+            [updated_tlas_resources.instance_buffer contents]
+        );
+    assert(moved_native_instance != nullptr);
+    assert(moved_native_instance->mask == 0x3CU);
+    assert(moved_native_instance->userID == 17U);
 
     return 0;
 }
