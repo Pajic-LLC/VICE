@@ -5,6 +5,7 @@
 #include <vice/render/material_asset.hpp>
 #include <vice/render/mesh_asset.hpp>
 #include <vice/render/rhi.hpp>
+#include <vice/runtime/directional_shadow.hpp>
 #include <vice/world/world.hpp>
 
 #include <array>
@@ -298,6 +299,10 @@ public:
         std::string* diagnostics = nullptr
     );
 
+    void set_directional_shadow_mode(RuntimeDirectionalShadowMode mode) noexcept;
+    [[nodiscard]] RuntimeDirectionalShadowMode directional_shadow_mode() const noexcept;
+    [[nodiscard]] RuntimeDirectionalShadowTelemetry directional_shadow_telemetry() const noexcept;
+
     [[nodiscard]] bool render(
         const world::World& world,
         render::Swapchain& swapchain,
@@ -317,6 +322,8 @@ private:
 
     struct State;
     std::unique_ptr<State> state_;
+    RuntimeDirectionalShadowMode directional_shadow_mode_ = RuntimeDirectionalShadowMode::automatic;
+    RuntimeDirectionalShadowTelemetry directional_shadow_telemetry_{};
 };
 
 } // namespace vice::runtime

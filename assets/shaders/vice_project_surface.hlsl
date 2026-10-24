@@ -203,8 +203,17 @@ float directional_shadow_cascade_visibility(
     return visibility / 9.0;
 }
 
-float directional_shadow_visibility(float3 world_position, float3 world_normal) {
+float directional_shadow_visibility(
+    float2 pixel_position,
+    float3 world_position,
+    float3 world_normal
+) {
     if (shadow_metadata.x < 0.5) return 1.0;
+    if (shadow_camera_forward.w > 0.5) {
+        return saturate(
+            directional_shadow_map.Load(int3(int2(pixel_position), 0))
+        );
+    }
 
     const float world_depth = max(
         dot(world_position - camera_position.xyz, shadow_camera_forward.xyz),
@@ -373,7 +382,11 @@ float4 vice_surface_fs(VertexOut input) : SV_Target0 {
         float visibility = 1.0;
         if (shadow_metadata.x >= 0.5 && index == shadow_light_index &&
             lights[index].position_or_direction.w < 0.5) {
-            visibility = directional_shadow_visibility(input.world_position, input.world_normal);
+            visibility = directional_shadow_visibility(
+                input.position.xy,
+                input.world_position,
+                input.world_normal
+            );
         } else if (lights[index].position_or_direction.w >= 0.5) {
             if (point_shadow_metadata_0.x >= 0.5 && index == (uint)point_shadow_metadata_0.y) {
                 visibility = point_shadow_visibility(0, input.model_position);
