@@ -31,6 +31,7 @@ if(DEFINED VICE_RUNTIME_DIRECTIONAL_RAY_SHADOW_MANIFEST_PATH AND
     PRIVATE
       VICE_DIRECTIONAL_RAY_SHADOW_MANIFEST="${VICE_RUNTIME_DIRECTIONAL_RAY_SHADOW_MANIFEST_PATH}"
       VICE_GPU_PBR_SURFACE_SOURCE="${CMAKE_SOURCE_DIR}/assets/shaders/vice_gpu_pbr_surface.hlsl"
+      VICE_PROJECT_SURFACE_SOURCE="${CMAKE_SOURCE_DIR}/assets/shaders/vice_project_surface.hlsl"
   )
   add_dependencies(
     vice_runtime_directional_ray_shadow_shader_tests

@@ -58,6 +58,42 @@ static_assert(
     ) == vice::runtime::RuntimeDirectionalShadowPath::ray_traced
 );
 
+static_assert(
+    vice::runtime::runtime_directional_shadow_active_path(
+        vice::runtime::RuntimeDirectionalShadowMode::automatic,
+        true,
+        false
+    ) == vice::runtime::RuntimeDirectionalShadowPath::cascaded
+);
+static_assert(
+    vice::runtime::runtime_directional_shadow_active_path(
+        vice::runtime::RuntimeDirectionalShadowMode::automatic,
+        true,
+        true
+    ) == vice::runtime::RuntimeDirectionalShadowPath::ray_traced
+);
+static_assert(
+    vice::runtime::runtime_directional_shadow_active_path(
+        vice::runtime::RuntimeDirectionalShadowMode::cascaded,
+        true,
+        true
+    ) == vice::runtime::RuntimeDirectionalShadowPath::cascaded
+);
+static_assert(
+    vice::runtime::make_runtime_directional_shadow_telemetry(
+        vice::runtime::RuntimeDirectionalShadowMode::ray_traced,
+        false,
+        false
+    ).active_path == vice::runtime::RuntimeDirectionalShadowPath::cascaded
+);
+static_assert(
+    vice::runtime::make_runtime_directional_shadow_telemetry(
+        vice::runtime::RuntimeDirectionalShadowMode::ray_traced,
+        true,
+        true
+    ).active_path == vice::runtime::RuntimeDirectionalShadowPath::ray_traced
+);
+
 static_assert(!vice::runtime::runtime_directional_shadow_requires_depth_prepass(
     vice::runtime::RuntimeDirectionalShadowPath::cascaded
 ));
@@ -69,6 +105,40 @@ static_assert(vice::runtime::runtime_directional_shadow_requires_depth_prepass(
 
 int main() {
     using namespace vice;
+
+    runtime::RuntimeSceneRenderer renderer;
+    assert(renderer.directional_shadow_mode() == runtime::RuntimeDirectionalShadowMode::automatic);
+    auto shadow_telemetry = renderer.directional_shadow_telemetry();
+    assert(shadow_telemetry.requested_mode == runtime::RuntimeDirectionalShadowMode::automatic);
+    assert(shadow_telemetry.active_path == runtime::RuntimeDirectionalShadowPath::cascaded);
+    assert(!shadow_telemetry.ray_tracing_supported);
+    assert(!shadow_telemetry.ray_query_visibility_available);
+
+    renderer.set_directional_shadow_mode(runtime::RuntimeDirectionalShadowMode::cascaded);
+    assert(renderer.directional_shadow_mode() == runtime::RuntimeDirectionalShadowMode::cascaded);
+    assert(renderer.directional_shadow_telemetry().requested_mode ==
+        runtime::RuntimeDirectionalShadowMode::cascaded);
+    renderer.set_directional_shadow_mode(runtime::RuntimeDirectionalShadowMode::ray_traced);
+    assert(renderer.directional_shadow_mode() == runtime::RuntimeDirectionalShadowMode::ray_traced);
+    assert(renderer.directional_shadow_telemetry().requested_mode ==
+        runtime::RuntimeDirectionalShadowMode::ray_traced);
+
+    const auto supported_without_visibility = runtime::make_runtime_directional_shadow_telemetry(
+        runtime::RuntimeDirectionalShadowMode::automatic,
+        true,
+        false
+    );
+    assert(supported_without_visibility.active_path == runtime::RuntimeDirectionalShadowPath::cascaded);
+    assert(supported_without_visibility.ray_tracing_supported);
+    assert(!supported_without_visibility.ray_query_visibility_available);
+
+    const auto active_ray_query = runtime::make_runtime_directional_shadow_telemetry(
+        runtime::RuntimeDirectionalShadowMode::automatic,
+        true,
+        true
+    );
+    assert(active_ray_query.active_path == runtime::RuntimeDirectionalShadowPath::ray_traced);
+    assert(active_ray_query.ray_query_visibility_available);
 
     world::World scene;
     assert(scene.register_region(world::RegionDesc{

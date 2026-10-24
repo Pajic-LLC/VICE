@@ -33,15 +33,24 @@ struct RuntimeDirectionalRayShadowRenderContext {
     render::Buffer* pbr_frame = nullptr;
     render::Texture* cascade_shadow = nullptr;
     RuntimeDirectionalRayShadowConstants constants{};
+    RuntimeDirectionalShadowMode requested_mode = RuntimeDirectionalShadowMode::automatic;
+    RuntimeDirectionalShadowTelemetry* telemetry = nullptr;
     std::string* diagnostics = nullptr;
     bool camera_depth_active = false;
     bool constants_ready = false;
     bool visibility_ready = false;
-    bool pbr_visibility_bound = false;
+    bool gpu_pbr_active = false;
+    bool gpu_pbr_visibility_marker_ready = false;
+    bool direct_visibility_marker_ready = false;
 };
 
 extern thread_local RuntimeDirectionalRayShadowRenderContext*
     active_directional_ray_shadow_render_context;
+
+[[nodiscard]] RuntimeDirectionalShadowPath runtime_resolve_directional_shadow_path(
+    RuntimeDirectionalShadowMode requested_mode,
+    bool ray_tracing_supported
+) noexcept;
 
 [[nodiscard]] bool runtime_directional_ray_shadow_after_begin_depth(
     render::Texture& depth_attachment,
@@ -63,6 +72,13 @@ extern thread_local RuntimeDirectionalRayShadowRenderContext*
     render::CommandList& commands
 ) noexcept;
 
+[[nodiscard]] render::Buffer& runtime_directional_ray_shadow_prepare_graphics_constants(
+    const render::ShaderBindingKey& binding,
+    render::Buffer& buffer,
+    std::uint64_t offset,
+    std::uint64_t size
+) noexcept;
+
 [[nodiscard]] render::Texture& runtime_directional_shadow_texture_override(
     const render::ShaderBindingKey& binding,
     render::Texture& texture
@@ -74,6 +90,8 @@ extern thread_local RuntimeDirectionalRayShadowRenderContext*
 #define render(...) render_legacy(__VA_ARGS__)
 #define set_vertex_buffer(...) set_vertex_buffer_resolved(__VA_ARGS__)
 #define set_index_buffer(...) set_index_buffer_resolved(__VA_ARGS__)
+#define resolve_runtime_directional_shadow_path(requested_mode, ray_tracing_supported) \
+    detail::runtime_resolve_directional_shadow_path((requested_mode), (ray_tracing_supported))
 #define begin_depth_render_pass(...) \
     begin_depth_render_pass(__VA_ARGS__) || \
         !detail::runtime_directional_ray_shadow_after_begin_depth( \
@@ -92,6 +110,15 @@ extern thread_local RuntimeDirectionalRayShadowRenderContext*
 #define end_render_pass(...) \
     end_render_pass(__VA_ARGS__) || \
         !detail::runtime_directional_ray_shadow_after_end_render_pass(*commands)
+#define set_graphics_constant_buffer(binding, buffer, offset, size) \
+    set_graphics_constant_buffer( \
+        (binding), \
+        detail::runtime_directional_ray_shadow_prepare_graphics_constants( \
+            (binding), (buffer), (offset), (size) \
+        ), \
+        (offset), \
+        (size) \
+    )
 #define set_graphics_texture(binding, texture) \
     set_graphics_texture( \
         (binding), \
@@ -99,8 +126,10 @@ extern thread_local RuntimeDirectionalRayShadowRenderContext*
     )
 #include "scene_legacy.inc"
 #undef set_graphics_texture
+#undef set_graphics_constant_buffer
 #undef end_render_pass
 #undef begin_depth_render_pass
+#undef resolve_runtime_directional_shadow_path
 #undef set_index_buffer
 #undef set_vertex_buffer
 #undef render
@@ -131,6 +160,17 @@ private:
     RuntimeDirectionalRayShadowRenderContext* previous_ = nullptr;
 };
 
+RuntimeDirectionalShadowPath runtime_resolve_directional_shadow_path(
+    const RuntimeDirectionalShadowMode requested_mode,
+    const bool ray_tracing_supported
+) noexcept {
+    const auto* const context = active_directional_ray_shadow_render_context;
+    return ::vice::runtime::resolve_runtime_directional_shadow_path(
+        context == nullptr ? requested_mode : context->requested_mode,
+        ray_tracing_supported
+    );
+}
+
 bool runtime_directional_ray_shadow_after_begin_depth(
     render::Texture& depth_attachment,
     const float,
@@ -154,14 +194,16 @@ bool runtime_directional_ray_shadow_after_begin_depth(
     context->camera_depth_active = true;
     context->constants_ready = false;
     context->visibility_ready = false;
-    context->pbr_visibility_bound = false;
+    context->gpu_pbr_active = has_gpu_pbr;
+    context->gpu_pbr_visibility_marker_ready = false;
+    context->direct_visibility_marker_ready = false;
     context->ray_scene = ray_scene;
     context->camera_depth = current_depth;
     context->pbr_frame = pbr_frame;
     context->cascade_shadow = cascade_shadow;
 
-    if (!has_gpu_pbr || !context->pass->available() || ray_scene == nullptr ||
-        current_depth == nullptr || pbr_frame == nullptr || cascade_shadow == nullptr ||
+    if (!context->pass->available() || ray_scene == nullptr ||
+        current_depth == nullptr || cascade_shadow == nullptr ||
         metrics.drawable_width == 0U || metrics.drawable_height == 0U) {
         return true;
     }
@@ -213,8 +255,7 @@ bool runtime_directional_ray_shadow_after_end_render_pass(
     context->camera_depth_active = false;
 
     if (!context->constants_ready || context->pass == nullptr ||
-        context->ray_scene == nullptr || context->camera_depth == nullptr ||
-        context->pbr_frame == nullptr) {
+        context->ray_scene == nullptr || context->camera_depth == nullptr) {
         return true;
     }
     auto* const tlas = context->ray_scene->active_tlas();
@@ -236,22 +277,65 @@ bool runtime_directional_ray_shadow_after_end_render_pass(
         return false;
     }
 
-    constexpr std::size_t mode_offset =
-        offsetof(GpuPbrSceneConstants, shadow_camera_forward) + sizeof(float) * 3U;
-    const float ray_traced_mode = 1.0F;
-    if (!context->pbr_frame->write(
-            mode_offset,
-            std::as_bytes(std::span{&ray_traced_mode, 1})
-        )) {
-        if (context->diagnostics != nullptr) {
-            *context->diagnostics =
-                "VICE Runtime could not select ray-traced directional shadows for GPU PBR.";
-        }
-        return false;
+    context->visibility_ready = true;
+    if (context->telemetry != nullptr) {
+        context->telemetry->active_path = RuntimeDirectionalShadowPath::ray_traced;
+        context->telemetry->ray_query_visibility_available = true;
     }
 
-    context->visibility_ready = true;
+    if (context->gpu_pbr_active) {
+        if (context->pbr_frame == nullptr) {
+            if (context->diagnostics != nullptr) {
+                *context->diagnostics =
+                    "VICE Runtime GPU PBR frame constants are unavailable for ray-traced shadows.";
+            }
+            return false;
+        }
+        constexpr std::size_t mode_offset =
+            offsetof(GpuPbrSceneConstants, shadow_camera_forward) + sizeof(float) * 3U;
+        const float ray_traced_mode = 1.0F;
+        if (!context->pbr_frame->write(
+                mode_offset,
+                std::as_bytes(std::span{&ray_traced_mode, 1})
+            )) {
+            if (context->diagnostics != nullptr) {
+                *context->diagnostics =
+                    "VICE Runtime could not select ray-traced directional shadows for GPU PBR.";
+            }
+            return false;
+        }
+        context->gpu_pbr_visibility_marker_ready = true;
+    }
+
     return true;
+}
+
+render::Buffer& runtime_directional_ray_shadow_prepare_graphics_constants(
+    const render::ShaderBindingKey& binding,
+    render::Buffer& buffer,
+    const std::uint64_t offset,
+    const std::uint64_t size
+) noexcept {
+    auto* const context = active_directional_ray_shadow_render_context;
+    if (context == nullptr ||
+        binding.register_class != render::ShaderRegisterClass::constant_buffer ||
+        binding.binding != 0U || binding.space != 0U || binding.array_element != 0U) {
+        return buffer;
+    }
+
+    context->direct_visibility_marker_ready = false;
+    if (!context->visibility_ready || size != sizeof(SceneConstants)) return buffer;
+
+    constexpr std::size_t mode_offset =
+        offsetof(SceneConstants, shadow_camera_forward) + sizeof(float) * 3U;
+    const float ray_traced_mode = 1.0F;
+    if (buffer.write(
+            offset + mode_offset,
+            std::as_bytes(std::span{&ray_traced_mode, 1})
+        )) {
+        context->direct_visibility_marker_ready = true;
+    }
+    return buffer;
 }
 
 render::Texture& runtime_directional_shadow_texture_override(
@@ -259,16 +343,21 @@ render::Texture& runtime_directional_shadow_texture_override(
     render::Texture& texture
 ) noexcept {
     auto* const context = active_directional_ray_shadow_render_context;
-    if (context == nullptr || !context->visibility_ready || context->pbr_visibility_bound ||
-        context->pass == nullptr || context->cascade_shadow != &texture ||
+    if (context == nullptr || !context->visibility_ready || context->pass == nullptr ||
+        context->cascade_shadow != &texture ||
         binding.register_class != render::ShaderRegisterClass::shader_resource ||
-        binding.binding != 0U || binding.space != 2U || binding.array_element != 0U) {
+        binding.array_element != 0U) {
         return texture;
     }
+
+    const bool gpu_pbr_binding = context->gpu_pbr_visibility_marker_ready &&
+        binding.binding == 0U && binding.space == 2U;
+    const bool direct_material_binding = context->direct_visibility_marker_ready &&
+        binding.space == 0U;
+    if (!gpu_pbr_binding && !direct_material_binding) return texture;
+
     auto* const visibility = context->pass->visibility();
-    if (visibility == nullptr) return texture;
-    context->pbr_visibility_bound = true;
-    return *visibility;
+    return visibility == nullptr ? texture : *visibility;
 }
 
 } // namespace vice::runtime::detail
@@ -862,6 +951,21 @@ RuntimeRenderResidentSceneBuildResult build_runtime_render_resident_scene_with_v
 
 } // namespace detail
 
+void RuntimeSceneRenderer::set_directional_shadow_mode(
+    const RuntimeDirectionalShadowMode mode
+) noexcept {
+    directional_shadow_mode_ = mode;
+    directional_shadow_telemetry_.requested_mode = mode;
+}
+
+RuntimeDirectionalShadowMode RuntimeSceneRenderer::directional_shadow_mode() const noexcept {
+    return directional_shadow_mode_;
+}
+
+RuntimeDirectionalShadowTelemetry RuntimeSceneRenderer::directional_shadow_telemetry() const noexcept {
+    return directional_shadow_telemetry_;
+}
+
 bool RuntimeSceneRenderer::render(
     const world::World& world,
     render::Swapchain& swapchain,
@@ -869,6 +973,11 @@ bool RuntimeSceneRenderer::render(
     const render::Color clear_color,
     std::string* const diagnostics
 ) {
+    directional_shadow_telemetry_.requested_mode = directional_shadow_mode_;
+    directional_shadow_telemetry_.active_path = RuntimeDirectionalShadowPath::cascaded;
+    directional_shadow_telemetry_.ray_tracing_supported = false;
+    directional_shadow_telemetry_.ray_query_visibility_available = false;
+
     if (state_ == nullptr) {
         return render_legacy(world, swapchain, metrics, clear_color, diagnostics);
     }
@@ -931,11 +1040,21 @@ bool RuntimeSceneRenderer::render(
     };
     const RuntimeVirtualGeometrySceneScope scope{context};
 
+    const bool ray_tracing_supported = state_->device != nullptr &&
+        state_->device->capabilities().ray_tracing;
+    directional_shadow_telemetry_.ray_tracing_supported = ray_tracing_supported;
+
     detail::RuntimeDirectionalRayShadowRenderContext ray_shadow_context{
+        .requested_mode = directional_shadow_mode_,
+        .telemetry = &directional_shadow_telemetry_,
         .diagnostics = diagnostics,
     };
+    const auto requested_path = resolve_runtime_directional_shadow_path(
+        directional_shadow_mode_,
+        ray_tracing_supported
+    );
     if (metrics.drawable_width != 0U && metrics.drawable_height != 0U &&
-        state_->device != nullptr && state_->device->capabilities().ray_tracing) {
+        requested_path == RuntimeDirectionalShadowPath::ray_traced && state_->device != nullptr) {
         if (!ensure_directional_ray_shadow_pass(state_.get(), *state_->device, diagnostics)) {
             return false;
         }

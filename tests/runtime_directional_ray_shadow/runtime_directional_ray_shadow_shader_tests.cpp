@@ -80,6 +80,16 @@ int main() {
         std::string::npos);
 #endif
 
+#ifdef VICE_PROJECT_SURFACE_SOURCE
+    const std::string project_source = read_text_file(VICE_PROJECT_SURFACE_SOURCE);
+    CHECK(!project_source.empty());
+    CHECK(project_source.find("shadow_camera_forward.w > 0.5") != std::string::npos);
+    CHECK(project_source.find("directional_shadow_map.Load(int3(int2(pixel_position), 0))") !=
+        std::string::npos);
+    CHECK(project_source.find("input.position.xy") != std::string::npos);
+    CHECK(project_source.find("directional_shadow_cascade_visibility(") != std::string::npos);
+#endif
+
     return 0;
 #endif
 }
