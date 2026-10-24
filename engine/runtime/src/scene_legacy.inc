@@ -1,4 +1,5 @@
 #include <vice/runtime/scene.hpp>
+#include <vice/runtime/directional_shadow.hpp>
 
 #include <vice/render/shader_asset.hpp>
 #include <vice/runtime/gpu_cluster_instance_remap.hpp>
@@ -2285,7 +2286,7 @@ bool RuntimeSceneRenderer::initialize(
     pipeline_desc.depth.format = render::TextureFormat::depth32_float;
     pipeline_desc.depth.test_enabled = true;
     pipeline_desc.depth.write_enabled = true;
-    pipeline_desc.depth.compare = render::CompareOp::less;
+    pipeline_desc.depth.compare = render::CompareOp::less_equal;
     pipeline_desc.vertex_buffers = mesh_layouts;
     pipeline_desc.debug_name = "VICE Runtime mesh fallback pipeline";
     state_->pipeline = device.create_graphics_pipeline(pipeline_desc);
@@ -2333,7 +2334,7 @@ bool RuntimeSceneRenderer::initialize(
         gpu_pbr_pipeline_desc.depth.format = render::TextureFormat::depth32_float;
         gpu_pbr_pipeline_desc.depth.test_enabled = true;
         gpu_pbr_pipeline_desc.depth.write_enabled = true;
-        gpu_pbr_pipeline_desc.depth.compare = render::CompareOp::less;
+        gpu_pbr_pipeline_desc.depth.compare = render::CompareOp::less_equal;
         gpu_pbr_pipeline_desc.vertex_buffers = mesh_layouts;
         gpu_pbr_pipeline_desc.debug_name = "VICE Runtime indexed GPU PBR pipeline";
         state_->gpu_pbr_pipeline = device.create_graphics_pipeline(gpu_pbr_pipeline_desc);
@@ -3138,6 +3139,12 @@ bool RuntimeSceneRenderer::render(
 
     const auto& authored_lights = resident_scene.lights;
     const auto shadow_view = directional_shadow_view(runtime_camera, authored_lights);
+    const auto directional_shadow_path = resolve_runtime_directional_shadow_path(
+        RuntimeDirectionalShadowMode::automatic,
+        state_->device->capabilities().ray_tracing
+    );
+    const bool use_camera_depth_prepass = shadow_view.has_value() &&
+        runtime_directional_shadow_requires_depth_prepass(directional_shadow_path);
     auto runtime_lights = authored_lights;
     if (runtime_lights.empty()) {
         runtime_lights.push_back(RuntimeLight{
@@ -3790,6 +3797,73 @@ bool RuntimeSceneRenderer::render(
         }
     }
 
+    if (use_camera_depth_prepass) {
+        const GpuDefaultFrame depth_frame{.view_projection = view_projection};
+        if (!state_->gpu_default_frame->write(
+                0U, std::as_bytes(std::span{&depth_frame, 1})
+            ) || !commands->begin_depth_render_pass(*current_depth, 1.0F, true) ||
+            !commands->set_viewport(render::Viewport{
+                .width = static_cast<float>(metrics.drawable_width),
+                .height = static_cast<float>(metrics.drawable_height),
+            }) || !commands->set_scissor_rect(render::ScissorRect{
+                .width = metrics.drawable_width,
+                .height = metrics.drawable_height,
+            })) {
+            set_diagnostics(diagnostics, "VICE Runtime could not begin the camera depth prepass.");
+            return false;
+        }
+
+        if (!gpu_shadow_plan.batches.empty()) {
+            const auto instance_table = state_->gpu_instances.result();
+            if (state_->gpu_shadow_pipeline == nullptr || instance_table.models == nullptr ||
+                gpu_motion_batch_result.compacted_instance_indices == nullptr ||
+                gpu_motion_batch_result.indirect_arguments == nullptr) {
+                set_diagnostics(diagnostics, "VICE Runtime camera depth-prepass resources are unavailable.");
+                return false;
+            }
+            const render::BufferViewDesc model_view{
+                .offset = 0U,
+                .size = static_cast<std::uint64_t>(instances.size()) * sizeof(math::Mat4),
+                .structure_stride = sizeof(math::Mat4),
+            };
+            const render::BufferViewDesc compacted_view{
+                .offset = 0U,
+                .size = static_cast<std::uint64_t>(instances.size()) * sizeof(std::uint32_t),
+                .structure_stride = sizeof(std::uint32_t),
+            };
+            if (!commands->set_graphics_pipeline(*state_->gpu_shadow_pipeline) ||
+                !commands->set_graphics_constant_buffer(
+                    frame_binding, *state_->gpu_default_frame, 0U, sizeof(GpuDefaultFrame)
+                ) || !commands->set_graphics_buffer(
+                    gpu_model_table_binding, *instance_table.models, model_view
+                ) || !commands->set_graphics_buffer(
+                    gpu_compacted_instance_binding,
+                    *gpu_motion_batch_result.compacted_instance_indices,
+                    compacted_view
+                )) {
+                set_diagnostics(diagnostics, "VICE Runtime could not bind camera depth-prepass resources.");
+                return false;
+            }
+            for (std::size_t batch_index = 0U; batch_index < gpu_shadow_plan.batches.size(); ++batch_index) {
+                auto& mesh = state_->meshes.at(gpu_shadow_plan.batch_meshes[batch_index]);
+                const std::uint64_t argument_offset = static_cast<std::uint64_t>(batch_index) *
+                    sizeof(render::IndexedIndirectDrawArguments);
+                if (!commands->set_vertex_buffer(0U, *mesh.vertices) ||
+                    !commands->set_index_buffer(*mesh.indices, render::IndexFormat::uint32) ||
+                    !commands->draw_indexed_indirect(
+                        *gpu_motion_batch_result.indirect_arguments, argument_offset
+                    )) {
+                    set_diagnostics(diagnostics, "VICE Runtime could not encode a camera depth-prepass batch.");
+                    return false;
+                }
+            }
+        }
+        if (!commands->end_render_pass()) {
+            set_diagnostics(diagnostics, "VICE Runtime could not finish the camera depth prepass.");
+            return false;
+        }
+    }
+
     const math::Vec3 camera_right = math::normalize(math::cross(runtime_camera.forward, runtime_camera.up));
     detail::SkyConstants sky_constants{};
     sky_constants.camera_forward_tan_half_fov[0] = runtime_camera.forward.x;
@@ -3853,6 +3927,7 @@ bool RuntimeSceneRenderer::render(
     pass.depth_attachment = current_depth;
     pass.clear_depth = 1.0F;
     pass.clear_color_attachment = false;
+    pass.clear_depth_attachment = !use_camera_depth_prepass;
     if (!commands->begin_render_pass(*scene_color, pass) ||
         !commands->set_viewport(render::Viewport{
             .width = static_cast<float>(metrics.drawable_width),
