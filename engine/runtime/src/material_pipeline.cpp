@@ -517,7 +517,7 @@ bool RuntimeMaterialLibrary::initialize(
         pipeline_desc.depth.format = render::TextureFormat::depth32_float;
         pipeline_desc.depth.test_enabled = true;
         pipeline_desc.depth.write_enabled = true;
-        pipeline_desc.depth.compare = render::CompareOp::less;
+        pipeline_desc.depth.compare = render::CompareOp::less_equal;
         pipeline_desc.vertex_buffers = vertex_layouts;
         pipeline_desc.debug_name = "VICE Runtime project material pipeline";
         auto pipeline = device.create_graphics_pipeline(pipeline_desc);
