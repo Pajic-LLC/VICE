@@ -437,6 +437,27 @@ bool record_acceleration_structure_build(
             set_diagnostics(diagnostics, "D3D12 TLAS build is missing its instance upload buffer.");
             return false;
         }
+        if (plan.instances.size() >
+            std::numeric_limits<std::uint64_t>::max() / sizeof(D3D12_RAYTRACING_INSTANCE_DESC)) {
+            set_diagnostics(diagnostics, "D3D12 TLAS instance upload size overflowed.");
+            return false;
+        }
+        const std::uint64_t instance_bytes =
+            static_cast<std::uint64_t>(plan.instances.size()) * sizeof(D3D12_RAYTRACING_INSTANCE_DESC);
+        if (instance_bytes == 0U || resource_size(resources.instance_upload.Get()) < instance_bytes) {
+            set_diagnostics(diagnostics, "D3D12 TLAS instance upload buffer is undersized.");
+            return false;
+        }
+        void* mapped = nullptr;
+        const D3D12_RANGE read_range{0U, 0U};
+        if (FAILED(resources.instance_upload->Map(0U, &read_range, &mapped)) || mapped == nullptr) {
+            set_diagnostics(diagnostics, "D3D12 could not map the TLAS instance upload buffer for build.");
+            return false;
+        }
+        std::memcpy(mapped, plan.instances.data(), static_cast<std::size_t>(instance_bytes));
+        const D3D12_RANGE written_range{0U, static_cast<SIZE_T>(instance_bytes)};
+        resources.instance_upload->Unmap(0U, &written_range);
+
         instance_address = resources.instance_upload->GetGPUVirtualAddress();
         if (instance_address == 0U ||
             instance_address % D3D12_RAYTRACING_INSTANCE_DESCS_BYTE_ALIGNMENT != 0U) {
