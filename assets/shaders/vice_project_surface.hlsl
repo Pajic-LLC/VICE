@@ -55,6 +55,7 @@ cbuffer SceneFrame : register(b0, space0) {
     column_major float4x4 point_shadow_face_1_3;
     column_major float4x4 point_shadow_face_1_4;
     column_major float4x4 point_shadow_face_1_5;
+    float4 ambient_occlusion_metadata;
 };
 
 cbuffer MaterialParams : register(b1, space0) {
@@ -81,6 +82,7 @@ Texture2D<float> point_shadow_map_1_2 : register(t13, space0);
 Texture2D<float> point_shadow_map_1_3 : register(t14, space0);
 Texture2D<float> point_shadow_map_1_4 : register(t15, space0);
 Texture2D<float> point_shadow_map_1_5 : register(t16, space0);
+Texture2D<float> ray_ambient_occlusion_visibility_texture : register(t17, space0);
 SamplerState base_color_sampler : register(s0, space0);
 SamplerState directional_shadow_sampler : register(s1, space0);
 
@@ -368,12 +370,20 @@ float3 evaluate_light(
     return (diffuse + specular) * radiance * normal_light;
 }
 
+float vice_ray_ambient_occlusion_visibility(float2 pixel_position) {
+    if (ambient_occlusion_metadata.x < 0.5) return 1.0;
+    return saturate(
+        ray_ambient_occlusion_visibility_texture.Load(int3(int2(pixel_position), 0))
+    );
+}
+
 float4 vice_surface_fs(VertexOut input) : SV_Target0 {
     const float4 sampled = base_color_texture.Sample(base_color_sampler, input.uv);
     const float4 albedo_sample = sampled * base_color * float4(input.color, 1.0);
     const float3 albedo = albedo_sample.rgb;
     const float3 normal = normalize(input.world_normal);
     const float3 view_direction = normalize(camera_position.xyz - input.world_position);
+    const float ray_ambient_occlusion = vice_ray_ambient_occlusion_visibility(input.position.xy);
 
     float3 direct = float3(0.0, 0.0, 0.0);
     const uint light_count = min((uint)light_metadata.x, VICE_MAX_LIGHTS);
@@ -406,6 +416,6 @@ float4 vice_surface_fs(VertexOut input) : SV_Target0 {
         );
     }
 
-    const float3 ambient = albedo * 0.035;
+    const float3 ambient = albedo * 0.035 * ray_ambient_occlusion;
     return float4(ambient + direct, albedo_sample.a);
 }

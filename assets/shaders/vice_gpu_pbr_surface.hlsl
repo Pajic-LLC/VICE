@@ -75,6 +75,7 @@ cbuffer SceneFrame : register(b0, space0) {
     column_major float4x4 point_shadow_face_1_3;
     column_major float4x4 point_shadow_face_1_4;
     column_major float4x4 point_shadow_face_1_5;
+    float4 ambient_occlusion_metadata;
 };
 
 StructuredBuffer<float4x4> scene_models : register(t0, space0);
@@ -110,6 +111,7 @@ Texture2D<float4> environment_brdf_1 : register(t21, space2);
 Texture2D<float4> environment_irradiance_2 : register(t22, space2);
 Texture2D<float4> environment_specular_2 : register(t23, space2);
 Texture2D<float4> environment_brdf_2 : register(t24, space2);
+Texture2D<float> ray_ambient_occlusion_visibility_texture : register(t25, space2);
 SamplerState shadow_sampler : register(s0, space2);
 SamplerState environment_sampler : register(s1, space2);
 
@@ -682,6 +684,13 @@ float3 vice_environment_source_2(
     return (diffuse * (1.0 - f0) * occlusion + specular * fresnel) * metadata.x * metadata.w;
 }
 
+float vice_ray_ambient_occlusion_visibility(float2 pixel_position) {
+    if (ambient_occlusion_metadata.x < 0.5) return 1.0;
+    return saturate(
+        ray_ambient_occlusion_visibility_texture.Load(int3(int2(pixel_position), 0))
+    );
+}
+
 float4 vice_gpu_pbr_fs(VertexOut input) : SV_Target0 {
     const uint material_index = instance_materials[input.scene_instance_index].x;
     const ViceGpuMaterialRecord material = material_records[material_index];
@@ -720,6 +729,7 @@ float4 vice_gpu_pbr_fs(VertexOut input) : SV_Target0 {
     const float roughness_value = saturate(material.roughness * orm.g);
     const float metallic_value = saturate(material.metallic * orm.b);
     const float occlusion = saturate(orm.r);
+    const float ray_ambient_occlusion = vice_ray_ambient_occlusion_visibility(input.position.xy);
     const float3 f0 = lerp(float3(0.04, 0.04, 0.04), base_sample.rgb, metallic_value);
     const float3 reflection_direction = reflect(-view_direction, normal);
 
@@ -759,9 +769,10 @@ float4 vice_gpu_pbr_fs(VertexOut input) : SV_Target0 {
     environment += vice_environment_source_2(
         input.model_position, normal, reflection_direction, f0, normal_view, roughness_value, occlusion
     );
+    environment *= ray_ambient_occlusion;
 
     const float3 emissive = emissive_sample * material.emissive_color.rgb * material.emissive_intensity;
-    const float3 ambient = base_sample.rgb * 0.035 * occlusion;
+    const float3 ambient = base_sample.rgb * 0.035 * occlusion * ray_ambient_occlusion;
     float3 surface = ambient + direct + environment * base_sample.rgb + emissive;
 
     if (atmosphere_secondary.z >= 0.5) {
