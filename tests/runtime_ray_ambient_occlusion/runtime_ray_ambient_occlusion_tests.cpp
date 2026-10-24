@@ -165,6 +165,10 @@ int main() {
     const auto shadow_dispatch = scene_source.find("runtime_directional_ray_shadow_after_end_render_pass(*commands)");
     const auto ao_dispatch = scene_source.find("runtime_ray_ambient_occlusion_after_end_render_pass(*commands)");
     CHECK(shadow_dispatch < ao_dispatch);
+    CHECK(scene_source.find("context->denoise_pass->dispatch(") != std::string::npos);
+    const auto raw_visibility_ready = scene_source.find("context->visibility_ready = true;");
+    const auto denoise_dispatch = scene_source.find("context->denoise_pass->dispatch(");
+    CHECK(raw_visibility_ready < denoise_dispatch);
 #endif
 
     return 0;

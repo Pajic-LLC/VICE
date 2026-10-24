@@ -128,6 +128,32 @@ if(TARGET vice_shader_cooker)
       PRIVATE
         VICE_RUNTIME_RAY_AMBIENT_OCCLUSION_MANIFEST="${VICE_RUNTIME_RAY_AMBIENT_OCCLUSION_MANIFEST_PATH}"
     )
+
+    set(
+      _vice_runtime_ray_ambient_occlusion_denoise_output
+      "${CMAKE_BINARY_DIR}/cooked/vice_runtime_ray_ambient_occlusion_denoise"
+    )
+    set(
+      VICE_RUNTIME_RAY_AMBIENT_OCCLUSION_DENOISE_MANIFEST_PATH
+      "${_vice_runtime_ray_ambient_occlusion_denoise_output}/shader.vice.json"
+    )
+    vice_add_cooked_shader(
+      NAME vice_runtime_ray_ambient_occlusion_denoise_shader
+      INPUT "${PROJECT_SOURCE_DIR}/assets/shaders/vice_ray_ambient_occlusion_denoise.hlsl"
+      OUTPUT "${_vice_runtime_ray_ambient_occlusion_denoise_output}"
+      ENTRY vice_ray_ambient_occlusion_denoise_cs
+      STAGE compute
+      TARGET "${_vice_runtime_ray_shadow_target}"
+      SHADER_MODEL 6.6
+      DXC "${_vice_runtime_ray_shadow_dxc}"
+      METAL_SHADER_CONVERTER "${_vice_runtime_ray_shadow_metal_converter}"
+    )
+    add_dependencies(vice_runtime vice_runtime_ray_ambient_occlusion_denoise_shader)
+    target_compile_definitions(
+      vice_runtime
+      PRIVATE
+        VICE_RUNTIME_RAY_AMBIENT_OCCLUSION_DENOISE_MANIFEST="${VICE_RUNTIME_RAY_AMBIENT_OCCLUSION_DENOISE_MANIFEST_PATH}"
+    )
   endif()
 endif()
 
