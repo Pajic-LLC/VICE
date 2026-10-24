@@ -230,8 +230,10 @@ int main() {
 
     RuntimeRayTracingSceneExecutor executor;
     assert(executor.active_tlas() == nullptr);
+    assert(executor.telemetry() == RuntimeRayTracingTelemetry{});
     const RuntimeRayTracingSceneExecutor& const_executor = executor;
     assert(const_executor.active_tlas() == nullptr);
+    assert(const_executor.telemetry() == RuntimeRayTracingTelemetry{});
     TestRayCommandList commands;
     TestDevice unsupported;
     const auto unsupported_result = executor.execute(unsupported, commands, plan, geometry);
@@ -241,6 +243,7 @@ int main() {
     assert(executor.cached_blas_count() == 0U);
     assert(!executor.has_tlas());
     assert(executor.active_tlas() == nullptr);
+    assert(executor.telemetry() == RuntimeRayTracingTelemetry{});
 
     TestRayDevice device;
     const auto first = executor.execute(device, commands, plan, geometry);
@@ -263,6 +266,15 @@ int main() {
     assert(executor.active_tlas() != nullptr);
     assert(executor.active_tlas()->type() == AccelerationStructureType::top_level);
     assert(const_executor.active_tlas() == executor.active_tlas());
+    assert(const_executor.telemetry().supported);
+    assert(const_executor.telemetry().scene_active);
+    assert(const_executor.telemetry().blas_count == 1U);
+    assert(const_executor.telemetry().tlas_instance_count == 2U);
+    assert(const_executor.telemetry().blas_bytes == 4096U);
+    assert(const_executor.telemetry().tlas_bytes == 8192U);
+    assert(const_executor.telemetry().total_bytes == 12288U);
+    assert(const_executor.telemetry().last_successful_execution == first.counters);
+    assert(const_executor.telemetry().cumulative == first.counters);
 
     const auto unchanged = executor.execute(device, commands, plan, geometry);
     assert(unchanged);
@@ -271,6 +283,12 @@ int main() {
     assert(device.create_count == 2U);
     assert(commands.builds.size() == 2U);
     assert(executor.active_tlas() != nullptr);
+    assert(executor.telemetry().last_successful_execution == unchanged.counters);
+    assert(executor.telemetry().cumulative.blas_creates == 1U);
+    assert(executor.telemetry().cumulative.blas_reuses == 1U);
+    assert(executor.telemetry().cumulative.tlas_builds == 1U);
+    assert(executor.telemetry().cumulative.tlas_reuses == 1U);
+    assert(executor.telemetry().total_bytes == 12288U);
 
     auto moved_plan = plan;
     moved_plan.instances[0].transform[3] = 12.0F;
@@ -285,6 +303,11 @@ int main() {
     assert(commands.builds.back().transforms[0][3] == 12.0F);
     assert(executor.active_tlas() != nullptr);
     assert(executor.active_tlas()->type() == AccelerationStructureType::top_level);
+    assert(executor.telemetry().last_successful_execution == moved.counters);
+    assert(executor.telemetry().cumulative.blas_reuses == 2U);
+    assert(executor.telemetry().cumulative.tlas_refits == 1U);
+    assert(executor.telemetry().tlas_instance_count == 2U);
+    assert(executor.telemetry().total_bytes == 12288U);
 
     auto regenerated_plan = moved_plan;
     regenerated_plan.blases[0].key.source_fingerprint = 999U;
@@ -300,6 +323,16 @@ int main() {
     assert(commands.builds[4].type == AccelerationStructureType::top_level);
     assert(!commands.builds[4].update);
     assert(executor.active_tlas() != nullptr);
+    assert(executor.telemetry().last_successful_execution == regenerated.counters);
+    assert(executor.telemetry().cumulative.blas_creates == 1U);
+    assert(executor.telemetry().cumulative.blas_reuses == 2U);
+    assert(executor.telemetry().cumulative.blas_rebuilds == 1U);
+    assert(executor.telemetry().cumulative.blas_evictions == 1U);
+    assert(executor.telemetry().cumulative.tlas_builds == 2U);
+    assert(executor.telemetry().cumulative.tlas_refits == 1U);
+    assert(executor.telemetry().cumulative.tlas_reuses == 1U);
+    assert(executor.telemetry().blas_bytes == 4096U);
+    assert(executor.telemetry().tlas_bytes == 8192U);
 
     const RuntimeRayTracingScenePlan empty_plan{};
     const auto emptied = executor.execute(device, commands, empty_plan, geometry);
@@ -308,6 +341,15 @@ int main() {
     assert(executor.cached_blas_count() == 0U);
     assert(!executor.has_tlas());
     assert(executor.active_tlas() == nullptr);
+    assert(executor.telemetry().supported);
+    assert(!executor.telemetry().scene_active);
+    assert(executor.telemetry().blas_count == 0U);
+    assert(executor.telemetry().tlas_instance_count == 0U);
+    assert(executor.telemetry().blas_bytes == 0U);
+    assert(executor.telemetry().tlas_bytes == 0U);
+    assert(executor.telemetry().total_bytes == 0U);
+    assert(executor.telemetry().last_successful_execution == emptied.counters);
+    assert(executor.telemetry().cumulative.blas_evictions == 2U);
 
     const auto disabled_again = executor.execute(unsupported, commands, plan, geometry);
     assert(disabled_again);
@@ -315,15 +357,20 @@ int main() {
     assert(executor.cached_blas_count() == 0U);
     assert(!executor.has_tlas());
     assert(executor.active_tlas() == nullptr);
+    assert(executor.telemetry() == RuntimeRayTracingTelemetry{});
 
     TestRayCommandList reset_commands;
     const auto before_reset = executor.execute(device, reset_commands, plan, geometry);
     assert(before_reset);
     assert(before_reset.active);
     assert(executor.active_tlas() != nullptr);
+    assert(executor.telemetry().supported);
+    assert(executor.telemetry().scene_active);
+    assert(executor.telemetry().cumulative == before_reset.counters);
     executor.reset();
     assert(executor.active_tlas() == nullptr);
     assert(!executor.has_tlas());
+    assert(executor.telemetry() == RuntimeRayTracingTelemetry{});
 
     return 0;
 }

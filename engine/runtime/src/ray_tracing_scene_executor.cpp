@@ -4,6 +4,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <memory>
 #include <span>
 #include <utility>
@@ -43,6 +44,37 @@ namespace {
     result.reserve(blases.size());
     for (const auto& blas : blases) result.push_back(blas.key);
     return result;
+}
+
+[[nodiscard]] constexpr std::uint32_t saturating_add(
+    const std::uint32_t left,
+    const std::uint32_t right
+) noexcept {
+    return right > std::numeric_limits<std::uint32_t>::max() - left
+        ? std::numeric_limits<std::uint32_t>::max()
+        : left + right;
+}
+
+[[nodiscard]] constexpr std::uint64_t saturating_add(
+    const std::uint64_t left,
+    const std::uint64_t right
+) noexcept {
+    return right > std::numeric_limits<std::uint64_t>::max() - left
+        ? std::numeric_limits<std::uint64_t>::max()
+        : left + right;
+}
+
+void accumulate_counters(
+    RuntimeRayTracingExecutionCounters& total,
+    const RuntimeRayTracingExecutionCounters& delta
+) noexcept {
+    total.blas_creates = saturating_add(total.blas_creates, delta.blas_creates);
+    total.blas_reuses = saturating_add(total.blas_reuses, delta.blas_reuses);
+    total.blas_rebuilds = saturating_add(total.blas_rebuilds, delta.blas_rebuilds);
+    total.blas_evictions = saturating_add(total.blas_evictions, delta.blas_evictions);
+    total.tlas_builds = saturating_add(total.tlas_builds, delta.tlas_builds);
+    total.tlas_refits = saturating_add(total.tlas_refits, delta.tlas_refits);
+    total.tlas_reuses = saturating_add(total.tlas_reuses, delta.tlas_reuses);
 }
 
 } // namespace
@@ -175,6 +207,7 @@ RuntimeRayTracingExecutionResult RuntimeRayTracingSceneExecutor::execute(
         tlas_.reset();
         previous_blas_keys_ = current_blas_keys;
         previous_instances_.clear();
+        refresh_telemetry(true, result.counters);
         return result;
     }
 
@@ -217,6 +250,7 @@ RuntimeRayTracingExecutionResult RuntimeRayTracingSceneExecutor::execute(
         previous_blas_keys_ = current_blas_keys;
         previous_instances_ = plan.instances;
         ++result.counters.tlas_reuses;
+        refresh_telemetry(true, result.counters);
         return result;
     }
 
@@ -249,6 +283,7 @@ RuntimeRayTracingExecutionResult RuntimeRayTracingSceneExecutor::execute(
     } else {
         ++result.counters.tlas_builds;
     }
+    refresh_telemetry(true, result.counters);
     return result;
 }
 
@@ -257,6 +292,30 @@ void RuntimeRayTracingSceneExecutor::reset() noexcept {
     tlas_.reset();
     previous_blas_keys_.clear();
     previous_instances_.clear();
+    telemetry_ = {};
+}
+
+void RuntimeRayTracingSceneExecutor::refresh_telemetry(
+    const bool supported,
+    const RuntimeRayTracingExecutionCounters& last_successful_execution
+) noexcept {
+    telemetry_.supported = supported;
+    telemetry_.scene_active = tlas_ != nullptr;
+    telemetry_.blas_count = blases_.size();
+    telemetry_.tlas_instance_count = tlas_ == nullptr ? 0U : previous_instances_.size();
+    telemetry_.blas_bytes = 0U;
+    for (const auto& cached : blases_) {
+        if (cached.structure != nullptr) {
+            telemetry_.blas_bytes = saturating_add(
+                telemetry_.blas_bytes,
+                cached.structure->size()
+            );
+        }
+    }
+    telemetry_.tlas_bytes = tlas_ == nullptr ? 0U : tlas_->size();
+    telemetry_.total_bytes = saturating_add(telemetry_.blas_bytes, telemetry_.tlas_bytes);
+    telemetry_.last_successful_execution = last_successful_execution;
+    accumulate_counters(telemetry_.cumulative, last_successful_execution);
 }
 
 } // namespace vice::runtime
