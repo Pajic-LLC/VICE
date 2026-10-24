@@ -30,6 +30,7 @@ struct RuntimeRayTracingInstancePlan {
     world::PersistentId entity{};
     std::uint32_t instance_id = 0U;
     std::uint32_t blas_index = 0U;
+    std::uint32_t mask = 0xFFU;
     std::array<float, 12> transform{
         1.0F, 0.0F, 0.0F, 0.0F,
         0.0F, 1.0F, 0.0F, 0.0F,
