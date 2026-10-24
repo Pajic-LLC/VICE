@@ -26,6 +26,7 @@ add_library(
     src/module_paths.cpp
     src/package_metadata.cpp
     src/post_process.cpp
+    src/ray_tracing_scene.cpp
     src/render_residency.cpp
     src/render_streaming.cpp
     src/resource_residency.cpp

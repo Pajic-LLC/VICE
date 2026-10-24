@@ -1,0 +1,57 @@
+#pragma once
+
+#include <vice/runtime/scene.hpp>
+
+#include <array>
+#include <cstdint>
+#include <span>
+#include <string>
+#include <vector>
+
+namespace vice::runtime {
+
+struct RuntimeRayTracingBlasKey {
+    world::ResourceId mesh{};
+    render::MeshStableId stable_id{};
+    std::uint64_t source_fingerprint = 0U;
+    std::uint32_t vertex_count = 0U;
+    std::uint32_t index_count = 0U;
+
+    friend bool operator==(const RuntimeRayTracingBlasKey&, const RuntimeRayTracingBlasKey&) = default;
+};
+
+struct RuntimeRayTracingBlasPlan {
+    RuntimeRayTracingBlasKey key{};
+
+    friend bool operator==(const RuntimeRayTracingBlasPlan&, const RuntimeRayTracingBlasPlan&) = default;
+};
+
+struct RuntimeRayTracingInstancePlan {
+    world::PersistentId entity{};
+    std::uint32_t instance_id = 0U;
+    std::uint32_t blas_index = 0U;
+    std::array<float, 12> transform{
+        1.0F, 0.0F, 0.0F, 0.0F,
+        0.0F, 1.0F, 0.0F, 0.0F,
+        0.0F, 0.0F, 1.0F, 0.0F,
+    };
+
+    friend bool operator==(const RuntimeRayTracingInstancePlan&, const RuntimeRayTracingInstancePlan&) = default;
+};
+
+struct RuntimeRayTracingScenePlan {
+    std::vector<RuntimeRayTracingBlasPlan> blases;
+    std::vector<RuntimeRayTracingInstancePlan> instances;
+    std::string diagnostics;
+
+    [[nodiscard]] explicit operator bool() const noexcept {
+        return diagnostics.empty();
+    }
+};
+
+[[nodiscard]] RuntimeRayTracingScenePlan build_runtime_ray_tracing_scene_plan(
+    std::span<const RenderMeshInstance> instances,
+    std::span<const CookedMeshRecord> meshes
+);
+
+} // namespace vice::runtime
