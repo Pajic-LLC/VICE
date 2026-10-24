@@ -4,6 +4,8 @@
 
 #include <wrl/client.h>
 
+#include <algorithm>
+#include <cstddef>
 #include <cstdint>
 #include <cstring>
 #include <limits>
@@ -32,6 +34,13 @@ using Microsoft::WRL::ComPtr;
     return static_cast<D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAGS>(result);
 }
 
+[[nodiscard]] bool native_flag_set(
+    const D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAGS value,
+    const D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAGS flag
+) noexcept {
+    return (static_cast<UINT>(value) & static_cast<UINT>(flag)) != 0U;
+}
+
 [[nodiscard]] DXGI_FORMAT native_index_format(const IndexFormat format) noexcept {
     return format == IndexFormat::uint16 ? DXGI_FORMAT_R16_UINT : DXGI_FORMAT_R32_UINT;
 }
@@ -46,6 +55,69 @@ using Microsoft::WRL::ComPtr;
     }
     result = address + offset;
     return result != 0U;
+}
+
+[[nodiscard]] bool aligned_size(
+    const std::uint64_t value,
+    const std::uint64_t alignment,
+    std::uint64_t& result
+) noexcept {
+    if (value == 0U || alignment == 0U ||
+        value > std::numeric_limits<std::uint64_t>::max() - (alignment - 1U)) {
+        return false;
+    }
+    result = (value + alignment - 1U) / alignment * alignment;
+    return result >= value;
+}
+
+[[nodiscard]] ComPtr<ID3D12Resource> create_buffer_resource(
+    ID3D12Device& device,
+    const std::uint64_t size,
+    const D3D12_HEAP_TYPE heap_type,
+    const D3D12_RESOURCE_FLAGS flags,
+    const D3D12_RESOURCE_STATES initial_state
+) {
+    if (size == 0U) return {};
+
+    D3D12_HEAP_PROPERTIES heap{};
+    heap.Type = heap_type;
+    heap.CreationNodeMask = 1U;
+    heap.VisibleNodeMask = 1U;
+
+    D3D12_RESOURCE_DESC desc{};
+    desc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+    desc.Alignment = 0U;
+    desc.Width = size;
+    desc.Height = 1U;
+    desc.DepthOrArraySize = 1U;
+    desc.MipLevels = 1U;
+    desc.Format = DXGI_FORMAT_UNKNOWN;
+    desc.SampleDesc.Count = 1U;
+    desc.SampleDesc.Quality = 0U;
+    desc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+    desc.Flags = flags;
+
+    ComPtr<ID3D12Resource> resource;
+    if (FAILED(device.CreateCommittedResource(
+        &heap,
+        D3D12_HEAP_FLAG_NONE,
+        &desc,
+        initial_state,
+        nullptr,
+        IID_PPV_ARGS(&resource)
+    ))) {
+        return {};
+    }
+    return resource;
+}
+
+[[nodiscard]] std::uint64_t resource_size(ID3D12Resource* const resource) noexcept {
+    if (resource == nullptr) return 0U;
+    return resource->GetDesc().Width;
+}
+
+void set_diagnostics(std::string* const diagnostics, std::string message) {
+    if (diagnostics != nullptr) *diagnostics = std::move(message);
 }
 
 } // namespace
@@ -212,6 +284,207 @@ AccelerationStructureBuildSizeResult query_acceleration_structure_build_sizes(
         result.sizes = {};
     }
     return result;
+}
+
+AccelerationStructureResources allocate_acceleration_structure_resources(
+    ID3D12Device& device,
+    const AccelerationStructureBuildPlan& plan,
+    const AccelerationStructureBuildSizes& sizes
+) {
+    AccelerationStructureResources result;
+    result.type = plan.type;
+    result.flags = plan.flags;
+    result.sizes = sizes;
+
+    if (!plan || !is_valid(sizes)) {
+        result.diagnostics = "Invalid D3D12 acceleration-structure allocation request.";
+        return result;
+    }
+    if (!supports_ray_tracing(device)) {
+        result.diagnostics = "The active Direct3D 12 device does not support DXR acceleration structures.";
+        return result;
+    }
+
+    std::uint64_t result_size = 0U;
+    if (!aligned_size(
+        sizes.result_size,
+        D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BYTE_ALIGNMENT,
+        result_size
+    )) {
+        result.diagnostics = "D3D12 acceleration-structure result size overflowed alignment.";
+        return result;
+    }
+
+    const std::uint64_t requested_scratch = std::max(
+        sizes.build_scratch_size,
+        native_flag_set(plan.flags, D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_ALLOW_UPDATE)
+            ? sizes.update_scratch_size
+            : 0U
+    );
+    std::uint64_t scratch_size = 0U;
+    if (!aligned_size(
+        requested_scratch,
+        D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BYTE_ALIGNMENT,
+        scratch_size
+    )) {
+        result.diagnostics = "D3D12 acceleration-structure scratch size overflowed alignment.";
+        return result;
+    }
+
+    result.result = create_buffer_resource(
+        device,
+        result_size,
+        D3D12_HEAP_TYPE_DEFAULT,
+        D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS,
+        D3D12_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE
+    );
+    result.scratch = create_buffer_resource(
+        device,
+        scratch_size,
+        D3D12_HEAP_TYPE_DEFAULT,
+        D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS,
+        D3D12_RESOURCE_STATE_UNORDERED_ACCESS
+    );
+    if (result.result == nullptr || result.scratch == nullptr) {
+        result.diagnostics = "D3D12 could not allocate acceleration-structure result or scratch memory.";
+        result.result.Reset();
+        result.scratch.Reset();
+        return result;
+    }
+
+    if (plan.type != AccelerationStructureType::top_level) return result;
+
+    if (plan.instances.size() >
+        std::numeric_limits<std::uint64_t>::max() / sizeof(D3D12_RAYTRACING_INSTANCE_DESC)) {
+        result.diagnostics = "D3D12 TLAS instance upload size overflowed.";
+        result.result.Reset();
+        result.scratch.Reset();
+        return result;
+    }
+    const std::uint64_t instance_bytes =
+        static_cast<std::uint64_t>(plan.instances.size()) * sizeof(D3D12_RAYTRACING_INSTANCE_DESC);
+    std::uint64_t instance_size = 0U;
+    if (!aligned_size(
+        instance_bytes,
+        D3D12_RAYTRACING_INSTANCE_DESCS_BYTE_ALIGNMENT,
+        instance_size
+    )) {
+        result.diagnostics = "D3D12 TLAS instance upload size overflowed alignment.";
+        result.result.Reset();
+        result.scratch.Reset();
+        return result;
+    }
+
+    result.instance_upload = create_buffer_resource(
+        device,
+        instance_size,
+        D3D12_HEAP_TYPE_UPLOAD,
+        D3D12_RESOURCE_FLAG_NONE,
+        D3D12_RESOURCE_STATE_GENERIC_READ
+    );
+    if (result.instance_upload == nullptr) {
+        result.diagnostics = "D3D12 could not allocate the TLAS instance upload buffer.";
+        result.result.Reset();
+        result.scratch.Reset();
+        return result;
+    }
+
+    void* mapped = nullptr;
+    const D3D12_RANGE read_range{0U, 0U};
+    if (FAILED(result.instance_upload->Map(0U, &read_range, &mapped)) || mapped == nullptr) {
+        result.diagnostics = "D3D12 could not map the TLAS instance upload buffer.";
+        result.result.Reset();
+        result.scratch.Reset();
+        result.instance_upload.Reset();
+        return result;
+    }
+    std::memcpy(mapped, plan.instances.data(), static_cast<std::size_t>(instance_bytes));
+    const D3D12_RANGE written_range{0U, static_cast<SIZE_T>(instance_bytes)};
+    result.instance_upload->Unmap(0U, &written_range);
+    return result;
+}
+
+bool record_acceleration_structure_build(
+    ID3D12GraphicsCommandList4& command_list,
+    const AccelerationStructureBuildPlan& plan,
+    AccelerationStructureResources& resources,
+    const bool update,
+    const AccelerationStructureResources* const source,
+    std::string* const diagnostics
+) {
+    if (diagnostics != nullptr) diagnostics->clear();
+    if (!plan || !resources || plan.type != resources.type || !is_valid(resources.sizes)) {
+        set_diagnostics(diagnostics, "Invalid D3D12 acceleration-structure build resources.");
+        return false;
+    }
+
+    if (resource_size(resources.result.Get()) < resources.sizes.result_size) {
+        set_diagnostics(diagnostics, "D3D12 acceleration-structure result memory is undersized.");
+        return false;
+    }
+
+    const std::uint64_t required_scratch = update
+        ? resources.sizes.update_scratch_size
+        : resources.sizes.build_scratch_size;
+    if (required_scratch == 0U || resource_size(resources.scratch.Get()) < required_scratch) {
+        set_diagnostics(diagnostics, "D3D12 acceleration-structure scratch memory is undersized.");
+        return false;
+    }
+
+    D3D12_GPU_VIRTUAL_ADDRESS instance_address = 0U;
+    if (plan.type == AccelerationStructureType::top_level) {
+        if (resources.instance_upload == nullptr) {
+            set_diagnostics(diagnostics, "D3D12 TLAS build is missing its instance upload buffer.");
+            return false;
+        }
+        instance_address = resources.instance_upload->GetGPUVirtualAddress();
+        if (instance_address == 0U ||
+            instance_address % D3D12_RAYTRACING_INSTANCE_DESCS_BYTE_ALIGNMENT != 0U) {
+            set_diagnostics(diagnostics, "D3D12 TLAS instance upload address is invalid.");
+            return false;
+        }
+    }
+
+    D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_DESC native{};
+    native.Inputs = plan.inputs(instance_address);
+    native.DestAccelerationStructureData = resources.result->GetGPUVirtualAddress();
+    native.ScratchAccelerationStructureData = resources.scratch->GetGPUVirtualAddress();
+    if (native.DestAccelerationStructureData == 0U || native.ScratchAccelerationStructureData == 0U) {
+        set_diagnostics(diagnostics, "D3D12 acceleration-structure GPU addresses are invalid.");
+        return false;
+    }
+
+    if (update) {
+        if (!native_flag_set(
+            plan.flags,
+            D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_ALLOW_UPDATE
+        ) || source == nullptr || !*source || source->type != plan.type ||
+            !native_flag_set(
+                source->flags,
+                D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_ALLOW_UPDATE
+            )) {
+            set_diagnostics(diagnostics, "D3D12 acceleration-structure update was not enabled by the source build.");
+            return false;
+        }
+        native.SourceAccelerationStructureData = source->result->GetGPUVirtualAddress();
+        if (native.SourceAccelerationStructureData == 0U) {
+            set_diagnostics(diagnostics, "D3D12 acceleration-structure update source address is invalid.");
+            return false;
+        }
+        const UINT flags = static_cast<UINT>(native.Inputs.Flags) |
+            D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_PERFORM_UPDATE;
+        native.Inputs.Flags =
+            static_cast<D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAGS>(flags);
+    }
+
+    command_list.BuildRaytracingAccelerationStructure(&native, 0U, nullptr);
+
+    D3D12_RESOURCE_BARRIER barrier{};
+    barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;
+    barrier.Flags = D3D12_RESOURCE_BARRIER_FLAG_NONE;
+    barrier.UAV.pResource = resources.result.Get();
+    command_list.ResourceBarrier(1U, &barrier);
+    return true;
 }
 
 } // namespace vice::render::d3d12

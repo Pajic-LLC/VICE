@@ -12,6 +12,7 @@
 #include <cstdint>
 #include <optional>
 #include <span>
+#include <string>
 
 namespace {
 
@@ -85,6 +86,37 @@ private:
         return {};
     }
     return device;
+}
+
+[[nodiscard]] ComPtr<ID3D12Resource> create_gpu_buffer(
+    ID3D12Device& device,
+    const std::uint64_t size
+) {
+    D3D12_HEAP_PROPERTIES heap{};
+    heap.Type = D3D12_HEAP_TYPE_DEFAULT;
+    heap.CreationNodeMask = 1U;
+    heap.VisibleNodeMask = 1U;
+
+    D3D12_RESOURCE_DESC desc{};
+    desc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+    desc.Width = size;
+    desc.Height = 1U;
+    desc.DepthOrArraySize = 1U;
+    desc.MipLevels = 1U;
+    desc.Format = DXGI_FORMAT_UNKNOWN;
+    desc.SampleDesc.Count = 1U;
+    desc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+
+    ComPtr<ID3D12Resource> resource;
+    const HRESULT result = device.CreateCommittedResource(
+        &heap,
+        D3D12_HEAP_FLAG_NONE,
+        &desc,
+        D3D12_RESOURCE_STATE_COMMON,
+        nullptr,
+        IID_PPV_ARGS(&resource)
+    );
+    return SUCCEEDED(result) ? resource : ComPtr<ID3D12Resource>{};
 }
 
 } // namespace
@@ -218,12 +250,102 @@ int main() {
 
     const bool dxr_supported = supports_ray_tracing(*device.Get());
     const auto sizes = query_acceleration_structure_build_sizes(*device.Get(), blas_plan);
-    if (dxr_supported) {
-        assert(sizes);
-        assert(is_valid(sizes.sizes));
-    } else {
+    if (!dxr_supported) {
         assert(!sizes);
+        const AccelerationStructureBuildSizes fake_sizes{
+            .result_size = 4096U,
+            .build_scratch_size = 4096U,
+            .update_scratch_size = 4096U,
+        };
+        assert(!allocate_acceleration_structure_resources(*device.Get(), blas_plan, fake_sizes));
+        return 0;
     }
 
+    assert(sizes);
+    assert(is_valid(sizes.sizes));
+
+    const auto native_vertices = create_gpu_buffer(*device.Get(), vertices.size());
+    const auto native_indices = create_gpu_buffer(*device.Get(), indices.size());
+    assert(native_vertices != nullptr);
+    assert(native_indices != nullptr);
+
+    const auto hardware_plan = build_acceleration_structure_plan(
+        blas_desc,
+        [&](const Buffer& buffer) -> std::optional<D3D12_GPU_VIRTUAL_ADDRESS> {
+            if (&buffer == &vertices) return native_vertices->GetGPUVirtualAddress();
+            if (&buffer == &indices) return native_indices->GetGPUVirtualAddress();
+            return std::nullopt;
+        }
+    );
+    assert(hardware_plan);
+
+    const auto hardware_sizes = query_acceleration_structure_build_sizes(*device.Get(), hardware_plan);
+    assert(hardware_sizes);
+    auto first_resources = allocate_acceleration_structure_resources(
+        *device.Get(),
+        hardware_plan,
+        hardware_sizes.sizes
+    );
+    auto updated_resources = allocate_acceleration_structure_resources(
+        *device.Get(),
+        hardware_plan,
+        hardware_sizes.sizes
+    );
+    assert(first_resources);
+    assert(updated_resources);
+    assert(first_resources.result->GetDesc().Width >= hardware_sizes.sizes.result_size);
+    assert(first_resources.scratch->GetDesc().Width >= hardware_sizes.sizes.build_scratch_size);
+
+    ComPtr<ID3D12CommandAllocator> allocator;
+    assert(SUCCEEDED(device->CreateCommandAllocator(
+        D3D12_COMMAND_LIST_TYPE_DIRECT,
+        IID_PPV_ARGS(&allocator)
+    )));
+    ComPtr<ID3D12GraphicsCommandList> command_list;
+    assert(SUCCEEDED(device->CreateCommandList(
+        0U,
+        D3D12_COMMAND_LIST_TYPE_DIRECT,
+        allocator.Get(),
+        nullptr,
+        IID_PPV_ARGS(&command_list)
+    )));
+    ComPtr<ID3D12GraphicsCommandList4> command_list4;
+    assert(SUCCEEDED(command_list.As(&command_list4)));
+    assert(command_list4 != nullptr);
+
+    std::string diagnostics;
+    assert(record_acceleration_structure_build(
+        *command_list4.Get(),
+        hardware_plan,
+        first_resources,
+        false,
+        nullptr,
+        &diagnostics
+    ));
+    assert(diagnostics.empty());
+
+    assert(record_acceleration_structure_build(
+        *command_list4.Get(),
+        hardware_plan,
+        updated_resources,
+        true,
+        &first_resources,
+        &diagnostics
+    ));
+    assert(diagnostics.empty());
+
+    auto no_update_plan = hardware_plan;
+    no_update_plan.flags = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_PREFER_FAST_TRACE;
+    assert(!record_acceleration_structure_build(
+        *command_list4.Get(),
+        no_update_plan,
+        updated_resources,
+        true,
+        &first_resources,
+        &diagnostics
+    ));
+    assert(!diagnostics.empty());
+
+    assert(SUCCEEDED(command_list4->Close()));
     return 0;
 }
