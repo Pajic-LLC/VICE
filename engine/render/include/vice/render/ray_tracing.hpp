@@ -6,6 +6,7 @@
 #include <cmath>
 #include <cstdint>
 #include <limits>
+#include <memory>
 #include <span>
 #include <string_view>
 
@@ -189,6 +190,71 @@ struct AccelerationStructureBuildSizes {
     const DeviceCapabilities& capabilities
 ) noexcept {
     return capabilities.ray_tracing;
+}
+
+class RayTracingDevice {
+public:
+    virtual ~RayTracingDevice() = default;
+
+    virtual bool query_acceleration_structure_build_sizes(
+        const AccelerationStructureBuildDesc& desc,
+        AccelerationStructureBuildSizes& sizes
+    ) = 0;
+
+    [[nodiscard]] virtual std::unique_ptr<AccelerationStructure> create_acceleration_structure(
+        const AccelerationStructureBuildDesc& desc,
+        const AccelerationStructureBuildSizes& sizes
+    ) = 0;
+};
+
+class RayTracingCommandList {
+public:
+    virtual ~RayTracingCommandList() = default;
+
+    virtual bool build_acceleration_structure(
+        AccelerationStructure& destination,
+        const AccelerationStructureBuildDesc& desc,
+        AccelerationStructure* source = nullptr
+    ) = 0;
+};
+
+[[nodiscard]] inline bool query_acceleration_structure_build_sizes(
+    Device& device,
+    const AccelerationStructureBuildDesc& desc,
+    AccelerationStructureBuildSizes& sizes
+) {
+    sizes = {};
+    if (!supports_acceleration_structures(device.capabilities())) {
+        return false;
+    }
+    auto* ray_tracing = dynamic_cast<RayTracingDevice*>(&device);
+    return ray_tracing != nullptr &&
+        ray_tracing->query_acceleration_structure_build_sizes(desc, sizes);
+}
+
+[[nodiscard]] inline std::unique_ptr<AccelerationStructure> create_acceleration_structure(
+    Device& device,
+    const AccelerationStructureBuildDesc& desc,
+    const AccelerationStructureBuildSizes& sizes
+) {
+    if (!supports_acceleration_structures(device.capabilities())) {
+        return nullptr;
+    }
+    auto* ray_tracing = dynamic_cast<RayTracingDevice*>(&device);
+    return ray_tracing != nullptr
+        ? ray_tracing->create_acceleration_structure(desc, sizes)
+        : nullptr;
+}
+
+[[nodiscard]] inline bool build_acceleration_structure(
+    CommandList& command_list,
+    AccelerationStructure& destination,
+    const AccelerationStructureBuildDesc& desc,
+    AccelerationStructure* source = nullptr
+) {
+    auto* ray_tracing = dynamic_cast<RayTracingCommandList*>(&command_list);
+    return ray_tracing != nullptr &&
+        ray_tracing->build_acceleration_structure(destination, desc, source);
 }
 
 } // namespace vice::render

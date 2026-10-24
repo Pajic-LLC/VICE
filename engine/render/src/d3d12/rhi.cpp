@@ -1,4 +1,5 @@
 #include "compute_pipeline.hpp"
+#include "ray_tracing.hpp"
 
 #include <vice/core/log.hpp>
 #include <vice/platform/native_window.hpp>
@@ -23,6 +24,7 @@
 #include <cstring>
 #include <limits>
 #include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -342,6 +344,62 @@ private:
     ComPtr<ID3D12Resource> resource_;
     D3D12_RESOURCE_STATES state_ = D3D12_RESOURCE_STATE_COMMON;
 };
+
+
+class D3D12AccelerationStructure final : public AccelerationStructure {
+public:
+    explicit D3D12AccelerationStructure(
+        d3d12::AccelerationStructureResources resources
+    ) : resources_{std::move(resources)} {}
+
+    [[nodiscard]] AccelerationStructureType type() const noexcept override {
+        return resources_.type;
+    }
+    [[nodiscard]] std::uint64_t size() const noexcept override {
+        return resources_.sizes.result_size;
+    }
+
+    [[nodiscard]] d3d12::AccelerationStructureResources& resources() noexcept {
+        return resources_;
+    }
+    [[nodiscard]] const d3d12::AccelerationStructureResources& resources() const noexcept {
+        return resources_;
+    }
+
+private:
+    d3d12::AccelerationStructureResources resources_;
+};
+
+[[nodiscard]] std::optional<D3D12_GPU_VIRTUAL_ADDRESS> d3d12_buffer_address(
+    const Buffer& buffer
+) noexcept {
+    Buffer& binding = const_cast<Buffer&>(buffer).binding_buffer();
+    auto* native = dynamic_cast<D3D12Buffer*>(&binding);
+    if (native == nullptr || native->native() == nullptr) {
+        return std::nullopt;
+    }
+    const auto base = native->native()->GetGPUVirtualAddress();
+    const auto offset = buffer.binding_offset();
+    if (base == 0U ||
+        base > std::numeric_limits<D3D12_GPU_VIRTUAL_ADDRESS>::max() - offset) {
+        return std::nullopt;
+    }
+    return base + offset;
+}
+
+[[nodiscard]] std::optional<D3D12_GPU_VIRTUAL_ADDRESS>
+d3d12_acceleration_structure_address(
+    const AccelerationStructure& structure
+) noexcept {
+    const auto* native = dynamic_cast<const D3D12AccelerationStructure*>(&structure);
+    if (native == nullptr || native->resources().result == nullptr) {
+        return std::nullopt;
+    }
+    const auto address = native->resources().result->GetGPUVirtualAddress();
+    return address != 0U
+        ? std::optional<D3D12_GPU_VIRTUAL_ADDRESS>{address}
+        : std::nullopt;
+}
 
 class D3D12Texture final : public Texture {
 public:
@@ -965,7 +1023,7 @@ struct DescriptorTableAllocation {
     std::uint32_t descriptor_count = 0;
 };
 
-class D3D12CommandList final : public CommandList {
+class D3D12CommandList final : public CommandList, public RayTracingCommandList {
 public:
     explicit D3D12CommandList(ComPtr<ID3D12Device> device) : device_{std::move(device)} {
         if (device_ == nullptr) {
@@ -1716,6 +1774,59 @@ public:
         return true;
     }
 
+
+    bool build_acceleration_structure(
+        AccelerationStructure& destination,
+        const AccelerationStructureBuildDesc& desc,
+        AccelerationStructure* source
+    ) override {
+        if (!valid() || render_pass_active_ || !is_valid(desc)) {
+            return false;
+        }
+
+        auto* destination_native =
+            dynamic_cast<D3D12AccelerationStructure*>(&destination);
+        auto* source_native = source != nullptr
+            ? dynamic_cast<D3D12AccelerationStructure*>(source)
+            : nullptr;
+        if (destination_native == nullptr ||
+            (source != nullptr && source_native == nullptr)) {
+            return false;
+        }
+
+        auto plan = d3d12::build_acceleration_structure_plan(
+            desc,
+            d3d12_buffer_address,
+            d3d12_acceleration_structure_address
+        );
+        if (!plan) {
+            if (!plan.diagnostics.empty()) {
+                core::log(core::LogLevel::error, plan.diagnostics);
+            }
+            return false;
+        }
+
+        ComPtr<ID3D12GraphicsCommandList4> command_list4;
+        if (FAILED(command_list_.As(&command_list4)) || command_list4 == nullptr) {
+            return false;
+        }
+
+        std::string diagnostics;
+        const bool update = source_native != nullptr;
+        const bool recorded = d3d12::record_acceleration_structure_build(
+            *command_list4.Get(),
+            plan,
+            destination_native->resources(),
+            update,
+            update ? &source_native->resources() : nullptr,
+            &diagnostics
+        );
+        if (!recorded && !diagnostics.empty()) {
+            core::log(core::LogLevel::error, diagnostics);
+        }
+        return recorded;
+    }
+
     [[nodiscard]] ID3D12GraphicsCommandList* native() const noexcept { return command_list_.Get(); }
     [[nodiscard]] D3D12Swapchain* present_swapchain() const noexcept { return present_swapchain_; }
 
@@ -2435,7 +2546,7 @@ private:
     bool valid_ = false;
 };
 
-class D3D12Device final : public Device {
+class D3D12Device final : public Device, public RayTracingDevice {
 public:
     D3D12Device() {
         if (!succeeded(
@@ -2468,6 +2579,7 @@ public:
         capabilities_.max_texture_dimension_2d = D3D12_REQ_TEXTURE2D_U_OR_V_DIMENSION;
         capabilities_.max_texture_dimension_3d = D3D12_REQ_TEXTURE3D_U_V_OR_W_DIMENSION;
         capabilities_.max_texture_array_layers = D3D12_REQ_TEXTURE2D_ARRAY_AXIS_DIMENSION;
+        capabilities_.ray_tracing = d3d12::supports_ray_tracing(*device_.Get());
         D3D12_FEATURE_DATA_ARCHITECTURE1 architecture{};
         architecture.NodeIndex = 0;
         if (SUCCEEDED(device_->CheckFeatureSupport(
@@ -2491,6 +2603,72 @@ public:
     }
     [[nodiscard]] Backend backend() const noexcept override { return Backend::direct3d12; }
     [[nodiscard]] DeviceCapabilities capabilities() const noexcept override { return capabilities_; }
+
+
+    bool query_acceleration_structure_build_sizes(
+        const AccelerationStructureBuildDesc& desc,
+        AccelerationStructureBuildSizes& sizes
+    ) override {
+        sizes = {};
+        if (!capabilities_.ray_tracing || !is_valid(desc)) {
+            return false;
+        }
+        auto plan = d3d12::build_acceleration_structure_plan(
+            desc,
+            d3d12_buffer_address,
+            d3d12_acceleration_structure_address
+        );
+        if (!plan) {
+            if (!plan.diagnostics.empty()) {
+                core::log(core::LogLevel::error, plan.diagnostics);
+            }
+            return false;
+        }
+        auto result = d3d12::query_acceleration_structure_build_sizes(
+            *device_.Get(),
+            plan
+        );
+        if (!result) {
+            if (!result.diagnostics.empty()) {
+                core::log(core::LogLevel::error, result.diagnostics);
+            }
+            return false;
+        }
+        sizes = result.sizes;
+        return true;
+    }
+
+    [[nodiscard]] std::unique_ptr<AccelerationStructure> create_acceleration_structure(
+        const AccelerationStructureBuildDesc& desc,
+        const AccelerationStructureBuildSizes& sizes
+    ) override {
+        if (!capabilities_.ray_tracing || !is_valid(desc) || !is_valid(sizes)) {
+            return nullptr;
+        }
+        auto plan = d3d12::build_acceleration_structure_plan(
+            desc,
+            d3d12_buffer_address,
+            d3d12_acceleration_structure_address
+        );
+        if (!plan) {
+            if (!plan.diagnostics.empty()) {
+                core::log(core::LogLevel::error, plan.diagnostics);
+            }
+            return nullptr;
+        }
+        auto resources = d3d12::allocate_acceleration_structure_resources(
+            *device_.Get(),
+            plan,
+            sizes
+        );
+        if (!resources) {
+            if (!resources.diagnostics.empty()) {
+                core::log(core::LogLevel::error, resources.diagnostics);
+            }
+            return nullptr;
+        }
+        return std::make_unique<D3D12AccelerationStructure>(std::move(resources));
+    }
 
     [[nodiscard]] std::unique_ptr<Buffer> create_buffer(const BufferDesc& desc) override {
         if (!is_valid(desc)) {

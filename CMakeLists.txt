@@ -9,8 +9,8 @@ project(
 
 option(VICE_BUILD_TESTS "Build VICE tests" ON)
 option(VICE_BUILD_LAB "Build the VICE Lab executable" ON)
-option(VICE_BUILD_EDITOR "Build the VICE editor targets" ON)
-option(VICE_BUILD_PLAYER "Build the VICE game runtime host" ON)
+option(VICE_BUILD_EDITOR "Build VICE editor targets" ON)
+option(VICE_BUILD_PLAYER "Build VICE game runtime host" ON)
 option(VICE_BUILD_TOOLS "Build VICE developer tools" ON)
 option(VICE_ENABLE_JOLT_RIGID_BODY "Build the Jolt rigid body backend" ON)
 
@@ -90,6 +90,7 @@ if(VICE_BUILD_TESTS)
   add_subdirectory(tests/world_persistence)
   add_subdirectory(tests/rigid_region_orchestration)
   add_subdirectory(tests/rigid_material_assets)
+  add_subdirectory(tests/ray_tracing_rhi)
   if(WIN32)
     add_subdirectory(tests/d3d12_ray_tracing)
   endif()
