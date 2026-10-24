@@ -5,6 +5,8 @@
 #include <vice/runtime/gpu_virtual_geometry_feedback_ring.hpp>
 #include <vice/runtime/ray_ambient_occlusion.hpp>
 #include <vice/runtime/ray_ambient_occlusion_denoise.hpp>
+#include <vice/runtime/ray_ambient_occlusion_temporal.hpp>
+#include <vice/runtime/post_process.hpp>
 #include <vice/runtime/ray_tracing_scene_executor.hpp>
 #include <vice/runtime/render_streaming.hpp>
 #include <vice/runtime/scene.hpp>
@@ -49,6 +51,7 @@ struct RuntimeDirectionalRayShadowRenderContext {
 struct RuntimeRayAmbientOcclusionRenderContext {
     RuntimeRayAmbientOcclusionPass* pass = nullptr;
     RuntimeRayAmbientOcclusionDenoisePass* denoise_pass = nullptr;
+    RuntimeRayAmbientOcclusionTemporalPass* temporal_pass = nullptr;
     RuntimeRayTracingSceneExecutor* ray_scene = nullptr;
     render::Texture* camera_depth = nullptr;
     render::Buffer* pbr_frame = nullptr;
@@ -62,6 +65,7 @@ struct RuntimeRayAmbientOcclusionRenderContext {
     bool constants_ready = false;
     bool visibility_ready = false;
     bool denoised_visibility_ready = false;
+    bool temporal_visibility_ready = false;
     bool gpu_pbr_visibility_marker_ready = false;
     bool binding_failed = false;
 };
@@ -112,6 +116,14 @@ extern thread_local RuntimeRayAmbientOcclusionRenderContext*
 
 [[nodiscard]] bool runtime_ray_ambient_occlusion_after_end_render_pass(
     render::CommandList& commands
+) noexcept;
+
+[[nodiscard]] bool runtime_ray_ambient_occlusion_after_motion_vectors(
+    render::CommandList& commands,
+    render::Texture* motion_vectors,
+    render::Texture* current_depth,
+    render::Texture* previous_depth,
+    const RuntimeTemporalFrameState& temporal_frame
 ) noexcept;
 
 [[nodiscard]] render::Buffer& runtime_ray_ambient_occlusion_prepare_graphics_constants(
@@ -181,6 +193,11 @@ extern thread_local RuntimeRayAmbientOcclusionRenderContext*
     end_render_pass(__VA_ARGS__) || \
         !detail::runtime_directional_ray_shadow_after_end_render_pass(*commands) || \
         !detail::runtime_ray_ambient_occlusion_after_end_render_pass(*commands)
+#define encode_motion_vectors(...) \
+    (encode_motion_vectors(__VA_ARGS__) && \
+        detail::runtime_ray_ambient_occlusion_after_motion_vectors( \
+            *commands, state_->motion_vectors.get(), current_depth, previous_depth, temporal_frame \
+        ))
 #define set_graphics_constant_buffer(binding, buffer, offset, size) \
     set_graphics_constant_buffer( \
         (binding), \
@@ -208,6 +225,7 @@ extern thread_local RuntimeRayAmbientOcclusionRenderContext*
 #include "scene_legacy.inc"
 #undef set_graphics_texture
 #undef set_graphics_constant_buffer
+#undef encode_motion_vectors
 #undef end_render_pass
 #undef begin_depth_render_pass
 #undef runtime_directional_shadow_requires_depth_prepass
@@ -381,6 +399,7 @@ bool runtime_ray_ambient_occlusion_after_begin_depth(
     context->constants_ready = false;
     context->visibility_ready = false;
     context->denoised_visibility_ready = false;
+    context->temporal_visibility_ready = false;
     context->ray_scene = ray_scene;
     context->camera_depth = current_depth;
 
@@ -551,6 +570,51 @@ bool runtime_ray_ambient_occlusion_after_end_render_pass(
     }
     return true;
 }
+bool runtime_ray_ambient_occlusion_after_motion_vectors(
+    render::CommandList& commands,
+    render::Texture* const motion_vectors,
+    render::Texture* const current_depth,
+    render::Texture* const previous_depth,
+    const RuntimeTemporalFrameState& temporal_frame
+) noexcept {
+    auto* const context = active_ray_ambient_occlusion_render_context;
+    if (context == nullptr) return true;
+    context->temporal_visibility_ready = false;
+    if (!context->visibility_ready || context->temporal_pass == nullptr ||
+        !context->temporal_pass->available() || motion_vectors == nullptr ||
+        current_depth == nullptr || previous_depth == nullptr || context->pass == nullptr) {
+        return true;
+    }
+
+    render::Texture* current_visibility = context->denoised_visibility_ready &&
+        context->denoise_pass != nullptr
+        ? context->denoise_pass->visibility()
+        : context->pass->visibility();
+    if (current_visibility == nullptr) return true;
+
+    const auto constants = make_runtime_ray_ambient_occlusion_temporal_constants(
+        current_visibility->width(),
+        current_visibility->height(),
+        temporal_frame.history_valid
+    );
+    if (!constants.has_value()) return true;
+
+    std::string temporal_diagnostics;
+    if (context->temporal_pass->dispatch(
+            commands,
+            *current_visibility,
+            *motion_vectors,
+            *current_depth,
+            *previous_depth,
+            *constants,
+            temporal_frame.frame_index,
+            &temporal_diagnostics
+        ) && context->temporal_pass->visibility() != nullptr) {
+        context->temporal_visibility_ready = true;
+    }
+    return true;
+}
+
 
 render::Buffer& runtime_ray_ambient_occlusion_prepare_graphics_constants(
     const render::ShaderBindingKey& binding,
@@ -595,9 +659,13 @@ render::Texture& runtime_ray_ambient_occlusion_prepare_graphics_texture(
         ? context->gpu_pbr_visibility_marker_ready
         : true;
     if (context->visibility_ready && visibility_marker_ready && context->pass != nullptr) {
-        ao_texture = context->denoised_visibility_ready && context->denoise_pass != nullptr
-            ? context->denoise_pass->visibility()
-            : context->pass->visibility();
+        if (context->temporal_visibility_ready && context->temporal_pass != nullptr) {
+            ao_texture = context->temporal_pass->visibility();
+        } else {
+            ao_texture = context->denoised_visibility_ready && context->denoise_pass != nullptr
+                ? context->denoise_pass->visibility()
+                : context->pass->visibility();
+        }
     }
     render::Texture& resource = ao_texture == nullptr ? texture : *ao_texture;
     const render::ShaderBindingKey ao_binding{
@@ -754,9 +822,16 @@ struct RuntimeRayAmbientOcclusionDenoiseSceneState {
     std::unique_ptr<RuntimeRayAmbientOcclusionDenoisePass> pass;
 };
 
+struct RuntimeRayAmbientOcclusionTemporalSceneState {
+    void* owner = nullptr;
+    render::Device* device = nullptr;
+    std::unique_ptr<RuntimeRayAmbientOcclusionTemporalPass> pass;
+};
+
 thread_local RuntimeDirectionalRayShadowSceneState directional_ray_shadow_scene_state;
 thread_local RuntimeRayAmbientOcclusionSceneState ray_ambient_occlusion_scene_state;
 thread_local RuntimeRayAmbientOcclusionDenoiseSceneState ray_ambient_occlusion_denoise_scene_state;
+thread_local RuntimeRayAmbientOcclusionTemporalSceneState ray_ambient_occlusion_temporal_scene_state;
 
 [[nodiscard]] bool ensure_directional_ray_shadow_pass(
     void* const owner,
@@ -835,6 +910,35 @@ thread_local RuntimeRayAmbientOcclusionDenoiseSceneState ray_ambient_occlusion_d
     if (!state.pass->initialize(
             device,
             VICE_RUNTIME_RAY_AMBIENT_OCCLUSION_DENOISE_MANIFEST,
+            diagnostics
+        )) {
+        return false;
+    }
+#else
+    if (!state.pass->initialize(device, {}, diagnostics)) return false;
+#endif
+    return true;
+}
+
+[[nodiscard]] bool ensure_ray_ambient_occlusion_temporal_pass(
+    void* const owner,
+    render::Device& device,
+    std::string* const diagnostics
+) {
+    auto& state = ray_ambient_occlusion_temporal_scene_state;
+    if (state.owner == owner && state.device == &device && state.pass != nullptr) {
+        if (diagnostics != nullptr) diagnostics->clear();
+        return true;
+    }
+
+    state.pass.reset();
+    state.owner = owner;
+    state.device = &device;
+    state.pass = std::make_unique<RuntimeRayAmbientOcclusionTemporalPass>();
+#ifdef VICE_RUNTIME_RAY_AMBIENT_OCCLUSION_TEMPORAL_MANIFEST
+    if (!state.pass->initialize(
+            device,
+            VICE_RUNTIME_RAY_AMBIENT_OCCLUSION_TEMPORAL_MANIFEST,
             diagnostics
         )) {
         return false;
@@ -1471,6 +1575,23 @@ bool RuntimeSceneRenderer::render(
                     return false;
                 }
                 ambient_occlusion_context.denoise_pass = denoise_state.pass.get();
+            }
+            if (!ensure_ray_ambient_occlusion_temporal_pass(
+                    state_.get(), *state_->device, diagnostics
+                ) && diagnostics != nullptr) {
+                diagnostics->clear();
+            }
+            auto& temporal_state = ray_ambient_occlusion_temporal_scene_state;
+            if (temporal_state.pass != nullptr && temporal_state.pass->available()) {
+                if (temporal_state.pass->resize(
+                        metrics.drawable_width,
+                        metrics.drawable_height,
+                        diagnostics
+                    )) {
+                    ambient_occlusion_context.temporal_pass = temporal_state.pass.get();
+                } else if (diagnostics != nullptr) {
+                    diagnostics->clear();
+                }
             }
         }
     }

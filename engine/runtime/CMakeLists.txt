@@ -29,6 +29,7 @@ add_library(
     src/post_process.cpp
     src/ray_ambient_occlusion.cpp
     src/ray_ambient_occlusion_denoise.cpp
+    src/ray_ambient_occlusion_temporal.cpp
     src/ray_tracing_scene.cpp
     src/ray_tracing_scene_executor.cpp
     src/render_residency.cpp
