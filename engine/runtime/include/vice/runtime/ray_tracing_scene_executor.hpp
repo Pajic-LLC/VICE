@@ -62,6 +62,8 @@ public:
 
     [[nodiscard]] std::size_t cached_blas_count() const noexcept { return blases_.size(); }
     [[nodiscard]] bool has_tlas() const noexcept { return tlas_ != nullptr; }
+    [[nodiscard]] render::AccelerationStructure* active_tlas() noexcept { return tlas_.get(); }
+    [[nodiscard]] const render::AccelerationStructure* active_tlas() const noexcept { return tlas_.get(); }
 
 private:
     struct CachedBlas {
