@@ -292,6 +292,11 @@ enum class ShaderRegisterClass : std::uint8_t {
     sampler,
 };
 
+enum class ShaderResourceKind : std::uint8_t {
+    generic,
+    acceleration_structure,
+};
+
 [[nodiscard]] constexpr std::string_view shader_stage_name(const ShaderStage stage) noexcept {
     switch (stage) {
     case ShaderStage::vertex: return "vertex";
@@ -313,15 +318,30 @@ enum class ShaderRegisterClass : std::uint8_t {
     return "unknown";
 }
 
+[[nodiscard]] constexpr std::string_view shader_resource_kind_name(
+    const ShaderResourceKind kind
+) noexcept {
+    switch (kind) {
+    case ShaderResourceKind::generic: return "generic";
+    case ShaderResourceKind::acceleration_structure: return "acceleration_structure";
+    }
+    return "unknown";
+}
+
 struct ShaderResourceBindingDesc {
     ShaderRegisterClass register_class = ShaderRegisterClass::shader_resource;
     std::uint32_t binding = 0;
     std::uint32_t space = 0;
     std::uint32_t count = 1;
     bool unbounded = false;
+    ShaderResourceKind kind = ShaderResourceKind::generic;
 };
 
 [[nodiscard]] constexpr bool is_valid(const ShaderResourceBindingDesc& desc) noexcept {
+    if (desc.kind == ShaderResourceKind::acceleration_structure &&
+        desc.register_class != ShaderRegisterClass::shader_resource) {
+        return false;
+    }
     return desc.unbounded ? desc.count == 0U : desc.count > 0U;
 }
 

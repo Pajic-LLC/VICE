@@ -103,7 +103,7 @@ jobs:
           if ($manifest.version -ne 4) {
             throw "Unexpected shader manifest version: $($manifest.version)"
           }
-          if ($manifest.reflection.version -ne 1) {
+          if ($manifest.reflection.version -ne 2) {
             throw "Unexpected shader reflection version: $($manifest.reflection.version)"
           }
           $group = $manifest.reflection.thread_group_size
@@ -129,6 +129,7 @@ jobs:
               throw "Missing reflected resource $name."
             }
             if ($resource.class -ne $class -or
+                $resource.kind -ne "generic" -or
                 $resource.binding -ne $binding -or
                 $resource.space -ne $space -or
                 $resource.count -ne 1 -or
