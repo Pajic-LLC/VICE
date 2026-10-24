@@ -233,6 +233,10 @@ jobs:
           }
 
           & $env:SIGNTOOL_PATH verify /pa /all /v $env:VICE_SIGN_TEST
-          if ($LASTEXITCODE -eq 0) {
+          $tamperedVerification = $LASTEXITCODE
+          if ($tamperedVerification -eq 0) {
             throw "Tampered Windows package still passed Authenticode verification."
           }
+
+          Write-Host "Tampered Windows package was rejected by Authenticode as expected."
+          exit 0
