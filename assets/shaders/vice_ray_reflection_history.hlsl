@@ -14,7 +14,7 @@ bool vice_finite3(float3 value) { return all(abs(value) < 1.0e20); }
 bool vice_history_depth_matches(float3 previous_ndc, float previous_depth, float depth_threshold) {
     if (previous_depth < 0.0 || previous_depth >= VICE_BACKGROUND_DEPTH) return false;
     const float relative_depth_threshold = max(depth_threshold, depth_threshold * 8.0 * max(abs(previous_ndc.z), abs(previous_depth)));
-    return abs(previous_ndc.z - previous_depth) <= relative_depth_threshold;
+    return !(abs(previous_ndc.z - previous_depth) > relative_depth_threshold);
 }
 bool vice_history_sample(uint2 history_pixel, float3 previous_ndc, float depth_threshold, out float3 radiance) {
     const float previous_depth = PreviousDepth.Load(int3(history_pixel, 0));
