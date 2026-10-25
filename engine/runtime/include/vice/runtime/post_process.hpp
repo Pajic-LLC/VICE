@@ -24,18 +24,9 @@ using RuntimePostProcessPlan = std::array<RuntimePostProcessPassDesc, 3U>;
 
 [[nodiscard]] constexpr RuntimePostProcessPlan default_runtime_post_process_plan() noexcept {
     return {{
-        RuntimePostProcessPassDesc{
-            .pass = RuntimePostProcessPass::temporal_resolve,
-            .enabled = true,
-        },
-        RuntimePostProcessPassDesc{
-            .pass = RuntimePostProcessPass::bloom,
-            .enabled = true,
-        },
-        RuntimePostProcessPassDesc{
-            .pass = RuntimePostProcessPass::tone_map,
-            .enabled = true,
-        },
+        RuntimePostProcessPassDesc{.pass = RuntimePostProcessPass::temporal_resolve, .enabled = true},
+        RuntimePostProcessPassDesc{.pass = RuntimePostProcessPass::bloom, .enabled = true},
+        RuntimePostProcessPassDesc{.pass = RuntimePostProcessPass::tone_map, .enabled = true},
     }};
 }
 
@@ -72,6 +63,8 @@ struct RuntimeTemporalFrameState {
     math::Mat4 previous_unjittered_view_projection{};
     RuntimeTemporalJitter jitter{};
     RuntimeTemporalJitter previous_jitter{};
+    world::GlobalPosition current_camera_global_position{};
+    world::GlobalPosition previous_camera_global_position{};
 };
 
 class RuntimeTemporalHistory final {
@@ -82,7 +75,8 @@ public:
         const math::Mat4& current_view_projection,
         RuntimeTemporalJitter jitter,
         math::Vec3 camera_position,
-        math::Vec3 camera_forward
+        math::Vec3 camera_forward,
+        world::GlobalPosition camera_global_position = {}
     ) noexcept;
 
     void commit_frame(
@@ -91,7 +85,8 @@ public:
         const math::Mat4& current_view_projection,
         RuntimeTemporalJitter jitter,
         math::Vec3 camera_position,
-        math::Vec3 camera_forward
+        math::Vec3 camera_forward,
+        world::GlobalPosition camera_global_position = {}
     ) noexcept;
 
     void reset() noexcept;
@@ -107,6 +102,7 @@ private:
     RuntimeTemporalJitter previous_jitter_{};
     math::Vec3 previous_camera_position_{};
     math::Vec3 previous_camera_forward_{};
+    world::GlobalPosition previous_camera_global_position_{};
     std::uint64_t completed_frames_ = 0;
     std::uint64_t generation_ = 0;
     bool valid_ = false;
@@ -118,7 +114,6 @@ struct RuntimePostProcessFrame {
     render::Texture* motion_vectors = nullptr;
     render::Texture* depth = nullptr;
     render::Texture* previous_depth = nullptr;
-    RuntimeTemporalFrameState temporal{};
 };
 
 } // namespace vice::runtime
