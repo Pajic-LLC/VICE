@@ -134,13 +134,48 @@ void test_shader_contract() {
     require(shader.find("SurfaceGuide.Load") != std::string::npos &&
             shader.find("vice_decode_octahedral_normal") != std::string::npos,
         "ray origin/direction must consume the authoritative reflection surface guide");
-    require(shader.find("const float metallic = saturate(guide.w)") != std::string::npos &&
-            shader.find("roughness > trace_parameters.z") != std::string::npos,
-        "reflection eligibility/weighting must consume authored roughness and metallic guide values");
+    require(shader.find("roughness > trace_parameters.z") != std::string::npos,
+        "reflection ray eligibility must consume authored roughness");
     require(shader.find("EnvironmentSpecular.SampleLevel") != std::string::npos,
         "ray hits and misses must have an explicit environment-specular fallback");
+    require(shader.find("ReflectionRadiance[pixel] = float4(fallback_radiance, 1.0)") !=
+            std::string::npos,
+        "raw reflection alpha must mark a valid per-pixel replacement contribution");
+    require(shader.find("reflection_weight") == std::string::npos &&
+            shader.find(".rgb * environment_parameters.x") == std::string::npos,
+        "raw reflection radiance must remain composition-neutral and leave BRDF/intensity to PBR");
     require(shader.find("RWStructuredBuffer<ReflectionHit>") != std::string::npos,
         "committed hit position and exact identity must use a structured GPU buffer");
+}
+
+void test_gpu_pbr_composition_contract() {
+    const auto shader = read_text(VICE_GPU_PBR_SURFACE_SHADER_SOURCE);
+    require(!shader.empty(), "GPU PBR shader source must be readable");
+    require(shader.find(
+            "Texture2D<float4> ray_reflection_radiance_texture : register(t26, space2);"
+        ) != std::string::npos,
+        "GPU PBR must expose the portable Runtime reflection-radiance binding");
+    require(shader.find("ambient_occlusion_metadata.y < 0.5") != std::string::npos,
+        "GPU PBR must gate RT reflection replacement on current-frame validity");
+    require(shader.find("ray_reflection_radiance_texture.Load") != std::string::npos &&
+            shader.find("lerp(raster_specular, max(reflection.rgb, 0.0), saturate(reflection.a))") !=
+                std::string::npos,
+        "GPU PBR must replace raster specular per pixel instead of adding RT radiance");
+
+    const auto source0 = shader.find("float3 vice_environment_source_0(");
+    const auto source1 = shader.find("float3 vice_environment_source_1(");
+    const auto source2 = shader.find("float3 vice_environment_source_2(");
+    const auto replacement = shader.find("vice_runtime_reflection_specular(", source0);
+    require(source0 != std::string::npos && source1 != std::string::npos &&
+            source2 != std::string::npos && replacement != std::string::npos &&
+            replacement < source1,
+        "only global environment source 0 may consume the RT reflection replacement");
+    require(shader.find("vice_runtime_reflection_specular(", source1) == std::string::npos,
+        "local reflection probes must stay on their existing raster/environment path");
+    require(shader.find("+ ray_reflection_radiance_texture") == std::string::npos,
+        "RT reflection radiance must never be added on top of environment specular");
+    require(shader.find("occlusion, input.position.xy") != std::string::npos,
+        "GPU PBR must address the reflection replacement with the current raster pixel");
 }
 
 void test_runtime_binding_and_order_contract() {
@@ -158,6 +193,16 @@ void test_runtime_binding_and_order_contract() {
     require(implementation.find("state.valid = dispatched") != std::string::npos &&
             implementation.find("|| !state.valid") != std::string::npos,
         "public raw reflection outputs must only expose data produced by the current frame");
+    require(bridge.find("binding = 26U") != std::string::npos &&
+            bridge.find("&render::CommandList::set_graphics_texture") != std::string::npos &&
+            bridge.find("(commands.*bind_texture)(reflection_binding, bound_texture)") !=
+                std::string::npos,
+        "Runtime must bind the portable GPU PBR reflection descriptor without recursive macro expansion");
+    require(bridge.find("radiance != nullptr ? *radiance : fallback_texture") != std::string::npos,
+        "GPU PBR must receive a valid t26 descriptor even on non-RT fallback frames");
+    require(bridge.find("offsetof(GpuPbrSceneConstants, ambient_occlusion_metadata) + sizeof(float)") !=
+            std::string::npos,
+        "Runtime must mark reflection validity in the reserved second metadata lane");
 
     const auto motion_macro = bridge.find("#define encode_motion_vectors");
     const auto guide_position = bridge.find(
@@ -166,9 +211,13 @@ void test_runtime_binding_and_order_contract() {
     const auto trace_position = bridge.find(
         "runtime_ray_reflections_after_surface_guide(", motion_macro
     );
+    const auto marker_position = bridge.find(
+        "runtime_ray_reflections_mark_gpu_pbr(", motion_macro
+    );
     require(motion_macro != std::string::npos && guide_position != std::string::npos &&
-            trace_position != std::string::npos && guide_position < trace_position,
-        "RayQuery reflections must execute after the authoritative guide in the shared pre-PBR stage");
+            trace_position != std::string::npos && marker_position != std::string::npos &&
+            guide_position < trace_position && trace_position < marker_position,
+        "surface guide, RayQuery trace, and PBR validity marker must execute in causal order");
 }
 
 } // namespace
@@ -179,6 +228,7 @@ int main() {
     test_constants_and_identity_contract();
     test_public_default_state();
     test_shader_contract();
+    test_gpu_pbr_composition_contract();
     test_runtime_binding_and_order_contract();
 
     if (failures != 0) {
