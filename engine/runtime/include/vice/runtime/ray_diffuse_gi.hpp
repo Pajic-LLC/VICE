@@ -3,6 +3,7 @@
 #include <vice/math/math.hpp>
 #include <vice/render/rhi.hpp>
 #include <vice/runtime/ray_reflections.hpp>
+#include <vice/runtime/ray_scene_hit.hpp>
 
 #include <cstdint>
 #include <filesystem>
@@ -31,14 +32,7 @@ struct RuntimeRayDiffuseGiConstants {
 
 static_assert(sizeof(RuntimeRayDiffuseGiConstants) == 112U);
 
-struct RuntimeRayDiffuseGiHit {
-    float world_position[3]{};
-    // The shader stores the authoritative Runtime scene-instance index plus one.
-    // Zero remains the miss sentinel so the record stays compact and GPU-friendly.
-    std::uint32_t instance_id_plus_one = 0U;
-};
-
-static_assert(sizeof(RuntimeRayDiffuseGiHit) == 16U);
+using RuntimeRayDiffuseGiHit = RuntimeRaySceneHit;
 
 [[nodiscard]] std::optional<math::Vec3> runtime_ray_diffuse_gi_direction(
     math::Vec3 world_normal,
