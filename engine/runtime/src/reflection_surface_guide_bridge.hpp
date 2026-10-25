@@ -126,7 +126,14 @@ struct RuntimeReflectionSurfaceGuideMeshBuffers {
     };
     auto* const radiance = runtime_ray_reflection_radiance(owner);
     render::Texture& bound_texture = radiance != nullptr ? *radiance : fallback_texture;
-    if (commands.set_graphics_texture(reflection_binding, bound_texture)) return true;
+    using SetGraphicsTexture = bool (render::CommandList::*)(
+        const render::ShaderBindingKey&,
+        render::Texture&
+    );
+    const auto bind_texture = static_cast<SetGraphicsTexture>(
+        &render::CommandList::set_graphics_texture
+    );
+    if ((commands.*bind_texture)(reflection_binding, bound_texture)) return true;
     if (diagnostics != nullptr) {
         *diagnostics = "VICE Runtime could not bind ray-reflection radiance for GPU PBR.";
     }
