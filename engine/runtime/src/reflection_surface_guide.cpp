@@ -317,11 +317,7 @@ bool RuntimeReflectionSurfaceGuidePass::encode(
     std::string* const diagnostics
 ) {
     if (state_ == nullptr || !state_->available || state_->pipeline == nullptr ||
-        state_->texture == nullptr || frame.depth == nullptr || frame.frame_constants == nullptr ||
-        frame.models == nullptr || frame.instance_materials == nullptr ||
-        frame.material_records == nullptr || frame.frame_constants_size == 0U ||
-        frame.model_count == 0U || frame.instance_material_count == 0U ||
-        frame.material_count == 0U) {
+        state_->texture == nullptr || frame.depth == nullptr) {
         set_diagnostics(diagnostics, "Runtime reflection surface-guide frame is incomplete.");
         return false;
     }
@@ -331,7 +327,30 @@ bool RuntimeReflectionSurfaceGuidePass::encode(
         set_diagnostics(diagnostics, "Runtime reflection surface-guide depth source is incompatible.");
         return false;
     }
+    if (!frame.draws.empty() &&
+        (frame.frame_constants == nullptr || frame.models == nullptr ||
+         frame.instance_materials == nullptr || frame.material_records == nullptr ||
+         frame.frame_constants_size == 0U || frame.model_count == 0U ||
+         frame.instance_material_count == 0U || frame.material_count == 0U)) {
+        set_diagnostics(diagnostics, "Runtime reflection surface-guide draw resources are incomplete.");
+        return false;
+    }
+
+    render::RenderPassDesc render_pass;
+    render_pass.clear_color = runtime_reflection_surface_guide_neutral();
+    render_pass.depth_attachment = frame.depth;
+    render_pass.clear_color_attachment = true;
+    render_pass.clear_depth_attachment = false;
+    if (!commands.begin_render_pass(*state_->texture, render_pass)) {
+        set_diagnostics(diagnostics, "VICE Runtime could not begin reflection surface-guide pass.");
+        return false;
+    }
+
     if (frame.draws.empty()) {
+        if (!commands.end_render_pass()) {
+            set_diagnostics(diagnostics, "VICE Runtime could not clear reflection surface guide.");
+            return false;
+        }
         if (diagnostics != nullptr) diagnostics->clear();
         return true;
     }
@@ -352,16 +371,6 @@ bool RuntimeReflectionSurfaceGuidePass::encode(
         .size = static_cast<std::uint64_t>(frame.material_count) * sizeof(RuntimeGpuMaterialRecord),
         .structure_stride = sizeof(RuntimeGpuMaterialRecord),
     };
-
-    render::RenderPassDesc render_pass;
-    render_pass.clear_color = runtime_reflection_surface_guide_neutral();
-    render_pass.depth_attachment = frame.depth;
-    render_pass.clear_color_attachment = true;
-    render_pass.clear_depth_attachment = false;
-    if (!commands.begin_render_pass(*state_->texture, render_pass)) {
-        set_diagnostics(diagnostics, "VICE Runtime could not begin reflection surface-guide pass.");
-        return false;
-    }
 
     bool encoded = commands.set_viewport(render::Viewport{
         .x = 0.0F,
@@ -519,14 +528,12 @@ bool runtime_reflection_surface_guide_after_motion_vectors(
     const std::function<RuntimeReflectionSurfaceGuideMeshBuffers(world::ResourceId)>& resolve_mesh,
     std::string* const diagnostics
 ) noexcept {
-    if (!device.capabilities().ray_tracing || current_depth == nullptr || frame_constants == nullptr ||
-        direct_meshes.empty() && cluster_meshes.empty()) {
+    if (!device.capabilities().ray_tracing || current_depth == nullptr) {
         if (diagnostics != nullptr) diagnostics->clear();
         return true;
     }
-    if (owner == nullptr || instance_table.models == nullptr || material_scene.materials.records == nullptr ||
-        material_scene.instance_materials.records == nullptr || material_scene.plan == nullptr) {
-        set_diagnostics(diagnostics, "Runtime reflection surface-guide scene resources are unavailable.");
+    if (owner == nullptr) {
+        set_diagnostics(diagnostics, "Runtime reflection surface-guide owner is unavailable.");
         return false;
     }
     if (!ensure_reflection_surface_guide_pass(owner, device, diagnostics)) return false;
@@ -536,6 +543,21 @@ bool runtime_reflection_surface_guide_after_motion_vectors(
         return true;
     }
     if (!state.pass->resize(current_depth->width(), current_depth->height(), diagnostics)) return false;
+
+    if (direct_meshes.empty() && cluster_meshes.empty()) {
+        return state.pass->encode(
+            commands,
+            RuntimeReflectionSurfaceGuideFrame{.depth = current_depth},
+            diagnostics
+        );
+    }
+
+    if (frame_constants == nullptr || instance_table.models == nullptr ||
+        material_scene.materials.records == nullptr ||
+        material_scene.instance_materials.records == nullptr || material_scene.plan == nullptr) {
+        set_diagnostics(diagnostics, "Runtime reflection surface-guide scene resources are unavailable.");
+        return false;
+    }
 
     std::vector<RuntimeReflectionSurfaceGuideDraw> draws;
     draws.reserve(direct_meshes.size() + cluster_meshes.size());
