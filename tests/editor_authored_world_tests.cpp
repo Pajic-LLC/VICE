@@ -66,9 +66,9 @@ void write_text(const std::filesystem::path& path, const std::string_view text) 
         .version = 3U,
         .name = "AuthoredGameplay",
     }), "component registration");
-    require(value.register_resource(mesh), "mesh resource registration");
-    require(value.register_resource(material), "material resource registration");
-    require(value.register_resource(environment), "environment resource registration");
+    require(value.create_resource(mesh).has_value(), "mesh resource registration");
+    require(value.create_resource(material).has_value(), "material resource registration");
+    require(value.create_resource(environment).has_value(), "environment resource registration");
     require(value.register_region(world::RegionDesc{
         .id = world::RegionId{1},
         .simulation_island = world::SimulationIslandId{7},
