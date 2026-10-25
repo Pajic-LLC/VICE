@@ -10,6 +10,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <limits>
 #include <optional>
 #include <string>
@@ -152,7 +153,7 @@ void append_double(std::string& output, const double value) {
 [[nodiscard]] CommandResult inspect_project(
     const std::string_view command,
     const std::filesystem::path& manifest_path,
-    const bool require_startup_world
+    const bool validate_startup_world
 ) {
     std::error_code error;
     if (!std::filesystem::is_regular_file(manifest_path, error)) {
@@ -175,12 +176,31 @@ void append_double(std::string& output, const double value) {
 
     error.clear();
     const bool startup_exists = std::filesystem::is_regular_file(startup_world, error);
-    if (require_startup_world && !startup_exists) {
+    if (validate_startup_world && !startup_exists) {
         return failure(
             exit_validation,
             command,
             "Configured startup World is not available at `" + startup_world.generic_string() + "`."
         );
+    }
+    if (validate_startup_world) {
+        std::string read_diagnostics;
+        const auto source = read_text(startup_world, read_diagnostics);
+        if (!source.has_value()) {
+            return failure(
+                exit_unavailable,
+                command,
+                "Could not validate configured startup World: " + read_diagnostics
+            );
+        }
+        const auto parsed_world = tools::world_cooker::parse_source_manifest(*source);
+        if (!parsed_world.snapshot.has_value()) {
+            return failure(
+                exit_validation,
+                command,
+                "Configured startup World is invalid: " + parsed_world.diagnostics
+            );
+        }
     }
 
     std::string data;
