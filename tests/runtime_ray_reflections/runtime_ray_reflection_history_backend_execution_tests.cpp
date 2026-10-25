@@ -99,7 +99,7 @@ int main() {
         .width = 1U,
         .height = 1U,
         .format = TextureFormat::depth32_float,
-        .usage = TextureUsage::sampled | TextureUsage::copy_destination,
+        .usage = TextureUsage::depth_attachment | TextureUsage::sampled,
         .debug_name = "reflection history validation previous depth",
     });
     CHECK(radiance != nullptr);
@@ -114,7 +114,6 @@ int main() {
     constexpr std::array<std::uint16_t, 4> previous_radiance{
         0x3A00U, 0x3400U, 0x3000U, 0x3C00U
     };
-    constexpr float previous_device_depth = 0.5F;
     CHECK(radiance->write_2d(
         std::as_bytes(std::span{current_radiance}),
         sizeof(current_radiance)
@@ -123,10 +122,19 @@ int main() {
         std::as_bytes(std::span{previous_radiance}),
         sizeof(previous_radiance)
     ));
-    CHECK(previous_depth->write_2d(
-        std::as_bytes(std::span{&previous_device_depth, 1U}),
-        sizeof(previous_device_depth)
+
+    constexpr float previous_device_depth = 0.5F;
+    auto depth_commands = device->create_command_list();
+    CHECK(depth_commands != nullptr);
+    CHECK(depth_commands->begin_depth_render_pass(
+        *previous_depth,
+        previous_device_depth,
+        true
     ));
+    CHECK(depth_commands->end_render_pass());
+    const SubmissionId depth_submission = device->submit(std::move(depth_commands));
+    CHECK(depth_submission != invalid_submission);
+    CHECK(device->wait_for_submission(depth_submission));
 
     const RuntimeRayReflectionHit committed_hit{
         .world_position = {0.0F, 0.0F, 0.5F},
