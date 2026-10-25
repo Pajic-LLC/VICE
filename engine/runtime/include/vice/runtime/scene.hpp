@@ -305,6 +305,8 @@ public:
     [[nodiscard]] RuntimeDirectionalShadowTelemetry directional_shadow_telemetry() const noexcept;
     [[nodiscard]] RuntimeRayTracingTelemetry ray_tracing_telemetry() const noexcept;
     [[nodiscard]] render::Texture* reflection_surface_guide() const noexcept;
+    [[nodiscard]] render::Texture* ray_reflection_radiance() const noexcept;
+    [[nodiscard]] render::Buffer* ray_reflection_hits() const noexcept;
 
     [[nodiscard]] bool render(
         const world::World& world,
