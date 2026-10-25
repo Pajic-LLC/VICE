@@ -80,6 +80,32 @@ add_test(
   COMMAND vice_runtime_ray_diffuse_gi_tests
 )
 
+add_executable(
+  vice_runtime_ray_diffuse_gi_reconstruction_tests
+  runtime_ray_diffuse_gi_reconstruction_tests.cpp
+)
+target_link_libraries(
+  vice_runtime_ray_diffuse_gi_reconstruction_tests
+  PRIVATE
+    VICE::Runtime
+)
+target_compile_features(
+  vice_runtime_ray_diffuse_gi_reconstruction_tests
+  PRIVATE
+    cxx_std_23
+)
+target_compile_definitions(
+  vice_runtime_ray_diffuse_gi_reconstruction_tests
+  PRIVATE
+    VICE_RAY_DIFFUSE_GI_DENOISE_SHADER_SOURCE="${CMAKE_SOURCE_DIR}/assets/shaders/vice_ray_diffuse_gi_denoise.hlsl"
+    VICE_RAY_DIFFUSE_GI_TEMPORAL_SHADER_SOURCE="${CMAKE_SOURCE_DIR}/assets/shaders/vice_ray_diffuse_gi_temporal.hlsl"
+)
+vice_enable_warnings(vice_runtime_ray_diffuse_gi_reconstruction_tests)
+add_test(
+  NAME vice_runtime_ray_diffuse_gi_reconstruction_tests
+  COMMAND vice_runtime_ray_diffuse_gi_reconstruction_tests
+)
+
 if(_vice_runtime_ray_shadow_target)
   set(
     _vice_runtime_ray_diffuse_gi_contract_output
@@ -100,6 +126,47 @@ if(_vice_runtime_ray_shadow_target)
     DXC "${_vice_runtime_ray_shadow_dxc}"
     METAL_SHADER_CONVERTER "${_vice_runtime_ray_shadow_metal_converter}"
   )
+
+  set(
+    _vice_runtime_ray_diffuse_gi_denoise_output
+    "${CMAKE_BINARY_DIR}/cooked/vice_runtime_ray_diffuse_gi_denoise"
+  )
+  set(
+    VICE_RUNTIME_RAY_DIFFUSE_GI_DENOISE_MANIFEST_PATH
+    "${_vice_runtime_ray_diffuse_gi_denoise_output}/shader.vice.json"
+  )
+  vice_add_cooked_shader(
+    NAME vice_runtime_ray_diffuse_gi_denoise_shader
+    INPUT "${CMAKE_SOURCE_DIR}/assets/shaders/vice_ray_diffuse_gi_denoise.hlsl"
+    OUTPUT "${_vice_runtime_ray_diffuse_gi_denoise_output}"
+    ENTRY vice_ray_diffuse_gi_denoise_cs
+    STAGE compute
+    TARGET "${_vice_runtime_ray_shadow_target}"
+    SHADER_MODEL 6.6
+    DXC "${_vice_runtime_ray_shadow_dxc}"
+    METAL_SHADER_CONVERTER "${_vice_runtime_ray_shadow_metal_converter}"
+  )
+
+  set(
+    _vice_runtime_ray_diffuse_gi_temporal_output
+    "${CMAKE_BINARY_DIR}/cooked/vice_runtime_ray_diffuse_gi_temporal"
+  )
+  set(
+    VICE_RUNTIME_RAY_DIFFUSE_GI_TEMPORAL_MANIFEST_PATH
+    "${_vice_runtime_ray_diffuse_gi_temporal_output}/shader.vice.json"
+  )
+  vice_add_cooked_shader(
+    NAME vice_runtime_ray_diffuse_gi_temporal_shader
+    INPUT "${CMAKE_SOURCE_DIR}/assets/shaders/vice_ray_diffuse_gi_temporal.hlsl"
+    OUTPUT "${_vice_runtime_ray_diffuse_gi_temporal_output}"
+    ENTRY vice_ray_diffuse_gi_temporal_cs
+    STAGE compute
+    TARGET "${_vice_runtime_ray_shadow_target}"
+    SHADER_MODEL 6.6
+    DXC "${_vice_runtime_ray_shadow_dxc}"
+    METAL_SHADER_CONVERTER "${_vice_runtime_ray_shadow_metal_converter}"
+  )
+
   add_dependencies(
     vice_runtime_ray_diffuse_gi_tests
     vice_runtime_ray_diffuse_gi_contract_shader
@@ -109,6 +176,19 @@ if(_vice_runtime_ray_shadow_target)
     PRIVATE
       VICE_RUNTIME_RAY_DIFFUSE_GI_CONTRACT_MANIFEST="${VICE_RUNTIME_RAY_DIFFUSE_GI_CONTRACT_MANIFEST_PATH}"
   )
+
+  add_dependencies(
+    vice_runtime_ray_diffuse_gi_reconstruction_tests
+    vice_runtime_ray_diffuse_gi_denoise_shader
+    vice_runtime_ray_diffuse_gi_temporal_shader
+  )
+  target_compile_definitions(
+    vice_runtime_ray_diffuse_gi_reconstruction_tests
+    PRIVATE
+      VICE_RUNTIME_RAY_DIFFUSE_GI_DENOISE_MANIFEST="${VICE_RUNTIME_RAY_DIFFUSE_GI_DENOISE_MANIFEST_PATH}"
+      VICE_RUNTIME_RAY_DIFFUSE_GI_TEMPORAL_MANIFEST="${VICE_RUNTIME_RAY_DIFFUSE_GI_TEMPORAL_MANIFEST_PATH}"
+  )
+
   if(TARGET vice_runtime_ray_reflection_history_shader)
     add_dependencies(
       vice_runtime_ray_diffuse_gi_tests
