@@ -133,10 +133,17 @@ void test_depth_and_order_contract() {
             std::string::npos,
         "reflection guide must independently request authoritative current depth");
 
-    const auto ao_position = bridge.find("runtime_ray_ambient_occlusion_after_motion_vectors");
-    const auto guide_position = bridge.find("runtime_reflection_surface_guide_after_motion_vectors");
-    require(ao_position != std::string::npos && guide_position != std::string::npos &&
-            ao_position < guide_position,
+    const auto hook_position = bridge.find("#define encode_motion_vectors");
+    const auto ao_position = bridge.find(
+        "::vice::runtime::detail::runtime_ray_ambient_occlusion_after_motion_vectors(",
+        hook_position
+    );
+    const auto guide_position = bridge.find(
+        "::vice::runtime::detail::runtime_reflection_surface_guide_after_motion_vectors(",
+        hook_position
+    );
+    require(hook_position != std::string::npos && ao_position != std::string::npos &&
+            guide_position != std::string::npos && ao_position < guide_position,
         "guide must run from the shared pre-PBR motion/depth stage after AO temporal reuse");
     require(bridge.find("gpu_pbr_plan.batch_meshes") != std::string::npos &&
             bridge.find("gpu_cluster_pbr_plan.batch_meshes") != std::string::npos,
