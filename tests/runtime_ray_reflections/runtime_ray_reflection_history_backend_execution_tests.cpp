@@ -136,8 +136,10 @@ int main() {
     CHECK(depth_submission != invalid_submission);
     CHECK(device->wait_for_submission(depth_submission));
 
+    // Current-camera-relative hit plus the precise current->previous origin delta
+    // reconstructs to (0, 0, 0.5) in the previous camera-local frame.
     const RuntimeRayReflectionHit committed_hit{
-        .world_position = {0.0F, 0.0F, 0.5F},
+        .world_position = {-3.0F, -4.0F, 5.5F},
         .instance_id_plus_one = 43U,
     };
     auto hit_upload = device->create_buffer(BufferDesc{
@@ -160,7 +162,7 @@ int main() {
     ));
 
     const world::GlobalPosition previous_origin{1.0e12, -2.0e12, 3.0e12};
-    const world::GlobalPosition current_origin{1.0e12, -2.0e12, 3.0e12};
+    const world::GlobalPosition current_origin{1.0e12 + 3.0, -2.0e12 + 4.0, 3.0e12 - 5.0};
     const auto constants = make_runtime_ray_reflection_history_constants(
         math::identity(),
         1U,
@@ -170,6 +172,9 @@ int main() {
         previous_origin
     );
     CHECK(constants.has_value());
+    CHECK(near(constants->current_to_previous_origin[0], 3.0F));
+    CHECK(near(constants->current_to_previous_origin[1], 4.0F));
+    CHECK(near(constants->current_to_previous_origin[2], -5.0F));
 
     auto radiance_probe = device->create_buffer(BufferDesc{
         .size = 4U * sizeof(float),
@@ -250,7 +255,7 @@ int main() {
 
     std::cout << "Executed production reflection-history reconstruction on "
               << backend_name(device->backend())
-              << " with large-world origin-aware temporal constants.\n";
+              << " with nonzero large-world origin rebasing.\n";
     return 0;
 #endif
 }
