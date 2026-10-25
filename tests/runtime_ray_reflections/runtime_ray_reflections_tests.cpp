@@ -134,11 +134,16 @@ void test_shader_contract() {
     require(shader.find("SurfaceGuide.Load") != std::string::npos &&
             shader.find("vice_decode_octahedral_normal") != std::string::npos,
         "ray origin/direction must consume the authoritative reflection surface guide");
-    require(shader.find("const float metallic = saturate(guide.w)") != std::string::npos &&
-            shader.find("roughness > trace_parameters.z") != std::string::npos,
-        "reflection eligibility/weighting must consume authored roughness and metallic guide values");
+    require(shader.find("roughness > trace_parameters.z") != std::string::npos,
+        "reflection ray eligibility must consume authored roughness");
     require(shader.find("EnvironmentSpecular.SampleLevel") != std::string::npos,
         "ray hits and misses must have an explicit environment-specular fallback");
+    require(shader.find("ReflectionRadiance[pixel] = float4(fallback_radiance, 1.0)") !=
+            std::string::npos,
+        "raw reflection alpha must mark a valid per-pixel replacement contribution");
+    require(shader.find("reflection_weight") == std::string::npos &&
+            shader.find(".rgb * environment_parameters.x") == std::string::npos,
+        "raw reflection radiance must remain composition-neutral and leave BRDF/intensity to PBR");
     require(shader.find("RWStructuredBuffer<ReflectionHit>") != std::string::npos,
         "committed hit position and exact identity must use a structured GPU buffer");
 }
