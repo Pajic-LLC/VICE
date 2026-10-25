@@ -78,6 +78,26 @@ add_test(
 )
 
 if(TARGET vice_runtime_ray_reflections_shader)
+  set(
+    _vice_runtime_ray_reflection_validation_readback_output
+    "${CMAKE_BINARY_DIR}/cooked/vice_runtime_ray_reflection_validation_readback"
+  )
+  set(
+    VICE_RUNTIME_RAY_REFLECTION_VALIDATION_READBACK_MANIFEST_PATH
+    "${_vice_runtime_ray_reflection_validation_readback_output}/shader.vice.json"
+  )
+  vice_add_cooked_shader(
+    NAME vice_runtime_ray_reflection_validation_readback_shader
+    INPUT "${CMAKE_CURRENT_SOURCE_DIR}/reflection_radiance_readback.hlsl"
+    OUTPUT "${_vice_runtime_ray_reflection_validation_readback_output}"
+    ENTRY vice_reflection_radiance_readback_cs
+    STAGE compute
+    TARGET "${_vice_runtime_ray_shadow_target}"
+    SHADER_MODEL 6.6
+    DXC "${_vice_runtime_ray_shadow_dxc}"
+    METAL_SHADER_CONVERTER "${_vice_runtime_ray_shadow_metal_converter}"
+  )
+
   add_executable(
     vice_runtime_ray_reflection_backend_execution_tests
     runtime_ray_reflection_backend_execution_tests.cpp
@@ -85,6 +105,7 @@ if(TARGET vice_runtime_ray_reflections_shader)
   add_dependencies(
     vice_runtime_ray_reflection_backend_execution_tests
     vice_runtime_ray_reflections_shader
+    vice_runtime_ray_reflection_validation_readback_shader
   )
   target_link_libraries(
     vice_runtime_ray_reflection_backend_execution_tests
@@ -100,6 +121,7 @@ if(TARGET vice_runtime_ray_reflections_shader)
     vice_runtime_ray_reflection_backend_execution_tests
     PRIVATE
       VICE_RUNTIME_RAY_REFLECTIONS_MANIFEST="${VICE_RUNTIME_RAY_REFLECTIONS_MANIFEST_PATH}"
+      VICE_RUNTIME_RAY_REFLECTION_VALIDATION_READBACK_MANIFEST="${VICE_RUNTIME_RAY_REFLECTION_VALIDATION_READBACK_MANIFEST_PATH}"
   )
   vice_enable_warnings(vice_runtime_ray_reflection_backend_execution_tests)
   add_test(
