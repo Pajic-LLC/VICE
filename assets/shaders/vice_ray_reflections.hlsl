@@ -35,7 +35,7 @@ float3 vice_world_position(uint2 pixel, float device_depth) {
     const float2 target_size = target_size_jitter.xy;
     const float2 uv = (float2(pixel) + 0.5) / target_size;
     const float ndc_x = uv.x * 2.0 - 1.0 - target_size_jitter.z;
-    const float ndc_y = 1.0 - uv.y * 2.0 - target_size_jitter.w;
+    const float ndc_y = 1.0 - uv.y * 2.0 - 1.0 - target_size_jitter.w;
     const float right_scale = ndc_x * camera_up_aspect.w * camera_right_tan_half_fov.w;
     const float up_scale = ndc_y * camera_right_tan_half_fov.w;
     const float3 camera_ray = camera_forward_far.xyz +
@@ -71,7 +71,7 @@ float3 vice_environment_fallback(float3 reflection_direction, float roughness) {
             EnvironmentSampler,
             vice_environment_uv(reflection_direction, environment_parameters.y),
             saturate(roughness) * environment_parameters.z
-        ).rgb * environment_parameters.x,
+        ).rgb,
         0.0
     );
 }
@@ -95,7 +95,6 @@ void vice_ray_reflections_cs(uint3 dispatch_thread_id : SV_DispatchThreadID) {
 
     const float4 guide = SurfaceGuide.Load(int3(pixel, 0));
     const float roughness = saturate(guide.z);
-    const float metallic = saturate(guide.w);
     if (roughness > trace_parameters.z || environment_parameters.w < 0.5) return;
 
     const float3 world_position = vice_world_position(pixel, device_depth);
@@ -108,10 +107,7 @@ void vice_ray_reflections_cs(uint3 dispatch_thread_id : SV_DispatchThreadID) {
     if (dot(reflection_direction, normal) <= 0.00001) return;
 
     const float3 fallback_radiance = vice_environment_fallback(reflection_direction, roughness);
-    const float dielectric_or_metal_weight = lerp(0.04, 1.0, metallic);
-    const float smoothness_weight = 1.0 - roughness;
-    const float reflection_weight = dielectric_or_metal_weight * smoothness_weight * smoothness_weight;
-    ReflectionRadiance[pixel] = float4(fallback_radiance, reflection_weight);
+    ReflectionRadiance[pixel] = float4(fallback_radiance, 1.0);
 
     RayDesc ray;
     ray.Origin = world_position + normal * trace_parameters.y;
