@@ -10,6 +10,7 @@
 
 #include "environment_pipeline.hpp"
 
+#include <cstddef>
 #include <cstdint>
 #include <functional>
 #include <span>
@@ -81,6 +82,56 @@ struct RuntimeReflectionSurfaceGuideMeshBuffers {
     const RuntimeSceneRenderer* owner
 ) noexcept;
 
+[[nodiscard]] inline bool runtime_ray_reflections_mark_gpu_pbr(
+    const RuntimeSceneRenderer* const owner,
+    render::Buffer* const frame_constants,
+    const std::uint64_t marker_offset,
+    std::string* const diagnostics
+) noexcept {
+    if (owner == nullptr || frame_constants == nullptr ||
+        runtime_ray_reflection_radiance(owner) == nullptr) {
+        return true;
+    }
+    const float enabled = 1.0F;
+    if (frame_constants->write(
+            marker_offset,
+            std::as_bytes(std::span{&enabled, 1})
+        )) {
+        return true;
+    }
+    if (diagnostics != nullptr) {
+        *diagnostics = "VICE Runtime could not enable ray reflections for GPU PBR.";
+    }
+    return false;
+}
+
+[[nodiscard]] inline bool runtime_ray_reflections_bind_gpu_pbr_texture(
+    render::CommandList& commands,
+    const RuntimeSceneRenderer* const owner,
+    const render::ShaderBindingKey& binding,
+    std::string* const diagnostics
+) noexcept {
+    if (owner == nullptr ||
+        binding.register_class != render::ShaderRegisterClass::shader_resource ||
+        binding.binding != 0U || binding.space != 2U || binding.array_element != 0U) {
+        return true;
+    }
+    auto* const radiance = runtime_ray_reflection_radiance(owner);
+    if (radiance == nullptr) return true;
+
+    constexpr render::ShaderBindingKey reflection_binding{
+        .register_class = render::ShaderRegisterClass::shader_resource,
+        .binding = 26U,
+        .space = 2U,
+        .array_element = 0U,
+    };
+    if (commands.set_graphics_texture(reflection_binding, *radiance)) return true;
+    if (diagnostics != nullptr) {
+        *diagnostics = "VICE Runtime could not bind ray-reflection radiance for GPU PBR.";
+    }
+    return false;
+}
+
 } // namespace vice::runtime::detail
 
 #if defined(render)
@@ -146,6 +197,29 @@ struct RuntimeReflectionSurfaceGuideMeshBuffers {
             metrics, \
             state_->environment.binding(), \
             diagnostics \
+        ) && \
+        ::vice::runtime::detail::runtime_ray_reflections_mark_gpu_pbr( \
+            this, \
+            state_->gpu_pbr_frame.get(), \
+            offsetof(GpuPbrSceneConstants, ambient_occlusion_metadata) + sizeof(float), \
+            diagnostics \
+        ))
+
+#ifdef set_graphics_texture
+#undef set_graphics_texture
+#endif
+#define set_graphics_texture(binding, texture) \
+    (::vice::runtime::detail::runtime_ray_reflections_bind_gpu_pbr_texture( \
+        *commands, this, (binding), diagnostics \
+    ) && \
+        set_graphics_texture( \
+            (binding), \
+            ::vice::runtime::detail::runtime_directional_shadow_texture_override( \
+                (binding), \
+                ::vice::runtime::detail::runtime_ray_ambient_occlusion_prepare_graphics_texture( \
+                    *commands, (binding), (texture) \
+                ) \
+            ) \
         ))
 
 #endif
