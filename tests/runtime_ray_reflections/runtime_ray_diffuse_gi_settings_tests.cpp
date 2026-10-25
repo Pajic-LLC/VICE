@@ -1,11 +1,14 @@
 #include <vice/runtime/ray_diffuse_gi_settings.hpp>
+#include <vice/runtime/scene.hpp>
 
 #include <cassert>
 #include <cmath>
 #include <limits>
+#include <string>
 
 int main() {
     using vice::runtime::RuntimeRayDiffuseGiSettings;
+    using vice::runtime::RuntimeSceneRenderer;
     using vice::runtime::is_valid;
 
     const RuntimeRayDiffuseGiSettings defaults{};
@@ -82,6 +85,32 @@ int main() {
     auto nan_history = defaults;
     nan_history.temporal_history_weight = std::numeric_limits<float>::quiet_NaN();
     assert(!is_valid(nan_history));
+
+    RuntimeSceneRenderer renderer;
+    assert(renderer.ray_diffuse_gi_settings() == defaults);
+
+    RuntimeRayDiffuseGiSettings tuned = defaults;
+    tuned.max_distance = 24.0F;
+    tuned.surface_bias = 0.01F;
+    tuned.spatial_kernel_radius = 3U;
+    tuned.temporal_history_weight = 0.85F;
+    std::string diagnostics = "stale";
+    assert(renderer.set_ray_diffuse_gi_settings(tuned, &diagnostics));
+    assert(diagnostics.empty());
+    assert(renderer.ray_diffuse_gi_settings() == tuned);
+
+    const auto committed = renderer.ray_diffuse_gi_settings();
+    auto invalid_update = tuned;
+    invalid_update.spatial_kernel_radius = 5U;
+    assert(!renderer.set_ray_diffuse_gi_settings(invalid_update, &diagnostics));
+    assert(!diagnostics.empty());
+    assert(renderer.ray_diffuse_gi_settings() == committed);
+
+    disabled = tuned;
+    disabled.enabled = false;
+    assert(renderer.set_ray_diffuse_gi_settings(disabled, &diagnostics));
+    assert(diagnostics.empty());
+    assert(renderer.ray_diffuse_gi_settings() == disabled);
 
     return 0;
 }
