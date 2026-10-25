@@ -114,7 +114,7 @@ struct RuntimeReflectionSurfaceGuideMeshBuffers {
 ) noexcept {
     if (owner == nullptr ||
         binding.register_class != render::ShaderRegisterClass::shader_resource ||
-        binding.binding != 0U || binding.space != 2U || binding.array_element != 0U) {
+        binding.binding != 17U || binding.space != 2U || binding.array_element != 0U) {
         return true;
     }
 
