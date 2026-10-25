@@ -141,7 +141,14 @@ struct RuntimeReflectionSurfaceGuideMeshBuffers {
     };
     auto* const radiance = runtime_ray_reflection_radiance(owner);
     render::Texture& bound_texture = radiance != nullptr ? *radiance : fallback_texture;
-    if (commands.set_graphics_texture(reflection_binding, bound_texture)) return true;
+    using SetGraphicsTexture = bool (render::CommandList::*)(
+        const render::ShaderBindingKey&,
+        render::Texture&
+    );
+    const auto bind_texture = static_cast<SetGraphicsTexture>(
+        &render::CommandList::set_graphics_texture
+    );
+    if ((commands.*bind_texture)(reflection_binding, bound_texture)) return true;
     if (diagnostics != nullptr) {
         *diagnostics = "VICE Runtime could not bind ray-reflection radiance for GPU PBR.";
     }
@@ -155,10 +162,6 @@ struct RuntimeReflectionSurfaceGuideMeshBuffers {
 #ifdef runtime_directional_shadow_requires_depth_prepass
 #undef runtime_directional_shadow_requires_depth_prepass
 #endif
-// Keep this unparenthesized. The legacy caller uses
-// `shadow_view.has_value() && runtime_directional_shadow_requires_depth_prepass(path)`;
-// `&&` must bind only to the directional-shadow term so AO and the reflection guide
-// can independently request authoritative current depth.
 #define runtime_directional_shadow_requires_depth_prepass(path) \
     ::vice::runtime::runtime_directional_shadow_requires_depth_prepass((path)) || \
         ::vice::runtime::detail::runtime_ray_ambient_occlusion_needs_camera_depth_prepass() || \
