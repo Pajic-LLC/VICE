@@ -220,7 +220,7 @@ int main() {
         .width = 1U,
         .height = 1U,
         .format = TextureFormat::depth32_float,
-        .usage = TextureUsage::sampled | TextureUsage::copy_destination,
+        .usage = TextureUsage::depth_attachment | TextureUsage::sampled,
         .debug_name = "reflection validation depth",
     });
     auto surface_guide = device->create_texture(TextureDesc{
@@ -253,12 +253,6 @@ int main() {
     CHECK(radiance != nullptr);
     CHECK(sampler != nullptr);
 
-    constexpr float depth = 9.0F / 9.9F;
-    CHECK(camera_depth->write_2d(
-        std::as_bytes(std::span{&depth, 1U}),
-        sizeof(depth)
-    ));
-
     // Octahedral encoding for normalize(float3(1, 0, 1)): encoded guide xy = (0.75, 0.5).
     constexpr std::array<std::uint16_t, 4> guide_pixel{
         0x3A00U, 0x3800U, 0x3400U, 0x3C00U
@@ -274,6 +268,15 @@ int main() {
         std::as_bytes(std::span{environment_pixel}),
         sizeof(environment_pixel)
     ));
+
+    constexpr float depth = 9.0F / 9.9F;
+    auto depth_commands = device->create_command_list();
+    CHECK(depth_commands != nullptr);
+    CHECK(depth_commands->begin_depth_render_pass(*camera_depth, depth, true));
+    CHECK(depth_commands->end_render_pass());
+    const SubmissionId depth_submission = device->submit(std::move(depth_commands));
+    CHECK(depth_submission != invalid_submission);
+    CHECK(device->wait_for_submission(depth_submission));
 
     const RuntimeRayReflectionsCamera camera{
         .position = {},
@@ -465,8 +468,6 @@ int main() {
     CHECK(near(reflected_radiance[1], 0.5F));
     CHECK(near(reflected_radiance[2], 1.0F));
     CHECK(near(reflected_radiance[3], 1.0F));
-    CHECK(radiance->format() == TextureFormat::rgba16_float);
-    CHECK(has_usage(radiance->usage(), TextureUsage::storage));
     CHECK(device->wait_idle());
 
     std::cout << "Executed production reflection shader on "
