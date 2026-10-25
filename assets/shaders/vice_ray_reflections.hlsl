@@ -35,7 +35,7 @@ float3 vice_world_position(uint2 pixel, float device_depth) {
     const float2 target_size = target_size_jitter.xy;
     const float2 uv = (float2(pixel) + 0.5) / target_size;
     const float ndc_x = uv.x * 2.0 - 1.0 - target_size_jitter.z;
-    const float ndc_y = 1.0 - uv.y * 2.0 - 1.0 - target_size_jitter.w;
+    const float ndc_y = 1.0 - uv.y * 2.0 - target_size_jitter.w;
     const float right_scale = ndc_x * camera_up_aspect.w * camera_right_tan_half_fov.w;
     const float up_scale = ndc_y * camera_right_tan_half_fov.w;
     const float3 camera_ray = camera_forward_far.xyz +
