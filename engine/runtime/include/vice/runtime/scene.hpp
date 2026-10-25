@@ -6,6 +6,7 @@
 #include <vice/render/mesh_asset.hpp>
 #include <vice/render/rhi.hpp>
 #include <vice/runtime/directional_shadow.hpp>
+#include <vice/runtime/ray_diffuse_gi_settings.hpp>
 #include <vice/runtime/ray_tracing_telemetry.hpp>
 #include <vice/world/world.hpp>
 
@@ -300,6 +301,12 @@ public:
         std::string* diagnostics = nullptr
     );
 
+    [[nodiscard]] bool set_ray_diffuse_gi_settings(
+        RuntimeRayDiffuseGiSettings settings,
+        std::string* diagnostics = nullptr
+    );
+    [[nodiscard]] RuntimeRayDiffuseGiSettings ray_diffuse_gi_settings() const noexcept;
+
     void set_directional_shadow_mode(RuntimeDirectionalShadowMode mode) noexcept;
     [[nodiscard]] RuntimeDirectionalShadowMode directional_shadow_mode() const noexcept;
     [[nodiscard]] RuntimeDirectionalShadowTelemetry directional_shadow_telemetry() const noexcept;
@@ -327,6 +334,7 @@ private:
 
     struct State;
     std::unique_ptr<State> state_;
+    RuntimeRayDiffuseGiSettings ray_diffuse_gi_settings_{};
     RuntimeDirectionalShadowMode directional_shadow_mode_ = RuntimeDirectionalShadowMode::automatic;
     RuntimeDirectionalShadowTelemetry directional_shadow_telemetry_{};
 };
