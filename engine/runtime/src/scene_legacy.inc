@@ -3119,13 +3119,24 @@ bool RuntimeSceneRenderer::render(
         jitter
     );
     const math::Vec3 camera_position = runtime_camera.position;
+    world::GlobalPosition camera_global_position{
+        static_cast<double>(camera_position.x),
+        static_cast<double>(camera_position.y),
+        static_cast<double>(camera_position.z),
+    };
+    if (const auto camera_entity = world.primary_camera(); camera_entity.has_value()) {
+        if (const auto spatial = world.spatial_state(*camera_entity); spatial.has_value()) {
+            camera_global_position = spatial->global_position;
+        }
+    }
     const auto temporal_frame = state_->temporal_history.begin_frame(
         runtime_camera.entity,
         unjittered_view_projection,
         view_projection,
         jitter,
         runtime_camera.position,
-        runtime_camera.forward
+        runtime_camera.forward,
+        camera_global_position
     );
     auto* const scene_color = state_->scene_color.get();
     auto* const temporal_output = state_->temporal_color_history[state_->history_write_index].get();
@@ -3161,16 +3172,6 @@ bool RuntimeSceneRenderer::render(
         });
     }
     const RuntimeAtmosphereFrame atmosphere = runtime_atmosphere_frame(runtime_lights);
-    world::GlobalPosition camera_global_position{
-        static_cast<double>(camera_position.x),
-        static_cast<double>(camera_position.y),
-        static_cast<double>(camera_position.z),
-    };
-    if (const auto camera_entity = world.primary_camera(); camera_entity.has_value()) {
-        if (const auto spatial = world.spatial_state(*camera_entity); spatial.has_value()) {
-            camera_global_position = spatial->global_position;
-        }
-    }
     const auto point_shadow_views = runtime_point_shadow_views(
         camera_global_position,
         runtime_lights
@@ -3195,7 +3196,8 @@ bool RuntimeSceneRenderer::render(
 
     const auto ray_tracing_plan = build_runtime_ray_tracing_scene_plan(
         instances,
-        state_->catalog.records()
+        state_->catalog.records(),
+        camera_global_position
     );
     if (!ray_tracing_plan) {
         set_diagnostics(diagnostics, ray_tracing_plan.diagnostics);
@@ -4955,7 +4957,8 @@ bool RuntimeSceneRenderer::render(
             view_projection,
             jitter,
             runtime_camera.position,
-            runtime_camera.forward
+            runtime_camera.forward,
+            camera_global_position
         );
     } else {
         state_->temporal_history.reset();
