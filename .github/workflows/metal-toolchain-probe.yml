@@ -23,8 +23,7 @@ jobs:
           set -uo pipefail
           sw_vers
           xcodebuild -version
-          developer_dir="$(xcode-select -p)"
-          echo "DEVELOPER_DIR=$developer_dir"
+          echo "DEVELOPER_DIR=$(xcode-select -p)"
           echo "PATH=$PATH"
 
           for tool in dxc metal-shaderconverter metal metallib metal-tt; do
@@ -33,9 +32,15 @@ jobs:
             xcrun --find "$tool" 2>/dev/null || true
           done
 
-          echo "== candidate executables =="
-          find /opt /usr/local "$developer_dir" -type f \
-            \( -name dxc -o -name metal-shaderconverter \) -print 2>/dev/null | head -100 || true
+          for path in \
+            /usr/local/bin/dxc \
+            /usr/local/bin/metal-shaderconverter \
+            /opt/metal-shaderconverter/bin/metal-shaderconverter \
+            /opt/metal-shaderconverter/metal-shaderconverter; do
+            if [[ -e "$path" ]]; then
+              ls -l "$path"
+            fi
+          done
 
       - name: Install Xcode Metal toolchain component
         shell: bash
@@ -47,7 +52,6 @@ jobs:
         shell: bash
         run: |
           set -uo pipefail
-          developer_dir="$(xcode-select -p)"
           for tool in dxc metal-shaderconverter metal metallib metal-tt; do
             echo "== $tool =="
             command -v "$tool" || true
@@ -57,9 +61,15 @@ jobs:
           echo "== installed packages =="
           pkgutil --pkgs | grep -Ei 'metal|shader|converter' || true
 
-          echo "== candidate executables =="
-          find /opt /usr/local "$developer_dir" -type f \
-            \( -name dxc -o -name metal-shaderconverter \) -print 2>/dev/null | head -100 || true
+          for path in \
+            /usr/local/bin/dxc \
+            /usr/local/bin/metal-shaderconverter \
+            /opt/metal-shaderconverter/bin/metal-shaderconverter \
+            /opt/metal-shaderconverter/metal-shaderconverter; do
+            if [[ -e "$path" ]]; then
+              ls -l "$path"
+            fi
+          done
 
           if command -v metal-shaderconverter >/dev/null 2>&1; then
             metal-shaderconverter --version || metal-shaderconverter --help | head -40
