@@ -218,6 +218,49 @@ int main() {
         forward
     );
 
+    runtime::RuntimeTemporalHistory large_world_history;
+    const world::GlobalPosition first_global_origin{1.0e12, -2.0e12, 3.0e12};
+    const world::GlobalPosition second_global_origin{1.0e12 + 1.0, -2.0e12, 3.0e12};
+    const math::Vec3 first_local_origin{50000.0F, 0.0F, 0.0F};
+    const math::Vec3 rebased_local_origin{0.0F, 0.0F, 0.0F};
+    const auto large_world_first = large_world_history.begin_frame(
+        *first_camera,
+        first_unjittered,
+        first_jittered,
+        jitter0,
+        first_local_origin,
+        forward,
+        first_global_origin
+    );
+    require(!large_world_first.history_valid, "first large-world frame has no history");
+    large_world_history.commit_frame(
+        *first_camera,
+        first_unjittered,
+        first_jittered,
+        jitter0,
+        first_local_origin,
+        forward,
+        first_global_origin
+    );
+    const auto large_world_rebased = large_world_history.begin_frame(
+        *first_camera,
+        second_unjittered,
+        second_jittered,
+        jitter1,
+        rebased_local_origin,
+        forward,
+        second_global_origin
+    );
+    require(
+        large_world_rebased.history_valid,
+        "camera-relative origin rebase must not look like a temporal camera teleport"
+    );
+    require(
+        large_world_rebased.previous_camera_global_position.x == first_global_origin.x &&
+        large_world_rebased.current_camera_global_position.x == second_global_origin.x,
+        "temporal frame must retain authoritative current and previous global camera origins"
+    );
+
     const auto generation_before_reset = history.generation();
     history.reset();
     require(!history.valid(), "explicit reset invalidates history");
