@@ -23,7 +23,8 @@ jobs:
           set -uo pipefail
           sw_vers
           xcodebuild -version
-          echo "DEVELOPER_DIR=$(xcode-select -p)"
+          developer_dir="$(xcode-select -p)"
+          echo "DEVELOPER_DIR=$developer_dir"
           echo "PATH=$PATH"
 
           for tool in dxc metal-shaderconverter metal metallib metal-tt; do
@@ -32,7 +33,8 @@ jobs:
             xcrun --find "$tool" 2>/dev/null || true
           done
 
-          find /opt /usr/local /Applications -type f \
+          echo "== candidate executables =="
+          find /opt /usr/local "$developer_dir" -type f \
             \( -name dxc -o -name metal-shaderconverter \) -print 2>/dev/null | head -100 || true
 
       - name: Install Xcode Metal toolchain component
@@ -45,6 +47,7 @@ jobs:
         shell: bash
         run: |
           set -uo pipefail
+          developer_dir="$(xcode-select -p)"
           for tool in dxc metal-shaderconverter metal metallib metal-tt; do
             echo "== $tool =="
             command -v "$tool" || true
@@ -55,7 +58,7 @@ jobs:
           pkgutil --pkgs | grep -Ei 'metal|shader|converter' || true
 
           echo "== candidate executables =="
-          find /opt /usr/local /Applications -type f \
+          find /opt /usr/local "$developer_dir" -type f \
             \( -name dxc -o -name metal-shaderconverter \) -print 2>/dev/null | head -100 || true
 
           if command -v metal-shaderconverter >/dev/null 2>&1; then
