@@ -23,6 +23,22 @@ bool vice_finite3(float3 value) {
     return all(abs(value) < 1.0e20);
 }
 
+bool vice_history_depth_matches(float expected_depth, float sampled_depth, float threshold) {
+    if (sampled_depth < 0.0 || sampled_depth >= VICE_BACKGROUND_DEPTH) return false;
+    const float relative_threshold = max(
+        threshold,
+        threshold * 8.0 * max(abs(expected_depth), abs(sampled_depth))
+    );
+    return abs(expected_depth - sampled_depth) <= relative_threshold;
+}
+
+bool vice_history_sample(uint2 history_pixel, float expected_depth, float threshold, out float3 radiance) {
+    const float sampled_depth = PreviousDepth.Load(int3(history_pixel, 0));
+    if (!vice_history_depth_matches(expected_depth, sampled_depth, threshold)) return false;
+    radiance = PreviousSceneColor.Load(int3(history_pixel, 0)).rgb;
+    return vice_finite3(radiance);
+}
+
 [numthreads(8, 8, 1)]
 void vice_ray_reflection_history_cs(uint3 dispatch_thread_id : SV_DispatchThreadID) {
     const uint width = (uint)target_size_history.x;
@@ -46,25 +62,32 @@ void vice_ray_reflection_history_cs(uint3 dispatch_thread_id : SV_DispatchThread
         return;
     }
 
-    const float2 previous_uv = float2(
-        previous_ndc.x * 0.5 + 0.5,
-        previous_ndc.y * -0.5 + 0.5
+    const float2 history_position = float2(
+        (previous_ndc.x * 0.5 + 0.5) * float(width) - 0.5,
+        (previous_ndc.y * -0.5 + 0.5) * float(height) - 0.5
     );
-    const uint2 history_pixel = min(
-        (uint2)(previous_uv * float2(width, height)),
-        uint2(width - 1u, height - 1u)
-    );
-    const float previous_depth = PreviousDepth.Load(int3(history_pixel, 0));
-    if (previous_depth < 0.0 || previous_depth >= VICE_BACKGROUND_DEPTH) return;
-
+    const int2 base_pixel = int2(floor(history_position));
+    const float2 fraction = frac(history_position);
     const float depth_threshold = max(target_size_history.w, 0.000001);
-    const float relative_depth_threshold = max(
-        depth_threshold,
-        depth_threshold * 8.0 * max(abs(previous_ndc.z), abs(previous_depth))
-    );
-    if (abs(previous_ndc.z - previous_depth) > relative_depth_threshold) return;
 
-    const float3 history_radiance = PreviousSceneColor.Load(int3(history_pixel, 0)).rgb;
-    if (!vice_finite3(history_radiance)) return;
-    ReflectionRadiance[pixel] = float4(max(history_radiance, 0.0), current_radiance.a);
+    float3 reconstructed = 0.0;
+    float total_weight = 0.0;
+    [unroll]
+    for (uint sample_index = 0u; sample_index < 4u; ++sample_index) {
+        const int2 offset = int2(sample_index & 1u, sample_index >> 1u);
+        const int2 candidate = base_pixel + offset;
+        if (candidate.x < 0 || candidate.y < 0 || candidate.x >= int(width) || candidate.y >= int(height)) continue;
+        const float2 sample_weight_2d = lerp(1.0 - fraction, fraction, float2(offset));
+        const float weight = sample_weight_2d.x * sample_weight_2d.y;
+        if (weight <= 0.0) continue;
+        float3 history_radiance = 0.0;
+        if (!vice_history_sample(uint2(candidate), previous_ndc.z, depth_threshold, history_radiance)) continue;
+        reconstructed += max(history_radiance, 0.0) * weight;
+        total_weight += weight;
+    }
+
+    // Fail closed on disocclusion or insufficient support: keep the current environment fallback.
+    // Requiring majority bilinear support avoids pulling a single stale neighbor across an edge.
+    if (total_weight < 0.5) return;
+    ReflectionRadiance[pixel] = float4(reconstructed / total_weight, current_radiance.a);
 }
