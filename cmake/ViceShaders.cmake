@@ -1,5 +1,32 @@
 # Shader cooking helpers for VICE targets.
 
+function(_vice_find_xcrun_tool out_var tool_name)
+  if(NOT APPLE)
+    set(${out_var} "" PARENT_SCOPE)
+    return()
+  endif()
+
+  find_program(_vice_xcrun NAMES xcrun)
+  if(NOT _vice_xcrun)
+    set(${out_var} "" PARENT_SCOPE)
+    return()
+  endif()
+
+  execute_process(
+    COMMAND "${_vice_xcrun}" --find "${tool_name}"
+    RESULT_VARIABLE _vice_xcrun_result
+    OUTPUT_VARIABLE _vice_xcrun_path
+    ERROR_QUIET
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+  )
+  if(_vice_xcrun_result EQUAL 0 AND EXISTS "${_vice_xcrun_path}")
+    set(${out_var} "${_vice_xcrun_path}" PARENT_SCOPE)
+    return()
+  endif()
+
+  set(${out_var} "" PARENT_SCOPE)
+endfunction()
+
 function(vice_find_dxc out_var)
   if(DEFINED VICE_DXC_EXECUTABLE AND EXISTS "${VICE_DXC_EXECUTABLE}")
     set(${out_var} "${VICE_DXC_EXECUTABLE}" PARENT_SCOPE)
@@ -15,6 +42,14 @@ function(vice_find_dxc out_var)
   if(_vice_dxc)
     set(${out_var} "${_vice_dxc}" PARENT_SCOPE)
     return()
+  endif()
+
+  if(APPLE)
+    _vice_find_xcrun_tool(_vice_xcrun_dxc dxc)
+    if(_vice_xcrun_dxc)
+      set(${out_var} "${_vice_xcrun_dxc}" PARENT_SCOPE)
+      return()
+    endif()
   endif()
 
   if(WIN32)
@@ -59,6 +94,14 @@ function(vice_find_metal_shader_converter out_var)
   if(_vice_metal_shader_converter)
     set(${out_var} "${_vice_metal_shader_converter}" PARENT_SCOPE)
     return()
+  endif()
+
+  if(APPLE)
+    _vice_find_xcrun_tool(_vice_xcrun_metal_shader_converter metal-shaderconverter)
+    if(_vice_xcrun_metal_shader_converter)
+      set(${out_var} "${_vice_xcrun_metal_shader_converter}" PARENT_SCOPE)
+      return()
+    endif()
   endif()
 
   set(${out_var} "" PARENT_SCOPE)
