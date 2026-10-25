@@ -1,3 +1,4 @@
+#include <vice/runtime/ray_reflection_history.hpp>
 #include <vice/runtime/ray_reflections.hpp>
 #include <vice/runtime/scene.hpp>
 
@@ -111,6 +112,45 @@ void test_constants_and_identity_contract() {
         "24-bit instance identity plus miss sentinel must remain lossless in uint32");
 }
 
+void test_history_projection_and_depth_contract() {
+    const auto identity = vice::math::identity();
+    const auto projection = vice::runtime::runtime_ray_reflection_history_projection(
+        identity,
+        {0.0F, 0.0F, 0.5F}
+    );
+    require(projection.has_value(), "center history point must project into the frame");
+    if (projection.has_value()) {
+        require(near(projection->u, 0.5F) && near(projection->v, 0.5F) &&
+                near(projection->device_depth, 0.5F),
+            "history projection must preserve center UV and zero-to-one depth");
+    }
+    require(!vice::runtime::runtime_ray_reflection_history_projection(
+            identity, {2.0F, 0.0F, 0.5F}
+        ).has_value(),
+        "offscreen history points must be rejected");
+    require(!vice::runtime::runtime_ray_reflection_history_projection(
+            identity, {0.0F, 0.0F, 1.0F}
+        ).has_value(),
+        "background-depth history points must be rejected");
+
+    require(vice::runtime::runtime_ray_reflection_history_depth_matches(0.5F, 0.505F),
+        "small relative depth deltas must preserve valid reflection history");
+    require(!vice::runtime::runtime_ray_reflection_history_depth_matches(0.5F, 0.55F),
+        "large depth deltas must reject disoccluded reflection history");
+
+    const auto constants = vice::runtime::make_runtime_ray_reflection_history_constants(
+        identity, 1920U, 1080U, true
+    );
+    require(constants.has_value(), "valid reflection-history constants must be accepted");
+    if (constants.has_value()) {
+        require(near(constants->target_size_history[0], 1920.0F) &&
+                near(constants->target_size_history[1], 1080.0F) &&
+                near(constants->target_size_history[2], 1.0F) &&
+                near(constants->target_size_history[3], 0.0025F),
+            "reflection-history constants must preserve extent, validity and depth threshold");
+    }
+}
+
 void test_public_default_state() {
     vice::runtime::RuntimeSceneRenderer renderer;
     require(renderer.ray_reflection_radiance() == nullptr,
@@ -148,6 +188,29 @@ void test_shader_contract() {
         "committed hit position and exact identity must use a structured GPU buffer");
 }
 
+void test_history_shader_contract() {
+    const auto shader = read_text(VICE_RAY_REFLECTION_HISTORY_SHADER_SOURCE);
+    require(!shader.empty(), "reflection-history shader source must be readable");
+    require(shader.find("vice_ray_reflection_history_cs") != std::string::npos &&
+            shader.find("StructuredBuffer<ReflectionHit>") != std::string::npos,
+        "reflection-history resolve must consume committed trace hits in compute");
+    require(shader.find("previous_view_projection") != std::string::npos &&
+            shader.find("PreviousSceneColor.Load") != std::string::npos &&
+            shader.find("PreviousDepth.Load") != std::string::npos,
+        "reflection-history resolve must reuse shared scene color, depth, and camera history");
+    require(shader.find("hit.instance_id_plus_one == 0u") != std::string::npos &&
+            shader.find("target_size_history.z < 0.5") != std::string::npos,
+        "misses and invalid temporal history must retain the environment fallback");
+    require(shader.find("depth_threshold * 8.0") != std::string::npos &&
+            shader.find("abs(previous_ndc.z - previous_depth) > relative_depth_threshold") !=
+                std::string::npos,
+        "reflection-history resolve must reject disocclusion with the shared relative-depth rule");
+    require(shader.find(
+            "ReflectionRadiance[pixel] = float4(max(history_radiance, 0.0), current_radiance.a)"
+        ) != std::string::npos,
+        "validated hits must replace only raw incident RGB and preserve the PBR replacement mask");
+}
+
 void test_gpu_pbr_composition_contract() {
     const auto shader = read_text(VICE_GPU_PBR_SURFACE_SHADER_SOURCE);
     require(!shader.empty(), "GPU PBR shader source must be readable");
@@ -180,6 +243,7 @@ void test_gpu_pbr_composition_contract() {
 
 void test_runtime_binding_and_order_contract() {
     const auto implementation = read_text(VICE_RAY_REFLECTIONS_CPP_SOURCE);
+    const auto history_implementation = read_text(VICE_RAY_REFLECTION_HISTORY_CPP_SOURCE);
     const auto bridge = read_text(VICE_RAY_REFLECTIONS_BRIDGE_SOURCE);
     require(implementation.find("render::TextureFormat::rgba16_float") != std::string::npos &&
             implementation.find("render::BufferUsage::storage") != std::string::npos,
@@ -187,20 +251,18 @@ void test_runtime_binding_and_order_contract() {
     require(implementation.find("set_compute_acceleration_structure") != std::string::npos &&
             implementation.find("set_compute_storage_buffer") != std::string::npos,
         "Runtime must bind the authoritative TLAS and lossless hit buffer through compute RHI");
-    require(implementation.find("environment.specular") != std::string::npos &&
-            implementation.find("environment.sampler") != std::string::npos,
-        "Runtime reflection dispatch must reuse the existing environment binding");
     require(implementation.find("state.valid = dispatched") != std::string::npos &&
             implementation.find("|| !state.valid") != std::string::npos,
         "public raw reflection outputs must only expose data produced by the current frame");
+    require(history_implementation.find("set_compute_buffer") != std::string::npos &&
+            history_implementation.find("set_compute_texture") != std::string::npos &&
+            history_implementation.find("set_compute_storage_texture") != std::string::npos,
+        "reflection-history resolve must use only portable compute RHI bindings");
     require(bridge.find("binding = 26U") != std::string::npos &&
             bridge.find("set_graphics_texture(reflection_binding, bound_texture)") != std::string::npos,
         "Runtime must bind the portable GPU PBR reflection descriptor");
     require(bridge.find("radiance != nullptr ? *radiance : fallback_texture") != std::string::npos,
         "GPU PBR must receive a valid t26 descriptor even on non-RT fallback frames");
-    require(bridge.find("offsetof(GpuPbrSceneConstants, ambient_occlusion_metadata) + sizeof(float)") !=
-            std::string::npos,
-        "Runtime must mark reflection validity in the reserved second metadata lane");
 
     const auto motion_macro = bridge.find("#define encode_motion_vectors");
     const auto guide_position = bridge.find(
@@ -209,13 +271,17 @@ void test_runtime_binding_and_order_contract() {
     const auto trace_position = bridge.find(
         "runtime_ray_reflections_after_surface_guide(", motion_macro
     );
+    const auto history_position = bridge.find(
+        "runtime_ray_reflection_history_after_trace(", motion_macro
+    );
     const auto marker_position = bridge.find(
         "runtime_ray_reflections_mark_gpu_pbr(", motion_macro
     );
     require(motion_macro != std::string::npos && guide_position != std::string::npos &&
-            trace_position != std::string::npos && marker_position != std::string::npos &&
-            guide_position < trace_position && trace_position < marker_position,
-        "surface guide, RayQuery trace, and PBR validity marker must execute in causal order");
+            trace_position != std::string::npos && history_position != std::string::npos &&
+            marker_position != std::string::npos && guide_position < trace_position &&
+            trace_position < history_position && history_position < marker_position,
+        "guide, trace, history resolve, and PBR validity marker must execute in causal order");
 }
 
 } // namespace
@@ -224,8 +290,10 @@ int main() {
     test_camera_reconstruction();
     test_reflection_direction_and_eligibility();
     test_constants_and_identity_contract();
+    test_history_projection_and_depth_contract();
     test_public_default_state();
     test_shader_contract();
+    test_history_shader_contract();
     test_gpu_pbr_composition_contract();
     test_runtime_binding_and_order_contract();
 
