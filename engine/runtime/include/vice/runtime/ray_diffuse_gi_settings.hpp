@@ -1,12 +1,12 @@
 #pragma once
 
+#include <vice/runtime/ray_diffuse_gi.hpp>
+
 #include <cmath>
 #include <cstdint>
 
 namespace vice::runtime {
 
-inline constexpr float runtime_ray_diffuse_gi_default_max_distance = 40.0F;
-inline constexpr float runtime_ray_diffuse_gi_default_surface_bias = 0.02F;
 inline constexpr std::uint32_t runtime_ray_diffuse_gi_default_spatial_kernel_radius = 2U;
 inline constexpr float runtime_ray_diffuse_gi_default_temporal_history_weight = 0.92F;
 
