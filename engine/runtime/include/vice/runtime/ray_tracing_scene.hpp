@@ -10,6 +10,8 @@
 
 namespace vice::runtime {
 
+inline constexpr std::uint32_t runtime_ray_tracing_invalid_scene_instance = 0xFFFFFFFFU;
+
 struct RuntimeRayTracingBlasKey {
     world::ResourceId mesh{};
     render::MeshStableId stable_id{};
@@ -43,10 +45,22 @@ struct RuntimeRayTracingInstancePlan {
 struct RuntimeRayTracingScenePlan {
     std::vector<RuntimeRayTracingBlasPlan> blases;
     std::vector<RuntimeRayTracingInstancePlan> instances;
+    // Indexed by TLAS array instance index. Values address the authoritative
+    // RenderMeshInstance span supplied to the planner; they are deliberately
+    // independent of the persistent 24-bit custom InstanceID identity.
+    std::vector<std::uint32_t> scene_instance_indices;
     std::string diagnostics;
 
     [[nodiscard]] explicit operator bool() const noexcept {
         return diagnostics.empty();
+    }
+
+    [[nodiscard]] std::uint32_t scene_instance_index(
+        const std::uint32_t tlas_instance_index
+    ) const noexcept {
+        return tlas_instance_index < scene_instance_indices.size()
+            ? scene_instance_indices[tlas_instance_index]
+            : runtime_ray_tracing_invalid_scene_instance;
     }
 };
 
