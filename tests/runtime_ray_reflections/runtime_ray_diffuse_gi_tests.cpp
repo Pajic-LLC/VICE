@@ -1,5 +1,7 @@
 #include <vice/render/rhi.hpp>
 #include <vice/runtime/ray_diffuse_gi.hpp>
+#include <vice/runtime/ray_hit_radiance_history.hpp>
+#include <vice/runtime/ray_scene_hit.hpp>
 
 #include <cmath>
 #include <filesystem>
@@ -110,6 +112,48 @@ int main() {
         math::Vec3{0.0F, 0.0F, 0.0F}, 0U, 0U, 0U
     ).has_value());
 
+    CHECK(sizeof(runtime::RuntimeRayDiffuseGiHit) == sizeof(runtime::RuntimeRaySceneHit));
+    runtime::RuntimeRayDiffuseGiHit hit{};
+    hit.world_position[0] = 7.0F;
+    hit.world_position[1] = 8.0F;
+    hit.world_position[2] = 9.0F;
+    hit.instance_id_plus_one = 18U;
+    CHECK(hit.instance_id_plus_one == 18U);
+
+    const world::GlobalPosition current_origin{
+        1.0e12 + 3.0,
+        -2.0e12 + 4.0,
+        3.0e12 - 5.0,
+    };
+    const world::GlobalPosition previous_origin{1.0e12, -2.0e12, 3.0e12};
+    const auto rebased = runtime::runtime_ray_hit_radiance_history_rebase_position(
+        {hit.world_position[0], hit.world_position[1], hit.world_position[2]},
+        current_origin,
+        previous_origin
+    );
+    CHECK(rebased.has_value());
+    CHECK(near(rebased->x, 10.0F));
+    CHECK(near(rebased->y, 12.0F));
+    CHECK(near(rebased->z, 4.0F));
+
+    const auto history_constants = runtime::make_runtime_ray_hit_radiance_history_constants(
+        math::identity(),
+        1920U,
+        1080U,
+        true,
+        current_origin,
+        previous_origin
+    );
+    CHECK(history_constants.has_value());
+    CHECK(near(history_constants->target_size_history[0], 1920.0F));
+    CHECK(near(history_constants->target_size_history[1], 1080.0F));
+    CHECK(near(history_constants->target_size_history[2], 1.0F));
+    CHECK(near(history_constants->current_to_previous_origin[0], 3.0F));
+    CHECK(near(history_constants->current_to_previous_origin[1], 4.0F));
+    CHECK(near(history_constants->current_to_previous_origin[2], -5.0F));
+    CHECK(runtime::runtime_ray_hit_radiance_history_depth_matches(0.5F, 0.505F));
+    CHECK(!runtime::runtime_ray_hit_radiance_history_depth_matches(0.5F, 0.55F));
+
     const std::string shader = read_text(VICE_RAY_DIFFUSE_GI_SHADER_SOURCE);
     CHECK(!shader.empty());
     CHECK(shader.find("RaytracingAccelerationStructure SceneTlas") != std::string::npos);
@@ -122,6 +166,23 @@ int main() {
     CHECK(shader.find("scene_instance_index + 1u") != std::string::npos);
     CHECK(shader.find("float4(vice_environment_radiance(ray_direction), 1.0)") != std::string::npos);
 
+    const std::string history_shader = read_text(VICE_RAY_DIFFUSE_GI_HISTORY_SHADER_SOURCE);
+    CHECK(!history_shader.empty());
+    CHECK(history_shader.find("StructuredBuffer<ReflectionHit>") != std::string::npos);
+    CHECK(history_shader.find("hit.instance_id_plus_one == 0u") != std::string::npos);
+    CHECK(history_shader.find("hit.world_position + current_to_previous_origin.xyz") != std::string::npos);
+    CHECK(history_shader.find("PreviousSceneColor.Load") != std::string::npos);
+    CHECK(history_shader.find("PreviousDepth.Load") != std::string::npos);
+    CHECK(history_shader.find("vice_history_depth_matches") != std::string::npos);
+    CHECK(history_shader.find("current_radiance.a") != std::string::npos);
+
+    const std::string history_cpp = read_text(VICE_RAY_HIT_RADIANCE_HISTORY_CPP_SOURCE);
+    CHECK(!history_cpp.empty());
+    CHECK(history_cpp.find("sizeof(RuntimeRaySceneHit)") != std::string::npos);
+    CHECK(history_cpp.find("set_compute_buffer") != std::string::npos);
+    CHECK(history_cpp.find("set_compute_texture") != std::string::npos);
+    CHECK(history_cpp.find("set_compute_storage_texture") != std::string::npos);
+
     auto device = render::Device::create();
     if (device != nullptr) {
         std::string diagnostics;
@@ -132,6 +193,11 @@ int main() {
         CHECK(fallback_pass.resize(1U, 1U, &diagnostics));
         CHECK(fallback_pass.radiance() == nullptr);
         CHECK(fallback_pass.hits() == nullptr);
+        CHECK(diagnostics.empty());
+
+        runtime::RuntimeRayHitRadianceHistoryPass fallback_history;
+        CHECK(fallback_history.initialize(*device, {}, &diagnostics));
+        CHECK(!fallback_history.available());
         CHECK(diagnostics.empty());
 
 #ifdef VICE_RUNTIME_RAY_DIFFUSE_GI_CONTRACT_MANIFEST
@@ -150,9 +216,22 @@ int main() {
             CHECK(diagnostics.empty());
         }
 #endif
+
+#ifdef VICE_RUNTIME_RAY_DIFFUSE_GI_HISTORY_MANIFEST
+        if (device->capabilities().ray_tracing) {
+            runtime::RuntimeRayHitRadianceHistoryPass cooked_history;
+            CHECK(cooked_history.initialize(
+                *device,
+                std::filesystem::path{VICE_RUNTIME_RAY_DIFFUSE_GI_HISTORY_MANIFEST},
+                &diagnostics
+            ));
+            CHECK(cooked_history.available());
+            CHECK(diagnostics.empty());
+        }
+#endif
     }
 
-    std::cout << "Diffuse GI ray sampling and authoritative hit contract validated.\n";
+    std::cout << "Diffuse GI ray and large-world shared history contract validated.\n";
     return 0;
 }
 

@@ -1,13 +1,11 @@
-#include <vice/runtime/ray_reflection_history.hpp>
+#include <vice/runtime/ray_hit_radiance_history.hpp>
 
 #include <vice/render/shader_asset.hpp>
-#include <vice/runtime/ray_reflections.hpp>
 
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
-#include <limits>
 #include <span>
 #include <string>
 #include <utility>
@@ -71,8 +69,8 @@ void set_diagnostics(std::string* const diagnostics, std::string message) {
 
 } // namespace
 
-std::optional<RuntimeRayReflectionHistoryProjection>
-runtime_ray_reflection_history_projection(
+std::optional<RuntimeRayHitRadianceHistoryProjection>
+runtime_ray_hit_radiance_history_projection(
     const math::Mat4& previous_view_projection,
     const math::Vec3 world_position
 ) noexcept {
@@ -111,14 +109,14 @@ runtime_ray_reflection_history_projection(
         return std::nullopt;
     }
 
-    return RuntimeRayReflectionHistoryProjection{
+    return RuntimeRayHitRadianceHistoryProjection{
         .u = ndc_x * 0.5F + 0.5F,
         .v = ndc_y * -0.5F + 0.5F,
         .device_depth = ndc_z,
     };
 }
 
-bool runtime_ray_reflection_history_depth_matches(
+bool runtime_ray_hit_radiance_history_depth_matches(
     const float expected_device_depth,
     const float sampled_device_depth,
     const float depth_threshold
@@ -135,8 +133,8 @@ bool runtime_ray_reflection_history_depth_matches(
     return std::abs(expected_device_depth - sampled_device_depth) <= relative_threshold;
 }
 
-std::optional<RuntimeRayReflectionHistoryConstants>
-make_runtime_ray_reflection_history_constants(
+std::optional<RuntimeRayHitRadianceHistoryConstants>
+make_runtime_ray_hit_radiance_history_constants(
     const math::Mat4& previous_view_projection,
     const std::uint32_t width,
     const std::uint32_t height,
@@ -148,7 +146,7 @@ make_runtime_ray_reflection_history_constants(
         return std::nullopt;
     }
 
-    RuntimeRayReflectionHistoryConstants constants{};
+    RuntimeRayHitRadianceHistoryConstants constants{};
     constants.previous_view_projection = previous_view_projection;
     constants.target_size_history[0] = static_cast<float>(width);
     constants.target_size_history[1] = static_cast<float>(height);
@@ -157,7 +155,7 @@ make_runtime_ray_reflection_history_constants(
     return constants;
 }
 
-struct RuntimeRayReflectionHistoryPass::State {
+struct RuntimeRayHitRadianceHistoryPass::State {
     std::unique_ptr<render::ShaderModule> shader;
     std::unique_ptr<render::ComputePipeline> pipeline;
     std::unique_ptr<render::Buffer> constants;
@@ -166,23 +164,23 @@ struct RuntimeRayReflectionHistoryPass::State {
     bool available = false;
 };
 
-RuntimeRayReflectionHistoryPass::RuntimeRayReflectionHistoryPass()
+RuntimeRayHitRadianceHistoryPass::RuntimeRayHitRadianceHistoryPass()
     : state_{std::make_unique<State>()} {}
-RuntimeRayReflectionHistoryPass::~RuntimeRayReflectionHistoryPass() = default;
-RuntimeRayReflectionHistoryPass::RuntimeRayReflectionHistoryPass(
-    RuntimeRayReflectionHistoryPass&&
+RuntimeRayHitRadianceHistoryPass::~RuntimeRayHitRadianceHistoryPass() = default;
+RuntimeRayHitRadianceHistoryPass::RuntimeRayHitRadianceHistoryPass(
+    RuntimeRayHitRadianceHistoryPass&&
 ) noexcept = default;
-RuntimeRayReflectionHistoryPass& RuntimeRayReflectionHistoryPass::operator=(
-    RuntimeRayReflectionHistoryPass&&
+RuntimeRayHitRadianceHistoryPass& RuntimeRayHitRadianceHistoryPass::operator=(
+    RuntimeRayHitRadianceHistoryPass&&
 ) noexcept = default;
 
-bool RuntimeRayReflectionHistoryPass::initialize(
+bool RuntimeRayHitRadianceHistoryPass::initialize(
     render::Device& device,
     const std::filesystem::path& shader_manifest,
     std::string* const diagnostics
 ) {
     if (state_ == nullptr) {
-        set_diagnostics(diagnostics, "Runtime reflection-history state is unavailable.");
+        set_diagnostics(diagnostics, "Runtime ray-hit history state is unavailable.");
         return false;
     }
     state_->shader.reset();
@@ -206,7 +204,7 @@ bool RuntimeRayReflectionHistoryPass::initialize(
         cooked.compute_thread_group_size->z != 1U) {
         set_diagnostics(
             diagnostics,
-            "VICE Runtime could not load the reflection-history compute shader."
+            "VICE Runtime could not load the ray-hit radiance-history compute shader."
         );
         return false;
     }
@@ -214,19 +212,19 @@ bool RuntimeRayReflectionHistoryPass::initialize(
     render::ComputePipelineDesc pipeline_desc;
     pipeline_desc.compute_shader = cooked.module.get();
     pipeline_desc.thread_group_size = *cooked.compute_thread_group_size;
-    pipeline_desc.debug_name = "VICE Runtime reflection history resolve";
+    pipeline_desc.debug_name = "VICE Runtime ray-hit radiance history resolve";
     auto pipeline = device.create_compute_pipeline(pipeline_desc);
 
     render::BufferDesc constants_desc;
-    constants_desc.size = sizeof(RuntimeRayReflectionHistoryConstants);
+    constants_desc.size = sizeof(RuntimeRayHitRadianceHistoryConstants);
     constants_desc.usage = render::BufferUsage::uniform;
     constants_desc.memory = render::MemoryLocation::cpu_to_gpu;
-    constants_desc.debug_name = "VICE Runtime reflection-history constants";
+    constants_desc.debug_name = "VICE Runtime ray-hit history constants";
     auto constants = device.create_buffer(constants_desc);
     if (!pipeline || !constants) {
         set_diagnostics(
             diagnostics,
-            "VICE Runtime could not create reflection-history compute resources."
+            "VICE Runtime could not create ray-hit radiance-history compute resources."
         );
         return false;
     }
@@ -241,44 +239,44 @@ bool RuntimeRayReflectionHistoryPass::initialize(
     return true;
 }
 
-bool RuntimeRayReflectionHistoryPass::dispatch(
+bool RuntimeRayHitRadianceHistoryPass::dispatch(
     render::CommandList& commands,
-    render::Texture& reflection_radiance,
-    render::Buffer& reflection_hits,
+    render::Texture& ray_radiance,
+    render::Buffer& ray_hits,
     render::Texture& previous_scene_color,
     render::Texture& previous_depth,
-    const RuntimeRayReflectionHistoryConstants& constants,
+    const RuntimeRayHitRadianceHistoryConstants& constants,
     std::string* const diagnostics
 ) {
     if (state_ == nullptr || !state_->available || !state_->pipeline || !state_->constants ||
         state_->group_size_x == 0U || state_->group_size_y == 0U) {
-        set_diagnostics(diagnostics, "Runtime reflection-history pass is not ready.");
+        set_diagnostics(diagnostics, "Runtime ray-hit radiance-history pass is not ready.");
         return false;
     }
 
     const auto width = static_cast<std::uint32_t>(constants.target_size_history[0]);
     const auto height = static_cast<std::uint32_t>(constants.target_size_history[1]);
     const std::uint64_t pixel_count = static_cast<std::uint64_t>(width) * height;
-    const std::uint64_t required_hit_bytes = pixel_count * sizeof(RuntimeRayReflectionHit);
+    const std::uint64_t required_hit_bytes = pixel_count * sizeof(RuntimeRaySceneHit);
     if (width == 0U || height == 0U ||
         constants.target_size_history[0] != static_cast<float>(width) ||
         constants.target_size_history[1] != static_cast<float>(height) ||
         constants.target_size_history[2] < 0.0F || constants.target_size_history[2] > 1.0F ||
         constants.target_size_history[3] <= 0.0F ||
-        reflection_radiance.format() != render::TextureFormat::rgba16_float ||
+        ray_radiance.format() != render::TextureFormat::rgba16_float ||
         previous_scene_color.format() != render::TextureFormat::rgba16_float ||
         previous_depth.format() != render::TextureFormat::depth32_float ||
-        !render::has_usage(reflection_radiance.usage(), render::TextureUsage::storage) ||
+        !render::has_usage(ray_radiance.usage(), render::TextureUsage::storage) ||
         !render::has_usage(previous_scene_color.usage(), render::TextureUsage::sampled) ||
         !render::has_usage(previous_depth.usage(), render::TextureUsage::sampled) ||
-        !render::has_usage(reflection_hits.usage(), render::BufferUsage::storage) ||
-        reflection_radiance.width() != width || reflection_radiance.height() != height ||
+        !render::has_usage(ray_hits.usage(), render::BufferUsage::storage) ||
+        ray_radiance.width() != width || ray_radiance.height() != height ||
         previous_scene_color.width() != width || previous_scene_color.height() != height ||
         previous_depth.width() != width || previous_depth.height() != height ||
-        reflection_hits.size() < required_hit_bytes) {
+        ray_hits.size() < required_hit_bytes) {
         set_diagnostics(
             diagnostics,
-            "Runtime reflection-history inputs or constants are incompatible."
+            "Runtime ray-hit radiance-history inputs or constants are incompatible."
         );
         return false;
     }
@@ -286,7 +284,7 @@ bool RuntimeRayReflectionHistoryPass::dispatch(
     const render::BufferViewDesc hit_view{
         .offset = 0U,
         .size = required_hit_bytes,
-        .structure_stride = sizeof(RuntimeRayReflectionHit),
+        .structure_stride = sizeof(RuntimeRaySceneHit),
     };
     if (!state_->constants->write(0U, std::as_bytes(std::span{&constants, 1})) ||
         !commands.set_compute_pipeline(*state_->pipeline) ||
@@ -294,17 +292,17 @@ bool RuntimeRayReflectionHistoryPass::dispatch(
             history_constants_binding,
             *state_->constants,
             0U,
-            sizeof(RuntimeRayReflectionHistoryConstants)
-        ) || !commands.set_compute_buffer(history_hits_binding, reflection_hits, hit_view) ||
+            sizeof(RuntimeRayHitRadianceHistoryConstants)
+        ) || !commands.set_compute_buffer(history_hits_binding, ray_hits, hit_view) ||
         !commands.set_compute_texture(history_color_binding, previous_scene_color) ||
         !commands.set_compute_texture(history_depth_binding, previous_depth) ||
-        !commands.set_compute_storage_texture(history_radiance_binding, reflection_radiance) ||
+        !commands.set_compute_storage_texture(history_radiance_binding, ray_radiance) ||
         !commands.dispatch(render::ComputeDispatchDesc{
             .group_count_x = dispatch_groups(width, state_->group_size_x),
             .group_count_y = dispatch_groups(height, state_->group_size_y),
             .group_count_z = 1U,
         })) {
-        set_diagnostics(diagnostics, "VICE Runtime could not encode reflection-history resolve.");
+        set_diagnostics(diagnostics, "VICE Runtime could not encode ray-hit radiance history.");
         return false;
     }
 
@@ -312,7 +310,7 @@ bool RuntimeRayReflectionHistoryPass::dispatch(
     return true;
 }
 
-bool RuntimeRayReflectionHistoryPass::available() const noexcept {
+bool RuntimeRayHitRadianceHistoryPass::available() const noexcept {
     return state_ != nullptr && state_->available;
 }
 

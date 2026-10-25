@@ -15,7 +15,7 @@ target_compile_definitions(
     VICE_RAY_REFLECTION_HISTORY_SHADER_SOURCE="${CMAKE_SOURCE_DIR}/assets/shaders/vice_ray_reflection_history.hlsl"
     VICE_GPU_PBR_SURFACE_SHADER_SOURCE="${CMAKE_SOURCE_DIR}/assets/shaders/vice_gpu_pbr_surface.hlsl"
     VICE_RAY_REFLECTIONS_CPP_SOURCE="${CMAKE_SOURCE_DIR}/engine/runtime/src/ray_reflections.cpp"
-    VICE_RAY_REFLECTION_HISTORY_CPP_SOURCE="${CMAKE_SOURCE_DIR}/engine/runtime/src/ray_reflection_history.cpp"
+    VICE_RAY_REFLECTION_HISTORY_CPP_SOURCE="${CMAKE_SOURCE_DIR}/engine/runtime/src/ray_hit_radiance_history.cpp"
     VICE_RAY_REFLECTIONS_BRIDGE_SOURCE="${CMAKE_SOURCE_DIR}/engine/runtime/src/reflection_surface_guide_bridge.hpp"
 )
 vice_enable_warnings(vice_runtime_ray_reflections_tests)
@@ -71,6 +71,8 @@ target_compile_definitions(
   vice_runtime_ray_diffuse_gi_tests
   PRIVATE
     VICE_RAY_DIFFUSE_GI_SHADER_SOURCE="${CMAKE_SOURCE_DIR}/assets/shaders/vice_ray_diffuse_gi.hlsl"
+    VICE_RAY_DIFFUSE_GI_HISTORY_SHADER_SOURCE="${CMAKE_SOURCE_DIR}/assets/shaders/vice_ray_reflection_history.hlsl"
+    VICE_RAY_HIT_RADIANCE_HISTORY_CPP_SOURCE="${CMAKE_SOURCE_DIR}/engine/runtime/src/ray_hit_radiance_history.cpp"
 )
 vice_enable_warnings(vice_runtime_ray_diffuse_gi_tests)
 add_test(
@@ -107,6 +109,17 @@ if(_vice_runtime_ray_shadow_target)
     PRIVATE
       VICE_RUNTIME_RAY_DIFFUSE_GI_CONTRACT_MANIFEST="${VICE_RUNTIME_RAY_DIFFUSE_GI_CONTRACT_MANIFEST_PATH}"
   )
+  if(TARGET vice_runtime_ray_reflection_history_shader)
+    add_dependencies(
+      vice_runtime_ray_diffuse_gi_tests
+      vice_runtime_ray_reflection_history_shader
+    )
+    target_compile_definitions(
+      vice_runtime_ray_diffuse_gi_tests
+      PRIVATE
+        VICE_RUNTIME_RAY_DIFFUSE_GI_HISTORY_MANIFEST="${VICE_RUNTIME_RAY_REFLECTION_HISTORY_MANIFEST_PATH}"
+    )
+  endif()
 endif()
 
 add_executable(
