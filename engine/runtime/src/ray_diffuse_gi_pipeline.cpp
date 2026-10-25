@@ -4,6 +4,7 @@
 #include <cmath>
 #include <cstdint>
 #include <string>
+#include <utility>
 
 namespace vice::runtime::detail {
 namespace {
@@ -109,8 +110,11 @@ bool RuntimeRayDiffuseGiPipeline::dispatch(
         max_distance,
         input.settings.surface_bias
     );
-    if (!trace_constants.has_value() ||
-        !trace_.dispatch(
+    if (!trace_constants.has_value()) {
+        set_diagnostics(diagnostics, "Runtime diffuse-GI trace constants are invalid.");
+        return false;
+    }
+    if (!trace_.dispatch(
             *input.commands,
             *input.current_depth,
             *input.surface_guide,
@@ -122,11 +126,6 @@ bool RuntimeRayDiffuseGiPipeline::dispatch(
             *trace_constants,
             diagnostics
         )) {
-        if (trace_constants.has_value() || diagnostics == nullptr || diagnostics->empty()) {
-            if (!trace_constants.has_value()) {
-                set_diagnostics(diagnostics, "Runtime diffuse-GI trace constants are invalid.");
-            }
-        }
         return false;
     }
 
