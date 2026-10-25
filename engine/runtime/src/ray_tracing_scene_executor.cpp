@@ -46,6 +46,18 @@ namespace {
     return result;
 }
 
+[[nodiscard]] bool valid_scene_instance_mapping(const RuntimeRayTracingScenePlan& plan) noexcept {
+    if (plan.scene_instance_indices.empty()) return true;
+    return plan.scene_instance_indices.size() == plan.instances.size() &&
+        std::none_of(
+            plan.scene_instance_indices.begin(),
+            plan.scene_instance_indices.end(),
+            [](const std::uint32_t index) {
+                return index == runtime_ray_tracing_invalid_scene_instance;
+            }
+        );
+}
+
 [[nodiscard]] constexpr std::uint32_t saturating_add(
     const std::uint32_t left,
     const std::uint32_t right
@@ -101,6 +113,10 @@ RuntimeRayTracingExecutionResult RuntimeRayTracingSceneExecutor::execute(
 
     if (!plan.blases.empty() && !geometry_resolver) {
         result.diagnostics = "Runtime ray tracing execution requires a geometry resolver.";
+        return result;
+    }
+    if (!valid_scene_instance_mapping(plan)) {
+        result.diagnostics = "Runtime ray tracing scene plan has an invalid TLAS scene-instance mapping.";
         return result;
     }
 
@@ -207,6 +223,7 @@ RuntimeRayTracingExecutionResult RuntimeRayTracingSceneExecutor::execute(
         tlas_.reset();
         previous_blas_keys_ = current_blas_keys;
         previous_instances_.clear();
+        active_scene_instance_indices_.clear();
         refresh_telemetry(true, result.counters);
         return result;
     }
@@ -249,6 +266,7 @@ RuntimeRayTracingExecutionResult RuntimeRayTracingSceneExecutor::execute(
         blases_ = std::move(next_blases);
         previous_blas_keys_ = current_blas_keys;
         previous_instances_ = plan.instances;
+        active_scene_instance_indices_ = plan.scene_instance_indices;
         ++result.counters.tlas_reuses;
         refresh_telemetry(true, result.counters);
         return result;
@@ -278,6 +296,7 @@ RuntimeRayTracingExecutionResult RuntimeRayTracingSceneExecutor::execute(
     tlas_ = std::move(next_tlas);
     previous_blas_keys_ = current_blas_keys;
     previous_instances_ = plan.instances;
+    active_scene_instance_indices_ = plan.scene_instance_indices;
     if (topology_matches) {
         ++result.counters.tlas_refits;
     } else {
@@ -292,6 +311,7 @@ void RuntimeRayTracingSceneExecutor::reset() noexcept {
     tlas_.reset();
     previous_blas_keys_.clear();
     previous_instances_.clear();
+    active_scene_instance_indices_.clear();
     telemetry_ = {};
 }
 
