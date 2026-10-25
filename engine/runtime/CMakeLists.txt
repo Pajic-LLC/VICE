@@ -28,6 +28,8 @@ add_library(
     src/package_metadata.cpp
     src/post_process.cpp
     src/ray_diffuse_gi.cpp
+    src/ray_diffuse_gi_denoise.cpp
+    src/ray_diffuse_gi_temporal.cpp
     src/ray_ambient_occlusion.cpp
     src/ray_ambient_occlusion_denoise.cpp
     src/ray_ambient_occlusion_temporal.cpp
