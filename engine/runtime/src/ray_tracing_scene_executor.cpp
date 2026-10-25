@@ -46,6 +46,18 @@ namespace {
     return result;
 }
 
+[[nodiscard]] bool valid_scene_instance_mapping(const RuntimeRayTracingScenePlan& plan) noexcept {
+    if (plan.scene_instance_indices.empty()) return true;
+    return plan.scene_instance_indices.size() == plan.instances.size() &&
+        std::none_of(
+            plan.scene_instance_indices.begin(),
+            plan.scene_instance_indices.end(),
+            [](const std::uint32_t index) {
+                return index == runtime_ray_tracing_invalid_scene_instance;
+            }
+        );
+}
+
 [[nodiscard]] constexpr std::uint32_t saturating_add(
     const std::uint32_t left,
     const std::uint32_t right
@@ -103,15 +115,9 @@ RuntimeRayTracingExecutionResult RuntimeRayTracingSceneExecutor::execute(
         result.diagnostics = "Runtime ray tracing execution requires a geometry resolver.";
         return result;
     }
-    if (plan.scene_instance_indices.size() != plan.instances.size()) {
-        result.diagnostics = "Runtime ray tracing scene plan has a stale TLAS scene-instance mapping.";
+    if (!valid_scene_instance_mapping(plan)) {
+        result.diagnostics = "Runtime ray tracing scene plan has an invalid TLAS scene-instance mapping.";
         return result;
-    }
-    for (const auto scene_instance_index : plan.scene_instance_indices) {
-        if (scene_instance_index == runtime_ray_tracing_invalid_scene_instance) {
-            result.diagnostics = "Runtime ray tracing scene plan contains an invalid scene-instance mapping.";
-            return result;
-        }
     }
 
     for (const auto& instance : plan.instances) {
