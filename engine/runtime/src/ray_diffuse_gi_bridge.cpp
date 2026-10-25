@@ -12,6 +12,7 @@ struct RuntimeRayDiffuseGiSceneState final {
     const RuntimeSceneRenderer* owner = nullptr;
     render::Device* device = nullptr;
     std::unique_ptr<RuntimeRayDiffuseGiPipeline> pipeline;
+    RuntimeRayDiffuseGiTelemetry telemetry{};
 };
 
 thread_local RuntimeRayDiffuseGiSceneState runtime_ray_diffuse_gi_scene_state;
@@ -22,6 +23,17 @@ void clear_diagnostics(std::string* const diagnostics) noexcept {
 
 void set_diagnostics(std::string* const diagnostics, const char* const message) {
     if (diagnostics != nullptr) *diagnostics = message;
+}
+
+void prepare_runtime_ray_diffuse_gi_scene_state(
+    const RuntimeSceneRenderer* const owner,
+    render::Device& device
+) {
+    auto& state = runtime_ray_diffuse_gi_scene_state;
+    if (state.owner == owner && state.device == &device) return;
+    state = {};
+    state.owner = owner;
+    state.device = &device;
 }
 
 [[nodiscard]] RuntimeRayDiffuseGiPipelineManifests runtime_ray_diffuse_gi_manifests() {
@@ -42,19 +54,15 @@ void set_diagnostics(std::string* const diagnostics, const char* const message) 
 }
 
 [[nodiscard]] bool ensure_runtime_ray_diffuse_gi_pipeline(
-    const RuntimeSceneRenderer* const owner,
     render::Device& device,
     std::string* const diagnostics
 ) {
     auto& state = runtime_ray_diffuse_gi_scene_state;
-    if (state.owner == owner && state.device == &device && state.pipeline != nullptr) {
+    if (state.pipeline != nullptr) {
         clear_diagnostics(diagnostics);
         return true;
     }
 
-    state = {};
-    state.owner = owner;
-    state.device = &device;
     state.pipeline = std::make_unique<RuntimeRayDiffuseGiPipeline>();
     if (!state.pipeline->initialize(device, runtime_ray_diffuse_gi_manifests(), diagnostics)) {
         state.pipeline.reset();
@@ -65,6 +73,17 @@ void set_diagnostics(std::string* const diagnostics, const char* const message) 
 }
 
 } // namespace
+
+RuntimeRayDiffuseGiTelemetry runtime_ray_diffuse_gi_telemetry_snapshot(
+    const RuntimeSceneRenderer* const owner
+) noexcept {
+    const auto& state = runtime_ray_diffuse_gi_scene_state;
+    if (owner != nullptr && state.owner == owner) return state.telemetry;
+
+    RuntimeRayDiffuseGiTelemetry telemetry{};
+    if (owner != nullptr) telemetry.settings = owner->ray_diffuse_gi_settings();
+    return telemetry;
+}
 
 bool runtime_ray_diffuse_gi_after_surface_guide(
     const RuntimeSceneRenderer* const owner,
@@ -89,20 +108,45 @@ bool runtime_ray_diffuse_gi_after_surface_guide(
         return true;
     }
 
+    prepare_runtime_ray_diffuse_gi_scene_state(owner, device);
+    auto& state = runtime_ray_diffuse_gi_scene_state;
     const RuntimeRayDiffuseGiSettings settings = owner->ray_diffuse_gi_settings();
+    state.telemetry = RuntimeRayDiffuseGiTelemetry{
+        .settings = settings,
+        .fallback_reason = RuntimeRayDiffuseGiFallbackReason::not_rendered,
+        .frame_index = temporal.frame_index,
+        .ray_tracing_supported = device.capabilities().ray_tracing,
+        .pipeline_available = state.pipeline != nullptr && state.pipeline->available(),
+        .scene_available = false,
+        .history_valid = temporal.history_valid,
+        .active = false,
+    };
+
     if (!is_valid(settings)) {
+        state.telemetry.fallback_reason = RuntimeRayDiffuseGiFallbackReason::invalid_settings;
         set_diagnostics(diagnostics, "Runtime diffuse-GI settings are invalid at render time.");
         return false;
     }
-    if (!settings.enabled || !device.capabilities().ray_tracing) {
+    if (!settings.enabled) {
+        state.telemetry.fallback_reason = RuntimeRayDiffuseGiFallbackReason::disabled;
+        clear_diagnostics(diagnostics);
+        return true;
+    }
+    if (!state.telemetry.ray_tracing_supported) {
+        state.telemetry.fallback_reason = RuntimeRayDiffuseGiFallbackReason::ray_tracing_unsupported;
         clear_diagnostics(diagnostics);
         return true;
     }
 
     if (current_depth == nullptr || previous_depth == nullptr || motion_vectors == nullptr ||
         surface_guide == nullptr || previous_scene_color == nullptr || ray_scene == nullptr ||
-        !environment.available || environment.specular == nullptr || environment.sampler == nullptr ||
         metrics.drawable_width == 0U || metrics.drawable_height == 0U) {
+        state.telemetry.fallback_reason = RuntimeRayDiffuseGiFallbackReason::frame_inputs_unavailable;
+        clear_diagnostics(diagnostics);
+        return true;
+    }
+    if (!environment.available || environment.specular == nullptr || environment.sampler == nullptr) {
+        state.telemetry.fallback_reason = RuntimeRayDiffuseGiFallbackReason::environment_unavailable;
         clear_diagnostics(diagnostics);
         return true;
     }
@@ -111,21 +155,29 @@ bool runtime_ray_diffuse_gi_after_surface_guide(
     auto* const scene_index_buffer = ray_scene->active_scene_instance_index_buffer();
     const auto scene_indices = ray_scene->active_scene_instance_indices();
     if (tlas == nullptr || scene_index_buffer == nullptr || scene_indices.empty()) {
+        state.telemetry.fallback_reason = RuntimeRayDiffuseGiFallbackReason::scene_unavailable;
         clear_diagnostics(diagnostics);
         return true;
     }
     if (scene_indices.size() > std::numeric_limits<std::uint32_t>::max()) {
+        state.telemetry.fallback_reason = RuntimeRayDiffuseGiFallbackReason::scene_unavailable;
         set_diagnostics(diagnostics, "Runtime diffuse GI scene-index mapping exceeds the supported range.");
         return false;
     }
+    state.telemetry.scene_available = true;
 
-    if (!ensure_runtime_ray_diffuse_gi_pipeline(owner, device, diagnostics)) return false;
-    auto& state = runtime_ray_diffuse_gi_scene_state;
-    if (state.pipeline == nullptr || !state.pipeline->available()) {
+    if (!ensure_runtime_ray_diffuse_gi_pipeline(device, diagnostics)) {
+        state.telemetry.fallback_reason = RuntimeRayDiffuseGiFallbackReason::pipeline_failure;
+        return false;
+    }
+    state.telemetry.pipeline_available = state.pipeline != nullptr && state.pipeline->available();
+    if (!state.telemetry.pipeline_available) {
+        state.telemetry.fallback_reason = RuntimeRayDiffuseGiFallbackReason::pipeline_unavailable;
         clear_diagnostics(diagnostics);
         return true;
     }
     if (!state.pipeline->resize(metrics.drawable_width, metrics.drawable_height, diagnostics)) {
+        state.telemetry.fallback_reason = RuntimeRayDiffuseGiFallbackReason::pipeline_failure;
         return false;
     }
 
@@ -160,14 +212,33 @@ bool runtime_ray_diffuse_gi_after_surface_guide(
         .width = metrics.drawable_width,
         .height = metrics.drawable_height,
     };
-    if (!state.pipeline->dispatch(input, diagnostics)) return false;
+    if (!state.pipeline->dispatch(input, diagnostics)) {
+        state.telemetry.fallback_reason = RuntimeRayDiffuseGiFallbackReason::pipeline_failure;
+        return false;
+    }
 
     auto* const radiance = state.pipeline->radiance();
-    if (radiance != nullptr) {
-        runtime_ray_diffuse_gi_publish_gpu_pbr(owner, radiance);
+    if (radiance == nullptr) {
+        state.telemetry.fallback_reason = RuntimeRayDiffuseGiFallbackReason::pipeline_failure;
+        set_diagnostics(diagnostics, "Runtime diffuse-GI pipeline produced no temporal output.");
+        return false;
     }
+
+    runtime_ray_diffuse_gi_publish_gpu_pbr(owner, radiance);
+    state.telemetry.active = true;
+    state.telemetry.fallback_reason = RuntimeRayDiffuseGiFallbackReason::none;
     clear_diagnostics(diagnostics);
     return true;
 }
 
 } // namespace vice::runtime::detail
+
+namespace vice::runtime {
+
+RuntimeRayDiffuseGiTelemetry runtime_ray_diffuse_gi_telemetry(
+    const RuntimeSceneRenderer& renderer
+) noexcept {
+    return detail::runtime_ray_diffuse_gi_telemetry_snapshot(&renderer);
+}
+
+} // namespace vice::runtime
