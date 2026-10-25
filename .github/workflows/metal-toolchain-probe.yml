@@ -11,8 +11,8 @@ permissions:
 
 jobs:
   probe:
-    name: macOS Metal toolchain probe
-    runs-on: macos-15
+    name: macOS 26 Metal toolchain probe
+    runs-on: macos-26
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -32,7 +32,7 @@ jobs:
             xcrun --find "$tool" 2>/dev/null || true
           done
 
-          find /opt /usr/local /Applications/Xcode.app -type f \
+          find /opt /usr/local /Applications -type f \
             \( -name dxc -o -name metal-shaderconverter \) -print 2>/dev/null | head -100 || true
 
       - name: Install Xcode Metal toolchain component
@@ -55,7 +55,7 @@ jobs:
           pkgutil --pkgs | grep -Ei 'metal|shader|converter' || true
 
           echo "== candidate executables =="
-          find /opt /usr/local /Applications/Xcode.app -type f \
+          find /opt /usr/local /Applications -type f \
             \( -name dxc -o -name metal-shaderconverter \) -print 2>/dev/null | head -100 || true
 
           if command -v metal-shaderconverter >/dev/null 2>&1; then
