@@ -125,6 +125,13 @@ void test_depth_and_order_contract() {
         "guide pass must depth-test against authoritative depth without rewriting it");
     require(implementation.find("render_pass.clear_depth_attachment = false") != std::string::npos,
         "guide pass must preserve the existing camera depth attachment");
+    require(implementation.find("RuntimeReflectionSurfaceGuideFrame{.depth = current_depth}") !=
+            std::string::npos &&
+            implementation.find("frame.draws.empty()") != std::string::npos,
+        "unsupported/direct-only frames must clear the guide to its neutral fallback");
+    require(bridge.find("runtime_reflection_surface_guide_needs_camera_depth_prepass") !=
+            std::string::npos,
+        "reflection guide must independently request authoritative current depth");
 
     const auto ao_position = bridge.find("runtime_ray_ambient_occlusion_after_motion_vectors");
     const auto guide_position = bridge.find("runtime_reflection_surface_guide_after_motion_vectors");
