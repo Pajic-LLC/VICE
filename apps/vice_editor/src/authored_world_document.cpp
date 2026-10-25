@@ -7,6 +7,7 @@
 #include <optional>
 #include <sstream>
 #include <string>
+#include <string_view>
 #include <system_error>
 #include <utility>
 
@@ -31,6 +32,25 @@ namespace {
     return result.lexically_normal();
 }
 
+[[nodiscard]] bool contains_parent_traversal(const std::filesystem::path& path) {
+    for (const auto& component : path) {
+        if (component == "..") return true;
+    }
+    return false;
+}
+
+[[nodiscard]] bool path_within(
+    const std::filesystem::path& root,
+    const std::filesystem::path& candidate
+) {
+    const auto relative = candidate.lexically_relative(root);
+    if (relative.empty() || relative.is_absolute()) return candidate == root;
+    for (const auto& component : relative) {
+        if (component == "..") return false;
+    }
+    return true;
+}
+
 [[nodiscard]] std::optional<std::string> read_text(
     const std::filesystem::path& path,
     std::string& diagnostics
@@ -50,6 +70,54 @@ namespace {
 }
 
 } // namespace
+
+std::optional<std::filesystem::path> resolve_project_authored_world_path(
+    const ProjectSession& session,
+    const std::filesystem::path& requested,
+    const bool require_existing,
+    std::string* const diagnostics
+) {
+    const auto fail_path = [&](std::string message) -> std::optional<std::filesystem::path> {
+        if (diagnostics != nullptr) *diagnostics = std::move(message);
+        return std::nullopt;
+    };
+
+    if (requested.empty()) return fail_path("Authored World path is empty.");
+    if (requested.extension() != ".vworld") {
+        return fail_path("Authored World path must use the .vworld extension.");
+    }
+    if (contains_parent_traversal(requested)) {
+        return fail_path("Authored World path cannot contain parent traversal (`..`).");
+    }
+
+    std::error_code error;
+    const auto root = std::filesystem::weakly_canonical(session.asset_root(), error);
+    if (error) {
+        return fail_path("Could not resolve the project asset root: " + error.message());
+    }
+
+    const auto candidate_input = requested.is_absolute() ? requested : root / requested;
+    const auto candidate = std::filesystem::weakly_canonical(candidate_input, error);
+    if (error) {
+        return fail_path("Could not resolve authored World path: " + error.message());
+    }
+    if (!path_within(root, candidate) || candidate == root) {
+        return fail_path("Authored World path must stay inside the project asset root.");
+    }
+
+    if (require_existing) {
+        const bool regular = std::filesystem::is_regular_file(candidate, error);
+        if (error) {
+            return fail_path("Could not inspect authored World path: " + error.message());
+        }
+        if (!regular) {
+            return fail_path("Authored World does not exist: " + candidate.generic_string());
+        }
+    }
+
+    if (diagnostics != nullptr) diagnostics->clear();
+    return candidate;
+}
 
 bool WorldDocument::open_authored(
     const std::filesystem::path& path,
