@@ -99,7 +99,7 @@ if(TARGET vice_runtime_ray_reflections_shader)
   target_compile_definitions(
     vice_runtime_ray_reflection_backend_execution_tests
     PRIVATE
-      VICE_RUNTIME_RAY_REFLECTIONS_MANIFEST="${VICE_LAB_RUNTIME_RAY_REFLECTIONS_MANIFEST}"
+      VICE_RUNTIME_RAY_REFLECTIONS_MANIFEST="${VICE_RUNTIME_RAY_REFLECTIONS_MANIFEST_PATH}"
   )
   vice_enable_warnings(vice_runtime_ray_reflection_backend_execution_tests)
   add_test(
