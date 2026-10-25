@@ -180,6 +180,57 @@ if(TARGET vice_shader_cooker)
       PRIVATE
         VICE_RUNTIME_RAY_AMBIENT_OCCLUSION_TEMPORAL_MANIFEST="${VICE_RUNTIME_RAY_AMBIENT_OCCLUSION_TEMPORAL_MANIFEST_PATH}"
     )
+
+    set(
+      _vice_runtime_reflection_surface_guide_vertex_output
+      "${CMAKE_BINARY_DIR}/cooked/vice_runtime_reflection_surface_guide_vertex"
+    )
+    set(
+      VICE_RUNTIME_REFLECTION_SURFACE_GUIDE_VERTEX_MANIFEST_PATH
+      "${_vice_runtime_reflection_surface_guide_vertex_output}/shader.vice.json"
+    )
+    vice_add_cooked_shader(
+      NAME vice_runtime_reflection_surface_guide_vertex_shader
+      INPUT "${PROJECT_SOURCE_DIR}/assets/shaders/vice_reflection_surface_guide.hlsl"
+      OUTPUT "${_vice_runtime_reflection_surface_guide_vertex_output}"
+      ENTRY vice_reflection_surface_guide_vs
+      STAGE vertex
+      TARGET "${_vice_runtime_ray_shadow_target}"
+      SHADER_MODEL 6.6
+      DXC "${_vice_runtime_ray_shadow_dxc}"
+      METAL_SHADER_CONVERTER "${_vice_runtime_ray_shadow_metal_converter}"
+    )
+
+    set(
+      _vice_runtime_reflection_surface_guide_fragment_output
+      "${CMAKE_BINARY_DIR}/cooked/vice_runtime_reflection_surface_guide_fragment"
+    )
+    set(
+      VICE_RUNTIME_REFLECTION_SURFACE_GUIDE_FRAGMENT_MANIFEST_PATH
+      "${_vice_runtime_reflection_surface_guide_fragment_output}/shader.vice.json"
+    )
+    vice_add_cooked_shader(
+      NAME vice_runtime_reflection_surface_guide_fragment_shader
+      INPUT "${PROJECT_SOURCE_DIR}/assets/shaders/vice_reflection_surface_guide.hlsl"
+      OUTPUT "${_vice_runtime_reflection_surface_guide_fragment_output}"
+      ENTRY vice_reflection_surface_guide_fs
+      STAGE fragment
+      TARGET "${_vice_runtime_ray_shadow_target}"
+      SHADER_MODEL 6.6
+      DXC "${_vice_runtime_ray_shadow_dxc}"
+      METAL_SHADER_CONVERTER "${_vice_runtime_ray_shadow_metal_converter}"
+    )
+    add_dependencies(
+      vice_runtime
+      vice_runtime_reflection_surface_guide_vertex_shader
+      vice_runtime_reflection_surface_guide_fragment_shader
+    )
+    target_compile_definitions(
+      vice_runtime
+      PRIVATE
+        VICE_RUNTIME_REFLECTION_SURFACE_GUIDE_VERTEX_MANIFEST="${VICE_RUNTIME_REFLECTION_SURFACE_GUIDE_VERTEX_MANIFEST_PATH}"
+        VICE_RUNTIME_REFLECTION_SURFACE_GUIDE_FRAGMENT_MANIFEST="${VICE_RUNTIME_REFLECTION_SURFACE_GUIDE_FRAGMENT_MANIFEST_PATH}"
+    )
   endif()
 endif()
 
@@ -213,6 +264,7 @@ if(VICE_BUILD_TESTS)
   add_subdirectory(tests/runtime_ray_tracing_scene)
   add_subdirectory(tests/runtime_directional_ray_shadow)
   add_subdirectory(tests/runtime_ray_ambient_occlusion)
+  add_subdirectory(tests/runtime_reflection_surface_guide)
   if(APPLE)
     add_subdirectory(tests/metal_ray_tracing)
   endif()
