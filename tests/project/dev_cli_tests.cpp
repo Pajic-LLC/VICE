@@ -140,6 +140,12 @@ int main() {
     require(invalid_project_result.json.find("\"ok\":false") != std::string::npos, "structured project failure");
     require(invalid_project_result.json.find("traversal") != std::string::npos, "project contract diagnostic");
 
+    write_text(world_path, "vice-world-source 999\n"sv);
+    const auto invalid_startup_result = execute("project", "validate", project_path);
+    require(invalid_startup_result.exit_code == vice::dev::exit_validation, "invalid startup World fails project validation");
+    require(invalid_startup_result.json.find("Configured startup World is invalid") != std::string::npos, "startup World validation context");
+    require(invalid_startup_result.json.find("World source line 1") != std::string::npos, "startup World parser diagnostic");
+
     const std::array<std::string_view, 0> no_arguments{};
     const auto usage = vice::dev::execute(no_arguments);
     require(usage.exit_code == vice::dev::exit_usage, "usage exit status");
