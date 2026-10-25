@@ -3,8 +3,12 @@
 #include <vice/runtime/gpu_cluster_instance_remap.hpp>
 #include <vice/runtime/gpu_draw_batches.hpp>
 #include <vice/runtime/gpu_instance_table.hpp>
+#include <vice/runtime/ray_reflections.hpp>
+#include <vice/runtime/ray_tracing_scene_executor.hpp>
 #include <vice/runtime/reflection_surface_guide.hpp>
 #include <vice/runtime/scene.hpp>
+
+#include "environment_pipeline.hpp"
 
 #include <cstdint>
 #include <functional>
@@ -50,7 +54,30 @@ struct RuntimeReflectionSurfaceGuideMeshBuffers {
     std::string* diagnostics = nullptr
 ) noexcept;
 
+[[nodiscard]] bool runtime_ray_reflections_after_surface_guide(
+    const RuntimeSceneRenderer* owner,
+    render::Device& device,
+    render::CommandList& commands,
+    render::Texture* current_depth,
+    render::Texture* surface_guide,
+    RuntimeRayTracingSceneExecutor* ray_scene,
+    const RuntimeCameraView& camera,
+    float jitter_x_ndc,
+    float jitter_y_ndc,
+    platform::WindowMetrics metrics,
+    RuntimeEnvironmentBinding environment,
+    std::string* diagnostics = nullptr
+) noexcept;
+
 [[nodiscard]] render::Texture* runtime_reflection_surface_guide_texture(
+    const RuntimeSceneRenderer* owner
+) noexcept;
+
+[[nodiscard]] render::Texture* runtime_ray_reflection_radiance(
+    const RuntimeSceneRenderer* owner
+) noexcept;
+
+[[nodiscard]] render::Buffer* runtime_ray_reflection_hits(
     const RuntimeSceneRenderer* owner
 ) noexcept;
 
@@ -104,6 +131,20 @@ struct RuntimeReflectionSurfaceGuideMeshBuffers {
                     .indices = found->second.indices.get(), \
                 }; \
             }, \
+            diagnostics \
+        ) && \
+        ::vice::runtime::detail::runtime_ray_reflections_after_surface_guide( \
+            this, \
+            *state_->device, \
+            *commands, \
+            current_depth, \
+            ::vice::runtime::detail::runtime_reflection_surface_guide_texture(this), \
+            &state_->ray_tracing_scene, \
+            runtime_camera, \
+            jitter.x_ndc, \
+            jitter.y_ndc, \
+            metrics, \
+            state_->environment.binding(), \
             diagnostics \
         ))
 
