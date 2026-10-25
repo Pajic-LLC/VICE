@@ -238,17 +238,17 @@ struct RuntimeReflectionSurfaceGuideMeshBuffers {
 #undef set_graphics_texture
 #endif
 #define set_graphics_texture(binding, texture) \
-    (::vice::runtime::detail::runtime_ray_reflections_bind_gpu_pbr_texture( \
-        *commands, this, (binding), (texture), diagnostics \
-    ) && \
-        set_graphics_texture( \
+    set_graphics_texture( \
+        (binding), \
+        ::vice::runtime::detail::runtime_directional_shadow_texture_override( \
             (binding), \
-            ::vice::runtime::detail::runtime_directional_shadow_texture_override( \
-                (binding), \
-                ::vice::runtime::detail::runtime_ray_ambient_occlusion_prepare_graphics_texture( \
-                    *commands, (binding), (texture) \
-                ) \
+            ::vice::runtime::detail::runtime_ray_ambient_occlusion_prepare_graphics_texture( \
+                *commands, (binding), (texture) \
             ) \
-        ))
+        ) \
+    ) && \
+    ::vice::runtime::detail::runtime_ray_reflections_bind_gpu_pbr_texture( \
+        *commands, this, (binding), (texture), diagnostics \
+    )
 
 #endif
