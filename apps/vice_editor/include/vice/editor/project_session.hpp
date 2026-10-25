@@ -139,4 +139,11 @@ private:
     bool dirty_ = false;
 };
 
+[[nodiscard]] std::optional<std::filesystem::path> resolve_project_authored_world_path(
+    const ProjectSession& session,
+    const std::filesystem::path& requested,
+    bool require_existing,
+    std::string* diagnostics = nullptr
+);
+
 } // namespace vice::editor
