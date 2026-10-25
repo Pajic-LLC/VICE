@@ -42,6 +42,8 @@ static_assert(sizeof(RuntimeRayReflectionsConstants) == 112U);
 
 struct RuntimeRayReflectionHit {
     float world_position[3]{};
+    // During the scene-index transition this field retains its compact ABI/layout while carrying
+    // the authoritative Runtime scene-instance index plus one. Zero remains the miss sentinel.
     std::uint32_t instance_id_plus_one = 0U;
 };
 
@@ -113,6 +115,8 @@ public:
         render::Texture& camera_depth,
         render::Texture& surface_guide,
         render::AccelerationStructure& scene_tlas,
+        render::Buffer& scene_instance_indices,
+        std::uint32_t scene_instance_index_count,
         render::Texture& environment_specular,
         render::Sampler& environment_sampler,
         const RuntimeRayReflectionsConstants& constants,
