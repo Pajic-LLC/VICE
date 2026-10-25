@@ -109,6 +109,7 @@ struct RuntimeReflectionSurfaceGuideMeshBuffers {
     render::CommandList& commands,
     const RuntimeSceneRenderer* const owner,
     const render::ShaderBindingKey& binding,
+    render::Texture& fallback_texture,
     std::string* const diagnostics
 ) noexcept {
     if (owner == nullptr ||
@@ -116,8 +117,6 @@ struct RuntimeReflectionSurfaceGuideMeshBuffers {
         binding.binding != 0U || binding.space != 2U || binding.array_element != 0U) {
         return true;
     }
-    auto* const radiance = runtime_ray_reflection_radiance(owner);
-    if (radiance == nullptr) return true;
 
     constexpr render::ShaderBindingKey reflection_binding{
         .register_class = render::ShaderRegisterClass::shader_resource,
@@ -125,7 +124,9 @@ struct RuntimeReflectionSurfaceGuideMeshBuffers {
         .space = 2U,
         .array_element = 0U,
     };
-    if (commands.set_graphics_texture(reflection_binding, *radiance)) return true;
+    auto* const radiance = runtime_ray_reflection_radiance(owner);
+    render::Texture& bound_texture = radiance != nullptr ? *radiance : fallback_texture;
+    if (commands.set_graphics_texture(reflection_binding, bound_texture)) return true;
     if (diagnostics != nullptr) {
         *diagnostics = "VICE Runtime could not bind ray-reflection radiance for GPU PBR.";
     }
@@ -210,7 +211,7 @@ struct RuntimeReflectionSurfaceGuideMeshBuffers {
 #endif
 #define set_graphics_texture(binding, texture) \
     (::vice::runtime::detail::runtime_ray_reflections_bind_gpu_pbr_texture( \
-        *commands, this, (binding), diagnostics \
+        *commands, this, (binding), (texture), diagnostics \
     ) && \
         set_graphics_texture( \
             (binding), \
