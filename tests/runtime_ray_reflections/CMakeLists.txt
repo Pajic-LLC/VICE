@@ -56,3 +56,54 @@ add_test(
   NAME vice_runtime_ray_reflection_reconstruction_tests
   COMMAND vice_runtime_ray_reflection_reconstruction_tests
 )
+
+add_executable(
+  vice_runtime_ray_reflection_backend_fallback_tests
+  runtime_ray_reflection_backend_fallback_tests.cpp
+)
+target_link_libraries(
+  vice_runtime_ray_reflection_backend_fallback_tests
+  PRIVATE
+    VICE::Runtime
+)
+target_compile_features(
+  vice_runtime_ray_reflection_backend_fallback_tests
+  PRIVATE
+    cxx_std_23
+)
+vice_enable_warnings(vice_runtime_ray_reflection_backend_fallback_tests)
+add_test(
+  NAME vice_runtime_ray_reflection_backend_fallback_tests
+  COMMAND vice_runtime_ray_reflection_backend_fallback_tests
+)
+
+if(TARGET vice_runtime_ray_reflections_shader)
+  add_executable(
+    vice_runtime_ray_reflection_backend_execution_tests
+    runtime_ray_reflection_backend_execution_tests.cpp
+  )
+  add_dependencies(
+    vice_runtime_ray_reflection_backend_execution_tests
+    vice_runtime_ray_reflections_shader
+  )
+  target_link_libraries(
+    vice_runtime_ray_reflection_backend_execution_tests
+    PRIVATE
+      VICE::Runtime
+  )
+  target_compile_features(
+    vice_runtime_ray_reflection_backend_execution_tests
+    PRIVATE
+      cxx_std_23
+  )
+  target_compile_definitions(
+    vice_runtime_ray_reflection_backend_execution_tests
+    PRIVATE
+      VICE_RUNTIME_RAY_REFLECTIONS_MANIFEST="${VICE_LAB_RUNTIME_RAY_REFLECTIONS_MANIFEST}"
+  )
+  vice_enable_warnings(vice_runtime_ray_reflection_backend_execution_tests)
+  add_test(
+    NAME vice_runtime_ray_reflection_backend_execution_tests
+    COMMAND vice_runtime_ray_reflection_backend_execution_tests
+  )
+endif()
