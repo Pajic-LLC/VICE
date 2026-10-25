@@ -58,6 +58,27 @@ add_test(
 )
 
 add_executable(
+  vice_runtime_ray_diffuse_gi_tests
+  runtime_ray_diffuse_gi_tests.cpp
+)
+target_link_libraries(
+  vice_runtime_ray_diffuse_gi_tests
+  PRIVATE
+    VICE::Runtime
+)
+target_compile_features(vice_runtime_ray_diffuse_gi_tests PRIVATE cxx_std_23)
+target_compile_definitions(
+  vice_runtime_ray_diffuse_gi_tests
+  PRIVATE
+    VICE_RAY_DIFFUSE_GI_SHADER_SOURCE="${CMAKE_SOURCE_DIR}/assets/shaders/vice_ray_diffuse_gi.hlsl"
+)
+vice_enable_warnings(vice_runtime_ray_diffuse_gi_tests)
+add_test(
+  NAME vice_runtime_ray_diffuse_gi_tests
+  COMMAND vice_runtime_ray_diffuse_gi_tests
+)
+
+add_executable(
   vice_runtime_ray_reflection_backend_fallback_tests
   runtime_ray_reflection_backend_fallback_tests.cpp
 )
