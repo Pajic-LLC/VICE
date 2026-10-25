@@ -2,7 +2,6 @@
 
 #include <vice/render/shader_asset.hpp>
 #include <vice/runtime/ray_tracing_scene_executor.hpp>
-#include <vice/runtime/ray_tracing_scene_index_table.hpp>
 #include <vice/runtime/scene.hpp>
 
 #include "environment_pipeline.hpp"
@@ -521,7 +520,6 @@ struct RuntimeRayReflectionsSceneState {
     const RuntimeSceneRenderer* owner = nullptr;
     render::Device* device = nullptr;
     std::unique_ptr<RuntimeRayReflectionsPass> pass;
-    std::unique_ptr<RuntimeRayTracingSceneIndexTable> scene_index_table;
     bool valid = false;
 };
 
@@ -533,18 +531,15 @@ thread_local RuntimeRayReflectionsSceneState ray_reflections_scene_state;
     std::string* const diagnostics
 ) {
     auto& state = ray_reflections_scene_state;
-    if (state.owner == owner && state.device == &device && state.pass != nullptr &&
-        state.scene_index_table != nullptr) {
+    if (state.owner == owner && state.device == &device && state.pass != nullptr) {
         if (diagnostics != nullptr) diagnostics->clear();
         return true;
     }
     state.pass.reset();
-    state.scene_index_table.reset();
     state.owner = owner;
     state.device = &device;
     state.valid = false;
     state.pass = std::make_unique<RuntimeRayReflectionsPass>();
-    state.scene_index_table = std::make_unique<RuntimeRayTracingSceneIndexTable>();
 
     bool pass_initialized = false;
 #ifdef VICE_RUNTIME_RAY_REFLECTIONS_MANIFEST
@@ -556,9 +551,8 @@ thread_local RuntimeRayReflectionsSceneState ray_reflections_scene_state;
 #else
     pass_initialized = state.pass->initialize(device, {}, diagnostics);
 #endif
-    if (!pass_initialized || !state.scene_index_table->initialize(device, diagnostics)) {
+    if (!pass_initialized) {
         state.pass.reset();
-        state.scene_index_table.reset();
         return false;
     }
     if (diagnostics != nullptr) diagnostics->clear();
@@ -598,27 +592,19 @@ bool runtime_ray_reflections_after_surface_guide(
     }
     if (!ensure_ray_reflections_pass(owner, device, diagnostics)) return false;
     auto& state = ray_reflections_scene_state;
-    if (state.pass == nullptr || state.scene_index_table == nullptr || !state.pass->available()) {
+    if (state.pass == nullptr || !state.pass->available()) {
         if (diagnostics != nullptr) diagnostics->clear();
         return true;
     }
     if (!state.pass->resize(metrics.drawable_width, metrics.drawable_height, diagnostics)) return false;
 
     const auto active_scene_indices = ray_scene->active_scene_instance_indices();
-    if (active_scene_indices.empty()) {
+    auto* const scene_index_buffer = ray_scene->active_scene_instance_index_buffer();
+    if (active_scene_indices.empty() || scene_index_buffer == nullptr ||
+        active_scene_indices.size() > std::numeric_limits<std::uint32_t>::max()) {
         set_diagnostics(
             diagnostics,
-            "Runtime ray reflections require an authoritative active TLAS scene-index mapping."
-        );
-        return false;
-    }
-    if (!state.scene_index_table->upload(commands, active_scene_indices, diagnostics)) return false;
-    const auto scene_index_table = state.scene_index_table->result();
-    if (!scene_index_table || scene_index_table.indices == nullptr ||
-        scene_index_table.index_count != active_scene_indices.size()) {
-        set_diagnostics(
-            diagnostics,
-            "Runtime ray reflections could not publish the active TLAS scene-index mapping."
+            "Runtime ray reflections require the committed active TLAS GPU scene-index mapping."
         );
         return false;
     }
@@ -656,8 +642,8 @@ bool runtime_ray_reflections_after_surface_guide(
         *current_depth,
         *surface_guide,
         *tlas,
-        *scene_index_table.indices,
-        scene_index_table.index_count,
+        *scene_index_buffer,
+        static_cast<std::uint32_t>(active_scene_indices.size()),
         *environment.specular,
         *environment.sampler,
         *constants,

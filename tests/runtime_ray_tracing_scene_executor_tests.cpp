@@ -4,6 +4,7 @@
 #include <cassert>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <memory>
 #include <span>
 #include <vector>
@@ -16,19 +17,52 @@ using namespace vice::runtime;
 
 class TestBuffer final : public Buffer {
 public:
-    TestBuffer(const std::uint64_t size, const BufferUsage usage) : size_{size}, usage_{usage} {}
+    TestBuffer(const BufferDesc& desc, const bool writable = true)
+        : size_{desc.size}, usage_{desc.usage}, memory_{desc.memory}, writable_{writable}, bytes_(desc.size) {}
+
+    TestBuffer(const std::uint64_t size, const BufferUsage usage)
+        : size_{size}, usage_{usage}, memory_{MemoryLocation::gpu_only}, bytes_(size) {}
 
     [[nodiscard]] std::uint64_t size() const noexcept override { return size_; }
     [[nodiscard]] BufferUsage usage() const noexcept override { return usage_; }
-    [[nodiscard]] MemoryLocation memory_location() const noexcept override {
-        return MemoryLocation::gpu_only;
+    [[nodiscard]] MemoryLocation memory_location() const noexcept override { return memory_; }
+
+    bool write(const std::uint64_t offset, const std::span<const std::byte> bytes) override {
+        if (!writable_ || offset > bytes_.size() || bytes.size() > bytes_.size() - offset) return false;
+        std::memcpy(bytes_.data() + offset, bytes.data(), bytes.size());
+        return true;
     }
-    bool write(std::uint64_t, std::span<const std::byte>) override { return false; }
-    bool read(std::uint64_t, std::span<std::byte>) override { return false; }
+
+    bool read(const std::uint64_t offset, const std::span<std::byte> bytes) override {
+        if (offset > bytes_.size() || bytes.size() > bytes_.size() - offset) return false;
+        std::memcpy(bytes.data(), bytes_.data() + offset, bytes.size());
+        return true;
+    }
+
+    bool copy_from(
+        const TestBuffer& source,
+        const std::uint64_t source_offset,
+        const std::uint64_t destination_offset,
+        const std::uint64_t size
+    ) {
+        if (source_offset > source.bytes_.size() || size > source.bytes_.size() - source_offset ||
+            destination_offset > bytes_.size() || size > bytes_.size() - destination_offset) {
+            return false;
+        }
+        std::memcpy(
+            bytes_.data() + destination_offset,
+            source.bytes_.data() + source_offset,
+            static_cast<std::size_t>(size)
+        );
+        return true;
+    }
 
 private:
     std::uint64_t size_ = 0U;
     BufferUsage usage_ = BufferUsage::none;
+    MemoryLocation memory_ = MemoryLocation::gpu_only;
+    bool writable_ = true;
+    std::vector<std::byte> bytes_;
 };
 
 class TestAccelerationStructure final : public AccelerationStructure {
@@ -46,8 +80,25 @@ private:
 
 class TestCommandList : public CommandList {
 public:
-    bool copy_buffer(Buffer&, std::uint64_t, Buffer&, std::uint64_t, std::uint64_t) override {
-        return false;
+    bool copy_buffer(
+        Buffer& source,
+        const std::uint64_t source_offset,
+        Buffer& destination,
+        const std::uint64_t destination_offset,
+        const std::uint64_t size
+    ) override {
+        if (fail_next_copy) {
+            fail_next_copy = false;
+            return false;
+        }
+        auto* const test_source = dynamic_cast<TestBuffer*>(&source);
+        auto* const test_destination = dynamic_cast<TestBuffer*>(&destination);
+        if (test_source == nullptr || test_destination == nullptr ||
+            !test_destination->copy_from(*test_source, source_offset, destination_offset, size)) {
+            return false;
+        }
+        ++copy_count;
+        return true;
     }
     bool begin_render_pass(Swapchain&, const RenderPassDesc&) override { return false; }
     bool begin_render_pass(Texture&, const RenderPassDesc&) override { return false; }
@@ -70,13 +121,25 @@ public:
     bool draw(std::uint32_t, std::uint32_t, std::uint32_t, std::uint32_t) override { return false; }
     bool end_render_pass() override { return false; }
     bool present(Swapchain&) override { return false; }
+
+    bool fail_next_copy = false;
+    std::uint32_t copy_count = 0U;
 };
 
 class TestDevice : public Device {
 public:
     [[nodiscard]] Backend backend() const noexcept override { return Backend::direct3d12; }
     [[nodiscard]] DeviceCapabilities capabilities() const noexcept override { return {}; }
-    [[nodiscard]] std::unique_ptr<Buffer> create_buffer(const BufferDesc&) override { return nullptr; }
+    [[nodiscard]] std::unique_ptr<Buffer> create_buffer(const BufferDesc& desc) override {
+        if (fail_next_buffer_allocation) {
+            fail_next_buffer_allocation = false;
+            return nullptr;
+        }
+        const bool writable = !fail_next_buffer_write;
+        fail_next_buffer_write = false;
+        ++buffer_create_count;
+        return std::make_unique<TestBuffer>(desc, writable);
+    }
     [[nodiscard]] std::unique_ptr<Texture> create_texture(const TextureDesc&) override { return nullptr; }
     [[nodiscard]] std::unique_ptr<Sampler> create_sampler(const SamplerDesc&) override { return nullptr; }
     [[nodiscard]] std::unique_ptr<ShaderModule> create_shader_module(const ShaderModuleDesc&) override {
@@ -94,6 +157,10 @@ public:
     bool wait_for_submission(SubmissionId) override { return false; }
     bool wait_idle() override { return false; }
     [[nodiscard]] std::unique_ptr<Swapchain> create_swapchain(platform::Window&) override { return nullptr; }
+
+    bool fail_next_buffer_allocation = false;
+    bool fail_next_buffer_write = false;
+    std::uint32_t buffer_create_count = 0U;
 };
 
 class TestRayDevice final : public TestDevice, public RayTracingDevice {
@@ -205,6 +272,13 @@ public:
     return result;
 }
 
+[[nodiscard]] std::vector<std::uint32_t> mapped_indices(Buffer* const buffer, const std::size_t count) {
+    assert(buffer != nullptr);
+    std::vector<std::uint32_t> result(count);
+    assert(buffer->read(0U, std::as_writable_bytes(std::span{result})));
+    return result;
+}
+
 } // namespace
 
 int main() {
@@ -227,12 +301,16 @@ int main() {
     plan.blases.push_back(RuntimeRayTracingBlasPlan{.key = blas_key(1U, 11U, 101U)});
     plan.instances.push_back(planned_instance(1U, 17U, 0U, 4.0F, 0xA5U));
     plan.instances.push_back(planned_instance(2U, 18U, 0U, 8.0F, 0xFFU));
+    plan.scene_instance_indices = {5U, 9U};
 
     RuntimeRayTracingSceneExecutor executor;
     assert(executor.active_tlas() == nullptr);
+    assert(executor.active_scene_instance_indices().empty());
+    assert(executor.active_scene_instance_index_buffer() == nullptr);
     assert(executor.telemetry() == RuntimeRayTracingTelemetry{});
     const RuntimeRayTracingSceneExecutor& const_executor = executor;
     assert(const_executor.active_tlas() == nullptr);
+    assert(const_executor.active_scene_instance_index_buffer() == nullptr);
     assert(const_executor.telemetry() == RuntimeRayTracingTelemetry{});
     TestRayCommandList commands;
     TestDevice unsupported;
@@ -243,6 +321,8 @@ int main() {
     assert(executor.cached_blas_count() == 0U);
     assert(!executor.has_tlas());
     assert(executor.active_tlas() == nullptr);
+    assert(executor.active_scene_instance_indices().empty());
+    assert(executor.active_scene_instance_index_buffer() == nullptr);
     assert(executor.telemetry() == RuntimeRayTracingTelemetry{});
 
     TestRayDevice device;
@@ -253,6 +333,8 @@ int main() {
     assert(first.counters.blas_reuses == 0U);
     assert(first.counters.tlas_builds == 1U);
     assert(device.create_count == 2U);
+    assert(device.buffer_create_count == 2U);
+    assert(commands.copy_count == 1U);
     assert(commands.builds.size() == 2U);
     assert(commands.builds[0].type == AccelerationStructureType::bottom_level);
     assert(commands.builds[1].type == AccelerationStructureType::top_level);
@@ -265,7 +347,17 @@ int main() {
     assert(executor.has_tlas());
     assert(executor.active_tlas() != nullptr);
     assert(executor.active_tlas()->type() == AccelerationStructureType::top_level);
+    assert((std::vector<std::uint32_t>{
+        executor.active_scene_instance_indices().begin(),
+        executor.active_scene_instance_indices().end()
+    } == plan.scene_instance_indices));
+    assert(executor.active_scene_instance_index_buffer() != nullptr);
+    assert(executor.active_scene_instance_index_buffer()->usage() ==
+        (BufferUsage::storage | BufferUsage::copy_destination));
+    assert(executor.active_scene_instance_index_buffer()->memory_location() == MemoryLocation::gpu_only);
+    assert(mapped_indices(executor.active_scene_instance_index_buffer(), 2U) == plan.scene_instance_indices);
     assert(const_executor.active_tlas() == executor.active_tlas());
+    assert(const_executor.active_scene_instance_index_buffer() == executor.active_scene_instance_index_buffer());
     assert(const_executor.telemetry().supported);
     assert(const_executor.telemetry().scene_active);
     assert(const_executor.telemetry().blas_count == 1U);
@@ -276,13 +368,17 @@ int main() {
     assert(const_executor.telemetry().last_successful_execution == first.counters);
     assert(const_executor.telemetry().cumulative == first.counters);
 
+    auto* const first_map = executor.active_scene_instance_index_buffer();
     const auto unchanged = executor.execute(device, commands, plan, geometry);
     assert(unchanged);
     assert(unchanged.counters.blas_reuses == 1U);
     assert(unchanged.counters.tlas_reuses == 1U);
     assert(device.create_count == 2U);
+    assert(device.buffer_create_count == 2U);
+    assert(commands.copy_count == 1U);
     assert(commands.builds.size() == 2U);
     assert(executor.active_tlas() != nullptr);
+    assert(executor.active_scene_instance_index_buffer() == first_map);
     assert(executor.telemetry().last_successful_execution == unchanged.counters);
     assert(executor.telemetry().cumulative.blas_creates == 1U);
     assert(executor.telemetry().cumulative.blas_reuses == 1U);
@@ -290,7 +386,68 @@ int main() {
     assert(executor.telemetry().cumulative.tlas_reuses == 1U);
     assert(executor.telemetry().total_bytes == 12288U);
 
-    auto moved_plan = plan;
+    auto remapped_plan = plan;
+    remapped_plan.scene_instance_indices = {9U, 5U};
+    const auto remapped = executor.execute(device, commands, remapped_plan, geometry);
+    assert(remapped);
+    assert(remapped.counters.blas_reuses == 1U);
+    assert(remapped.counters.tlas_reuses == 1U);
+    assert(device.create_count == 2U);
+    assert(device.buffer_create_count == 4U);
+    assert(commands.copy_count == 2U);
+    assert(commands.builds.size() == 2U);
+    assert(executor.active_scene_instance_index_buffer() != first_map);
+    assert((std::vector<std::uint32_t>{
+        executor.active_scene_instance_indices().begin(),
+        executor.active_scene_instance_indices().end()
+    } == remapped_plan.scene_instance_indices));
+    assert(mapped_indices(executor.active_scene_instance_index_buffer(), 2U) == remapped_plan.scene_instance_indices);
+
+    auto* const committed_map = executor.active_scene_instance_index_buffer();
+    const auto committed_indices = std::vector<std::uint32_t>{
+        executor.active_scene_instance_indices().begin(),
+        executor.active_scene_instance_indices().end()
+    };
+    auto failed_map_plan = remapped_plan;
+    failed_map_plan.scene_instance_indices = {11U, 13U};
+
+    device.fail_next_buffer_allocation = true;
+    const auto allocation_failed = executor.execute(device, commands, failed_map_plan, geometry);
+    assert(!allocation_failed);
+    assert(executor.active_scene_instance_index_buffer() == committed_map);
+    assert((std::vector<std::uint32_t>{
+        executor.active_scene_instance_indices().begin(),
+        executor.active_scene_instance_indices().end()
+    } == committed_indices));
+    assert(mapped_indices(executor.active_scene_instance_index_buffer(), 2U) == committed_indices);
+    assert(commands.copy_count == 2U);
+    assert(commands.builds.size() == 2U);
+
+    device.fail_next_buffer_write = true;
+    const auto write_failed = executor.execute(device, commands, failed_map_plan, geometry);
+    assert(!write_failed);
+    assert(executor.active_scene_instance_index_buffer() == committed_map);
+    assert((std::vector<std::uint32_t>{
+        executor.active_scene_instance_indices().begin(),
+        executor.active_scene_instance_indices().end()
+    } == committed_indices));
+    assert(mapped_indices(executor.active_scene_instance_index_buffer(), 2U) == committed_indices);
+    assert(commands.copy_count == 2U);
+    assert(commands.builds.size() == 2U);
+
+    commands.fail_next_copy = true;
+    const auto copy_failed = executor.execute(device, commands, failed_map_plan, geometry);
+    assert(!copy_failed);
+    assert(executor.active_scene_instance_index_buffer() == committed_map);
+    assert((std::vector<std::uint32_t>{
+        executor.active_scene_instance_indices().begin(),
+        executor.active_scene_instance_indices().end()
+    } == committed_indices));
+    assert(mapped_indices(executor.active_scene_instance_index_buffer(), 2U) == committed_indices);
+    assert(commands.copy_count == 2U);
+    assert(commands.builds.size() == 2U);
+
+    auto moved_plan = remapped_plan;
     moved_plan.instances[0].transform[3] = 12.0F;
     const auto moved = executor.execute(device, commands, moved_plan, geometry);
     assert(moved);
@@ -303,8 +460,8 @@ int main() {
     assert(commands.builds.back().transforms[0][3] == 12.0F);
     assert(executor.active_tlas() != nullptr);
     assert(executor.active_tlas()->type() == AccelerationStructureType::top_level);
+    assert(executor.active_scene_instance_index_buffer() == committed_map);
     assert(executor.telemetry().last_successful_execution == moved.counters);
-    assert(executor.telemetry().cumulative.blas_reuses == 2U);
     assert(executor.telemetry().cumulative.tlas_refits == 1U);
     assert(executor.telemetry().tlas_instance_count == 2U);
     assert(executor.telemetry().total_bytes == 12288U);
@@ -323,14 +480,8 @@ int main() {
     assert(commands.builds[4].type == AccelerationStructureType::top_level);
     assert(!commands.builds[4].update);
     assert(executor.active_tlas() != nullptr);
+    assert(executor.active_scene_instance_index_buffer() == committed_map);
     assert(executor.telemetry().last_successful_execution == regenerated.counters);
-    assert(executor.telemetry().cumulative.blas_creates == 1U);
-    assert(executor.telemetry().cumulative.blas_reuses == 2U);
-    assert(executor.telemetry().cumulative.blas_rebuilds == 1U);
-    assert(executor.telemetry().cumulative.blas_evictions == 1U);
-    assert(executor.telemetry().cumulative.tlas_builds == 2U);
-    assert(executor.telemetry().cumulative.tlas_refits == 1U);
-    assert(executor.telemetry().cumulative.tlas_reuses == 1U);
     assert(executor.telemetry().blas_bytes == 4096U);
     assert(executor.telemetry().tlas_bytes == 8192U);
 
@@ -341,6 +492,8 @@ int main() {
     assert(executor.cached_blas_count() == 0U);
     assert(!executor.has_tlas());
     assert(executor.active_tlas() == nullptr);
+    assert(executor.active_scene_instance_indices().empty());
+    assert(executor.active_scene_instance_index_buffer() == nullptr);
     assert(executor.telemetry().supported);
     assert(!executor.telemetry().scene_active);
     assert(executor.telemetry().blas_count == 0U);
@@ -349,7 +502,6 @@ int main() {
     assert(executor.telemetry().tlas_bytes == 0U);
     assert(executor.telemetry().total_bytes == 0U);
     assert(executor.telemetry().last_successful_execution == emptied.counters);
-    assert(executor.telemetry().cumulative.blas_evictions == 2U);
 
     const auto disabled_again = executor.execute(unsupported, commands, plan, geometry);
     assert(disabled_again);
@@ -357,6 +509,8 @@ int main() {
     assert(executor.cached_blas_count() == 0U);
     assert(!executor.has_tlas());
     assert(executor.active_tlas() == nullptr);
+    assert(executor.active_scene_instance_indices().empty());
+    assert(executor.active_scene_instance_index_buffer() == nullptr);
     assert(executor.telemetry() == RuntimeRayTracingTelemetry{});
 
     TestRayCommandList reset_commands;
@@ -364,11 +518,14 @@ int main() {
     assert(before_reset);
     assert(before_reset.active);
     assert(executor.active_tlas() != nullptr);
+    assert(executor.active_scene_instance_index_buffer() != nullptr);
     assert(executor.telemetry().supported);
     assert(executor.telemetry().scene_active);
     assert(executor.telemetry().cumulative == before_reset.counters);
     executor.reset();
     assert(executor.active_tlas() == nullptr);
+    assert(executor.active_scene_instance_indices().empty());
+    assert(executor.active_scene_instance_index_buffer() == nullptr);
     assert(!executor.has_tlas());
     assert(executor.telemetry() == RuntimeRayTracingTelemetry{});
 

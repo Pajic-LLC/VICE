@@ -58,6 +58,84 @@ namespace {
         );
 }
 
+[[nodiscard]] bool same_scene_instance_mapping(
+    const std::span<const std::uint32_t> left,
+    const std::span<const std::uint32_t> right
+) noexcept {
+    return left.size() == right.size() && std::equal(left.begin(), left.end(), right.begin());
+}
+
+struct PendingSceneInstanceMap final {
+    bool changed = false;
+    std::unique_ptr<render::Buffer> upload;
+    std::unique_ptr<render::Buffer> storage;
+};
+
+[[nodiscard]] bool prepare_scene_instance_map(
+    render::Device& device,
+    const std::span<const std::uint32_t> planned,
+    const std::span<const std::uint32_t> active,
+    PendingSceneInstanceMap& pending,
+    std::string& diagnostics
+) {
+    pending = {};
+    if (same_scene_instance_mapping(planned, active)) return true;
+    pending.changed = true;
+    if (planned.empty()) return true;
+
+    const std::uint64_t size = static_cast<std::uint64_t>(planned.size()) * sizeof(std::uint32_t);
+
+    render::BufferDesc upload_desc;
+    upload_desc.size = size;
+    upload_desc.usage = render::BufferUsage::copy_source;
+    upload_desc.memory = render::MemoryLocation::cpu_to_gpu;
+    upload_desc.debug_name = "VICE Runtime TLAS scene-index upload";
+    auto upload = device.create_buffer(upload_desc);
+    if (upload == nullptr) {
+        diagnostics = "Runtime ray tracing could not allocate the GPU TLAS scene-index upload buffer.";
+        return false;
+    }
+    if (!upload->write(0U, std::as_bytes(planned))) {
+        diagnostics = "Runtime ray tracing could not upload the TLAS scene-index mapping.";
+        return false;
+    }
+
+    render::BufferDesc storage_desc;
+    storage_desc.size = size;
+    storage_desc.usage = render::BufferUsage::storage | render::BufferUsage::copy_destination;
+    storage_desc.memory = render::MemoryLocation::gpu_only;
+    storage_desc.debug_name = "VICE Runtime TLAS scene-index map";
+    auto storage = device.create_buffer(storage_desc);
+    if (storage == nullptr) {
+        diagnostics = "Runtime ray tracing could not allocate the GPU TLAS scene-index storage buffer.";
+        return false;
+    }
+
+    pending.upload = std::move(upload);
+    pending.storage = std::move(storage);
+    return true;
+}
+
+[[nodiscard]] bool record_scene_instance_map_copy(
+    render::CommandList& commands,
+    PendingSceneInstanceMap& pending,
+    std::string& diagnostics
+) {
+    if (!pending.changed || pending.storage == nullptr) return true;
+    if (pending.upload == nullptr ||
+        !commands.copy_buffer(
+            *pending.upload,
+            0U,
+            *pending.storage,
+            0U,
+            pending.storage->size()
+        )) {
+        diagnostics = "Runtime ray tracing could not record the GPU TLAS scene-index mapping upload.";
+        return false;
+    }
+    return true;
+}
+
 [[nodiscard]] constexpr std::uint32_t saturating_add(
     const std::uint32_t left,
     const std::uint32_t right
@@ -127,6 +205,18 @@ RuntimeRayTracingExecutionResult RuntimeRayTracingSceneExecutor::execute(
             result.diagnostics = "Runtime ray tracing scene plan contains an invalid TLAS instance.";
             return result;
         }
+    }
+
+    PendingSceneInstanceMap pending_scene_map;
+    if (!plan.instances.empty() &&
+        !prepare_scene_instance_map(
+            device,
+            plan.scene_instance_indices,
+            active_scene_instance_indices_,
+            pending_scene_map,
+            result.diagnostics
+        )) {
+        return result;
     }
 
     std::vector<CachedBlas> next_blases;
@@ -224,6 +314,8 @@ RuntimeRayTracingExecutionResult RuntimeRayTracingSceneExecutor::execute(
         previous_blas_keys_ = current_blas_keys;
         previous_instances_.clear();
         active_scene_instance_indices_.clear();
+        active_scene_instance_index_upload_.reset();
+        active_scene_instance_index_buffer_.reset();
         refresh_telemetry(true, result.counters);
         return result;
     }
@@ -263,10 +355,17 @@ RuntimeRayTracingExecutionResult RuntimeRayTracingSceneExecutor::execute(
         plan.instances
     );
     if (topology_matches && previous_instances_ == plan.instances) {
+        if (!record_scene_instance_map_copy(commands, pending_scene_map, result.diagnostics)) {
+            return result;
+        }
         blases_ = std::move(next_blases);
         previous_blas_keys_ = current_blas_keys;
         previous_instances_ = plan.instances;
-        active_scene_instance_indices_ = plan.scene_instance_indices;
+        if (pending_scene_map.changed) {
+            active_scene_instance_indices_ = plan.scene_instance_indices;
+            active_scene_instance_index_upload_ = std::move(pending_scene_map.upload);
+            active_scene_instance_index_buffer_ = std::move(pending_scene_map.storage);
+        }
         ++result.counters.tlas_reuses;
         refresh_telemetry(true, result.counters);
         return result;
@@ -290,13 +389,20 @@ RuntimeRayTracingExecutionResult RuntimeRayTracingSceneExecutor::execute(
             : "Runtime ray tracing could not record a TLAS build.";
         return result;
     }
+    if (!record_scene_instance_map_copy(commands, pending_scene_map, result.diagnostics)) {
+        return result;
+    }
 
     std::shared_ptr<render::AccelerationStructure> next_tlas{std::move(next_tlas_native)};
     blases_ = std::move(next_blases);
     tlas_ = std::move(next_tlas);
     previous_blas_keys_ = current_blas_keys;
     previous_instances_ = plan.instances;
-    active_scene_instance_indices_ = plan.scene_instance_indices;
+    if (pending_scene_map.changed) {
+        active_scene_instance_indices_ = plan.scene_instance_indices;
+        active_scene_instance_index_upload_ = std::move(pending_scene_map.upload);
+        active_scene_instance_index_buffer_ = std::move(pending_scene_map.storage);
+    }
     if (topology_matches) {
         ++result.counters.tlas_refits;
     } else {
@@ -312,6 +418,8 @@ void RuntimeRayTracingSceneExecutor::reset() noexcept {
     previous_blas_keys_.clear();
     previous_instances_.clear();
     active_scene_instance_indices_.clear();
+    active_scene_instance_index_upload_.reset();
+    active_scene_instance_index_buffer_.reset();
     telemetry_ = {};
 }
 
