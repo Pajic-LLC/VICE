@@ -618,6 +618,8 @@ float3 vice_environment_source_0(
     float3 normal,
     float3 reflection_direction,
     float3 f0,
+    float3 albedo,
+    float metallic_value,
     float normal_view,
     float roughness_value,
     float occlusion,
@@ -628,7 +630,7 @@ float3 vice_environment_source_0(
         model_position, reflection_direction, environment_probe_from_model_0,
         environment_probe_half_extents_0, environment_probe_rotation_0
     );
-    const float3 diffuse = environment_irradiance_0.Sample(
+    const float3 diffuse_irradiance = environment_irradiance_0.Sample(
         environment_sampler, vice_environment_uv(normal, metadata.y)
     ).rgb;
     const float3 raster_specular = environment_specular_0.SampleLevel(
@@ -640,7 +642,9 @@ float3 vice_environment_source_0(
         environment_sampler, float2(saturate(normal_view), saturate(roughness_value))
     ).rg;
     const float3 fresnel = f0 * brdf.x + brdf.y;
-    return (diffuse * (1.0 - f0) * occlusion + specular * fresnel) * metadata.x * metadata.w;
+    const float3 kd = (1.0 - f0) * (1.0 - saturate(metallic_value));
+    const float3 diffuse = diffuse_irradiance * kd * albedo * occlusion;
+    return (diffuse + specular * fresnel) * metadata.x * metadata.w;
 }
 
 float3 vice_environment_source_1(
@@ -648,6 +652,8 @@ float3 vice_environment_source_1(
     float3 normal,
     float3 reflection_direction,
     float3 f0,
+    float3 albedo,
+    float metallic_value,
     float normal_view,
     float roughness_value,
     float occlusion
@@ -657,7 +663,9 @@ float3 vice_environment_source_1(
         model_position, reflection_direction, environment_probe_from_model_1,
         environment_probe_half_extents_1, environment_probe_rotation_1
     );
-    const float3 diffuse = environment_irradiance_1.Sample(environment_sampler, vice_environment_uv(normal, metadata.y)).rgb;
+    const float3 diffuse_irradiance = environment_irradiance_1.Sample(
+        environment_sampler, vice_environment_uv(normal, metadata.y)
+    ).rgb;
     const float3 specular = environment_specular_1.SampleLevel(
         environment_sampler, vice_environment_uv(projected, metadata.y),
         saturate(roughness_value) * metadata.z
@@ -666,7 +674,9 @@ float3 vice_environment_source_1(
         environment_sampler, float2(saturate(normal_view), saturate(roughness_value))
     ).rg;
     const float3 fresnel = f0 * brdf.x + brdf.y;
-    return (diffuse * (1.0 - f0) * occlusion + specular * fresnel) * metadata.x * metadata.w;
+    const float3 kd = (1.0 - f0) * (1.0 - saturate(metallic_value));
+    const float3 diffuse = diffuse_irradiance * kd * albedo * occlusion;
+    return (diffuse + specular * fresnel) * metadata.x * metadata.w;
 }
 
 float3 vice_environment_source_2(
@@ -674,6 +684,8 @@ float3 vice_environment_source_2(
     float3 normal,
     float3 reflection_direction,
     float3 f0,
+    float3 albedo,
+    float metallic_value,
     float normal_view,
     float roughness_value,
     float occlusion
@@ -683,7 +695,9 @@ float3 vice_environment_source_2(
         model_position, reflection_direction, environment_probe_from_model_2,
         environment_probe_half_extents_2, environment_probe_rotation_2
     );
-    const float3 diffuse = environment_irradiance_2.Sample(environment_sampler, vice_environment_uv(normal, metadata.y)).rgb;
+    const float3 diffuse_irradiance = environment_irradiance_2.Sample(
+        environment_sampler, vice_environment_uv(normal, metadata.y)
+    ).rgb;
     const float3 specular = environment_specular_2.SampleLevel(
         environment_sampler, vice_environment_uv(projected, metadata.y),
         saturate(roughness_value) * metadata.z
@@ -692,7 +706,9 @@ float3 vice_environment_source_2(
         environment_sampler, float2(saturate(normal_view), saturate(roughness_value))
     ).rg;
     const float3 fresnel = f0 * brdf.x + brdf.y;
-    return (diffuse * (1.0 - f0) * occlusion + specular * fresnel) * metadata.x * metadata.w;
+    const float3 kd = (1.0 - f0) * (1.0 - saturate(metallic_value));
+    const float3 diffuse = diffuse_irradiance * kd * albedo * occlusion;
+    return (diffuse + specular * fresnel) * metadata.x * metadata.w;
 }
 
 float vice_ray_ambient_occlusion_visibility(float2 pixel_position) {
@@ -772,20 +788,22 @@ float4 vice_gpu_pbr_fs(VertexOut input) : SV_Target0 {
     }
 
     float3 environment = vice_environment_source_0(
-        input.model_position, normal, reflection_direction, f0, normal_view, roughness_value,
-        occlusion, input.position.xy
+        input.model_position, normal, reflection_direction, f0, base_sample.rgb, metallic_value,
+        normal_view, roughness_value, occlusion, input.position.xy
     );
     environment += vice_environment_source_1(
-        input.model_position, normal, reflection_direction, f0, normal_view, roughness_value, occlusion
+        input.model_position, normal, reflection_direction, f0, base_sample.rgb, metallic_value,
+        normal_view, roughness_value, occlusion
     );
     environment += vice_environment_source_2(
-        input.model_position, normal, reflection_direction, f0, normal_view, roughness_value, occlusion
+        input.model_position, normal, reflection_direction, f0, base_sample.rgb, metallic_value,
+        normal_view, roughness_value, occlusion
     );
     environment *= ray_ambient_occlusion;
 
     const float3 emissive = emissive_sample * material.emissive_color.rgb * material.emissive_intensity;
     const float3 ambient = base_sample.rgb * 0.035 * occlusion * ray_ambient_occlusion;
-    float3 surface = ambient + direct + environment * base_sample.rgb + emissive;
+    float3 surface = ambient + direct + environment + emissive;
 
     if (atmosphere_secondary.z >= 0.5) {
         const float3 camera_relative = input.world_position - camera_position.xyz;
