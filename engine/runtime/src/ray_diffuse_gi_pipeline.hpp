@@ -6,7 +6,6 @@
 #include <vice/runtime/ray_diffuse_gi_settings.hpp>
 #include <vice/runtime/ray_diffuse_gi_temporal.hpp>
 #include <vice/runtime/ray_hit_radiance_history.hpp>
-#include <vice/world/spatial.hpp>
 
 #include <cstdint>
 #include <filesystem>
@@ -35,7 +34,6 @@ struct RuntimeRayDiffuseGiPipelineInput final {
     render::Sampler* environment_sampler = nullptr;
     RuntimeRayDiffuseGiCamera camera{};
     RuntimeTemporalFrameState temporal{};
-    world::GlobalPosition current_origin{};
     RuntimeRayDiffuseGiSettings settings{};
     float environment_intensity = 0.0F;
     float environment_rotation_radians = 0.0F;
