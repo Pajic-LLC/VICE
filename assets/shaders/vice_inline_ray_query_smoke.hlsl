@@ -14,13 +14,13 @@ void vice_inline_ray_query_cs(uint3 dispatch_thread_id : SV_DispatchThreadID) {
     while (query.Proceed()) {
     }
 
-    uint result = 0U;
+    uint hit = 0U;
     if (query.CommittedStatus() == COMMITTED_TRIANGLE_HIT) {
-        // Keep the persistent custom InstanceID and the TLAS array index distinct.
-        // The latter is the portable lookup key for VICE's authoritative runtime-instance map.
+        // Validate both identity channels explicitly: the authored persistent custom InstanceID
+        // is not the same thing as the TLAS array index used to address VICE's runtime map.
         const uint instance_id = query.CommittedInstanceID();
         const uint instance_index = query.CommittedInstanceIndex();
-        result = 0x80000000U | ((instance_id & 0x7FFFU) << 16U) | ((instance_index + 1U) & 0xFFFFU);
+        hit = instance_id == 1U && instance_index == 0U ? 1U : 0U;
     }
-    QueryResult.Store(dispatch_thread_id.x * 4U, result);
+    QueryResult.Store(dispatch_thread_id.x * 4U, hit);
 }
