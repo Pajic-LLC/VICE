@@ -7,6 +7,8 @@
 
 namespace vice::runtime {
 
+class RuntimeSceneRenderer;
+
 inline constexpr std::uint32_t runtime_ray_diffuse_gi_default_spatial_kernel_radius = 2U;
 inline constexpr float runtime_ray_diffuse_gi_default_temporal_history_weight = 0.92F;
 
@@ -55,5 +57,9 @@ struct RuntimeRayDiffuseGiTelemetry final {
         std::isfinite(settings.temporal_history_weight) &&
         settings.temporal_history_weight >= 0.0F && settings.temporal_history_weight <= 1.0F;
 }
+
+[[nodiscard]] RuntimeRayDiffuseGiTelemetry runtime_ray_diffuse_gi_telemetry(
+    const RuntimeSceneRenderer& renderer
+) noexcept;
 
 } // namespace vice::runtime
