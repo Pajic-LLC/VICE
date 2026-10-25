@@ -81,6 +81,46 @@ add_test(
 )
 
 add_executable(
+  vice_runtime_ray_diffuse_gi_settings_tests
+  runtime_ray_diffuse_gi_settings_tests.cpp
+)
+target_link_libraries(
+  vice_runtime_ray_diffuse_gi_settings_tests
+  PRIVATE
+    VICE::Runtime
+)
+target_compile_features(
+  vice_runtime_ray_diffuse_gi_settings_tests
+  PRIVATE
+    cxx_std_23
+)
+vice_enable_warnings(vice_runtime_ray_diffuse_gi_settings_tests)
+add_test(
+  NAME vice_runtime_ray_diffuse_gi_settings_tests
+  COMMAND vice_runtime_ray_diffuse_gi_settings_tests
+)
+
+add_executable(
+  vice_runtime_ray_diffuse_gi_pipeline_contract_tests
+  runtime_ray_diffuse_gi_pipeline_contract_tests.cpp
+)
+target_compile_features(
+  vice_runtime_ray_diffuse_gi_pipeline_contract_tests
+  PRIVATE
+    cxx_std_23
+)
+target_compile_definitions(
+  vice_runtime_ray_diffuse_gi_pipeline_contract_tests
+  PRIVATE
+    VICE_RAY_DIFFUSE_GI_PIPELINE_CPP_SOURCE="${CMAKE_SOURCE_DIR}/engine/runtime/src/ray_diffuse_gi_pipeline.cpp"
+)
+vice_enable_warnings(vice_runtime_ray_diffuse_gi_pipeline_contract_tests)
+add_test(
+  NAME vice_runtime_ray_diffuse_gi_pipeline_contract_tests
+  COMMAND vice_runtime_ray_diffuse_gi_pipeline_contract_tests
+)
+
+add_executable(
   vice_runtime_ray_diffuse_gi_reconstruction_tests
   runtime_ray_diffuse_gi_reconstruction_tests.cpp
 )
@@ -216,6 +256,39 @@ if(TARGET vice_runtime_ray_reflections_shader)
     NAME vice_runtime_ray_reflection_backend_execution_tests
     COMMAND vice_runtime_ray_reflection_backend_execution_tests
   )
+
+  if(TARGET vice_runtime_ray_diffuse_gi_shader)
+    add_executable(
+      vice_runtime_ray_diffuse_gi_backend_execution_tests
+      runtime_ray_diffuse_gi_backend_execution_tests.cpp
+    )
+    add_dependencies(
+      vice_runtime_ray_diffuse_gi_backend_execution_tests
+      vice_runtime_ray_diffuse_gi_shader
+      vice_runtime_ray_reflection_validation_readback_shader
+    )
+    target_link_libraries(
+      vice_runtime_ray_diffuse_gi_backend_execution_tests
+      PRIVATE
+        VICE::Runtime
+    )
+    target_compile_features(
+      vice_runtime_ray_diffuse_gi_backend_execution_tests
+      PRIVATE
+        cxx_std_23
+    )
+    target_compile_definitions(
+      vice_runtime_ray_diffuse_gi_backend_execution_tests
+      PRIVATE
+        VICE_RUNTIME_RAY_DIFFUSE_GI_MANIFEST="${VICE_RUNTIME_RAY_DIFFUSE_GI_MANIFEST_PATH}"
+        VICE_RUNTIME_RAY_REFLECTION_VALIDATION_READBACK_MANIFEST="${VICE_RUNTIME_RAY_REFLECTION_VALIDATION_READBACK_MANIFEST_PATH}"
+    )
+    vice_enable_warnings(vice_runtime_ray_diffuse_gi_backend_execution_tests)
+    add_test(
+      NAME vice_runtime_ray_diffuse_gi_backend_execution_tests
+      COMMAND vice_runtime_ray_diffuse_gi_backend_execution_tests
+    )
+  endif()
 
   if(TARGET vice_runtime_ray_reflection_history_shader)
     add_executable(
