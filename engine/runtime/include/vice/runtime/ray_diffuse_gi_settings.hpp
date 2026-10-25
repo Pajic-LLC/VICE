@@ -20,6 +20,33 @@ struct RuntimeRayDiffuseGiSettings final {
     friend bool operator==(const RuntimeRayDiffuseGiSettings&, const RuntimeRayDiffuseGiSettings&) = default;
 };
 
+enum class RuntimeRayDiffuseGiFallbackReason : std::uint8_t {
+    not_rendered,
+    none,
+    disabled,
+    ray_tracing_unsupported,
+    frame_inputs_unavailable,
+    environment_unavailable,
+    scene_unavailable,
+    pipeline_unavailable,
+    invalid_settings,
+    pipeline_failure,
+};
+
+struct RuntimeRayDiffuseGiTelemetry final {
+    RuntimeRayDiffuseGiSettings settings{};
+    RuntimeRayDiffuseGiFallbackReason fallback_reason =
+        RuntimeRayDiffuseGiFallbackReason::not_rendered;
+    std::uint64_t frame_index = 0U;
+    bool ray_tracing_supported = false;
+    bool pipeline_available = false;
+    bool scene_available = false;
+    bool history_valid = false;
+    bool active = false;
+
+    friend bool operator==(const RuntimeRayDiffuseGiTelemetry&, const RuntimeRayDiffuseGiTelemetry&) = default;
+};
+
 [[nodiscard]] inline bool is_valid(const RuntimeRayDiffuseGiSettings& settings) noexcept {
     return std::isfinite(settings.max_distance) && settings.max_distance > 0.0F &&
         std::isfinite(settings.surface_bias) && settings.surface_bias > 0.0F &&
