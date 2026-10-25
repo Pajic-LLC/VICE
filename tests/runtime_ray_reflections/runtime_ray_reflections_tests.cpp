@@ -150,16 +150,26 @@ void test_gpu_pbr_composition_contract() {
     const auto shader = read_text(VICE_GPU_PBR_SURFACE_SHADER_SOURCE);
     require(!shader.empty(), "GPU PBR shader source must be readable");
     require(shader.find("Texture2D<float4> ray_reflection_radiance_texture : register(t26, space2);") != std::string::npos, "GPU PBR must expose the portable Runtime reflection-radiance binding");
+    require(shader.find("Texture2D<float4> ray_diffuse_gi_radiance_texture : register(t27, space2);") != std::string::npos, "GPU PBR must expose a backend-neutral diffuse-GI binding after the existing lighting resources");
     require(shader.find("ambient_occlusion_metadata.y < 0.5") != std::string::npos, "GPU PBR must gate RT reflection replacement on current-frame validity");
+    require(shader.find("ambient_occlusion_metadata.z < 0.5") != std::string::npos, "GPU PBR must gate diffuse-GI replacement on a separate current-frame validity marker");
     require(shader.find("ray_reflection_radiance_texture.Load") != std::string::npos && shader.find("lerp(raster_specular, max(reflection.rgb, 0.0), saturate(reflection.a))") != std::string::npos, "GPU PBR must replace raster specular per pixel instead of adding RT radiance");
+    require(shader.find("ray_diffuse_gi_radiance_texture.Load") != std::string::npos && shader.find("diffuse_gi.a <= 0.0") != std::string::npos && shader.find("return max(diffuse_gi.rgb, 0.0)") != std::string::npos, "diffuse GI must require current-pixel validity and remain composition-neutral until the PBR diffuse lobe");
     const auto source0 = shader.find("float3 vice_environment_source_0(");
     const auto source1 = shader.find("float3 vice_environment_source_1(");
     const auto source2 = shader.find("float3 vice_environment_source_2(");
-    const auto replacement = shader.find("vice_runtime_reflection_specular(", source0);
-    require(source0 != std::string::npos && source1 != std::string::npos && source2 != std::string::npos && replacement != std::string::npos && replacement < source1, "only global environment source 0 may consume the RT reflection replacement");
+    const auto reflection_replacement = shader.find("vice_runtime_reflection_specular(", source0);
+    const auto gi_replacement = shader.find("vice_runtime_diffuse_gi(", source0);
+    require(source0 != std::string::npos && source1 != std::string::npos && source2 != std::string::npos && reflection_replacement != std::string::npos && reflection_replacement < source1, "only global environment source 0 may consume the RT reflection replacement");
+    require(gi_replacement != std::string::npos && gi_replacement < source1, "only global environment source 0 may consume reconstructed diffuse GI");
     require(shader.find("vice_runtime_reflection_specular(", source1) == std::string::npos, "local reflection probes must stay on their existing raster/environment path");
-    require(shader.find("+ ray_reflection_radiance_texture") == std::string::npos, "RT reflection radiance must never be added on top of environment specular");
-    require(shader.find("occlusion, input.position.xy") != std::string::npos, "GPU PBR must address the reflection replacement with the current raster pixel");
+    require(shader.find("vice_runtime_diffuse_gi(", source1) == std::string::npos, "local diffuse probes must stay on their existing raster/environment path");
+    require(shader.find("const float3 raster_diffuse_irradiance = environment_irradiance_0.Sample(") != std::string::npos && shader.find("pixel_position, raster_diffuse_irradiance") != std::string::npos, "valid GI must replace source-0 irradiance rather than add another diffuse term");
+    require(shader.find("const float3 diffuse = diffuse_irradiance * kd * albedo * occlusion;") != std::string::npos, "GI must enter before the existing metallic/albedo/occlusion diffuse BRDF contract");
+    require(shader.find("+ ray_reflection_radiance_texture") == std::string::npos && shader.find("+ ray_diffuse_gi_radiance_texture") == std::string::npos, "Runtime lighting textures must never be double-counted as additive post-BRDF terms");
+    require(shader.find("environment += vice_environment_source_1(") != std::string::npos && shader.find("environment += vice_environment_source_2(") != std::string::npos, "local probes must remain additive and independent of global diffuse-GI replacement");
+    require(shader.find("environment *= ray_ambient_occlusion;") != std::string::npos, "RTAO must remain an independent environment-visibility stage after source composition");
+    require(shader.find("occlusion, input.position.xy") != std::string::npos, "GPU PBR must address Runtime replacements with the current raster pixel");
 }
 
 void test_runtime_binding_and_order_contract() {
@@ -175,13 +185,25 @@ void test_runtime_binding_and_order_contract() {
             bridge.find("&render::CommandList::set_graphics_texture") != std::string::npos &&
             bridge.find("(commands.*bind_texture)(reflection_binding, bound_texture)") != std::string::npos,
         "Runtime must bind the portable GPU PBR reflection descriptor through the macro-proof RHI member call");
-    require(bridge.find("radiance != nullptr ? *radiance : fallback_texture") != std::string::npos, "GPU PBR must receive a valid t26 descriptor even on non-RT fallback frames");
+    require(bridge.find("binding.binding != 16U || binding.space != 2U") != std::string::npos &&
+            bridge.find("binding = 27U") != std::string::npos &&
+            bridge.find("(commands.*bind_texture)(diffuse_gi_binding, bound_texture)") != std::string::npos,
+        "Runtime must bind diffuse GI through t27/space2 only when source-0 irradiance is being prepared");
+    require(bridge.find("runtime_ray_diffuse_gi_gpu_pbr_frame = RuntimeRayDiffuseGiGpuPbrFrame") != std::string::npos &&
+            bridge.find(".radiance = nullptr") != std::string::npos &&
+            bridge.find("runtime_ray_diffuse_gi_publish_gpu_pbr") != std::string::npos,
+        "Runtime must clear diffuse-GI state every frame before a producer can publish current-frame radiance");
+    require(bridge.find("runtime_ray_diffuse_gi_gpu_pbr_frame.owner != owner") != std::string::npos, "diffuse-GI publication must be scoped to the renderer that began the current frame");
+    require(bridge.find("offsetof(GpuPbrSceneConstants, ambient_occlusion_metadata) + 2U * sizeof(float)") != std::string::npos, "diffuse GI must use a validity marker independent of RTAO and RT reflections");
+    require(bridge.find("radiance != nullptr ? *radiance : fallback_texture") != std::string::npos, "GPU PBR Runtime lighting descriptors must remain valid on fallback frames");
     const auto motion_macro = bridge.find("#define encode_motion_vectors");
+    const auto gi_reset_position = bridge.find("runtime_ray_diffuse_gi_begin_gpu_pbr_frame(this)", motion_macro);
     const auto guide_position = bridge.find("runtime_reflection_surface_guide_after_motion_vectors(", motion_macro);
     const auto trace_position = bridge.find("runtime_ray_reflections_after_surface_guide(", motion_macro);
     const auto history_position = bridge.find("runtime_ray_reflection_history_after_trace(", motion_macro);
-    const auto marker_position = bridge.find("runtime_ray_reflections_mark_gpu_pbr(", motion_macro);
-    require(motion_macro != std::string::npos && guide_position != std::string::npos && trace_position != std::string::npos && history_position != std::string::npos && marker_position != std::string::npos && guide_position < trace_position && trace_position < history_position && history_position < marker_position, "guide, trace, history resolve, and PBR validity marker must execute in causal order");
+    const auto reflection_marker_position = bridge.find("runtime_ray_reflections_mark_gpu_pbr(", motion_macro);
+    const auto gi_marker_position = bridge.find("runtime_ray_diffuse_gi_mark_gpu_pbr(", motion_macro);
+    require(motion_macro != std::string::npos && gi_reset_position != std::string::npos && guide_position != std::string::npos && trace_position != std::string::npos && history_position != std::string::npos && reflection_marker_position != std::string::npos && gi_marker_position != std::string::npos && gi_reset_position < guide_position && guide_position < trace_position && trace_position < history_position && history_position < reflection_marker_position && reflection_marker_position < gi_marker_position, "current-frame reset, guide, trace, history, reflection marker, and diffuse-GI marker must execute in causal order");
 }
 
 } // namespace

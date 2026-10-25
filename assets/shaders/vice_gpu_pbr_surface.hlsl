@@ -113,6 +113,7 @@ Texture2D<float4> environment_specular_2 : register(t23, space2);
 Texture2D<float4> environment_brdf_2 : register(t24, space2);
 Texture2D<float> ray_ambient_occlusion_visibility_texture : register(t25, space2);
 Texture2D<float4> ray_reflection_radiance_texture : register(t26, space2);
+Texture2D<float4> ray_diffuse_gi_radiance_texture : register(t27, space2);
 SamplerState shadow_sampler : register(s0, space2);
 SamplerState environment_sampler : register(s1, space2);
 
@@ -613,6 +614,15 @@ float3 vice_runtime_reflection_specular(float2 pixel_position, float3 raster_spe
     return lerp(raster_specular, max(reflection.rgb, 0.0), saturate(reflection.a));
 }
 
+float3 vice_runtime_diffuse_gi(float2 pixel_position, float3 raster_diffuse_irradiance) {
+    if (ambient_occlusion_metadata.z < 0.5) return raster_diffuse_irradiance;
+    const float4 diffuse_gi = ray_diffuse_gi_radiance_texture.Load(
+        int3(int2(pixel_position), 0)
+    );
+    if (diffuse_gi.a <= 0.0) return raster_diffuse_irradiance;
+    return max(diffuse_gi.rgb, 0.0);
+}
+
 float3 vice_environment_source_0(
     float3 model_position,
     float3 normal,
@@ -630,9 +640,12 @@ float3 vice_environment_source_0(
         model_position, reflection_direction, environment_probe_from_model_0,
         environment_probe_half_extents_0, environment_probe_rotation_0
     );
-    const float3 diffuse_irradiance = environment_irradiance_0.Sample(
+    const float3 raster_diffuse_irradiance = environment_irradiance_0.Sample(
         environment_sampler, vice_environment_uv(normal, metadata.y)
     ).rgb;
+    const float3 diffuse_irradiance = vice_runtime_diffuse_gi(
+        pixel_position, raster_diffuse_irradiance
+    );
     const float3 raster_specular = environment_specular_0.SampleLevel(
         environment_sampler, vice_environment_uv(projected, metadata.y),
         saturate(roughness_value) * metadata.z
