@@ -25,6 +25,15 @@ int main() {
     const auto source = read_text(VICE_RAY_DIFFUSE_GI_PIPELINE_CPP_SOURCE);
     require(!source.empty(), "diffuse-GI production pipeline source must be readable");
 
+    const auto resize = source.find("bool RuntimeRayDiffuseGiPipeline::resize(");
+    const auto resize_clear_valid = source.find("valid_ = false;", resize);
+    const auto resize_trace = source.find("trace_.resize(", resize);
+    require(
+        resize != std::string::npos && resize_clear_valid != std::string::npos &&
+            resize_trace != std::string::npos && resize_clear_valid < resize_trace,
+        "resize must invalidate publishable GI before any render-size resource transition"
+    );
+
     const auto dispatch = source.find("bool RuntimeRayDiffuseGiPipeline::dispatch(");
     const auto clear_valid = source.find("valid_ = false;", dispatch);
     const auto disabled_fallback = source.find("!input.settings.enabled || !available()", dispatch);
