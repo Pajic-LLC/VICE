@@ -27,6 +27,38 @@ struct RuntimeReflectionSurfaceGuideMeshBuffers {
     render::Buffer* indices = nullptr;
 };
 
+struct RuntimeRayDiffuseGiGpuPbrFrame final {
+    const RuntimeSceneRenderer* owner = nullptr;
+    render::Texture* radiance = nullptr;
+};
+
+inline thread_local RuntimeRayDiffuseGiGpuPbrFrame runtime_ray_diffuse_gi_gpu_pbr_frame{};
+
+[[nodiscard]] inline bool runtime_ray_diffuse_gi_begin_gpu_pbr_frame(
+    const RuntimeSceneRenderer* const owner
+) noexcept {
+    runtime_ray_diffuse_gi_gpu_pbr_frame = RuntimeRayDiffuseGiGpuPbrFrame{
+        .owner = owner,
+        .radiance = nullptr,
+    };
+    return true;
+}
+
+inline void runtime_ray_diffuse_gi_publish_gpu_pbr(
+    const RuntimeSceneRenderer* const owner,
+    render::Texture* const current_frame_radiance
+) noexcept {
+    if (runtime_ray_diffuse_gi_gpu_pbr_frame.owner != owner) return;
+    runtime_ray_diffuse_gi_gpu_pbr_frame.radiance = current_frame_radiance;
+}
+
+[[nodiscard]] inline render::Texture* runtime_ray_diffuse_gi_gpu_pbr_radiance(
+    const RuntimeSceneRenderer* const owner
+) noexcept {
+    if (runtime_ray_diffuse_gi_gpu_pbr_frame.owner != owner) return nullptr;
+    return runtime_ray_diffuse_gi_gpu_pbr_frame.radiance;
+}
+
 [[nodiscard]] inline bool runtime_reflection_surface_guide_needs_camera_depth_prepass(
     const render::Device* const device
 ) noexcept {
@@ -120,6 +152,29 @@ struct RuntimeReflectionSurfaceGuideMeshBuffers {
     return false;
 }
 
+[[nodiscard]] inline bool runtime_ray_diffuse_gi_mark_gpu_pbr(
+    const RuntimeSceneRenderer* const owner,
+    render::Buffer* const frame_constants,
+    const std::uint64_t marker_offset,
+    std::string* const diagnostics
+) noexcept {
+    if (owner == nullptr || frame_constants == nullptr ||
+        runtime_ray_diffuse_gi_gpu_pbr_radiance(owner) == nullptr) {
+        return true;
+    }
+    const float enabled = 1.0F;
+    if (frame_constants->write(
+            marker_offset,
+            std::as_bytes(std::span{&enabled, 1})
+        )) {
+        return true;
+    }
+    if (diagnostics != nullptr) {
+        *diagnostics = "VICE Runtime could not enable diffuse GI for GPU PBR.";
+    }
+    return false;
+}
+
 [[nodiscard]] inline bool runtime_ray_reflections_bind_gpu_pbr_texture(
     render::CommandList& commands,
     const RuntimeSceneRenderer* const owner,
@@ -155,6 +210,41 @@ struct RuntimeReflectionSurfaceGuideMeshBuffers {
     return false;
 }
 
+[[nodiscard]] inline bool runtime_ray_diffuse_gi_bind_gpu_pbr_texture(
+    render::CommandList& commands,
+    const RuntimeSceneRenderer* const owner,
+    const render::ShaderBindingKey& binding,
+    render::Texture& fallback_texture,
+    std::string* const diagnostics
+) noexcept {
+    if (owner == nullptr ||
+        binding.register_class != render::ShaderRegisterClass::shader_resource ||
+        binding.binding != 16U || binding.space != 2U || binding.array_element != 0U) {
+        return true;
+    }
+
+    constexpr render::ShaderBindingKey diffuse_gi_binding{
+        .register_class = render::ShaderRegisterClass::shader_resource,
+        .binding = 27U,
+        .space = 2U,
+        .array_element = 0U,
+    };
+    auto* const radiance = runtime_ray_diffuse_gi_gpu_pbr_radiance(owner);
+    render::Texture& bound_texture = radiance != nullptr ? *radiance : fallback_texture;
+    using SetGraphicsTexture = bool (render::CommandList::*)(
+        const render::ShaderBindingKey&,
+        render::Texture&
+    );
+    const auto bind_texture = static_cast<SetGraphicsTexture>(
+        &render::CommandList::set_graphics_texture
+    );
+    if ((commands.*bind_texture)(diffuse_gi_binding, bound_texture)) return true;
+    if (diagnostics != nullptr) {
+        *diagnostics = "VICE Runtime could not bind diffuse-GI radiance for GPU PBR.";
+    }
+    return false;
+}
+
 } // namespace vice::runtime::detail
 
 #if defined(render)
@@ -174,7 +264,8 @@ struct RuntimeReflectionSurfaceGuideMeshBuffers {
 #endif
 
 #define encode_motion_vectors(...) \
-    (encode_motion_vectors(__VA_ARGS__) && \
+    (::vice::runtime::detail::runtime_ray_diffuse_gi_begin_gpu_pbr_frame(this) && \
+        encode_motion_vectors(__VA_ARGS__) && \
         ::vice::runtime::detail::runtime_ray_ambient_occlusion_after_motion_vectors( \
             *commands, state_->motion_vectors.get(), current_depth, previous_depth, temporal_frame \
         ) && \
@@ -234,6 +325,12 @@ struct RuntimeReflectionSurfaceGuideMeshBuffers {
             state_->gpu_pbr_frame.get(), \
             offsetof(GpuPbrSceneConstants, ambient_occlusion_metadata) + sizeof(float), \
             diagnostics \
+        ) && \
+        ::vice::runtime::detail::runtime_ray_diffuse_gi_mark_gpu_pbr( \
+            this, \
+            state_->gpu_pbr_frame.get(), \
+            offsetof(GpuPbrSceneConstants, ambient_occlusion_metadata) + 2U * sizeof(float), \
+            diagnostics \
         ))
 
 #ifdef set_graphics_texture
@@ -250,6 +347,9 @@ struct RuntimeReflectionSurfaceGuideMeshBuffers {
         ) \
     ) && \
     ::vice::runtime::detail::runtime_ray_reflections_bind_gpu_pbr_texture( \
+        *commands, this, (binding), (texture), diagnostics \
+    ) && \
+    ::vice::runtime::detail::runtime_ray_diffuse_gi_bind_gpu_pbr_texture( \
         *commands, this, (binding), (texture), diagnostics \
     )
 
