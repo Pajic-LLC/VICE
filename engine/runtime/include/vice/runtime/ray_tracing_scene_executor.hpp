@@ -55,6 +55,16 @@ public:
     [[nodiscard]] bool has_tlas() const noexcept { return tlas_ != nullptr; }
     [[nodiscard]] render::AccelerationStructure* active_tlas() noexcept { return tlas_.get(); }
     [[nodiscard]] const render::AccelerationStructure* active_tlas() const noexcept { return tlas_.get(); }
+    [[nodiscard]] std::span<const std::uint32_t> active_scene_instance_indices() const noexcept {
+        return active_scene_instance_indices_;
+    }
+    [[nodiscard]] std::uint32_t active_scene_instance_index(
+        const std::uint32_t tlas_instance_index
+    ) const noexcept {
+        return tlas_ != nullptr && tlas_instance_index < active_scene_instance_indices_.size()
+            ? active_scene_instance_indices_[tlas_instance_index]
+            : runtime_ray_tracing_invalid_scene_instance;
+    }
     [[nodiscard]] const RuntimeRayTracingTelemetry& telemetry() const noexcept { return telemetry_; }
 
 private:
@@ -72,6 +82,10 @@ private:
     std::shared_ptr<render::AccelerationStructure> tlas_;
     std::vector<RuntimeRayTracingBlasKey> previous_blas_keys_;
     std::vector<RuntimeRayTracingInstancePlan> previous_instances_;
+    // This mapping is committed only together with a successful active TLAS
+    // state. It may change while the TLAS itself is reused because authoritative
+    // Runtime scene-array order is not part of TLAS topology or identity.
+    std::vector<std::uint32_t> active_scene_instance_indices_;
     RuntimeRayTracingTelemetry telemetry_{};
 };
 
