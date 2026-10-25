@@ -5,6 +5,7 @@
 #include <array>
 #include <cassert>
 #include <cstdint>
+#include <limits>
 #include <vector>
 namespace {
 [[nodiscard]] vice::world::PersistentId persistent_id(const std::uint8_t value){vice::world::PersistentId::Bytes bytes{};bytes.back()=value;return vice::world::PersistentId{bytes};}
@@ -21,9 +22,6 @@ int main(){using namespace vice;
  const std::array missing_instance{instance(4U,9U)};assert(!runtime::build_runtime_ray_tracing_scene_plan(missing_instance,meshes));auto malformed_meshes=meshes;malformed_meshes[1].asset.indices.clear();const std::array malformed_instance{instance(5U,1U)};assert(!runtime::build_runtime_ray_tracing_scene_plan(malformed_instance,malformed_meshes));const std::array duplicate_entities{instance(6U,1U),instance(6U,2U)};assert(!runtime::build_runtime_ray_tracing_scene_plan(duplicate_entities,meshes));
  runtime::RuntimeResourceResidencyPlan only_mesh_one;only_mesh_one.resources={resource_id(1U)};const auto resident_mesh_one=runtime::filter_runtime_resident_geometry(instances,only_mesh_one);const auto resident_plan=runtime::build_runtime_ray_tracing_scene_plan(resident_mesh_one,meshes);assert(resident_plan);assert(resident_plan.blases.size()==1U);assert(resident_plan.instances.size()==2U);
  runtime::RuntimeResourceResidencyPlan all_meshes;all_meshes.resources={resource_id(1U),resource_id(2U)};const auto streamed_back=runtime::filter_runtime_resident_geometry(instances,all_meshes);const auto streamed_back_plan=runtime::build_runtime_ray_tracing_scene_plan(streamed_back,meshes);assert(streamed_back_plan);const auto before_identity=std::find_if(plan.instances.begin(),plan.instances.end(),[&](const auto& p){return p.entity==persistent_id(2U);});const auto after_identity=std::find_if(streamed_back_plan.instances.begin(),streamed_back_plan.instances.end(),[&](const auto& p){return p.entity==persistent_id(2U);});assert(before_identity->instance_id==after_identity->instance_id);
- // A huge authoritative global translation must disappear from the float TLAS frame while local offsets survive.
- const std::vector<runtime::RenderMeshInstance> huge_instances{instance(9U,1U,1.0e12+4.0,-2.0e12+5.0,3.0e12+6.0)};
- const world::GlobalPosition origin{1.0e12,-2.0e12,3.0e12};
+ const std::vector<runtime::RenderMeshInstance> huge_instances{instance(9U,1U,1.0e12+4.0,-2.0e12+5.0,3.0e12+6.0)}; const world::GlobalPosition origin{1.0e12,-2.0e12,3.0e12};
  const auto relative=runtime::build_runtime_ray_tracing_scene_plan(huge_instances,meshes,origin);assert(relative);assert(relative.instances.size()==1U);assert(relative.instances[0].transform[3]==4.0F);assert(relative.instances[0].transform[7]==5.0F);assert(relative.instances[0].transform[11]==6.0F);
- const auto invalid_origin=runtime::build_runtime_ray_tracing_scene_plan(huge_instances,meshes,world::GlobalPosition{std::numeric_limits<double>::infinity(),0.0,0.0});assert(!invalid_origin);assert(!invalid_origin.diagnostics.empty());
- return 0;}
+ const auto invalid_origin=runtime::build_runtime_ray_tracing_scene_plan(huge_instances,meshes,world::GlobalPosition{std::numeric_limits<double>::infinity(),0.0,0.0});assert(!invalid_origin);assert(!invalid_origin.diagnostics.empty()); return 0;}
