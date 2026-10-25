@@ -2,6 +2,7 @@
 #include <vice/runtime/ray_diffuse_gi.hpp>
 
 #include <cmath>
+#include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <limits>
@@ -123,15 +124,32 @@ int main() {
 
     auto device = render::Device::create();
     if (device != nullptr) {
-        runtime::RuntimeRayDiffuseGiPass pass;
         std::string diagnostics;
-        CHECK(pass.initialize(*device, {}, &diagnostics));
-        CHECK(!pass.available());
+        runtime::RuntimeRayDiffuseGiPass fallback_pass;
+        CHECK(fallback_pass.initialize(*device, {}, &diagnostics));
+        CHECK(!fallback_pass.available());
         CHECK(diagnostics.empty());
-        CHECK(pass.resize(1U, 1U, &diagnostics));
-        CHECK(pass.radiance() == nullptr);
-        CHECK(pass.hits() == nullptr);
+        CHECK(fallback_pass.resize(1U, 1U, &diagnostics));
+        CHECK(fallback_pass.radiance() == nullptr);
+        CHECK(fallback_pass.hits() == nullptr);
         CHECK(diagnostics.empty());
+
+#ifdef VICE_RUNTIME_RAY_DIFFUSE_GI_CONTRACT_MANIFEST
+        if (device->capabilities().ray_tracing) {
+            runtime::RuntimeRayDiffuseGiPass cooked_pass;
+            CHECK(cooked_pass.initialize(
+                *device,
+                std::filesystem::path{VICE_RUNTIME_RAY_DIFFUSE_GI_CONTRACT_MANIFEST},
+                &diagnostics
+            ));
+            CHECK(cooked_pass.available());
+            CHECK(diagnostics.empty());
+            CHECK(cooked_pass.resize(4U, 4U, &diagnostics));
+            CHECK(cooked_pass.radiance() != nullptr);
+            CHECK(cooked_pass.hits() != nullptr);
+            CHECK(diagnostics.empty());
+        }
+#endif
     }
 
     std::cout << "Diffuse GI ray sampling and authoritative hit contract validated.\n";
