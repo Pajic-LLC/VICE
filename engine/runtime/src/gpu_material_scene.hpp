@@ -101,8 +101,10 @@ private:
 
 // scene.cpp intentionally compiles scene_legacy.inc behind small token-level RHI hooks.
 // When this private header is parsed under that wrapper, extend the same bridge to
-// virtual-texture feedback without changing the legacy renderer's public surface.
+// virtual-texture feedback and the pre-PBR reflection surface guide without changing
+// the legacy renderer's public scene representation.
 #if defined(render)
+#include "reflection_surface_guide_bridge.hpp"
 #define set_graphics_buffer(binding, ...) \
     set_graphics_buffer(binding, __VA_ARGS__) && \
     ::vice::runtime::detail::runtime_gpu_material_buffer_binding_hook(*commands, (binding))
