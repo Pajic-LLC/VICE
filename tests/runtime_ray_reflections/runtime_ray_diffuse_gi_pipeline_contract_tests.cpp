@@ -1,3 +1,4 @@
+#include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <iterator>
@@ -14,7 +15,7 @@ void require(const bool condition, const std::string_view message) {
     ++failures;
 }
 
-[[nodiscard]] std::string read_text(const char* path) {
+[[nodiscard]] std::string read_text(const std::filesystem::path& path) {
     std::ifstream stream{path, std::ios::binary};
     return std::string{std::istreambuf_iterator<char>{stream}, std::istreambuf_iterator<char>{}};
 }
@@ -22,7 +23,8 @@ void require(const bool condition, const std::string_view message) {
 } // namespace
 
 int main() {
-    const auto source = read_text(VICE_RAY_DIFFUSE_GI_PIPELINE_CPP_SOURCE);
+    const std::filesystem::path pipeline_path{VICE_RAY_DIFFUSE_GI_PIPELINE_CPP_SOURCE};
+    const auto source = read_text(pipeline_path);
     require(!source.empty(), "diffuse-GI production pipeline source must be readable");
 
     const auto resize = source.find("bool RuntimeRayDiffuseGiPipeline::resize(");
@@ -82,6 +84,53 @@ int main() {
             std::string::npos &&
             source.find("max_distance <= input.settings.surface_bias") != std::string::npos,
         "GI ray quality must respect the active camera far plane and fail closed on an unusable range"
+    );
+
+    const auto bridge = read_text(pipeline_path.parent_path() / "ray_diffuse_gi_bridge.cpp");
+    require(!bridge.empty(), "diffuse-GI Runtime bridge source must be readable");
+    require(
+        bridge.find("active_tlas()") != std::string::npos &&
+            bridge.find("active_scene_instance_index_buffer()") != std::string::npos &&
+            bridge.find("active_scene_instance_indices()") != std::string::npos,
+        "GI must consume the active TLAS and its executor-owned authoritative GPU scene-index map"
+    );
+    require(
+        bridge.find("RuntimeRayTracingSceneIndexTable") == std::string::npos &&
+            bridge.find("scene_index_table") == std::string::npos,
+        "GI scheduling must not recreate a second scene-identity mapping table"
+    );
+    require(
+        bridge.find("runtime_ray_diffuse_gi_publish_gpu_pbr(owner, radiance);") != std::string::npos,
+        "only the successful production bridge may publish temporal GI into the PBR current-frame gate"
+    );
+    require(
+        bridge.find("RuntimeRayDiffuseGiFallbackReason::disabled") != std::string::npos &&
+            bridge.find("RuntimeRayDiffuseGiFallbackReason::ray_tracing_unsupported") != std::string::npos &&
+            bridge.find("RuntimeRayDiffuseGiFallbackReason::frame_inputs_unavailable") != std::string::npos &&
+            bridge.find("RuntimeRayDiffuseGiFallbackReason::environment_unavailable") != std::string::npos &&
+            bridge.find("RuntimeRayDiffuseGiFallbackReason::scene_unavailable") != std::string::npos &&
+            bridge.find("RuntimeRayDiffuseGiFallbackReason::pipeline_unavailable") != std::string::npos &&
+            bridge.find("RuntimeRayDiffuseGiFallbackReason::pipeline_failure") != std::string::npos &&
+            bridge.find("RuntimeRayDiffuseGiFallbackReason::none") != std::string::npos,
+        "GI telemetry must explain active, expected fallback, and actual pipeline failure states"
+    );
+
+    const auto render_bridge = read_text(pipeline_path.parent_path() / "reflection_surface_guide_bridge.hpp");
+    require(!render_bridge.empty(), "Runtime reflection/GI render bridge source must be readable");
+    const auto motion_macro = render_bridge.find("#define encode_motion_vectors");
+    const auto frame_reset = render_bridge.find("runtime_ray_diffuse_gi_begin_gpu_pbr_frame(this)", motion_macro);
+    const auto guide = render_bridge.find("runtime_reflection_surface_guide_after_motion_vectors(", motion_macro);
+    const auto reflection_history = render_bridge.find("runtime_ray_reflection_history_after_trace(", motion_macro);
+    const auto gi_schedule = render_bridge.find("runtime_ray_diffuse_gi_after_surface_guide(", motion_macro);
+    const auto reflection_marker = render_bridge.find("runtime_ray_reflections_mark_gpu_pbr(", motion_macro);
+    const auto gi_marker = render_bridge.find("runtime_ray_diffuse_gi_mark_gpu_pbr(", motion_macro);
+    require(
+        motion_macro != std::string::npos && frame_reset != std::string::npos && guide != std::string::npos &&
+            reflection_history != std::string::npos && gi_schedule != std::string::npos &&
+            reflection_marker != std::string::npos && gi_marker != std::string::npos &&
+            frame_reset < guide && guide < reflection_history && reflection_history < gi_schedule &&
+            gi_schedule < reflection_marker && reflection_marker < gi_marker,
+        "renderer order must reset GI, build the guide/history, schedule GI, then write reflection/GI validity markers"
     );
 
     if (failures != 0) {
