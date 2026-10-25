@@ -2,6 +2,7 @@
 
 #include <vice/render/shader_asset.hpp>
 #include <vice/runtime/ray_tracing_scene_executor.hpp>
+#include <vice/runtime/ray_tracing_scene_index_table.hpp>
 #include <vice/runtime/scene.hpp>
 
 #include "environment_pipeline.hpp"
@@ -48,6 +49,12 @@ constexpr render::ShaderBindingKey reflection_guide_binding{
 constexpr render::ShaderBindingKey reflection_environment_binding{
     .register_class = render::ShaderRegisterClass::shader_resource,
     .binding = 3U,
+    .space = 0U,
+    .array_element = 0U,
+};
+constexpr render::ShaderBindingKey reflection_scene_indices_binding{
+    .register_class = render::ShaderRegisterClass::shader_resource,
+    .binding = 4U,
     .space = 0U,
     .array_element = 0U,
 };
@@ -416,6 +423,8 @@ bool RuntimeRayReflectionsPass::dispatch(
     render::Texture& camera_depth,
     render::Texture& surface_guide,
     render::AccelerationStructure& scene_tlas,
+    render::Buffer& scene_instance_indices,
+    const std::uint32_t scene_instance_index_count,
     render::Texture& environment_specular,
     render::Sampler& environment_sampler,
     const RuntimeRayReflectionsConstants& constants,
@@ -428,11 +437,16 @@ bool RuntimeRayReflectionsPass::dispatch(
         set_diagnostics(diagnostics, "Runtime ray-reflection pass is not ready.");
         return false;
     }
+
+    const std::uint64_t scene_index_bytes =
+        static_cast<std::uint64_t>(scene_instance_index_count) * sizeof(std::uint32_t);
     if (camera_depth.format() != render::TextureFormat::depth32_float ||
         surface_guide.format() != render::TextureFormat::rgba16_float ||
         !render::has_usage(camera_depth.usage(), render::TextureUsage::sampled) ||
         !render::has_usage(surface_guide.usage(), render::TextureUsage::sampled) ||
         !render::has_usage(environment_specular.usage(), render::TextureUsage::sampled) ||
+        !render::has_usage(scene_instance_indices.usage(), render::BufferUsage::storage) ||
+        scene_instance_index_count == 0U || scene_instance_indices.size() < scene_index_bytes ||
         camera_depth.width() != state_->width || camera_depth.height() != state_->height ||
         surface_guide.width() != state_->width || surface_guide.height() != state_->height ||
         constants.target_size_jitter[0] != static_cast<float>(state_->width) ||
@@ -444,6 +458,11 @@ bool RuntimeRayReflectionsPass::dispatch(
         return false;
     }
 
+    const render::BufferViewDesc scene_index_view{
+        .offset = 0U,
+        .size = scene_index_bytes,
+        .structure_stride = sizeof(std::uint32_t),
+    };
     const render::BufferViewDesc hit_view{
         .offset = 0U,
         .size = state_->hits->size(),
@@ -460,6 +479,11 @@ bool RuntimeRayReflectionsPass::dispatch(
         !commands.set_compute_texture(reflection_depth_binding, camera_depth) ||
         !commands.set_compute_texture(reflection_guide_binding, surface_guide) ||
         !commands.set_compute_texture(reflection_environment_binding, environment_specular) ||
+        !commands.set_compute_buffer(
+            reflection_scene_indices_binding,
+            scene_instance_indices,
+            scene_index_view
+        ) ||
         !commands.set_compute_sampler(reflection_environment_sampler_binding, environment_sampler) ||
         !commands.set_compute_storage_texture(reflection_radiance_binding, *state_->radiance) ||
         !commands.set_compute_storage_buffer(reflection_hits_binding, *state_->hits, hit_view) ||
@@ -497,6 +521,7 @@ struct RuntimeRayReflectionsSceneState {
     const RuntimeSceneRenderer* owner = nullptr;
     render::Device* device = nullptr;
     std::unique_ptr<RuntimeRayReflectionsPass> pass;
+    std::unique_ptr<RuntimeRayTracingSceneIndexTable> scene_index_table;
     bool valid = false;
 };
 
@@ -508,20 +533,36 @@ thread_local RuntimeRayReflectionsSceneState ray_reflections_scene_state;
     std::string* const diagnostics
 ) {
     auto& state = ray_reflections_scene_state;
-    if (state.owner == owner && state.device == &device && state.pass != nullptr) {
+    if (state.owner == owner && state.device == &device && state.pass != nullptr &&
+        state.scene_index_table != nullptr) {
         if (diagnostics != nullptr) diagnostics->clear();
         return true;
     }
     state.pass.reset();
+    state.scene_index_table.reset();
     state.owner = owner;
     state.device = &device;
     state.valid = false;
     state.pass = std::make_unique<RuntimeRayReflectionsPass>();
+    state.scene_index_table = std::make_unique<RuntimeRayTracingSceneIndexTable>();
+
+    bool pass_initialized = false;
 #ifdef VICE_RUNTIME_RAY_REFLECTIONS_MANIFEST
-    return state.pass->initialize(device, VICE_RUNTIME_RAY_REFLECTIONS_MANIFEST, diagnostics);
+    pass_initialized = state.pass->initialize(
+        device,
+        VICE_RUNTIME_RAY_REFLECTIONS_MANIFEST,
+        diagnostics
+    );
 #else
-    return state.pass->initialize(device, {}, diagnostics);
+    pass_initialized = state.pass->initialize(device, {}, diagnostics);
 #endif
+    if (!pass_initialized || !state.scene_index_table->initialize(device, diagnostics)) {
+        state.pass.reset();
+        state.scene_index_table.reset();
+        return false;
+    }
+    if (diagnostics != nullptr) diagnostics->clear();
+    return true;
 }
 
 } // namespace
@@ -557,11 +598,30 @@ bool runtime_ray_reflections_after_surface_guide(
     }
     if (!ensure_ray_reflections_pass(owner, device, diagnostics)) return false;
     auto& state = ray_reflections_scene_state;
-    if (state.pass == nullptr || !state.pass->available()) {
+    if (state.pass == nullptr || state.scene_index_table == nullptr || !state.pass->available()) {
         if (diagnostics != nullptr) diagnostics->clear();
         return true;
     }
     if (!state.pass->resize(metrics.drawable_width, metrics.drawable_height, diagnostics)) return false;
+
+    const auto active_scene_indices = ray_scene->active_scene_instance_indices();
+    if (active_scene_indices.empty()) {
+        set_diagnostics(
+            diagnostics,
+            "Runtime ray reflections require an authoritative active TLAS scene-index mapping."
+        );
+        return false;
+    }
+    if (!state.scene_index_table->upload(commands, active_scene_indices, diagnostics)) return false;
+    const auto scene_index_table = state.scene_index_table->result();
+    if (!scene_index_table || scene_index_table.indices == nullptr ||
+        scene_index_table.index_count != active_scene_indices.size()) {
+        set_diagnostics(
+            diagnostics,
+            "Runtime ray reflections could not publish the active TLAS scene-index mapping."
+        );
+        return false;
+    }
 
     const RuntimeRayReflectionsCamera ray_camera{
         .position = camera.position,
@@ -596,6 +656,8 @@ bool runtime_ray_reflections_after_surface_guide(
         *current_depth,
         *surface_guide,
         *tlas,
+        *scene_index_table.indices,
+        scene_index_table.index_count,
         *environment.specular,
         *environment.sampler,
         *constants,

@@ -23,3 +23,20 @@ add_test(
   NAME vice_runtime_ray_reflections_tests
   COMMAND vice_runtime_ray_reflections_tests
 )
+
+add_executable(
+  vice_runtime_ray_reflection_scene_index_tests
+  runtime_ray_reflection_scene_index_tests.cpp
+)
+target_compile_features(vice_runtime_ray_reflection_scene_index_tests PRIVATE cxx_std_23)
+target_compile_definitions(
+  vice_runtime_ray_reflection_scene_index_tests
+  PRIVATE
+    VICE_RAY_REFLECTIONS_SHADER_SOURCE="${CMAKE_SOURCE_DIR}/assets/shaders/vice_ray_reflections.hlsl"
+    VICE_RAY_REFLECTIONS_CPP_SOURCE="${CMAKE_SOURCE_DIR}/engine/runtime/src/ray_reflections.cpp"
+)
+vice_enable_warnings(vice_runtime_ray_reflection_scene_index_tests)
+add_test(
+  NAME vice_runtime_ray_reflection_scene_index_tests
+  COMMAND vice_runtime_ray_reflection_scene_index_tests
+)

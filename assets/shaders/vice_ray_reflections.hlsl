@@ -1,5 +1,6 @@
 static const float VICE_PI = 3.14159265358979323846;
 static const float VICE_BACKGROUND_DEPTH = 0.999999;
+static const uint VICE_INVALID_SCENE_INSTANCE = 0xFFFFFFFFu;
 
 cbuffer ReflectionFrame : register(b0, space0) {
     float4 camera_position_near;
@@ -15,6 +16,7 @@ RaytracingAccelerationStructure SceneTlas : register(t0, space0);
 Texture2D<float> CameraDepth : register(t1, space0);
 Texture2D<float4> SurfaceGuide : register(t2, space0);
 Texture2D<float4> EnvironmentSpecular : register(t3, space0);
+StructuredBuffer<uint> SceneInstanceIndices : register(t4, space0);
 SamplerState EnvironmentSampler : register(s0, space0);
 RWTexture2D<float4> ReflectionRadiance : register(u0, space0);
 
@@ -121,11 +123,23 @@ void vice_ray_reflections_cs(uint3 dispatch_thread_id : SV_DispatchThreadID) {
     }
 
     if (query.CommittedStatus() != COMMITTED_TRIANGLE_HIT) return;
-    const uint instance_id = query.CommittedInstanceID();
+
+    // Keep the authored 24-bit custom identity channel intact for deterministic identity/debugging,
+    // but address Runtime scene data only through the TLAS array index plus VICE's authoritative map.
+    const uint persistent_instance_id = query.CommittedInstanceID();
+    const uint tlas_instance_index = query.CommittedInstanceIndex();
     const float hit_t = query.CommittedRayT();
-    if (instance_id > (uint)trace_parameters.w || hit_t < ray.TMin || hit_t > ray.TMax) return;
+    if (persistent_instance_id > (uint)trace_parameters.w || hit_t < ray.TMin || hit_t > ray.TMax) return;
+
+    uint scene_index_count = 0u;
+    uint scene_index_stride = 0u;
+    SceneInstanceIndices.GetDimensions(scene_index_count, scene_index_stride);
+    if (scene_index_stride != 4u || tlas_instance_index >= scene_index_count) return;
+
+    const uint scene_instance_index = SceneInstanceIndices[tlas_instance_index];
+    if (scene_instance_index == VICE_INVALID_SCENE_INSTANCE) return;
 
     hit.world_position = ray.Origin + ray.Direction * hit_t;
-    hit.instance_id_plus_one = instance_id + 1u;
+    hit.instance_id_plus_one = scene_instance_index + 1u;
     ReflectionHits[linear_index] = hit;
 }

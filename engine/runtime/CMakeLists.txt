@@ -35,6 +35,7 @@ add_library(
     src/ray_reflections.cpp
     src/ray_tracing_scene.cpp
     src/ray_tracing_scene_executor.cpp
+    src/ray_tracing_scene_index_table.cpp
     src/reflection_surface_guide.cpp
     src/render_residency.cpp
     src/render_streaming.cpp
