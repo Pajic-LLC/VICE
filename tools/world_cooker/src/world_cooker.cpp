@@ -41,6 +41,7 @@ constexpr float degrees_to_radians = 0.01745329251994329577F;
 ) noexcept {
     if (text == "render_mesh") return world::ResourceRole::render_mesh;
     if (text == "render_material") return world::ResourceRole::render_material;
+    if (text == "reflection_environment") return world::ResourceRole::reflection_environment;
     return std::nullopt;
 }
 
@@ -276,6 +277,36 @@ ParseResult parse_source_manifest(const std::string_view source) {
                         return result;
                     }
                     entity.light = light;
+                    continue;
+                }
+
+                if (metadata == "reflection_probe") {
+                    if (entity.reflection_probe.has_value()) {
+                        fail("entity reflection probe is duplicated.");
+                        return result;
+                    }
+                    if (!entity.spatial_state.has_value()) {
+                        fail("reflection probe requires a spatial entity.");
+                        return result;
+                    }
+                    std::string enabled_text;
+                    world::ReflectionProbe probe;
+                    if (!(values >> probe.half_extents.x >> probe.half_extents.y >> probe.half_extents.z >>
+                            probe.blend_distance >> probe.priority >> enabled_text)) {
+                        fail("entity reflection probe is incomplete.");
+                        return result;
+                    }
+                    if (enabled_text == "enabled") probe.enabled = true;
+                    else if (enabled_text == "disabled") probe.enabled = false;
+                    else {
+                        fail("reflection probe state must be `enabled` or `disabled`.");
+                        return result;
+                    }
+                    if (!world::valid(probe)) {
+                        fail("entity reflection probe values are invalid.");
+                        return result;
+                    }
+                    entity.reflection_probe = probe;
                     continue;
                 }
 
