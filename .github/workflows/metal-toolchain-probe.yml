@@ -1,0 +1,65 @@
+name: Metal Toolchain Probe
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/metal-toolchain-probe.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    name: macOS Metal toolchain probe
+    runs-on: macos-15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Inspect preinstalled toolchain
+        shell: bash
+        run: |
+          set -uo pipefail
+          sw_vers
+          xcodebuild -version
+          echo "DEVELOPER_DIR=$(xcode-select -p)"
+          echo "PATH=$PATH"
+
+          for tool in dxc metal-shaderconverter metal metallib metal-tt; do
+            echo "== $tool =="
+            command -v "$tool" || true
+            xcrun --find "$tool" 2>/dev/null || true
+          done
+
+          find /opt /usr/local /Applications/Xcode.app -type f \
+            \( -name dxc -o -name metal-shaderconverter \) -print 2>/dev/null | head -100 || true
+
+      - name: Install Xcode Metal toolchain component
+        shell: bash
+        run: |
+          set -o pipefail
+          xcodebuild -downloadComponent MetalToolchain
+
+      - name: Inspect downloaded component
+        shell: bash
+        run: |
+          set -uo pipefail
+          for tool in dxc metal-shaderconverter metal metallib metal-tt; do
+            echo "== $tool =="
+            command -v "$tool" || true
+            xcrun --find "$tool" 2>/dev/null || true
+          done
+
+          echo "== installed packages =="
+          pkgutil --pkgs | grep -Ei 'metal|shader|converter' || true
+
+          echo "== candidate executables =="
+          find /opt /usr/local /Applications/Xcode.app -type f \
+            \( -name dxc -o -name metal-shaderconverter \) -print 2>/dev/null | head -100 || true
+
+          if command -v metal-shaderconverter >/dev/null 2>&1; then
+            metal-shaderconverter --version || metal-shaderconverter --help | head -40
+          elif xcrun --find metal-shaderconverter >/dev/null 2>&1; then
+            xcrun metal-shaderconverter --version || xcrun metal-shaderconverter --help | head -40
+          fi
