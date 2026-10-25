@@ -7,9 +7,11 @@
 #include <string>
 
 int main() {
+    using vice::runtime::RuntimeRayDiffuseGiFallbackReason;
     using vice::runtime::RuntimeRayDiffuseGiSettings;
     using vice::runtime::RuntimeSceneRenderer;
     using vice::runtime::is_valid;
+    using vice::runtime::runtime_ray_diffuse_gi_telemetry;
 
     const RuntimeRayDiffuseGiSettings defaults{};
     assert(is_valid(defaults));
@@ -88,6 +90,14 @@ int main() {
 
     RuntimeSceneRenderer renderer;
     assert(renderer.ray_diffuse_gi_settings() == defaults);
+    const auto initial_telemetry = runtime_ray_diffuse_gi_telemetry(renderer);
+    assert(initial_telemetry.settings == defaults);
+    assert(initial_telemetry.fallback_reason == RuntimeRayDiffuseGiFallbackReason::not_rendered);
+    assert(!initial_telemetry.ray_tracing_supported);
+    assert(!initial_telemetry.pipeline_available);
+    assert(!initial_telemetry.scene_available);
+    assert(!initial_telemetry.history_valid);
+    assert(!initial_telemetry.active);
 
     RuntimeRayDiffuseGiSettings tuned = defaults;
     tuned.max_distance = 24.0F;
@@ -98,6 +108,10 @@ int main() {
     assert(renderer.set_ray_diffuse_gi_settings(tuned, &diagnostics));
     assert(diagnostics.empty());
     assert(renderer.ray_diffuse_gi_settings() == tuned);
+    const auto tuned_telemetry = runtime_ray_diffuse_gi_telemetry(renderer);
+    assert(tuned_telemetry.settings == tuned);
+    assert(tuned_telemetry.fallback_reason == RuntimeRayDiffuseGiFallbackReason::not_rendered);
+    assert(!tuned_telemetry.active);
 
     const auto committed = renderer.ray_diffuse_gi_settings();
     auto invalid_update = tuned;
@@ -111,6 +125,9 @@ int main() {
     assert(renderer.set_ray_diffuse_gi_settings(disabled, &diagnostics));
     assert(diagnostics.empty());
     assert(renderer.ray_diffuse_gi_settings() == disabled);
+    const auto disabled_telemetry = runtime_ray_diffuse_gi_telemetry(renderer);
+    assert(disabled_telemetry.settings == disabled);
+    assert(disabled_telemetry.fallback_reason == RuntimeRayDiffuseGiFallbackReason::not_rendered);
 
     return 0;
 }
