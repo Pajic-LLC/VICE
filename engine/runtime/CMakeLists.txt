@@ -32,6 +32,7 @@ add_library(
     src/ray_ambient_occlusion_temporal.cpp
     src/ray_tracing_scene.cpp
     src/ray_tracing_scene_executor.cpp
+    src/reflection_surface_guide.cpp
     src/render_residency.cpp
     src/render_streaming.cpp
     src/resource_residency.cpp
