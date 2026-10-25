@@ -109,7 +109,7 @@ int main() {
         }
     );
     CHECK(scene_index_resource != manifest.resources.end());
-    CHECK(scene_index_resource->kind == ShaderResourceKind::structured_buffer);
+    CHECK(scene_index_resource->kind == ShaderResourceKind::generic);
 
     auto device = Device::create();
     CHECK(device != nullptr);
@@ -313,7 +313,6 @@ int main() {
     CHECK(radiance != nullptr);
     CHECK(sampler != nullptr);
 
-    // Octahedral +Z normal encodes to (0.5, 0.5).
     constexpr std::array<std::uint16_t, 4> guide_pixel{
         0x3800U, 0x3800U, 0x0000U, 0x3C00U
     };
