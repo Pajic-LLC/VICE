@@ -2,6 +2,7 @@
 
 #include <vice/math/math.hpp>
 #include <vice/render/rhi.hpp>
+#include <vice/runtime/ray_scene_hit.hpp>
 
 #include <cstdint>
 #include <filesystem>
@@ -40,14 +41,7 @@ struct RuntimeRayReflectionsConstants {
 
 static_assert(sizeof(RuntimeRayReflectionsConstants) == 112U);
 
-struct RuntimeRayReflectionHit {
-    float world_position[3]{};
-    // During the scene-index transition this field retains its compact ABI/layout while carrying
-    // the authoritative Runtime scene-instance index plus one. Zero remains the miss sentinel.
-    std::uint32_t instance_id_plus_one = 0U;
-};
-
-static_assert(sizeof(RuntimeRayReflectionHit) == 16U);
+using RuntimeRayReflectionHit = RuntimeRaySceneHit;
 
 [[nodiscard]] float runtime_ray_reflections_linear_depth(
     float device_depth,
