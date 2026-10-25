@@ -308,7 +308,7 @@ void validate_environment_shader_contract() {
     const auto source_2 = source_block(
         shader,
         "float3 vice_environment_source_2(",
-        "float vice_runtime_ray_ambient_occlusion("
+        "float vice_ray_ambient_occlusion_visibility("
     );
     require(
         source_0.find("vice_runtime_reflection_specular(pixel_position, raster_specular)") !=
