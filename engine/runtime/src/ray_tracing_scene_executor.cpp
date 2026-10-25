@@ -91,6 +91,14 @@ struct PendingSceneInstanceMap final {
     upload_desc.memory = render::MemoryLocation::cpu_to_gpu;
     upload_desc.debug_name = "VICE Runtime TLAS scene-index upload";
     auto upload = device.create_buffer(upload_desc);
+    if (upload == nullptr) {
+        diagnostics = "Runtime ray tracing could not allocate the GPU TLAS scene-index upload buffer.";
+        return false;
+    }
+    if (!upload->write(0U, std::as_bytes(planned))) {
+        diagnostics = "Runtime ray tracing could not upload the TLAS scene-index mapping.";
+        return false;
+    }
 
     render::BufferDesc storage_desc;
     storage_desc.size = size;
@@ -98,13 +106,8 @@ struct PendingSceneInstanceMap final {
     storage_desc.memory = render::MemoryLocation::gpu_only;
     storage_desc.debug_name = "VICE Runtime TLAS scene-index map";
     auto storage = device.create_buffer(storage_desc);
-
-    if (upload == nullptr || storage == nullptr) {
-        diagnostics = "Runtime ray tracing could not allocate the GPU TLAS scene-index mapping.";
-        return false;
-    }
-    if (!upload->write(0U, std::as_bytes(planned))) {
-        diagnostics = "Runtime ray tracing could not upload the TLAS scene-index mapping.";
+    if (storage == nullptr) {
+        diagnostics = "Runtime ray tracing could not allocate the GPU TLAS scene-index storage buffer.";
         return false;
     }
 
@@ -202,6 +205,18 @@ RuntimeRayTracingExecutionResult RuntimeRayTracingSceneExecutor::execute(
             result.diagnostics = "Runtime ray tracing scene plan contains an invalid TLAS instance.";
             return result;
         }
+    }
+
+    PendingSceneInstanceMap pending_scene_map;
+    if (!plan.instances.empty() &&
+        !prepare_scene_instance_map(
+            device,
+            plan.scene_instance_indices,
+            active_scene_instance_indices_,
+            pending_scene_map,
+            result.diagnostics
+        )) {
+        return result;
     }
 
     std::vector<CachedBlas> next_blases;
@@ -330,17 +345,6 @@ RuntimeRayTracingExecutionResult RuntimeRayTracingSceneExecutor::execute(
     };
     if (!render::is_valid(tlas_desc)) {
         result.diagnostics = "Runtime ray tracing produced an invalid TLAS description.";
-        return result;
-    }
-
-    PendingSceneInstanceMap pending_scene_map;
-    if (!prepare_scene_instance_map(
-            device,
-            plan.scene_instance_indices,
-            active_scene_instance_indices_,
-            pending_scene_map,
-            result.diagnostics
-        )) {
         return result;
     }
 
