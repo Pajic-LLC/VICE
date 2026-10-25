@@ -4,7 +4,6 @@
 
 #include <array>
 #include <cmath>
-#include <cstddef>
 #include <cstdint>
 #include <iostream>
 #include <span>
@@ -19,11 +18,13 @@
 
 namespace {
 
-[[nodiscard]] vice::render::ShaderBindingKey binding(
-    const vice::render::ShaderRegisterClass register_class,
+using namespace vice;
+
+[[nodiscard]] render::ShaderBindingKey binding(
+    const render::ShaderRegisterClass register_class,
     const std::uint32_t slot
 ) noexcept {
-    return vice::render::ShaderBindingKey{
+    return {
         .register_class = register_class,
         .binding = slot,
         .space = 0U,
@@ -36,7 +37,7 @@ namespace {
     const float right,
     const float epsilon = 0.02F
 ) noexcept {
-    return std::isfinite(left) && std::isfinite(right) && std::abs(left - right) <= epsilon;
+    return std::isfinite(left) && std::abs(left - right) <= epsilon;
 }
 
 } // namespace
@@ -52,11 +53,6 @@ int main() {
 
     auto device = Device::create();
     CHECK(device != nullptr);
-    if (!device->capabilities().ray_tracing) {
-        std::cout << "SKIP: " << backend_name(device->backend())
-                  << " device exposes no hardware ray tracing; reflection-history execution skipped.\n";
-        return 0;
-    }
 
     RuntimeRayReflectionHistoryPass history_pass;
     std::string diagnostics;
@@ -102,15 +98,11 @@ int main() {
         .usage = TextureUsage::depth_attachment | TextureUsage::sampled,
         .debug_name = "reflection history validation previous depth",
     });
-    CHECK(radiance != nullptr);
-    CHECK(previous_color != nullptr);
-    CHECK(previous_depth != nullptr);
+    CHECK(radiance != nullptr && previous_color != nullptr && previous_depth != nullptr);
 
-    // Current raw fallback is deliberately different from history so successful reconstruction is observable.
     constexpr std::array<std::uint16_t, 4> current_radiance{
         0x3400U, 0x3800U, 0x3C00U, 0x3C00U
     };
-    // (0.75, 0.25, 0.125, 1.0) in IEEE-754 binary16.
     constexpr std::array<std::uint16_t, 4> previous_radiance{
         0x3A00U, 0x3400U, 0x3000U, 0x3C00U
     };
@@ -136,8 +128,6 @@ int main() {
     CHECK(depth_submission != invalid_submission);
     CHECK(device->wait_for_submission(depth_submission));
 
-    // Current-camera-relative hit plus the precise current->previous origin delta
-    // reconstructs to (0, 0, 0.5) in the previous camera-local frame.
     const RuntimeRayReflectionHit committed_hit{
         .world_position = {-3.0F, -4.0F, 5.5F},
         .instance_id_plus_one = 43U,
@@ -154,12 +144,8 @@ int main() {
         .memory = MemoryLocation::gpu_only,
         .debug_name = "reflection history validation hits",
     });
-    CHECK(hit_upload != nullptr);
-    CHECK(hits != nullptr);
-    CHECK(hit_upload->write(
-        0U,
-        std::as_bytes(std::span{&committed_hit, 1U})
-    ));
+    CHECK(hit_upload != nullptr && hits != nullptr);
+    CHECK(hit_upload->write(0U, std::as_bytes(std::span{&committed_hit, 1U})));
 
     const world::GlobalPosition previous_origin{1.0e12, -2.0e12, 3.0e12};
     const world::GlobalPosition current_origin{1.0e12 + 3.0, -2.0e12 + 4.0, 3.0e12 - 5.0};
@@ -176,30 +162,23 @@ int main() {
     CHECK(near(constants->current_to_previous_origin[1], 4.0F));
     CHECK(near(constants->current_to_previous_origin[2], -5.0F));
 
-    auto radiance_probe = device->create_buffer(BufferDesc{
+    auto probe = device->create_buffer(BufferDesc{
         .size = 4U * sizeof(float),
         .usage = BufferUsage::storage | BufferUsage::copy_source,
         .memory = MemoryLocation::gpu_only,
         .debug_name = "reflection history validation probe",
     });
-    auto radiance_readback = device->create_buffer(BufferDesc{
+    auto readback = device->create_buffer(BufferDesc{
         .size = 4U * sizeof(float),
         .usage = BufferUsage::copy_destination,
         .memory = MemoryLocation::gpu_to_cpu,
         .debug_name = "reflection history validation readback",
     });
-    CHECK(radiance_probe != nullptr);
-    CHECK(radiance_readback != nullptr);
+    CHECK(probe != nullptr && readback != nullptr);
 
     auto commands = device->create_command_list();
     CHECK(commands != nullptr);
-    CHECK(commands->copy_buffer(
-        *hit_upload,
-        0U,
-        *hits,
-        0U,
-        sizeof(committed_hit)
-    ));
+    CHECK(commands->copy_buffer(*hit_upload, 0U, *hits, 0U, sizeof(committed_hit)));
     CHECK(history_pass.dispatch(
         *commands,
         *radiance,
@@ -218,35 +197,22 @@ int main() {
     ));
     CHECK(commands->set_compute_storage_buffer(
         binding(ShaderRegisterClass::unordered_access, 0U),
-        *radiance_probe,
+        *probe,
         BufferViewDesc{
             .offset = 0U,
             .size = 4U * sizeof(float),
             .structure_stride = 4U * sizeof(float),
         }
     ));
-    CHECK(commands->dispatch(ComputeDispatchDesc{
-        .group_count_x = 1U,
-        .group_count_y = 1U,
-        .group_count_z = 1U,
-    }));
-    CHECK(commands->copy_buffer(
-        *radiance_probe,
-        0U,
-        *radiance_readback,
-        0U,
-        4U * sizeof(float)
-    ));
+    CHECK(commands->dispatch({.group_count_x = 1U, .group_count_y = 1U, .group_count_z = 1U}));
+    CHECK(commands->copy_buffer(*probe, 0U, *readback, 0U, 4U * sizeof(float)));
 
     const SubmissionId submission = device->submit(std::move(commands));
     CHECK(submission != invalid_submission);
     CHECK(device->wait_for_submission(submission));
 
     std::array<float, 4> resolved{};
-    CHECK(radiance_readback->read(
-        0U,
-        std::as_writable_bytes(std::span{resolved})
-    ));
+    CHECK(readback->read(0U, std::as_writable_bytes(std::span{resolved})));
     CHECK(near(resolved[0], 0.75F));
     CHECK(near(resolved[1], 0.25F));
     CHECK(near(resolved[2], 0.125F));
