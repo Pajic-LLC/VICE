@@ -513,7 +513,7 @@ float3 point_shadow_relative_position(uint slot, float3 world_position) {
 float point_shadow_visibility(uint slot, float3 world_position) {
     const float4 metadata = point_shadow_metadata(slot);
     if (metadata.x < 0.5 || metadata.z <= 0.0) return 1.0;
-    const float3 relative_position = point_shadow_relative_position(slot, model_position);
+    const float3 relative_position = point_shadow_relative_position(slot, world_position);
     const float distance_to_light = length(relative_position);
     if (distance_to_light <= 0.0001 || distance_to_light >= metadata.z) return 1.0;
     const uint face = point_shadow_face(relative_position);
