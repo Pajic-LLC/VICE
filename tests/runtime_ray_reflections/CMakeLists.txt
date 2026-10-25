@@ -106,77 +106,20 @@ add_test(
   COMMAND vice_runtime_ray_diffuse_gi_reconstruction_tests
 )
 
-if(_vice_runtime_ray_shadow_target)
-  set(
-    _vice_runtime_ray_diffuse_gi_contract_output
-    "${CMAKE_BINARY_DIR}/cooked/vice_runtime_ray_diffuse_gi_contract"
-  )
-  set(
-    VICE_RUNTIME_RAY_DIFFUSE_GI_CONTRACT_MANIFEST_PATH
-    "${_vice_runtime_ray_diffuse_gi_contract_output}/shader.vice.json"
-  )
-  vice_add_cooked_shader(
-    NAME vice_runtime_ray_diffuse_gi_contract_shader
-    INPUT "${CMAKE_SOURCE_DIR}/assets/shaders/vice_ray_diffuse_gi.hlsl"
-    OUTPUT "${_vice_runtime_ray_diffuse_gi_contract_output}"
-    ENTRY vice_ray_diffuse_gi_cs
-    STAGE compute
-    TARGET "${_vice_runtime_ray_shadow_target}"
-    SHADER_MODEL 6.6
-    DXC "${_vice_runtime_ray_shadow_dxc}"
-    METAL_SHADER_CONVERTER "${_vice_runtime_ray_shadow_metal_converter}"
-  )
-
-  set(
-    _vice_runtime_ray_diffuse_gi_denoise_output
-    "${CMAKE_BINARY_DIR}/cooked/vice_runtime_ray_diffuse_gi_denoise"
-  )
-  set(
-    VICE_RUNTIME_RAY_DIFFUSE_GI_DENOISE_MANIFEST_PATH
-    "${_vice_runtime_ray_diffuse_gi_denoise_output}/shader.vice.json"
-  )
-  vice_add_cooked_shader(
-    NAME vice_runtime_ray_diffuse_gi_denoise_shader
-    INPUT "${CMAKE_SOURCE_DIR}/assets/shaders/vice_ray_diffuse_gi_denoise.hlsl"
-    OUTPUT "${_vice_runtime_ray_diffuse_gi_denoise_output}"
-    ENTRY vice_ray_diffuse_gi_denoise_cs
-    STAGE compute
-    TARGET "${_vice_runtime_ray_shadow_target}"
-    SHADER_MODEL 6.6
-    DXC "${_vice_runtime_ray_shadow_dxc}"
-    METAL_SHADER_CONVERTER "${_vice_runtime_ray_shadow_metal_converter}"
-  )
-
-  set(
-    _vice_runtime_ray_diffuse_gi_temporal_output
-    "${CMAKE_BINARY_DIR}/cooked/vice_runtime_ray_diffuse_gi_temporal"
-  )
-  set(
-    VICE_RUNTIME_RAY_DIFFUSE_GI_TEMPORAL_MANIFEST_PATH
-    "${_vice_runtime_ray_diffuse_gi_temporal_output}/shader.vice.json"
-  )
-  vice_add_cooked_shader(
-    NAME vice_runtime_ray_diffuse_gi_temporal_shader
-    INPUT "${CMAKE_SOURCE_DIR}/assets/shaders/vice_ray_diffuse_gi_temporal.hlsl"
-    OUTPUT "${_vice_runtime_ray_diffuse_gi_temporal_output}"
-    ENTRY vice_ray_diffuse_gi_temporal_cs
-    STAGE compute
-    TARGET "${_vice_runtime_ray_shadow_target}"
-    SHADER_MODEL 6.6
-    DXC "${_vice_runtime_ray_shadow_dxc}"
-    METAL_SHADER_CONVERTER "${_vice_runtime_ray_shadow_metal_converter}"
-  )
-
+if(TARGET vice_runtime_ray_diffuse_gi_shader)
   add_dependencies(
     vice_runtime_ray_diffuse_gi_tests
-    vice_runtime_ray_diffuse_gi_contract_shader
+    vice_runtime_ray_diffuse_gi_shader
   )
   target_compile_definitions(
     vice_runtime_ray_diffuse_gi_tests
     PRIVATE
-      VICE_RUNTIME_RAY_DIFFUSE_GI_CONTRACT_MANIFEST="${VICE_RUNTIME_RAY_DIFFUSE_GI_CONTRACT_MANIFEST_PATH}"
+      VICE_RUNTIME_RAY_DIFFUSE_GI_CONTRACT_MANIFEST="${VICE_RUNTIME_RAY_DIFFUSE_GI_MANIFEST_PATH}"
   )
+endif()
 
+if(TARGET vice_runtime_ray_diffuse_gi_denoise_shader AND
+   TARGET vice_runtime_ray_diffuse_gi_temporal_shader)
   add_dependencies(
     vice_runtime_ray_diffuse_gi_reconstruction_tests
     vice_runtime_ray_diffuse_gi_denoise_shader
@@ -188,18 +131,18 @@ if(_vice_runtime_ray_shadow_target)
       VICE_RUNTIME_RAY_DIFFUSE_GI_DENOISE_MANIFEST="${VICE_RUNTIME_RAY_DIFFUSE_GI_DENOISE_MANIFEST_PATH}"
       VICE_RUNTIME_RAY_DIFFUSE_GI_TEMPORAL_MANIFEST="${VICE_RUNTIME_RAY_DIFFUSE_GI_TEMPORAL_MANIFEST_PATH}"
   )
+endif()
 
-  if(TARGET vice_runtime_ray_reflection_history_shader)
-    add_dependencies(
-      vice_runtime_ray_diffuse_gi_tests
-      vice_runtime_ray_reflection_history_shader
-    )
-    target_compile_definitions(
-      vice_runtime_ray_diffuse_gi_tests
-      PRIVATE
-        VICE_RUNTIME_RAY_DIFFUSE_GI_HISTORY_MANIFEST="${VICE_RUNTIME_RAY_REFLECTION_HISTORY_MANIFEST_PATH}"
-    )
-  endif()
+if(TARGET vice_runtime_ray_reflection_history_shader)
+  add_dependencies(
+    vice_runtime_ray_diffuse_gi_tests
+    vice_runtime_ray_reflection_history_shader
+  )
+  target_compile_definitions(
+    vice_runtime_ray_diffuse_gi_tests
+    PRIVATE
+      VICE_RUNTIME_RAY_DIFFUSE_GI_HISTORY_MANIFEST="${VICE_RUNTIME_RAY_REFLECTION_HISTORY_MANIFEST_PATH}"
+  )
 endif()
 
 add_executable(
