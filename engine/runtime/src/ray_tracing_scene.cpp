@@ -6,6 +6,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <optional>
 #include <span>
 #include <vector>
 
@@ -48,23 +49,31 @@ namespace {
     return hash & render::acceleration_structure_instance_id_max;
 }
 
-[[nodiscard]] std::array<float, 12> portable_transform(const RenderMeshInstance& instance) noexcept {
-    const math::Mat4 model = runtime_model_matrix(instance);
+[[nodiscard]] std::array<float, 12> portable_transform(
+    const RenderMeshInstance& instance,
+    const std::optional<world::GlobalPosition> origin
+) noexcept {
+    const math::Mat4 model = origin.has_value()
+        ? runtime_model_matrix_relative_to(instance, *origin)
+        : runtime_model_matrix(instance);
     return {model(0U,0U), model(0U,1U), model(0U,2U), model(0U,3U), model(1U,0U), model(1U,1U),
         model(1U,2U), model(1U,3U), model(2U,0U), model(2U,1U), model(2U,2U), model(2U,3U)};
 }
 
-} // namespace
-
-RuntimeRayTracingScenePlan build_runtime_ray_tracing_scene_plan(
+RuntimeRayTracingScenePlan build_plan(
     const std::span<const RenderMeshInstance> instances,
-    const std::span<const CookedMeshRecord> meshes
+    const std::span<const CookedMeshRecord> meshes,
+    const std::optional<world::GlobalPosition> origin
 ) {
     RuntimeRayTracingScenePlan result;
     if (instances.empty()) return result;
     if (instances.size() > static_cast<std::size_t>(render::acceleration_structure_instance_id_max) + 1U ||
         instances.size() > static_cast<std::size_t>(std::numeric_limits<std::uint32_t>::max())) {
         result.diagnostics = "Runtime ray tracing scene exceeds the portable instance-index range.";
+        return result;
+    }
+    if (origin.has_value() && !world::finite(*origin)) {
+        result.diagnostics = "Runtime ray tracing scene received a non-finite camera-relative origin.";
         return result;
     }
 
@@ -129,11 +138,28 @@ RuntimeRayTracingScenePlan build_runtime_ray_tracing_scene_plan(
         used_ids.push_back(instance_id);
 
         result.instances.push_back(RuntimeRayTracingInstancePlan{.entity = instance->entity, .instance_id = instance_id,
-            .blas_index = static_cast<std::uint32_t>(blas - result.blases.begin()), .transform = portable_transform(*instance)});
+            .blas_index = static_cast<std::uint32_t>(blas - result.blases.begin()), .transform = portable_transform(*instance, origin)});
         result.scene_instance_indices.push_back(static_cast<std::uint32_t>(instance - instances.data()));
     }
 
     return result;
+}
+
+} // namespace
+
+RuntimeRayTracingScenePlan build_runtime_ray_tracing_scene_plan(
+    const std::span<const RenderMeshInstance> instances,
+    const std::span<const CookedMeshRecord> meshes
+) {
+    return build_plan(instances, meshes, std::nullopt);
+}
+
+RuntimeRayTracingScenePlan build_runtime_ray_tracing_scene_plan(
+    const std::span<const RenderMeshInstance> instances,
+    const std::span<const CookedMeshRecord> meshes,
+    const world::GlobalPosition origin
+) {
+    return build_plan(instances, meshes, origin);
 }
 
 } // namespace vice::runtime

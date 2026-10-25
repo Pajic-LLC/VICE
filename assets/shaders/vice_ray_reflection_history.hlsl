@@ -3,6 +3,7 @@ static const float VICE_BACKGROUND_DEPTH = 0.999999;
 cbuffer ReflectionHistoryFrame : register(b0, space0) {
     column_major float4x4 previous_view_projection;
     float4 target_size_history;
+    float4 current_to_previous_origin;
 };
 
 struct ReflectionHit { float3 world_position; uint instance_id_plus_one; };
@@ -42,7 +43,13 @@ void vice_ray_reflection_history_cs(uint3 dispatch_thread_id : SV_DispatchThread
     const ReflectionHit hit = ReflectionHits[pixel.y * width + pixel.x];
     if (hit.instance_id_plus_one == 0u || !vice_finite3(hit.world_position)) return;
 
-    const float4 previous_clip = mul(previous_view_projection, float4(hit.world_position, 1.0));
+    // Ray hits are current-camera-relative. Translate them into the previous camera's
+    // local frame before applying the previous local view-projection.
+    const float3 previous_relative_position =
+        hit.world_position + current_to_previous_origin.xyz;
+    if (!vice_finite3(previous_relative_position)) return;
+    const float4 previous_clip =
+        mul(previous_view_projection, float4(previous_relative_position, 1.0));
     if (!vice_finite4(previous_clip) || previous_clip.w <= 0.000001) return;
     const float3 previous_ndc = previous_clip.xyz / previous_clip.w;
     if (!vice_finite3(previous_ndc) || previous_ndc.x < -1.0 || previous_ndc.x > 1.0 ||

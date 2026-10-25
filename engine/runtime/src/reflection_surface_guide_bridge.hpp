@@ -3,6 +3,7 @@
 #include <vice/runtime/gpu_cluster_instance_remap.hpp>
 #include <vice/runtime/gpu_draw_batches.hpp>
 #include <vice/runtime/gpu_instance_table.hpp>
+#include <vice/runtime/post_process.hpp>
 #include <vice/runtime/ray_reflection_history.hpp>
 #include <vice/runtime/ray_reflections.hpp>
 #include <vice/runtime/ray_tracing_scene_executor.hpp>
@@ -79,8 +80,7 @@ struct RuntimeReflectionSurfaceGuideMeshBuffers {
     render::Buffer* reflection_hits,
     render::Texture* previous_scene_color,
     render::Texture* previous_depth,
-    const math::Mat4& previous_view_projection,
-    bool history_valid,
+    const RuntimeTemporalFrameState& temporal,
     platform::WindowMetrics metrics,
     std::string* diagnostics = nullptr
 ) noexcept;
@@ -225,8 +225,7 @@ struct RuntimeReflectionSurfaceGuideMeshBuffers {
             ::vice::runtime::detail::runtime_ray_reflection_hits(this), \
             previous_scene_color, \
             previous_depth, \
-            temporal_frame.previous_view_projection, \
-            temporal_frame.history_valid, \
+            temporal_frame, \
             metrics, \
             diagnostics \
         ) && \

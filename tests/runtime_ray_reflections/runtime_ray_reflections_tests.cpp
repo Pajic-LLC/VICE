@@ -81,6 +81,38 @@ void test_history_projection_and_depth_contract() {
     const auto constants = vice::runtime::make_runtime_ray_reflection_history_constants(identity, 1920U, 1080U, true);
     require(constants.has_value(), "valid reflection-history constants must be accepted");
     if (constants.has_value()) require(near(constants->target_size_history[0], 1920.0F) && near(constants->target_size_history[1], 1080.0F) && near(constants->target_size_history[2], 1.0F) && near(constants->target_size_history[3], 0.0025F), "reflection-history constants must preserve extent, validity and depth threshold");
+
+    const vice::world::GlobalPosition current_origin{1.0e12 + 3.0, -2.0e12 + 4.0, 3.0e12 - 5.0};
+    const vice::world::GlobalPosition previous_origin{1.0e12, -2.0e12, 3.0e12};
+    const auto rebased = vice::runtime::runtime_ray_reflection_history_rebase_position(
+        {7.0F, 8.0F, 9.0F},
+        current_origin,
+        previous_origin
+    );
+    require(rebased.has_value(), "large-world reflection history must preserve small origin deltas");
+    if (rebased.has_value()) {
+        require(
+            near(rebased->x, 10.0F) && near(rebased->y, 12.0F) && near(rebased->z, 4.0F),
+            "current-camera-relative hits must rebase into the previous camera frame"
+        );
+    }
+    const auto origin_constants = vice::runtime::make_runtime_ray_reflection_history_constants(
+        identity,
+        1920U,
+        1080U,
+        true,
+        current_origin,
+        previous_origin
+    );
+    require(origin_constants.has_value(), "large-world reflection-history constants must be accepted");
+    if (origin_constants.has_value()) {
+        require(
+            near(origin_constants->current_to_previous_origin[0], 3.0F) &&
+            near(origin_constants->current_to_previous_origin[1], 4.0F) &&
+            near(origin_constants->current_to_previous_origin[2], -5.0F),
+            "history constants must publish only the precise current-to-previous origin delta"
+        );
+    }
 }
 
 void test_public_default_state() {
@@ -110,6 +142,7 @@ void test_history_shader_contract() {
     require(shader.find("previous_view_projection") != std::string::npos && shader.find("PreviousSceneColor.Load") != std::string::npos && shader.find("PreviousDepth.Load") != std::string::npos, "reflection-history resolve must reuse shared scene color, depth, and camera history");
     require(shader.find("hit.instance_id_plus_one == 0u") != std::string::npos && shader.find("target_size_history.z < 0.5") != std::string::npos, "misses and invalid temporal history must retain the environment fallback");
     require(shader.find("depth_threshold * 8.0") != std::string::npos && shader.find("abs(previous_ndc.z - previous_depth) > relative_depth_threshold") != std::string::npos, "reflection-history resolve must reject disocclusion with the shared relative-depth rule");
+    require(shader.find("current_to_previous_origin") != std::string::npos && shader.find("hit.world_position + current_to_previous_origin.xyz") != std::string::npos, "history resolve must rebase current-camera-relative hits into the previous camera frame");
     require(shader.find("ReflectionRadiance[pixel] = float4(max(history_radiance, 0.0), current_radiance.a)") != std::string::npos, "validated hits must replace only raw incident RGB and preserve the PBR replacement mask");
 }
 

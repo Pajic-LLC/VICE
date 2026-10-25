@@ -624,7 +624,7 @@ bool runtime_ray_reflections_after_surface_guide(
     }
 
     const RuntimeRayReflectionsCamera ray_camera{
-        .position = camera.position,
+        .position = {},
         .forward = camera.forward,
         .up = camera.up,
         .vertical_fov_radians = camera.camera.vertical_fov_radians,

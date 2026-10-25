@@ -57,12 +57,11 @@ bool runtime_ray_reflection_history_after_trace(
     render::Buffer* const reflection_hits,
     render::Texture* const previous_scene_color,
     render::Texture* const previous_depth,
-    const math::Mat4& previous_view_projection,
-    const bool history_valid,
+    const RuntimeTemporalFrameState& temporal,
     const platform::WindowMetrics metrics,
     std::string* const diagnostics
 ) noexcept {
-    if (!history_valid || owner == nullptr || reflection_radiance == nullptr ||
+    if (!temporal.history_valid || owner == nullptr || reflection_radiance == nullptr ||
         reflection_hits == nullptr || metrics.drawable_width == 0U ||
         metrics.drawable_height == 0U) {
         if (diagnostics != nullptr) diagnostics->clear();
@@ -84,15 +83,17 @@ bool runtime_ray_reflection_history_after_trace(
     }
 
     const auto constants = make_runtime_ray_reflection_history_constants(
-        previous_view_projection,
+        temporal.previous_view_projection,
         metrics.drawable_width,
         metrics.drawable_height,
-        true
+        true,
+        temporal.current_camera_global_position,
+        temporal.previous_camera_global_position
     );
     if (!constants.has_value()) {
         set_diagnostics(
             diagnostics,
-            "VICE Runtime could not build reflection-history reprojection constants."
+            "VICE Runtime could not build origin-aware reflection-history reprojection constants."
         );
         return false;
     }

@@ -19,13 +19,31 @@ namespace {
 [[nodiscard]] bool camera_discontinuity(
     const math::Vec3 previous_position,
     const math::Vec3 current_position,
+    const world::GlobalPosition previous_global_position,
+    const world::GlobalPosition current_global_position,
     const math::Vec3 previous_forward,
     const math::Vec3 current_forward
 ) noexcept {
-    const math::Vec3 translation = current_position - previous_position;
-    const float distance_squared = math::dot(translation, translation);
-    if (distance_squared > runtime_taa_camera_cut_distance * runtime_taa_camera_cut_distance) {
-        return true;
+    const bool has_global_position =
+        world::finite(previous_global_position) && world::finite(current_global_position) &&
+        (previous_global_position.x != 0.0 || previous_global_position.y != 0.0 ||
+         previous_global_position.z != 0.0 || current_global_position.x != 0.0 ||
+         current_global_position.y != 0.0 || current_global_position.z != 0.0);
+
+    if (has_global_position) {
+        const double dx = current_global_position.x - previous_global_position.x;
+        const double dy = current_global_position.y - previous_global_position.y;
+        const double dz = current_global_position.z - previous_global_position.z;
+        const double distance_squared = dx * dx + dy * dy + dz * dz;
+        const double cut_distance = static_cast<double>(runtime_taa_camera_cut_distance);
+        if (distance_squared > cut_distance * cut_distance) return true;
+    } else {
+        const math::Vec3 translation = current_position - previous_position;
+        const float distance_squared = math::dot(translation, translation);
+        if (distance_squared >
+            runtime_taa_camera_cut_distance * runtime_taa_camera_cut_distance) {
+            return true;
+        }
     }
 
     const math::Vec3 previous_direction = math::normalize(previous_forward);
@@ -71,13 +89,16 @@ RuntimeTemporalFrameState RuntimeTemporalHistory::begin_frame(
     const math::Mat4& current_view_projection,
     const RuntimeTemporalJitter jitter,
     const math::Vec3 camera_position,
-    const math::Vec3 camera_forward
+    const math::Vec3 camera_forward,
+    const world::GlobalPosition camera_global_position
 ) noexcept {
     const bool discontinuity = valid_ && (
         camera_entity != camera_entity_ ||
         camera_discontinuity(
             previous_camera_position_,
             camera_position,
+            previous_camera_global_position_,
+            camera_global_position,
             previous_camera_forward_,
             camera_forward
         )
@@ -100,6 +121,10 @@ RuntimeTemporalFrameState RuntimeTemporalHistory::begin_frame(
             : current_unjittered_view_projection,
         .jitter = jitter,
         .previous_jitter = valid_ ? previous_jitter_ : jitter,
+        .current_camera_global_position = camera_global_position,
+        .previous_camera_global_position = valid_
+            ? previous_camera_global_position_
+            : camera_global_position,
     };
 }
 
@@ -109,7 +134,8 @@ void RuntimeTemporalHistory::commit_frame(
     const math::Mat4& current_view_projection,
     const RuntimeTemporalJitter jitter,
     const math::Vec3 camera_position,
-    const math::Vec3 camera_forward
+    const math::Vec3 camera_forward,
+    const world::GlobalPosition camera_global_position
 ) noexcept {
     camera_entity_ = camera_entity;
     previous_unjittered_view_projection_ = current_unjittered_view_projection;
@@ -117,6 +143,7 @@ void RuntimeTemporalHistory::commit_frame(
     previous_jitter_ = jitter;
     previous_camera_position_ = camera_position;
     previous_camera_forward_ = camera_forward;
+    previous_camera_global_position_ = camera_global_position;
     valid_ = true;
     ++completed_frames_;
 }
@@ -128,6 +155,7 @@ void RuntimeTemporalHistory::reset() noexcept {
     previous_jitter_ = {};
     previous_camera_position_ = {};
     previous_camera_forward_ = {};
+    previous_camera_global_position_ = {};
     valid_ = false;
     ++generation_;
 }

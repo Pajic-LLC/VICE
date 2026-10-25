@@ -6,6 +6,7 @@
 #include <array>
 #include <cassert>
 #include <cstdint>
+#include <limits>
 #include <vector>
 
 namespace {
@@ -82,5 +83,28 @@ int main() {
     assert(reordered_resident_plan); assert(reordered_resident_plan.blases == streamed_back_plan.blases); assert(reordered_resident_plan.instances == streamed_back_plan.instances);
     for (std::size_t index = 0U; index < reordered_resident_plan.instances.size(); ++index)
         assert(reordered_resident[reordered_resident_plan.scene_instance_indices[index]].entity == reordered_resident_plan.instances[index].entity);
+
+    const std::vector<runtime::RenderMeshInstance> huge_instances{
+        instance(9U, 1U, 1.0e12 + 4.0, -2.0e12 + 5.0, 3.0e12 + 6.0)
+    };
+    const world::GlobalPosition origin{1.0e12, -2.0e12, 3.0e12};
+    const auto relative = runtime::build_runtime_ray_tracing_scene_plan(
+        huge_instances,
+        meshes,
+        origin
+    );
+    assert(relative);
+    assert(relative.instances.size() == 1U);
+    assert(relative.instances[0].transform[3] == 4.0F);
+    assert(relative.instances[0].transform[7] == 5.0F);
+    assert(relative.instances[0].transform[11] == 6.0F);
+
+    const auto invalid_origin = runtime::build_runtime_ray_tracing_scene_plan(
+        huge_instances,
+        meshes,
+        world::GlobalPosition{std::numeric_limits<double>::infinity(), 0.0, 0.0}
+    );
+    assert(!invalid_origin);
+    assert(!invalid_origin.diagnostics.empty());
     return 0;
 }

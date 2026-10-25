@@ -72,6 +72,8 @@ struct RuntimeTemporalFrameState {
     math::Mat4 previous_unjittered_view_projection{};
     RuntimeTemporalJitter jitter{};
     RuntimeTemporalJitter previous_jitter{};
+    world::GlobalPosition current_camera_global_position{};
+    world::GlobalPosition previous_camera_global_position{};
 };
 
 class RuntimeTemporalHistory final {
@@ -82,7 +84,8 @@ public:
         const math::Mat4& current_view_projection,
         RuntimeTemporalJitter jitter,
         math::Vec3 camera_position,
-        math::Vec3 camera_forward
+        math::Vec3 camera_forward,
+        world::GlobalPosition camera_global_position = {}
     ) noexcept;
 
     void commit_frame(
@@ -91,7 +94,8 @@ public:
         const math::Mat4& current_view_projection,
         RuntimeTemporalJitter jitter,
         math::Vec3 camera_position,
-        math::Vec3 camera_forward
+        math::Vec3 camera_forward,
+        world::GlobalPosition camera_global_position = {}
     ) noexcept;
 
     void reset() noexcept;
@@ -107,6 +111,7 @@ private:
     RuntimeTemporalJitter previous_jitter_{};
     math::Vec3 previous_camera_position_{};
     math::Vec3 previous_camera_forward_{};
+    world::GlobalPosition previous_camera_global_position_{};
     std::uint64_t completed_frames_ = 0;
     std::uint64_t generation_ = 0;
     bool valid_ = false;

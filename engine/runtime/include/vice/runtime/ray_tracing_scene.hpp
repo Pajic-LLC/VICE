@@ -69,4 +69,13 @@ struct RuntimeRayTracingScenePlan {
     std::span<const CookedMeshRecord> meshes
 );
 
+// Builds the same authoritative identity/BLAS plan, but expresses every TLAS instance
+// transform in the supplied global origin's local float frame. This keeps backend AS
+// transforms precise without exposing backend-native coordinates to game-facing APIs.
+[[nodiscard]] RuntimeRayTracingScenePlan build_runtime_ray_tracing_scene_plan(
+   std::span<const RenderMeshInstance> instances,
+   std::span<const CookedMeshRecord> meshes,
+   world::GlobalPosition origin
+);
+
 } // namespace vice::runtime

@@ -345,7 +345,7 @@ bool runtime_directional_ray_shadow_after_begin_depth(
     }
     const auto& shadow_light = lights[shadow_view->light_index];
     const RuntimeDirectionalRayShadowCamera ray_camera{
-        .position = camera.position,
+        .position = {},
         .forward = camera.forward,
         .up = camera.up,
         .vertical_fov_radians = camera.camera.vertical_fov_radians,
@@ -409,7 +409,7 @@ bool runtime_ray_ambient_occlusion_after_begin_depth(
     }
 
     const RuntimeRayAmbientOcclusionCamera ray_camera{
-        .position = camera.position,
+        .position = {},
         .forward = camera.forward,
         .up = camera.up,
         .vertical_fov_radians = camera.camera.vertical_fov_radians,
