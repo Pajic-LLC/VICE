@@ -117,6 +117,25 @@ inline void runtime_ray_diffuse_gi_publish_gpu_pbr(
     std::string* diagnostics = nullptr
 ) noexcept;
 
+[[nodiscard]] bool runtime_ray_diffuse_gi_after_surface_guide(
+    const RuntimeSceneRenderer* owner,
+    render::Device& device,
+    render::CommandList& commands,
+    render::Texture* current_depth,
+    render::Texture* previous_depth,
+    render::Texture* motion_vectors,
+    render::Texture* surface_guide,
+    render::Texture* previous_scene_color,
+    RuntimeRayTracingSceneExecutor* ray_scene,
+    const RuntimeCameraView& camera,
+    float jitter_x_ndc,
+    float jitter_y_ndc,
+    const RuntimeTemporalFrameState& temporal,
+    platform::WindowMetrics metrics,
+    RuntimeEnvironmentBinding environment,
+    std::string* diagnostics = nullptr
+) noexcept;
+
 [[nodiscard]] render::Texture* runtime_reflection_surface_guide_texture(
     const RuntimeSceneRenderer* owner
 ) noexcept;
@@ -318,6 +337,24 @@ inline void runtime_ray_diffuse_gi_publish_gpu_pbr(
             previous_depth, \
             temporal_frame, \
             metrics, \
+            diagnostics \
+        ) && \
+        ::vice::runtime::detail::runtime_ray_diffuse_gi_after_surface_guide( \
+            this, \
+            *state_->device, \
+            *commands, \
+            current_depth, \
+            previous_depth, \
+            state_->motion_vectors.get(), \
+            ::vice::runtime::detail::runtime_reflection_surface_guide_texture(this), \
+            previous_scene_color, \
+            &state_->ray_tracing_scene, \
+            runtime_camera, \
+            jitter.x_ndc, \
+            jitter.y_ndc, \
+            temporal_frame, \
+            metrics, \
+            state_->environment.binding(), \
             diagnostics \
         ) && \
         ::vice::runtime::detail::runtime_ray_reflections_mark_gpu_pbr( \
