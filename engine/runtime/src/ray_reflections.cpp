@@ -497,6 +497,7 @@ struct RuntimeRayReflectionsSceneState {
     const RuntimeSceneRenderer* owner = nullptr;
     render::Device* device = nullptr;
     std::unique_ptr<RuntimeRayReflectionsPass> pass;
+    bool valid = false;
 };
 
 thread_local RuntimeRayReflectionsSceneState ray_reflections_scene_state;
@@ -514,6 +515,7 @@ thread_local RuntimeRayReflectionsSceneState ray_reflections_scene_state;
     state.pass.reset();
     state.owner = owner;
     state.device = &device;
+    state.valid = false;
     state.pass = std::make_unique<RuntimeRayReflectionsPass>();
 #ifdef VICE_RUNTIME_RAY_REFLECTIONS_MANIFEST
     return state.pass->initialize(device, VICE_RUNTIME_RAY_REFLECTIONS_MANIFEST, diagnostics);
@@ -538,6 +540,9 @@ bool runtime_ray_reflections_after_surface_guide(
     const RuntimeEnvironmentBinding environment,
     std::string* const diagnostics
 ) noexcept {
+    auto& scene_state = ray_reflections_scene_state;
+    if (scene_state.owner == owner) scene_state.valid = false;
+
     if (!device.capabilities().ray_tracing || owner == nullptr || current_depth == nullptr ||
         surface_guide == nullptr || ray_scene == nullptr || !environment.available ||
         environment.specular == nullptr || environment.sampler == nullptr ||
@@ -586,7 +591,7 @@ bool runtime_ray_reflections_after_surface_guide(
         set_diagnostics(diagnostics, "VICE Runtime could not build ray-reflection camera constants.");
         return false;
     }
-    return state.pass->dispatch(
+    const bool dispatched = state.pass->dispatch(
         commands,
         *current_depth,
         *surface_guide,
@@ -596,17 +601,23 @@ bool runtime_ray_reflections_after_surface_guide(
         *constants,
         diagnostics
     );
+    state.valid = dispatched;
+    return dispatched;
 }
 
 render::Texture* runtime_ray_reflection_radiance(const RuntimeSceneRenderer* const owner) noexcept {
     const auto& state = ray_reflections_scene_state;
-    if (owner == nullptr || state.owner != owner || state.pass == nullptr) return nullptr;
+    if (owner == nullptr || state.owner != owner || state.pass == nullptr || !state.valid) {
+        return nullptr;
+    }
     return state.pass->radiance();
 }
 
 render::Buffer* runtime_ray_reflection_hits(const RuntimeSceneRenderer* const owner) noexcept {
     const auto& state = ray_reflections_scene_state;
-    if (owner == nullptr || state.owner != owner || state.pass == nullptr) return nullptr;
+    if (owner == nullptr || state.owner != owner || state.pass == nullptr || !state.valid) {
+        return nullptr;
+    }
     return state.pass->hits();
 }
 
