@@ -112,6 +112,7 @@ Texture2D<float4> environment_irradiance_2 : register(t22, space2);
 Texture2D<float4> environment_specular_2 : register(t23, space2);
 Texture2D<float4> environment_brdf_2 : register(t24, space2);
 Texture2D<float> ray_ambient_occlusion_visibility_texture : register(t25, space2);
+Texture2D<float4> ray_reflection_radiance_texture : register(t26, space2);
 SamplerState shadow_sampler : register(s0, space2);
 SamplerState environment_sampler : register(s1, space2);
 
@@ -604,6 +605,14 @@ float3 vice_surface_normal(
     return normalize(tangent * mapped.x + bitangent * mapped.y + geometric_normal * mapped.z);
 }
 
+float3 vice_runtime_reflection_specular(float2 pixel_position, float3 raster_specular) {
+    if (ambient_occlusion_metadata.y < 0.5) return raster_specular;
+    const float4 reflection = ray_reflection_radiance_texture.Load(
+        int3(int2(pixel_position), 0)
+    );
+    return lerp(raster_specular, max(reflection.rgb, 0.0), saturate(reflection.a));
+}
+
 float3 vice_environment_source_0(
     float3 model_position,
     float3 normal,
@@ -611,7 +620,8 @@ float3 vice_environment_source_0(
     float3 f0,
     float normal_view,
     float roughness_value,
-    float occlusion
+    float occlusion,
+    float2 pixel_position
 ) {
     const float4 metadata = environment_metadata;
     const float3 projected = vice_box_project_direction(
@@ -621,10 +631,11 @@ float3 vice_environment_source_0(
     const float3 diffuse = environment_irradiance_0.Sample(
         environment_sampler, vice_environment_uv(normal, metadata.y)
     ).rgb;
-    const float3 specular = environment_specular_0.SampleLevel(
+    const float3 raster_specular = environment_specular_0.SampleLevel(
         environment_sampler, vice_environment_uv(projected, metadata.y),
         saturate(roughness_value) * metadata.z
     ).rgb;
+    const float3 specular = vice_runtime_reflection_specular(pixel_position, raster_specular);
     const float2 brdf = environment_brdf_0.Sample(
         environment_sampler, float2(saturate(normal_view), saturate(roughness_value))
     ).rg;
@@ -761,7 +772,8 @@ float4 vice_gpu_pbr_fs(VertexOut input) : SV_Target0 {
     }
 
     float3 environment = vice_environment_source_0(
-        input.model_position, normal, reflection_direction, f0, normal_view, roughness_value, occlusion
+        input.model_position, normal, reflection_direction, f0, normal_view, roughness_value,
+        occlusion, input.position.xy
     );
     environment += vice_environment_source_1(
         input.model_position, normal, reflection_direction, f0, normal_view, roughness_value, occlusion
