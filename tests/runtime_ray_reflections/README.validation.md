@@ -8,6 +8,8 @@ These tests close the gap between Runtime reflection contract tests and backend 
 
 The execution fixture also runs a small cooked validation probe after the production pass to read the RGBA16F reflection output through the normal compute RHI. With a known one-pixel environment fixture, it requires the raw replacement radiance to remain finite, non-negative, and equal to the expected environment contribution. The probe does not participate in Runtime rendering; it exists only to make production GPU output observable in the test.
 
+`vice_runtime_ray_reflection_history_backend_execution_tests` executes the production temporal reconstruction pass with a committed hit, previous scene color/depth, and trillion-unit global origins. The same validation probe requires the resolved GPU output to replace the current environment fallback with the expected previous-frame scene radiance while preserving the reflection replacement mask.
+
 A runner without hardware ray tracing reports an explicit skip after validating the production cooked manifest. This is evidence of shader/cook integration, not evidence of hardware ray execution.
 
 The macOS production-shader execution gate remains dependent on real Metal Shader Converter provisioning in CI. Do not treat source fallback compilation as equivalent to a cooked Metal reflection execution.
