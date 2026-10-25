@@ -34,10 +34,19 @@ namespace {
     };
 }
 
+[[nodiscard]] bool near(
+    const float left,
+    const float right,
+    const float epsilon = 0.02F
+) noexcept {
+    return std::isfinite(left) && std::isfinite(right) && std::abs(left - right) <= epsilon;
+}
+
 } // namespace
 
 int main() {
-#ifndef VICE_RUNTIME_RAY_REFLECTIONS_MANIFEST
+#if !defined(VICE_RUNTIME_RAY_REFLECTIONS_MANIFEST) || \
+    !defined(VICE_RUNTIME_RAY_REFLECTION_VALIDATION_READBACK_MANIFEST)
     return 0;
 #else
     using namespace vice;
@@ -87,6 +96,19 @@ int main() {
         .debug_name = "production reflection backend validation",
     });
     CHECK(pipeline != nullptr);
+
+    auto readback_shader = load_cooked_shader(
+        *device,
+        VICE_RUNTIME_RAY_REFLECTION_VALIDATION_READBACK_MANIFEST
+    );
+    CHECK(readback_shader);
+    CHECK(readback_shader.compute_thread_group_size.has_value());
+    auto readback_pipeline = device->create_compute_pipeline(ComputePipelineDesc{
+        .compute_shader = readback_shader.module.get(),
+        .thread_group_size = *readback_shader.compute_thread_group_size,
+        .debug_name = "reflection radiance validation readback",
+    });
+    CHECK(readback_pipeline != nullptr);
 
     constexpr std::array<float, 9> triangle_vertices{
         1.0F, -2.0F, -3.0F,
@@ -293,9 +315,23 @@ int main() {
         .memory = MemoryLocation::gpu_to_cpu,
         .debug_name = "reflection validation hit readback",
     });
+    auto radiance_probe = device->create_buffer(BufferDesc{
+        .size = 4U * sizeof(float),
+        .usage = BufferUsage::storage | BufferUsage::copy_source,
+        .memory = MemoryLocation::gpu_only,
+        .debug_name = "reflection validation radiance probe",
+    });
+    auto radiance_readback = device->create_buffer(BufferDesc{
+        .size = 4U * sizeof(float),
+        .usage = BufferUsage::copy_destination,
+        .memory = MemoryLocation::gpu_to_cpu,
+        .debug_name = "reflection validation radiance readback",
+    });
     CHECK(constant_buffer != nullptr);
     CHECK(hits != nullptr);
     CHECK(hit_readback != nullptr);
+    CHECK(radiance_probe != nullptr);
+    CHECK(radiance_readback != nullptr);
     CHECK(constant_buffer->write(
         0U,
         std::as_bytes(std::span{&*constants, 1U})
@@ -368,12 +404,39 @@ int main() {
         .group_count_y = 1U,
         .group_count_z = 1U,
     }));
+
+    CHECK(commands->set_compute_pipeline(*readback_pipeline));
+    CHECK(commands->set_compute_texture(
+        binding(ShaderRegisterClass::shader_resource, 0U),
+        *radiance
+    ));
+    CHECK(commands->set_compute_storage_buffer(
+        binding(ShaderRegisterClass::unordered_access, 0U),
+        *radiance_probe,
+        BufferViewDesc{
+            .offset = 0U,
+            .size = 4U * sizeof(float),
+            .structure_stride = 4U * sizeof(float),
+        }
+    ));
+    CHECK(commands->dispatch(ComputeDispatchDesc{
+        .group_count_x = 1U,
+        .group_count_y = 1U,
+        .group_count_z = 1U,
+    }));
     CHECK(commands->copy_buffer(
         *hits,
         0U,
         *hit_readback,
         0U,
         sizeof(RuntimeRayReflectionHit)
+    ));
+    CHECK(commands->copy_buffer(
+        *radiance_probe,
+        0U,
+        *radiance_readback,
+        0U,
+        4U * sizeof(float)
     ));
 
     const SubmissionId submission = device->submit(std::move(commands));
@@ -392,13 +455,24 @@ int main() {
     CHECK(hit.world_position[0] > 0.9F && hit.world_position[0] < 1.1F);
     CHECK(std::abs(hit.world_position[1]) < 0.1F);
     CHECK(hit.world_position[2] < -0.8F && hit.world_position[2] > -1.2F);
+
+    std::array<float, 4> reflected_radiance{};
+    CHECK(radiance_readback->read(
+        0U,
+        std::as_writable_bytes(std::span{reflected_radiance})
+    ));
+    CHECK(near(reflected_radiance[0], 0.25F));
+    CHECK(near(reflected_radiance[1], 0.5F));
+    CHECK(near(reflected_radiance[2], 1.0F));
+    CHECK(near(reflected_radiance[3], 1.0F));
     CHECK(radiance->format() == TextureFormat::rgba16_float);
     CHECK(has_usage(radiance->usage(), TextureUsage::storage));
     CHECK(device->wait_idle());
 
     std::cout << "Executed production reflection shader on "
               << backend_name(device->backend())
-              << " with authoritative scene index " << authoritative_scene_index << ".\n";
+              << " with authoritative scene index " << authoritative_scene_index
+              << " and finite environment replacement radiance.\n";
     return 0;
 #endif
 }
