@@ -103,6 +103,16 @@ RuntimeRayTracingExecutionResult RuntimeRayTracingSceneExecutor::execute(
         result.diagnostics = "Runtime ray tracing execution requires a geometry resolver.";
         return result;
     }
+    if (plan.scene_instance_indices.size() != plan.instances.size()) {
+        result.diagnostics = "Runtime ray tracing scene plan has a stale TLAS scene-instance mapping.";
+        return result;
+    }
+    for (const auto scene_instance_index : plan.scene_instance_indices) {
+        if (scene_instance_index == runtime_ray_tracing_invalid_scene_instance) {
+            result.diagnostics = "Runtime ray tracing scene plan contains an invalid scene-instance mapping.";
+            return result;
+        }
+    }
 
     for (const auto& instance : plan.instances) {
         if (instance.blas_index >= plan.blases.size() ||
@@ -207,6 +217,7 @@ RuntimeRayTracingExecutionResult RuntimeRayTracingSceneExecutor::execute(
         tlas_.reset();
         previous_blas_keys_ = current_blas_keys;
         previous_instances_.clear();
+        active_scene_instance_indices_.clear();
         refresh_telemetry(true, result.counters);
         return result;
     }
@@ -249,6 +260,7 @@ RuntimeRayTracingExecutionResult RuntimeRayTracingSceneExecutor::execute(
         blases_ = std::move(next_blases);
         previous_blas_keys_ = current_blas_keys;
         previous_instances_ = plan.instances;
+        active_scene_instance_indices_ = plan.scene_instance_indices;
         ++result.counters.tlas_reuses;
         refresh_telemetry(true, result.counters);
         return result;
@@ -278,6 +290,7 @@ RuntimeRayTracingExecutionResult RuntimeRayTracingSceneExecutor::execute(
     tlas_ = std::move(next_tlas);
     previous_blas_keys_ = current_blas_keys;
     previous_instances_ = plan.instances;
+    active_scene_instance_indices_ = plan.scene_instance_indices;
     if (topology_matches) {
         ++result.counters.tlas_refits;
     } else {
@@ -292,6 +305,7 @@ void RuntimeRayTracingSceneExecutor::reset() noexcept {
     tlas_.reset();
     previous_blas_keys_.clear();
     previous_instances_.clear();
+    active_scene_instance_indices_.clear();
     telemetry_ = {};
 }
 
