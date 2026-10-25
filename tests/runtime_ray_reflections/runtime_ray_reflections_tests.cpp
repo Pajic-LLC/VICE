@@ -155,6 +155,9 @@ void test_runtime_binding_and_order_contract() {
     require(implementation.find("environment.specular") != std::string::npos &&
             implementation.find("environment.sampler") != std::string::npos,
         "Runtime reflection dispatch must reuse the existing environment binding");
+    require(implementation.find("state.valid = dispatched") != std::string::npos &&
+            implementation.find("|| !state.valid") != std::string::npos,
+        "public raw reflection outputs must only expose data produced by the current frame");
 
     const auto motion_macro = bridge.find("#define encode_motion_vectors");
     const auto guide_position = bridge.find(
