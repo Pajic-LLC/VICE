@@ -3,6 +3,7 @@
 #include <vice/runtime/gpu_cluster_instance_remap.hpp>
 #include <vice/runtime/gpu_draw_batches.hpp>
 #include <vice/runtime/gpu_instance_table.hpp>
+#include <vice/runtime/post_process.hpp>
 #include <vice/runtime/ray_reflection_history.hpp>
 #include <vice/runtime/ray_reflections.hpp>
 #include <vice/runtime/ray_tracing_scene_executor.hpp>
