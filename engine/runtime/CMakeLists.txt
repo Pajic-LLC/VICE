@@ -28,6 +28,7 @@ add_library(
     src/package_metadata.cpp
     src/post_process.cpp
     src/ray_diffuse_gi.cpp
+    src/ray_diffuse_gi_bridge.cpp
     src/ray_diffuse_gi_denoise.cpp
     src/ray_diffuse_gi_pipeline.cpp
     src/ray_diffuse_gi_settings.cpp
