@@ -63,8 +63,8 @@ void write_text(const std::filesystem::path& path, const std::string_view text) 
 
     require(value.register_component_type(world::ComponentTypeDesc{
         .id = component,
-        .version = 3U,
         .name = "AuthoredGameplay",
+        .version = 3U,
     }), "component registration");
     require(value.create_resource(mesh).has_value(), "mesh resource registration");
     require(value.create_resource(material).has_value(), "material resource registration");
@@ -129,9 +129,9 @@ void write_text(const std::filesystem::path& path, const std::string_view text) 
         .resource = environment,
     }), "reflection environment reference");
     require(value.add_relation(world::Relation{
-        .subject = subject_id,
+        .subject = *subject,
         .kind = relation_kind,
-        .object = object_id,
+        .object = *object,
     }), "relation");
     return value;
 }
