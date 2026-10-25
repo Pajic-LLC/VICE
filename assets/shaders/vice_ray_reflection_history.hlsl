@@ -5,11 +5,7 @@ cbuffer ReflectionHistoryFrame : register(b0, space0) {
     float4 target_size_history;
 };
 
-struct ReflectionHit {
-    float3 world_position;
-    uint instance_id_plus_one;
-};
-
+struct ReflectionHit { float3 world_position; uint instance_id_plus_one; };
 StructuredBuffer<ReflectionHit> ReflectionHits : register(t0, space0);
 Texture2D<float4> PreviousSceneColor : register(t1, space0);
 Texture2D<float> PreviousDepth : register(t2, space0);
@@ -18,19 +14,19 @@ RWTexture2D<float4> ReflectionRadiance : register(u0, space0);
 bool vice_finite4(float4 value) { return all(abs(value) < 1.0e20); }
 bool vice_finite3(float3 value) { return all(abs(value) < 1.0e20); }
 
-bool vice_history_depth_matches(float expected_depth, float previous_depth, float depth_threshold) {
+bool vice_history_depth_matches(float3 previous_ndc, float previous_depth, float depth_threshold) {
     if (previous_depth < 0.0 || previous_depth >= VICE_BACKGROUND_DEPTH) return false;
     const float relative_depth_threshold = max(
         depth_threshold,
-        depth_threshold * 8.0 * max(abs(expected_depth), abs(previous_depth))
+        depth_threshold * 8.0 * max(abs(previous_ndc.z), abs(previous_depth))
     );
-    if (abs(expected_depth - previous_depth) > relative_depth_threshold) return false;
+    if (abs(previous_ndc.z - previous_depth) > relative_depth_threshold) return false;
     return true;
 }
 
-bool vice_history_sample(uint2 history_pixel, float expected_depth, float depth_threshold, out float3 radiance) {
+bool vice_history_sample(uint2 history_pixel, float3 previous_ndc, float depth_threshold, out float3 radiance) {
     const float previous_depth = PreviousDepth.Load(int3(history_pixel, 0));
-    if (!vice_history_depth_matches(expected_depth, previous_depth, depth_threshold)) return false;
+    if (!vice_history_depth_matches(previous_ndc, previous_depth, depth_threshold)) return false;
     radiance = PreviousSceneColor.Load(int3(history_pixel, 0)).rgb;
     return vice_finite3(radiance);
 }
@@ -41,7 +37,6 @@ void vice_ray_reflection_history_cs(uint3 dispatch_thread_id : SV_DispatchThread
     const uint height = (uint)target_size_history.y;
     const uint2 pixel = dispatch_thread_id.xy;
     if (pixel.x >= width || pixel.y >= height || target_size_history.z < 0.5) return;
-
     const float4 current_radiance = ReflectionRadiance[pixel];
     if (current_radiance.a <= 0.0) return;
     const ReflectionHit hit = ReflectionHits[pixel.y * width + pixel.x];
@@ -72,11 +67,10 @@ void vice_ray_reflection_history_cs(uint3 dispatch_thread_id : SV_DispatchThread
         const float weight = sample_weight_2d.x * sample_weight_2d.y;
         if (weight <= 0.0) continue;
         float3 history_radiance = 0.0;
-        if (!vice_history_sample(uint2(candidate), previous_ndc.z, depth_threshold, history_radiance)) continue;
+        if (!vice_history_sample(uint2(candidate), previous_ndc, depth_threshold, history_radiance)) continue;
         reconstructed += max(history_radiance, 0.0) * weight;
         total_weight += weight;
     }
-
     if (total_weight < 0.5) return;
     const float3 history_radiance = reconstructed / total_weight;
     ReflectionRadiance[pixel] = float4(max(history_radiance, 0.0), current_radiance.a);
