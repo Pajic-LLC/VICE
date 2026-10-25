@@ -58,6 +58,12 @@ public:
     [[nodiscard]] std::span<const std::uint32_t> active_scene_instance_indices() const noexcept {
         return active_scene_instance_indices_;
     }
+    [[nodiscard]] render::Buffer* active_scene_instance_index_buffer() noexcept {
+        return active_scene_instance_index_buffer_.get();
+    }
+    [[nodiscard]] const render::Buffer* active_scene_instance_index_buffer() const noexcept {
+        return active_scene_instance_index_buffer_.get();
+    }
     [[nodiscard]] std::uint32_t active_scene_instance_index(
         const std::uint32_t tlas_instance_index
     ) const noexcept {
@@ -86,6 +92,11 @@ private:
     // state. It may change while the TLAS itself is reused because authoritative
     // Runtime scene-array order is not part of TLAS topology or identity.
     std::vector<std::uint32_t> active_scene_instance_indices_;
+    // The upload buffer is retained with the GPU-only map so recorded copy work
+    // cannot outlive the staging resource. Both buffers are replaced only after
+    // the new mapping has been recorded successfully.
+    std::unique_ptr<render::Buffer> active_scene_instance_index_upload_;
+    std::unique_ptr<render::Buffer> active_scene_instance_index_buffer_;
     RuntimeRayTracingTelemetry telemetry_{};
 };
 

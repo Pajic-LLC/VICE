@@ -52,26 +52,33 @@ void test_runtime_scene_index_binding_contract() {
     const auto implementation = read_text(VICE_RAY_REFLECTIONS_CPP_SOURCE);
     require(!implementation.empty(), "ray-reflection Runtime source must be readable");
     require(
-        implementation.find("RuntimeRayTracingSceneIndexTable") != std::string::npos &&
-            implementation.find("active_scene_instance_indices()") != std::string::npos,
-        "Runtime reflection ownership must source mapping data from the active TLAS executor"
+        implementation.find("active_scene_instance_indices()") != std::string::npos &&
+            implementation.find("active_scene_instance_index_buffer()") != std::string::npos,
+        "Runtime reflections must source both CPU count and GPU mapping from the active TLAS executor"
     );
     require(
-        implementation.find("scene_index_table->upload(commands, active_scene_indices") !=
-            std::string::npos,
-        "Runtime reflections must upload the active authoritative mapping before dispatch"
+        implementation.find("RuntimeRayTracingSceneIndexTable") == std::string::npos &&
+            implementation.find("scene_index_table->upload") == std::string::npos,
+        "Runtime reflections must not maintain or upload a duplicate TLAS scene-index table"
+    );
+    require(
+        implementation.find("*scene_index_buffer") != std::string::npos &&
+            implementation.find("static_cast<std::uint32_t>(active_scene_indices.size())") !=
+                std::string::npos,
+        "Runtime reflections must dispatch with the executor-owned GPU map and its committed count"
     );
     require(
         implementation.find("reflection_scene_indices_binding") != std::string::npos &&
             implementation.find(".binding = 4U") != std::string::npos &&
             implementation.find("commands.set_compute_buffer(") != std::string::npos,
-        "Runtime reflections must bind the scene-index table through the portable compute RHI"
+        "Runtime reflections must bind the scene-index map through the portable compute RHI"
     );
     require(
         implementation.find("active_scene_indices.empty()") != std::string::npos &&
-            implementation.find("require an authoritative active TLAS scene-index mapping") !=
+            implementation.find("scene_index_buffer == nullptr") != std::string::npos &&
+            implementation.find("committed active TLAS GPU scene-index mapping") !=
                 std::string::npos,
-        "Runtime reflections must fail closed when the authoritative mapping is unavailable"
+        "Runtime reflections must fail closed when the committed CPU/GPU mapping pair is unavailable"
     );
 }
 
