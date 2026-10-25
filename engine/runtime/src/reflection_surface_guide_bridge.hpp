@@ -3,6 +3,7 @@
 #include <vice/runtime/gpu_cluster_instance_remap.hpp>
 #include <vice/runtime/gpu_draw_batches.hpp>
 #include <vice/runtime/gpu_instance_table.hpp>
+#include <vice/runtime/ray_reflection_history.hpp>
 #include <vice/runtime/ray_reflections.hpp>
 #include <vice/runtime/ray_tracing_scene_executor.hpp>
 #include <vice/runtime/reflection_surface_guide.hpp>
@@ -67,6 +68,20 @@ struct RuntimeReflectionSurfaceGuideMeshBuffers {
     float jitter_y_ndc,
     platform::WindowMetrics metrics,
     RuntimeEnvironmentBinding environment,
+    std::string* diagnostics = nullptr
+) noexcept;
+
+[[nodiscard]] bool runtime_ray_reflection_history_after_trace(
+    const RuntimeSceneRenderer* owner,
+    render::Device& device,
+    render::CommandList& commands,
+    render::Texture* reflection_radiance,
+    render::Buffer* reflection_hits,
+    render::Texture* previous_scene_color,
+    render::Texture* previous_depth,
+    const math::Mat4& previous_view_projection,
+    bool history_valid,
+    platform::WindowMetrics metrics,
     std::string* diagnostics = nullptr
 ) noexcept;
 
@@ -147,10 +162,6 @@ struct RuntimeReflectionSurfaceGuideMeshBuffers {
 #ifdef runtime_directional_shadow_requires_depth_prepass
 #undef runtime_directional_shadow_requires_depth_prepass
 #endif
-// Keep this unparenthesized. The legacy caller uses
-// `shadow_view.has_value() && runtime_directional_shadow_requires_depth_prepass(path)`;
-// `&&` must bind only to the directional-shadow term so AO and the reflection guide
-// can independently request authoritative current depth.
 #define runtime_directional_shadow_requires_depth_prepass(path) \
     ::vice::runtime::runtime_directional_shadow_requires_depth_prepass((path)) || \
         ::vice::runtime::detail::runtime_ray_ambient_occlusion_needs_camera_depth_prepass() || \
@@ -204,6 +215,19 @@ struct RuntimeReflectionSurfaceGuideMeshBuffers {
             jitter.y_ndc, \
             metrics, \
             state_->environment.binding(), \
+            diagnostics \
+        ) && \
+        ::vice::runtime::detail::runtime_ray_reflection_history_after_trace( \
+            this, \
+            *state_->device, \
+            *commands, \
+            ::vice::runtime::detail::runtime_ray_reflection_radiance(this), \
+            ::vice::runtime::detail::runtime_ray_reflection_hits(this), \
+            previous_scene_color, \
+            previous_depth, \
+            temporal_frame.previous_view_projection, \
+            temporal_frame.history_valid, \
+            metrics, \
             diagnostics \
         ) && \
         ::vice::runtime::detail::runtime_ray_reflections_mark_gpu_pbr( \

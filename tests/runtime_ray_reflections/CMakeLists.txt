@@ -12,8 +12,10 @@ target_compile_definitions(
   vice_runtime_ray_reflections_tests
   PRIVATE
     VICE_RAY_REFLECTIONS_SHADER_SOURCE="${CMAKE_SOURCE_DIR}/assets/shaders/vice_ray_reflections.hlsl"
+    VICE_RAY_REFLECTION_HISTORY_SHADER_SOURCE="${CMAKE_SOURCE_DIR}/assets/shaders/vice_ray_reflection_history.hlsl"
     VICE_GPU_PBR_SURFACE_SHADER_SOURCE="${CMAKE_SOURCE_DIR}/assets/shaders/vice_gpu_pbr_surface.hlsl"
     VICE_RAY_REFLECTIONS_CPP_SOURCE="${CMAKE_SOURCE_DIR}/engine/runtime/src/ray_reflections.cpp"
+    VICE_RAY_REFLECTION_HISTORY_CPP_SOURCE="${CMAKE_SOURCE_DIR}/engine/runtime/src/ray_reflection_history.cpp"
     VICE_RAY_REFLECTIONS_BRIDGE_SOURCE="${CMAKE_SOURCE_DIR}/engine/runtime/src/reflection_surface_guide_bridge.hpp"
 )
 vice_enable_warnings(vice_runtime_ray_reflections_tests)
