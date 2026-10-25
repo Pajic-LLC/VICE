@@ -20,6 +20,18 @@ struct RuntimeReflectionSurfaceGuideMeshBuffers {
     render::Buffer* indices = nullptr;
 };
 
+[[nodiscard]] inline bool runtime_reflection_surface_guide_needs_camera_depth_prepass(
+    const render::Device* const device
+) noexcept {
+#if defined(VICE_RUNTIME_REFLECTION_SURFACE_GUIDE_VERTEX_MANIFEST) && \
+    defined(VICE_RUNTIME_REFLECTION_SURFACE_GUIDE_FRAGMENT_MANIFEST)
+    return device != nullptr && device->capabilities().ray_tracing;
+#else
+    (void)device;
+    return false;
+#endif
+}
+
 [[nodiscard]] bool runtime_reflection_surface_guide_after_motion_vectors(
     const RuntimeSceneRenderer* owner,
     render::Device& device,
@@ -45,6 +57,16 @@ struct RuntimeReflectionSurfaceGuideMeshBuffers {
 } // namespace vice::runtime::detail
 
 #if defined(render)
+
+#ifdef runtime_directional_shadow_requires_depth_prepass
+#undef runtime_directional_shadow_requires_depth_prepass
+#endif
+#define runtime_directional_shadow_requires_depth_prepass(path) \
+    (::vice::runtime::runtime_directional_shadow_requires_depth_prepass((path)) || \
+        ::vice::runtime::detail::runtime_ray_ambient_occlusion_needs_camera_depth_prepass() || \
+        ::vice::runtime::detail::runtime_reflection_surface_guide_needs_camera_depth_prepass( \
+            state_->device \
+        ))
 
 #ifdef encode_motion_vectors
 #undef encode_motion_vectors
