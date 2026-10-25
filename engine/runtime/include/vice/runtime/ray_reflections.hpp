@@ -15,7 +15,6 @@ inline constexpr std::uint32_t runtime_ray_reflection_max_instance_id = 0x00FFFF
 inline constexpr float runtime_ray_reflection_default_max_distance = 250.0F;
 inline constexpr float runtime_ray_reflection_default_surface_bias = 0.02F;
 inline constexpr float runtime_ray_reflection_default_max_roughness = 0.85F;
-inline constexpr float runtime_ray_reflection_history_depth_threshold = 0.0025F;
 
 struct RuntimeRayReflectionsCamera {
     math::Vec3 position{};
@@ -29,18 +28,6 @@ struct RuntimeRayReflectionsCamera {
     float jitter_y_ndc = 0.0F;
 };
 
-struct RuntimeRayReflectionsHistory {
-    math::Mat4 previous_view_projection{};
-    bool valid = false;
-    float depth_threshold = runtime_ray_reflection_history_depth_threshold;
-};
-
-struct RuntimeRayReflectionHistoryProjection {
-    float u = 0.0F;
-    float v = 0.0F;
-    float device_depth = 0.0F;
-};
-
 struct RuntimeRayReflectionsConstants {
     float camera_position_near[4]{};
     float camera_forward_far[4]{};
@@ -49,11 +36,9 @@ struct RuntimeRayReflectionsConstants {
     float target_size_jitter[4]{};
     float trace_parameters[4]{};
     float environment_parameters[4]{};
-    math::Mat4 previous_view_projection{};
-    float history_parameters[4]{};
 };
 
-static_assert(sizeof(RuntimeRayReflectionsConstants) == 192U);
+static_assert(sizeof(RuntimeRayReflectionsConstants) == 112U);
 
 struct RuntimeRayReflectionHit {
     float world_position[3]{};
@@ -88,18 +73,6 @@ static_assert(sizeof(RuntimeRayReflectionHit) == 16U);
     float max_roughness = runtime_ray_reflection_default_max_roughness
 ) noexcept;
 
-[[nodiscard]] std::optional<RuntimeRayReflectionHistoryProjection>
-runtime_ray_reflections_history_projection(
-    const math::Mat4& previous_view_projection,
-    math::Vec3 world_position
-) noexcept;
-
-[[nodiscard]] bool runtime_ray_reflections_history_depth_matches(
-    float expected_device_depth,
-    float sampled_device_depth,
-    float depth_threshold = runtime_ray_reflection_history_depth_threshold
-) noexcept;
-
 [[nodiscard]] std::optional<RuntimeRayReflectionsConstants>
 make_runtime_ray_reflections_constants(
     const RuntimeRayReflectionsCamera& camera,
@@ -110,8 +83,7 @@ make_runtime_ray_reflections_constants(
     float environment_max_specular_lod,
     float max_distance = runtime_ray_reflection_default_max_distance,
     float surface_bias = runtime_ray_reflection_default_surface_bias,
-    float max_roughness = runtime_ray_reflection_default_max_roughness,
-    const RuntimeRayReflectionsHistory& history = {}
+    float max_roughness = runtime_ray_reflection_default_max_roughness
 ) noexcept;
 
 class RuntimeRayReflectionsPass final {
@@ -142,8 +114,6 @@ public:
         render::Texture& surface_guide,
         render::AccelerationStructure& scene_tlas,
         render::Texture& environment_specular,
-        render::Texture& previous_scene_color,
-        render::Texture& previous_depth,
         render::Sampler& environment_sampler,
         const RuntimeRayReflectionsConstants& constants,
         std::string* diagnostics = nullptr
