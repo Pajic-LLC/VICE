@@ -194,8 +194,10 @@ void test_runtime_binding_and_order_contract() {
             implementation.find("|| !state.valid") != std::string::npos,
         "public raw reflection outputs must only expose data produced by the current frame");
     require(bridge.find("binding = 26U") != std::string::npos &&
-            bridge.find("set_graphics_texture(reflection_binding, bound_texture)") != std::string::npos,
-        "Runtime must bind the portable GPU PBR reflection descriptor");
+            bridge.find("&render::CommandList::set_graphics_texture") != std::string::npos &&
+            bridge.find("(commands.*bind_texture)(reflection_binding, bound_texture)") !=
+                std::string::npos,
+        "Runtime must bind the portable GPU PBR reflection descriptor without recursive macro expansion");
     require(bridge.find("radiance != nullptr ? *radiance : fallback_texture") != std::string::npos,
         "GPU PBR must receive a valid t26 descriptor even on non-RT fallback frames");
     require(bridge.find("offsetof(GpuPbrSceneConstants, ambient_occlusion_metadata) + sizeof(float)") !=
