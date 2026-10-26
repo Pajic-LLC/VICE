@@ -16,8 +16,4 @@ ProjectTextureCookResult cook_project_textures(const ProjectSession& session) {
     });
 }
 
-std::vector<world::ResourceId> cooked_texture_ids(const ProjectTextureCookResult& result) {
-    return tools::cooked_texture_ids(result);
-}
-
 } // namespace vice::editor
