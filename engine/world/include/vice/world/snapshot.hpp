@@ -27,6 +27,8 @@ struct SnapshotRelation {
     PersistentId subject{};
     PersistentId kind{};
     PersistentId object{};
+
+    friend bool operator==(const SnapshotRelation&, const SnapshotRelation&) = default;
 };
 
 struct WorldSnapshot {

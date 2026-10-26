@@ -1,5 +1,6 @@
 add_library(vice_platform STATIC)
 add_library(VICE::Platform ALIAS vice_platform)
+target_sources(vice_platform PRIVATE src/file.cpp)
 
 target_include_directories(
   vice_platform
@@ -18,6 +19,7 @@ if(APPLE)
     vice_platform
     PRIVATE
       src/macos/dynamic_library.cpp
+      src/macos/file.cpp
       src/macos/platform.mm
       src/macos/process.mm
   )
@@ -42,11 +44,12 @@ elseif(WIN32)
     vice_platform
     PRIVATE
       src/windows/dynamic_library.cpp
+      src/windows/file.cpp
       src/windows/platform.cpp
       src/windows/process.cpp
   )
   target_compile_definitions(vice_platform PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX UNICODE _UNICODE)
-  target_link_libraries(vice_platform PRIVATE user32 shell32 ole32)
+  target_link_libraries(vice_platform PRIVATE user32 shell32 ole32 bcrypt)
 else()
   message(FATAL_ERROR "VICE currently supports macOS and Windows as development targets.")
 endif()

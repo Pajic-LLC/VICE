@@ -39,6 +39,12 @@ struct CommandEnvironment {
     std::string_view entity_id
 );
 
+[[nodiscard]] CommandResult execute_world_edit(
+    const std::filesystem::path& world_path,
+    const std::filesystem::path& request_path,
+    bool dry_run
+);
+
 [[nodiscard]] CommandResult execute(
     std::span<const std::string_view> arguments,
     const CommandEnvironment& environment

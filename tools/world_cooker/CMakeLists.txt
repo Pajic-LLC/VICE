@@ -2,6 +2,7 @@ add_library(
   vice_world_cooker_lib
   STATIC
     src/world_authoring.cpp
+    src/world_edit.cpp
     src/world_cooker.cpp
     src/world_source_serializer.cpp
 )
@@ -12,7 +13,7 @@ target_include_directories(
   PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
 )
-target_link_libraries(vice_world_cooker_lib PUBLIC VICE::World)
+target_link_libraries(vice_world_cooker_lib PUBLIC VICE::World PRIVATE VICE::Platform)
 target_compile_features(vice_world_cooker_lib PUBLIC cxx_std_23)
 vice_enable_warnings(vice_world_cooker_lib)
 
@@ -24,6 +25,12 @@ if(VICE_BUILD_TOOLS)
 endif()
 
 if(VICE_BUILD_TESTS)
+  add_executable(vice_world_edit_tests tests/world_edit_tests.cpp)
+  target_link_libraries(vice_world_edit_tests PRIVATE VICE::WorldCooker VICE::Platform)
+  target_compile_features(vice_world_edit_tests PRIVATE cxx_std_23)
+  vice_enable_warnings(vice_world_edit_tests)
+  add_test(NAME vice_world_edit_tests COMMAND vice_world_edit_tests)
+
   add_executable(
     vice_world_authoring_tests
     tests/world_authoring_tests.cpp

@@ -273,7 +273,7 @@ int main(const int argc, char** argv) {
         );
         std::error_code error;
         const bool module_exists = std::filesystem::is_regular_file(module_path, error);
-        if (error) {
+        if (error && error != std::errc::no_such_file_or_directory) {
             std::cerr
                 << "VICE Runtime could not inspect project game module `"
                 << module_path.generic_string()

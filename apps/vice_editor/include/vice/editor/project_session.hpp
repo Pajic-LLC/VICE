@@ -9,6 +9,8 @@
 #include <string>
 #include <utility>
 
+namespace vice::tools::world_authoring { struct Transaction; }
+
 namespace vice::editor {
 
 enum class DirtyReplacePolicy {
@@ -127,6 +129,10 @@ public:
     bool save_as(const std::filesystem::path& path, std::string* diagnostics = nullptr);
     bool save_authored(std::string* diagnostics = nullptr);
     bool save_authored_as(const std::filesystem::path& path, std::string* diagnostics = nullptr);
+    bool apply_authoring_transaction(
+        const tools::world_authoring::Transaction& transaction,
+        std::string* diagnostics = nullptr
+    );
 
 private:
     [[nodiscard]] bool replacement_allowed(
@@ -136,6 +142,7 @@ private:
 
     std::unique_ptr<world::World> world_;
     std::filesystem::path path_;
+    std::optional<std::string> authored_source_;
     bool dirty_ = false;
 };
 

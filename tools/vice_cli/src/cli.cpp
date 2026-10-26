@@ -1,5 +1,6 @@
 #include <vice/dev/cli.hpp>
 
+#include <vice/platform/file.hpp>
 #include <vice/project/project.hpp>
 #include <vice/project/workspace.hpp>
 #include <vice/runtime/dev_session.hpp>
@@ -599,13 +600,14 @@ void append_relations(std::string& data, const world::WorldSnapshot& snapshot) {
         );
     }
 
-    std::string read_diagnostics;
-    const auto source = read_text(world_path, read_diagnostics);
-    if (!source.has_value()) {
-        return failure(exit_unavailable, command, std::move(read_diagnostics));
+    const auto source = platform::read_text_file(world_path);
+    if (!source) {
+        return failure(exit_unavailable, command, source.diagnostics);
     }
 
-    const auto parsed = tools::world_cooker::parse_source_manifest(*source);
+    const auto revision = platform::text_revision(source.contents);
+    if (revision.empty()) return failure(exit_unavailable, command, "Could not compute source revision.");
+    const auto parsed = tools::world_cooker::parse_source_manifest(source.contents);
     if (!parsed.snapshot.has_value()) {
         return failure(exit_validation, command, parsed.diagnostics);
     }
@@ -626,6 +628,8 @@ void append_relations(std::string& data, const world::WorldSnapshot& snapshot) {
     data.reserve(2048U + snapshot.entities.size() * 256U);
     data += "{\"path\":";
     append_json_string(data, normalized_path(world_path));
+    data += ",\"source_revision\":";
+    append_json_string(data, revision);
     data += ",\"summary\":{\"component_types\":" + std::to_string(snapshot.component_types.size());
     data += ",\"resources\":" + std::to_string(snapshot.resources.size());
     data += ",\"regions\":" + std::to_string(snapshot.regions.size());
@@ -719,6 +723,20 @@ CommandResult execute(
     const std::span<const std::string_view> arguments,
     const CommandEnvironment& environment
 ) {
+    if (arguments.size() >= 2U && arguments[0] == "world" && arguments[1] == "edit") {
+        if (arguments.size() != 5U || (arguments[4] != "--dry-run" && arguments[4] != "--apply")) {
+            return failure(exit_usage, "world.edit",
+                "Usage: vice world edit <world.vworld> <request.viceedit> <--dry-run|--apply>");
+        }
+        return execute_world_edit(std::filesystem::path{std::string{arguments[2]}},
+            std::filesystem::path{std::string{arguments[3]}}, arguments[4] == "--dry-run");
+    }
+    if (arguments.size() == 3U && arguments[0] == "runtime" && arguments[1] == "profile") {
+        return execute_runtime_profile(std::filesystem::path{std::string{arguments[2]}});
+    }
+    if (arguments.size() == 4U && arguments[0] == "runtime" && arguments[1] == "debug") {
+        return execute_runtime_debug(std::filesystem::path{std::string{arguments[2]}}, arguments[3]);
+    }
     if (arguments.size() != 3U) {
         return failure(
             exit_usage,

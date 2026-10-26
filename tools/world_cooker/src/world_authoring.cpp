@@ -210,7 +210,8 @@ namespace {
 
 [[nodiscard]] Result fail(
     const world::WorldSnapshot& authoritative,
-    std::string diagnostics
+    std::string diagnostics,
+    const std::optional<std::size_t> failed_operation = std::nullopt
 ) {
     return Result{
         .success = false,
@@ -218,6 +219,7 @@ namespace {
         .applied_operations = 0U,
         .snapshot = authoritative,
         .diagnostics = std::move(diagnostics),
+        .failed_operation = failed_operation,
     };
 }
 
@@ -254,7 +256,8 @@ Result apply(
             return fail(
                 authoritative,
                 "World authoring operation " + std::to_string(index) + " rejected: " +
-                    operation_diagnostics
+                    operation_diagnostics,
+                index
             );
         }
     }

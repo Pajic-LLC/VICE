@@ -66,6 +66,7 @@ struct Result {
     world::WorldSnapshot snapshot;
     std::string serialized_source;
     std::string diagnostics;
+    std::optional<std::size_t> failed_operation;
 
     [[nodiscard]] explicit operator bool() const noexcept { return success; }
 };

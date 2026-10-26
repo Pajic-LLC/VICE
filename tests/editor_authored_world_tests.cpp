@@ -2,6 +2,8 @@
 #include <vice/editor/project_session.hpp>
 #include <vice/editor/project_settings.hpp>
 #include <vice/tools/world_cooker.hpp>
+#include <vice/tools/world_edit.hpp>
+#include <vice/platform/file.hpp>
 #include <vice/world/world.hpp>
 
 #include <cstdlib>
@@ -302,6 +304,32 @@ int main() {
     require(static_cast<bool>(built), "project builds selected authored World");
     require(built.region_count == 2U, "Build Project follows selected authored source");
     require(built.cooked_startup_world.filename() == "saved-as.vworldc", "Build Project cooks selected source path");
+
+    editor::WorldDocument stale_editor;
+    require(stale_editor.open_authored(saved_as_world, editor::DirtyReplacePolicy::discard, &diagnostics),
+        "open document before agent edit");
+    const auto before_agent = platform::read_text_file(saved_as_world);
+    require(before_agent.success, "read pre-agent source");
+    tools::world_authoring::EditRequest agent_edit;
+    agent_edit.expected_revision = platform::text_revision(before_agent.contents);
+    agent_edit.transaction.operations.push_back(tools::world_authoring::SetRegionFidelity{
+        world::RegionId{2}, world::RegionFidelity::full});
+    const auto agent_result = tools::world_authoring::edit_file(saved_as_world, agent_edit, false);
+    require(agent_result.success && agent_result.published, "agent edits same authored source");
+    tools::world_authoring::Transaction editor_edit;
+    editor_edit.operations.push_back(tools::world_authoring::SetRegionFidelity{
+        world::RegionId{1}, world::RegionFidelity::reduced});
+    require(stale_editor.apply_authoring_transaction(editor_edit, &diagnostics) && stale_editor.dirty(),
+        "Editor uses shared transaction validation");
+    require(!stale_editor.save_authored(&diagnostics) && stale_editor.dirty(),
+        "stale Editor save rejected with unsaved edits retained");
+    require(platform::read_text_file(saved_as_world).contents == agent_result.proposed_source,
+        "stale Editor does not overwrite agent source");
+    require(stale_editor.open_authored(saved_as_world, editor::DirtyReplacePolicy::discard, &diagnostics),
+        "explicitly reload external changes");
+    require(stale_editor.apply_authoring_transaction(editor_edit, &diagnostics) &&
+        stale_editor.save_authored(&diagnostics) && !stale_editor.dirty(),
+        "rebased Editor transaction saves through same publication service");
 
     std::error_code error;
     std::filesystem::remove_all(root, error);
