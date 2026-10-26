@@ -33,6 +33,19 @@ int main() {
     status.frame_index = 77U;
     status.frame_seconds = 0.016;
     status.frames_per_second = 62.5;
+    status.profile.count = 2U;
+    status.profile.frames[0] = runtime::RuntimeFrameProfileSample{
+        .frame_index = 76U,
+        .frame_seconds = 0.017,
+        .update_seconds = 0.004,
+        .render_seconds = 0.009,
+    };
+    status.profile.frames[1] = runtime::RuntimeFrameProfileSample{
+        .frame_index = 77U,
+        .frame_seconds = 0.016,
+        .update_seconds = 0.0035,
+        .render_seconds = 0.008,
+    };
     status.world = runtime::RuntimeWorldDiagnostics{
         .entities = 12U,
         .resources = 7U,
@@ -85,6 +98,15 @@ int main() {
     require(json.starts_with("{\"schema\":\"vice.dev.runtime.v1\""), "versioned schema");
     require(json.find("\"session_id\":\"session-17\"") != std::string::npos, "session identity");
     require(json.find("\"execution_state\":\"running\"") != std::string::npos, "execution state");
+    require(json.find("\"units\":\"seconds\"") != std::string::npos, "profile units");
+    require(json.find("\"capacity\":120") != std::string::npos, "bounded profile capacity");
+    require(json.find("\"count\":2") != std::string::npos, "profile count");
+    require(json.find("\"stages\":[\"frame\",\"update\",\"render\"]") != std::string::npos,
+        "named profile stages");
+    require(json.find("\"frame_index\":77") != std::string::npos, "profile frame index");
+    require(json.find("\"update\":0.0035000000000000001") != std::string::npos ||
+        json.find("\"update\":0.0035") != std::string::npos, "profile update timing");
+    require(json.find("\"render\":0.008") != std::string::npos, "profile render timing");
     require(json.find("\"backend\":\"direct3d12\"") != std::string::npos, "portable backend name");
     require(json.find("1000000000000.25") != std::string::npos, "large-world camera x precision");
     require(json.find("-2000000000000.5") != std::string::npos, "large-world camera y precision");
@@ -138,6 +160,7 @@ int main() {
     require(sampled.world.resources == 1U, "status reads authoritative resource count");
     require(sampled.world.regions == 1U, "status reads authoritative region count");
     require(sampled.world.reduced_regions == 1U, "status reads authoritative fidelity");
+    require(sampled.profile.count == 0U, "sampling does not invent profile history");
     require(sampled.presentation.width == 2560U, "drawable width used");
     require(sampled.presentation.height == 1440U, "drawable height used");
     require(sampled.presentation.drawable, "drawable presentation state");

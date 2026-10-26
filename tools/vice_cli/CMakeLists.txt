@@ -2,6 +2,7 @@ add_library(
   vice_dev_cli
   STATIC
     src/cli.cpp
+    src/runtime_profile.cpp
 )
 add_library(VICE::DevCLI ALIAS vice_dev_cli)
 
@@ -36,3 +37,22 @@ target_link_libraries(vice_cli PRIVATE VICE::DevCLI)
 target_compile_features(vice_cli PRIVATE cxx_std_23)
 vice_enable_warnings(vice_cli)
 set_target_properties(vice_cli PROPERTIES OUTPUT_NAME vice)
+
+if(VICE_BUILD_TESTS)
+  add_executable(
+    vice_runtime_profile_cli_tests
+    tests/runtime_profile_tests.cpp
+  )
+  target_link_libraries(
+    vice_runtime_profile_cli_tests
+    PRIVATE
+      VICE::DevCLI
+      VICE::RuntimeDevSession
+  )
+  target_compile_features(vice_runtime_profile_cli_tests PRIVATE cxx_std_23)
+  vice_enable_warnings(vice_runtime_profile_cli_tests)
+  add_test(
+    NAME vice_runtime_profile_cli_tests
+    COMMAND vice_runtime_profile_cli_tests
+  )
+endif()

@@ -85,6 +85,7 @@ add_library(
   vice_runtime_diagnostics
   STATIC
     src/diagnostics.cpp
+    src/profile.cpp
     src/status.cpp
 )
 add_library(VICE::RuntimeDiagnostics ALIAS vice_runtime_diagnostics)
@@ -139,6 +140,22 @@ if(VICE_BUILD_TESTS)
   add_test(
     NAME vice_runtime_diagnostics_tests
     COMMAND vice_runtime_diagnostics_tests
+  )
+
+  add_executable(
+    vice_runtime_profile_tests
+    tests/profile_tests.cpp
+  )
+  target_link_libraries(
+    vice_runtime_profile_tests
+    PRIVATE
+      VICE::RuntimeDiagnostics
+  )
+  target_compile_features(vice_runtime_profile_tests PRIVATE cxx_std_23)
+  vice_enable_warnings(vice_runtime_profile_tests)
+  add_test(
+    NAME vice_runtime_profile_tests
+    COMMAND vice_runtime_profile_tests
   )
 
   add_executable(

@@ -30,6 +30,10 @@ struct CommandEnvironment {
 
 [[nodiscard]] CommandEnvironment configured_command_environment();
 
+[[nodiscard]] CommandResult execute_runtime_profile(
+    const std::filesystem::path& runtime_session_path
+);
+
 [[nodiscard]] CommandResult execute(
     std::span<const std::string_view> arguments,
     const CommandEnvironment& environment

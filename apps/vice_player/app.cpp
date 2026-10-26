@@ -2,6 +2,7 @@
 #include <vice/runtime/dev_session.hpp>
 #include <vice/runtime/module_loader.hpp>
 #include <vice/runtime/package_metadata.hpp>
+#include <vice/runtime/profile.hpp>
 #include <vice/runtime/runtime.hpp>
 #include <vice/runtime/status.hpp>
 
@@ -13,6 +14,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <utility>
 
 namespace {
 
@@ -32,12 +34,32 @@ public:
     void on_runtime_observation(
         const vice::runtime::RuntimeFrameObservation& observation
     ) noexcept override {
+        try {
+            publish_observation(observation);
+        } catch (...) {
+            if (!publication_error_reported_) {
+                std::cerr << "VICE Runtime development snapshot publication failed unexpectedly.\n";
+                publication_error_reported_ = true;
+            }
+        }
+    }
+
+private:
+    static constexpr double publish_interval_seconds = 0.10;
+
+    void publish_observation(const vice::runtime::RuntimeFrameObservation& observation) {
         if (project_ == nullptr || project_->world == nullptr || generation_ ==
             std::numeric_limits<std::uint64_t>::max()) {
             return;
         }
 
         if (observation.execution_state == vice::runtime::RuntimeExecutionState::running) {
+            profile_history_.push(vice::runtime::RuntimeFrameProfileSample{
+                .frame_index = observation.frame_index,
+                .frame_seconds = observation.frame_seconds,
+                .update_seconds = observation.update_seconds,
+                .render_seconds = observation.render_seconds,
+            });
             elapsed_seconds_ += observation.frame_seconds;
             if (observation.frame_index != 1U && elapsed_seconds_ < publish_interval_seconds) {
                 return;
@@ -45,7 +67,7 @@ public:
             elapsed_seconds_ = 0.0;
         }
 
-        const auto snapshot = vice::runtime::make_runtime_status_snapshot(
+        auto snapshot = vice::runtime::make_runtime_status_snapshot(
             project_->manifest.id.to_string(),
             project_->manifest.game_target,
             project_->manifest.startup_world.generic_string(),
@@ -57,6 +79,7 @@ public:
             *project_->world,
             observation.scene_renderer
         );
+        snapshot.profile = profile_history_.snapshot();
         const auto payload = vice::runtime::serialize_runtime_status_snapshot(snapshot, session_.id);
         const auto next_generation = generation_ + 1U;
         std::string diagnostics;
@@ -78,11 +101,9 @@ public:
         }
     }
 
-private:
-    static constexpr double publish_interval_seconds = 0.10;
-
     vice::runtime::LoadedProject* project_ = nullptr;
     vice::runtime::RuntimeDevSession session_{};
+    vice::runtime::RuntimeProfileHistory profile_history_{};
     std::uint64_t generation_ = 0U;
     double elapsed_seconds_ = 0.0;
     bool publication_error_reported_ = false;

@@ -1,6 +1,8 @@
 #include <vice/dev/cli.hpp>
 
+#include <filesystem>
 #include <iostream>
+#include <string>
 #include <string_view>
 #include <vector>
 
@@ -11,7 +13,10 @@ int main(const int argc, char** argv) {
         arguments.emplace_back(argv[index]);
     }
 
-    const auto result = vice::dev::execute(arguments);
+    const auto result = arguments.size() == 3U &&
+            arguments[0] == "runtime" && arguments[1] == "profile"
+        ? vice::dev::execute_runtime_profile(std::filesystem::path{std::string{arguments[2]}})
+        : vice::dev::execute(arguments);
     std::cout << result.json;
     if (result.json.empty() || result.json.back() != '\n') {
         std::cout << '\n';
