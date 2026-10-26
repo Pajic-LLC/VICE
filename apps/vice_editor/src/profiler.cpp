@@ -35,7 +35,20 @@ std::size_t ProfilerHistory::capacity() const noexcept {
 }
 
 WorldProfilerStats summarize_world(const world::World& world) {
-    return runtime::summarize_runtime_world(world);
+    const auto snapshot = world.snapshot();
+    WorldProfilerStats result;
+    result.entities = snapshot.entities.size();
+    result.resources = snapshot.resources.size();
+    result.relations = snapshot.relations.size();
+    result.regions = snapshot.regions.size();
+    for (const auto& region : snapshot.regions) {
+        switch (region.fidelity) {
+        case world::RegionFidelity::full: ++result.full_regions; break;
+        case world::RegionFidelity::reduced: ++result.reduced_regions; break;
+        case world::RegionFidelity::inactive: ++result.inactive_regions; break;
+        }
+    }
+    return result;
 }
 
 ProfilerSnapshot sample_profiler(
@@ -45,13 +58,16 @@ ProfilerSnapshot sample_profiler(
     const render::InstrumentedDevice& render_device,
     const world::World& world
 ) {
-    return runtime::sample_runtime_diagnostics(
-        frame_seconds,
-        jobs,
-        simulation,
-        render_device,
-        world
-    );
+    ProfilerSnapshot result;
+    if (std::isfinite(frame_seconds) && frame_seconds > 0.0) {
+        result.frame_seconds = frame_seconds;
+        result.frames_per_second = 1.0 / frame_seconds;
+    }
+    result.jobs = jobs.stats();
+    if (simulation != nullptr) result.simulation = simulation->stats();
+    result.render = render_device.stats();
+    result.world = summarize_world(world);
+    return result;
 }
 
 } // namespace vice::editor
