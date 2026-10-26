@@ -19,6 +19,8 @@ struct RuntimeFrameObservation {
     RuntimeExecutionState execution_state = RuntimeExecutionState::starting;
     std::uint64_t frame_index = 0U;
     double frame_seconds = 0.0;
+    double update_seconds = 0.0;
+    double render_seconds = 0.0;
     render::Backend backend = render::Backend::metal;
     platform::WindowMetrics metrics{};
     const RuntimeSceneRenderer* scene_renderer = nullptr;

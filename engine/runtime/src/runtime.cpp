@@ -303,18 +303,27 @@ int run_native_game(
 
     std::uint64_t frame_index = 0U;
     double last_frame_seconds = 0.0;
-    const auto observe = [&](const RuntimeExecutionState execution_state, const double frame_seconds) {
+    double last_update_seconds = 0.0;
+    double last_render_seconds = 0.0;
+    const auto observe = [&](
+        const RuntimeExecutionState execution_state,
+        const double frame_seconds,
+        const double update_seconds,
+        const double render_seconds
+    ) {
         if (observer == nullptr) return;
         observer->on_runtime_observation(RuntimeFrameObservation{
             .execution_state = execution_state,
             .frame_index = frame_index,
             .frame_seconds = frame_seconds,
+            .update_seconds = update_seconds,
+            .render_seconds = render_seconds,
             .backend = render_device->backend(),
             .metrics = metrics,
             .scene_renderer = &scene_renderer,
         });
     };
-    observe(RuntimeExecutionState::starting, 0.0);
+    observe(RuntimeExecutionState::starting, 0.0, 0.0, 0.0);
 
     core::FrameClock clock;
     int exit_code = 0;
@@ -346,10 +355,14 @@ int run_native_game(
         clock.tick();
         const double delta_seconds = std::min(clock.delta_seconds(), 0.25);
         last_frame_seconds = delta_seconds;
-        lifecycle.update(delta_seconds);
 
+        const auto update_begin = std::chrono::steady_clock::now();
+        lifecycle.update(delta_seconds);
         render::Color clear_color = config.clear_color;
         lifecycle.frame(clear_color);
+        const auto render_begin = std::chrono::steady_clock::now();
+        last_update_seconds = std::chrono::duration<double>(render_begin - update_begin).count();
+
         if (drawable && !scene_renderer.render(
                 *runtime_project.world,
                 *swapchain,
@@ -361,13 +374,25 @@ int run_native_game(
             running = false;
             exit_code = 1;
         }
+        const auto render_end = std::chrono::steady_clock::now();
+        last_render_seconds = std::chrono::duration<double>(render_end - render_begin).count();
 
         ++frame_index;
-        observe(RuntimeExecutionState::running, delta_seconds);
+        observe(
+            RuntimeExecutionState::running,
+            delta_seconds,
+            last_update_seconds,
+            last_render_seconds
+        );
         std::this_thread::sleep_for(std::chrono::milliseconds{1});
     }
 
-    observe(RuntimeExecutionState::stopping, last_frame_seconds);
+    observe(
+        RuntimeExecutionState::stopping,
+        last_frame_seconds,
+        last_update_seconds,
+        last_render_seconds
+    );
     (void)render_device->wait_idle();
     lifecycle.stop();
     return exit_code;
