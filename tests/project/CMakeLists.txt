@@ -4,6 +4,12 @@ target_compile_features(vice_project_tests PRIVATE cxx_std_23)
 vice_enable_warnings(vice_project_tests)
 add_test(NAME vice_project_tests COMMAND vice_project_tests)
 
+add_executable(vice_project_workspace_tests project_workspace_tests.cpp)
+target_link_libraries(vice_project_workspace_tests PRIVATE VICE::Project)
+target_compile_features(vice_project_workspace_tests PRIVATE cxx_std_23)
+vice_enable_warnings(vice_project_workspace_tests)
+add_test(NAME vice_project_workspace_tests COMMAND vice_project_workspace_tests)
+
 if(TARGET vice_dev_cli)
   add_executable(vice_dev_cli_tests dev_cli_tests.cpp)
   target_link_libraries(vice_dev_cli_tests PRIVATE VICE::DevCLI)

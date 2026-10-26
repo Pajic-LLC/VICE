@@ -2,6 +2,7 @@ add_library(
   vice_project
   STATIC
     src/project.cpp
+    src/workspace.cpp
 )
 
 add_library(VICE::Project ALIAS vice_project)
