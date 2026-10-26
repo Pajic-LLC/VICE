@@ -4,6 +4,7 @@
 #include <vice/render/rhi.hpp>
 #include <vice/runtime/diagnostics.hpp>
 #include <vice/runtime/observation.hpp>
+#include <vice/runtime/profile.hpp>
 #include <vice/world/persistent_id.hpp>
 #include <vice/world/spatial.hpp>
 #include <vice/world/world.hpp>
@@ -45,6 +46,7 @@ struct RuntimeStatusSnapshot {
     std::uint64_t frame_index = 0U;
     double frame_seconds = 0.0;
     double frames_per_second = 0.0;
+    RuntimeProfileWindow profile{};
     RuntimeWorldDiagnostics world{};
     RuntimeCameraDiagnostics camera{};
     RuntimePresentationDiagnostics presentation{};

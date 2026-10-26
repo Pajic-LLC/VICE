@@ -60,6 +60,26 @@ void append_double(std::string& output, const double value) {
     output.append(buffer.data(), converted.ptr);
 }
 
+void append_profile_window(std::string& output, const RuntimeProfileWindow& profile) {
+    output += "{\"units\":\"seconds\",\"capacity\":" +
+        std::to_string(runtime_profile_frame_capacity);
+    output += ",\"count\":" + std::to_string(profile.count);
+    output += ",\"stages\":[\"frame\",\"update\",\"render\"],\"frames\":[";
+    for (std::size_t index = 0U; index < profile.count; ++index) {
+        if (index != 0U) output.push_back(',');
+        const auto& frame = profile.frames[index];
+        output += "{\"frame_index\":" + std::to_string(frame.frame_index);
+        output += ",\"frame\":";
+        append_double(output, frame.frame_seconds);
+        output += ",\"update\":";
+        append_double(output, frame.update_seconds);
+        output += ",\"render\":";
+        append_double(output, frame.render_seconds);
+        output.push_back('}');
+    }
+    output += "]}";
+}
+
 [[nodiscard]] constexpr std::string_view execution_state_name(
     const RuntimeExecutionState state
 ) noexcept {
@@ -232,7 +252,7 @@ std::string serialize_runtime_status_snapshot(
     const std::string_view session_id
 ) {
     std::string output;
-    output.reserve(2048U);
+    output.reserve(16384U);
     output += "{\"schema\":\"vice.dev.runtime.v1\",\"session_id\":";
     append_json_string(output, session_id);
     output += ",\"project_id\":";
@@ -248,7 +268,9 @@ std::string serialize_runtime_status_snapshot(
     append_double(output, snapshot.frame_seconds);
     output += ",\"frames_per_second\":";
     append_double(output, snapshot.frames_per_second);
-    output += "},\"world\":{\"entities\":" + std::to_string(snapshot.world.entities);
+    output += "},\"profile\":";
+    append_profile_window(output, snapshot.profile);
+    output += ",\"world\":{\"entities\":" + std::to_string(snapshot.world.entities);
     output += ",\"resources\":" + std::to_string(snapshot.world.resources);
     output += ",\"relations\":" + std::to_string(snapshot.world.relations);
     output += ",\"regions\":" + std::to_string(snapshot.world.regions);
