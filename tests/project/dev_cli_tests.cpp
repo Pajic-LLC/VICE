@@ -1,6 +1,7 @@
 #include <vice/dev/cli.hpp>
 
 #include <array>
+#include <chrono>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -8,6 +9,7 @@
 #include <iterator>
 #include <string>
 #include <string_view>
+#include <thread>
 
 #ifndef VICE_DEV_CLI_TEST_RUNTIME_HOST
 #error "VICE dev CLI tests require a launchable test runtime host"
@@ -218,7 +220,14 @@ int main() {
     require(usage.exit_code == vice::dev::exit_usage, "usage exit status");
     require(usage.json.find("\"command\":\"usage\"") != std::string::npos, "structured usage response");
 
-    std::filesystem::remove_all(root, error);
-    require(!error, "remove test directory");
+    // Launch is asynchronous. Windows may retain the short-lived helper's image
+    // handle briefly after the parent has finished the contract assertions.
+    const auto cleanup_deadline = std::chrono::steady_clock::now() + std::chrono::seconds{2};
+    do {
+        std::filesystem::remove_all(root, error);
+        if (!error || std::chrono::steady_clock::now() >= cleanup_deadline) break;
+        std::this_thread::sleep_for(std::chrono::milliseconds{10});
+    } while (true);
+    require(!error, "remove test directory after helper exit");
     return 0;
 }
