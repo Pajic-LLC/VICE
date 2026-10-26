@@ -18,6 +18,7 @@ if(APPLE)
     vice_platform
     PRIVATE
       src/macos/dynamic_library.cpp
+      src/macos/file.mm
       src/macos/platform.mm
       src/macos/process.mm
   )
@@ -29,6 +30,7 @@ if(APPLE)
       OBJCXX_EXTENSIONS NO
   )
   set_source_files_properties(
+    src/macos/file.mm
     src/macos/platform.mm
     src/macos/process.mm
     PROPERTIES COMPILE_OPTIONS "-fobjc-arc"
@@ -42,6 +44,7 @@ elseif(WIN32)
     vice_platform
     PRIVATE
       src/windows/dynamic_library.cpp
+      src/windows/file.cpp
       src/windows/platform.cpp
       src/windows/process.cpp
   )
