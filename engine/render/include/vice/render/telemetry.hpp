@@ -1,6 +1,6 @@
 #pragma once
 
-#include <vice/render/rhi.hpp>
+#include <vice/render/ray_tracing.hpp>
 
 #include <atomic>
 #include <cstdint>
@@ -18,7 +18,7 @@ struct DeviceStats {
     std::uint64_t created_graphics_pipelines = 0;
 };
 
-class InstrumentedDevice final : public Device {
+class InstrumentedDevice final : public Device, public RayTracingDevice {
 public:
     explicit InstrumentedDevice(std::unique_ptr<Device> device) noexcept;
     ~InstrumentedDevice() override;
@@ -42,6 +42,9 @@ public:
     [[nodiscard]] std::unique_ptr<GraphicsPipeline> create_graphics_pipeline(
         const GraphicsPipelineDesc& desc
     ) override;
+    [[nodiscard]] std::unique_ptr<ComputePipeline> create_compute_pipeline(
+        const ComputePipelineDesc& desc
+    ) override;
     [[nodiscard]] std::unique_ptr<CommandList> create_command_list() override;
 
     SubmissionId submit(std::unique_ptr<CommandList> command_list) override;
@@ -50,6 +53,15 @@ public:
     bool wait_idle() override;
 
     [[nodiscard]] std::unique_ptr<Swapchain> create_swapchain(platform::Window& window) override;
+
+    bool query_acceleration_structure_build_sizes(
+        const AccelerationStructureBuildDesc& desc,
+        AccelerationStructureBuildSizes& sizes
+    ) override;
+    [[nodiscard]] std::unique_ptr<AccelerationStructure> create_acceleration_structure(
+        const AccelerationStructureBuildDesc& desc,
+        const AccelerationStructureBuildSizes& sizes
+    ) override;
 
 private:
     std::unique_ptr<Device> device_;

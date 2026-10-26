@@ -2,6 +2,7 @@
 
 #include <vice/platform/window.hpp>
 #include <vice/render/rhi.hpp>
+#include <vice/render/telemetry.hpp>
 #include <vice/runtime/diagnostics.hpp>
 #include <vice/runtime/observation.hpp>
 #include <vice/runtime/profile.hpp>
@@ -38,6 +39,11 @@ struct RuntimePresentationDiagnostics {
     ) = default;
 };
 
+struct RuntimeRenderDeviceDiagnostics {
+    render::DeviceCapabilities capabilities{};
+    render::DeviceStats counters{};
+};
+
 struct RuntimeStatusSnapshot {
     std::string project_id;
     std::string game_target;
@@ -50,6 +56,7 @@ struct RuntimeStatusSnapshot {
     RuntimeWorldDiagnostics world{};
     RuntimeCameraDiagnostics camera{};
     RuntimePresentationDiagnostics presentation{};
+    RuntimeRenderDeviceDiagnostics render_device{};
     RuntimeRendererDiagnostics renderer{};
 };
 
@@ -66,6 +73,8 @@ struct RuntimeStatusSnapshot {
     std::uint64_t frame_index,
     double frame_seconds,
     render::Backend backend,
+    render::DeviceCapabilities device_capabilities,
+    render::DeviceStats device_stats,
     platform::WindowMetrics metrics,
     const world::World& world,
     const RuntimeSceneRenderer* scene_renderer = nullptr
