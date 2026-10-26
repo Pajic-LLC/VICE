@@ -20,4 +20,11 @@ if(VICE_BUILD_TOOLS)
   target_link_libraries(vice_world_cooker PRIVATE VICE::WorldCooker VICE::World)
   target_compile_features(vice_world_cooker PRIVATE cxx_std_23)
   vice_enable_warnings(vice_world_cooker)
+
+  # The structured developer CLI consumes the authoritative World cooker contract.
+  # Register it here so editor-only builds do not pull in the developer command surface.
+  add_subdirectory(
+    "${PROJECT_SOURCE_DIR}/tools/vice_cli"
+    "${CMAKE_BINARY_DIR}/tools/vice_cli"
+  )
 endif()

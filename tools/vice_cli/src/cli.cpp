@@ -1,0 +1,501 @@
+#include <vice/dev/cli.hpp>
+
+#include <vice/project/project.hpp>
+#include <vice/tools/world_cooker.hpp>
+#include <vice/world/snapshot.hpp>
+
+#include <algorithm>
+#include <array>
+#include <charconv>
+#include <cstdint>
+#include <filesystem>
+#include <fstream>
+#include <iterator>
+#include <limits>
+#include <optional>
+#include <string>
+#include <string_view>
+#include <system_error>
+#include <tuple>
+#include <utility>
+#include <vector>
+
+namespace vice::dev {
+namespace {
+
+void append_json_string(std::string& output, const std::string_view value) {
+    static constexpr char hex[] = "0123456789abcdef";
+    output.push_back('"');
+    for (const unsigned char character : value) {
+        switch (character) {
+        case '"': output += "\\\""; break;
+        case '\\': output += "\\\\"; break;
+        case '\b': output += "\\b"; break;
+        case '\f': output += "\\f"; break;
+        case '\n': output += "\\n"; break;
+        case '\r': output += "\\r"; break;
+        case '\t': output += "\\t"; break;
+        default:
+            if (character < 0x20U) {
+                output += "\\u00";
+                output.push_back(hex[(character >> 4U) & 0x0fU]);
+                output.push_back(hex[character & 0x0fU]);
+            } else {
+                output.push_back(static_cast<char>(character));
+            }
+            break;
+        }
+    }
+    output.push_back('"');
+}
+
+void append_double(std::string& output, const double value) {
+    std::array<char, 64> buffer{};
+    const auto converted = std::to_chars(
+        buffer.data(),
+        buffer.data() + buffer.size(),
+        value,
+        std::chars_format::general,
+        std::numeric_limits<double>::max_digits10
+    );
+    if (converted.ec != std::errc{}) {
+        output += "null";
+        return;
+    }
+    output.append(buffer.data(), converted.ptr);
+}
+
+[[nodiscard]] std::string normalized_path(const std::filesystem::path& path) {
+    std::error_code error;
+    const auto absolute = std::filesystem::absolute(path, error);
+    if (error) {
+        return path.lexically_normal().generic_string();
+    }
+    return absolute.lexically_normal().generic_string();
+}
+
+[[nodiscard]] std::optional<std::string> read_text(
+    const std::filesystem::path& path,
+    std::string& diagnostics
+) {
+    std::ifstream input{path, std::ios::binary};
+    if (!input) {
+        diagnostics = "Could not open `" + path.generic_string() + "`.";
+        return std::nullopt;
+    }
+    std::string contents{
+        std::istreambuf_iterator<char>{input},
+        std::istreambuf_iterator<char>{}
+    };
+    if (!input.eof() && input.fail()) {
+        diagnostics = "Could not read `" + path.generic_string() + "`.";
+        return std::nullopt;
+    }
+    return contents;
+}
+
+[[nodiscard]] std::string response_json(
+    const std::string_view command,
+    const bool ok,
+    const std::vector<std::string>& diagnostics,
+    const std::string_view data_json
+) {
+    std::string output;
+    output.reserve(256U + data_json.size());
+    output += "{\"schema\":";
+    append_json_string(output, structured_schema);
+    output += ",\"command\":";
+    append_json_string(output, command);
+    output += ",\"ok\":";
+    output += ok ? "true" : "false";
+    output += ",\"diagnostics\":[";
+    for (std::size_t index = 0; index < diagnostics.size(); ++index) {
+        if (index != 0U) output.push_back(',');
+        append_json_string(output, diagnostics[index]);
+    }
+    output += "],\"data\":";
+    output += data_json;
+    output += "}\n";
+    return output;
+}
+
+[[nodiscard]] CommandResult failure(
+    const int exit_code,
+    const std::string_view command,
+    std::string diagnostics
+) {
+    std::vector<std::string> messages;
+    messages.push_back(std::move(diagnostics));
+    return CommandResult{
+        .exit_code = exit_code,
+        .json = response_json(command, false, messages, "{}"),
+    };
+}
+
+[[nodiscard]] std::string_view fidelity_name(const world::RegionFidelity fidelity) noexcept {
+    switch (fidelity) {
+    case world::RegionFidelity::inactive: return "inactive";
+    case world::RegionFidelity::reduced: return "reduced";
+    case world::RegionFidelity::full: return "full";
+    }
+    return "unknown";
+}
+
+[[nodiscard]] std::string_view resource_role_name(const world::ResourceRole role) noexcept {
+    switch (role) {
+    case world::ResourceRole::render_mesh: return "render_mesh";
+    case world::ResourceRole::render_material: return "render_material";
+    case world::ResourceRole::reflection_environment: return "reflection_environment";
+    }
+    return "unknown";
+}
+
+[[nodiscard]] CommandResult inspect_project(
+    const std::string_view command,
+    const std::filesystem::path& manifest_path,
+    const bool validate_startup_world
+) {
+    std::error_code error;
+    if (!std::filesystem::is_regular_file(manifest_path, error)) {
+        return failure(
+            exit_unavailable,
+            command,
+            "Project manifest is not available at `" + manifest_path.generic_string() + "`."
+        );
+    }
+
+    const auto loaded = project::load_manifest(manifest_path);
+    if (!loaded.manifest.has_value()) {
+        return failure(exit_validation, command, loaded.diagnostics);
+    }
+
+    const auto& manifest = *loaded.manifest;
+    const auto asset_root = project::resolve_asset_root(manifest_path, manifest);
+    const auto startup_world = project::resolve_startup_world(manifest_path, manifest);
+    const auto game_output_root = project::resolve_game_output_root(manifest_path, manifest);
+
+    error.clear();
+    const bool startup_exists = std::filesystem::is_regular_file(startup_world, error);
+    if (validate_startup_world && !startup_exists) {
+        return failure(
+            exit_validation,
+            command,
+            "Configured startup World is not available at `" + startup_world.generic_string() + "`."
+        );
+    }
+    if (validate_startup_world) {
+        std::string read_diagnostics;
+        const auto source = read_text(startup_world, read_diagnostics);
+        if (!source.has_value()) {
+            return failure(
+                exit_unavailable,
+                command,
+                "Could not validate configured startup World: " + read_diagnostics
+            );
+        }
+        const auto parsed_world = tools::world_cooker::parse_source_manifest(*source);
+        if (!parsed_world.snapshot.has_value()) {
+            return failure(
+                exit_validation,
+                command,
+                "Configured startup World is invalid: " + parsed_world.diagnostics
+            );
+        }
+    }
+
+    std::string data;
+    data.reserve(768U);
+    data += "{\"manifest_version\":" + std::to_string(manifest.version);
+    data += ",\"project_id\":";
+    append_json_string(data, manifest.id.to_string());
+    data += ",\"name\":";
+    append_json_string(data, manifest.name);
+    data += ",\"game_name\":";
+    append_json_string(data, manifest.game_name);
+    data += ",\"game_target\":";
+    append_json_string(data, manifest.game_target);
+    data += ",\"manifest_path\":";
+    append_json_string(data, normalized_path(manifest_path));
+    data += ",\"asset_root\":";
+    append_json_string(data, normalized_path(asset_root));
+    data += ",\"startup_world_relative\":";
+    append_json_string(data, manifest.startup_world.generic_string());
+    data += ",\"startup_world\":";
+    append_json_string(data, normalized_path(startup_world));
+    data += ",\"startup_world_exists\":";
+    data += startup_exists ? "true" : "false";
+    data += ",\"game_output_root\":";
+    append_json_string(data, normalized_path(game_output_root));
+    data.push_back('}');
+
+    return CommandResult{
+        .exit_code = exit_success,
+        .json = response_json(command, true, {}, data),
+    };
+}
+
+void append_component_types(std::string& data, const world::WorldSnapshot& snapshot) {
+    std::vector<const world::ComponentTypeDesc*> values;
+    values.reserve(snapshot.component_types.size());
+    for (const auto& value : snapshot.component_types) values.push_back(&value);
+    std::sort(values.begin(), values.end(), [](const auto* lhs, const auto* rhs) {
+        return lhs->id.value.bytes() < rhs->id.value.bytes();
+    });
+
+    data += "\"component_types\":[";
+    for (std::size_t index = 0; index < values.size(); ++index) {
+        if (index != 0U) data.push_back(',');
+        const auto& value = *values[index];
+        data += "{\"id\":";
+        append_json_string(data, value.id.value.to_string());
+        data += ",\"name\":";
+        append_json_string(data, value.name);
+        data += ",\"version\":" + std::to_string(value.version) + "}";
+    }
+    data.push_back(']');
+}
+
+void append_resources(std::string& data, const world::WorldSnapshot& snapshot) {
+    auto values = snapshot.resources;
+    std::sort(values.begin(), values.end(), [](const auto& lhs, const auto& rhs) {
+        return lhs.value.bytes() < rhs.value.bytes();
+    });
+
+    data += ",\"resources\":[";
+    for (std::size_t index = 0; index < values.size(); ++index) {
+        if (index != 0U) data.push_back(',');
+        append_json_string(data, values[index].value.to_string());
+    }
+    data.push_back(']');
+}
+
+void append_regions(std::string& data, const world::WorldSnapshot& snapshot) {
+    std::vector<const world::RegionDesc*> values;
+    values.reserve(snapshot.regions.size());
+    for (const auto& value : snapshot.regions) values.push_back(&value);
+    std::sort(values.begin(), values.end(), [](const auto* lhs, const auto* rhs) {
+        return lhs->id.value < rhs->id.value;
+    });
+
+    data += ",\"regions\":[";
+    for (std::size_t index = 0; index < values.size(); ++index) {
+        if (index != 0U) data.push_back(',');
+        const auto& value = *values[index];
+        data += "{\"id\":" + std::to_string(value.id.value);
+        data += ",\"simulation_island\":" + std::to_string(value.simulation_island.value);
+        data += ",\"origin\":[";
+        append_double(data, value.origin.x);
+        data.push_back(',');
+        append_double(data, value.origin.y);
+        data.push_back(',');
+        append_double(data, value.origin.z);
+        data += "],\"streaming_cell\":[" + std::to_string(value.streaming_cell.x) + "," +
+            std::to_string(value.streaming_cell.y) + "," + std::to_string(value.streaming_cell.z) + "]";
+        data += ",\"fidelity\":";
+        append_json_string(data, fidelity_name(value.fidelity));
+        data += ",\"bounds\":";
+        if (!value.bounds.has_value()) {
+            data += "null";
+        } else {
+            data += "{\"min\":[";
+            append_double(data, value.bounds->min.x);
+            data.push_back(',');
+            append_double(data, value.bounds->min.y);
+            data.push_back(',');
+            append_double(data, value.bounds->min.z);
+            data += "],\"max\":[";
+            append_double(data, value.bounds->max.x);
+            data.push_back(',');
+            append_double(data, value.bounds->max.y);
+            data.push_back(',');
+            append_double(data, value.bounds->max.z);
+            data += "]}";
+        }
+        data.push_back('}');
+    }
+    data.push_back(']');
+}
+
+void append_entities(std::string& data, const world::WorldSnapshot& snapshot) {
+    std::vector<const world::SnapshotEntity*> values;
+    values.reserve(snapshot.entities.size());
+    for (const auto& value : snapshot.entities) values.push_back(&value);
+    std::sort(values.begin(), values.end(), [](const auto* lhs, const auto* rhs) {
+        return lhs->persistent_id.bytes() < rhs->persistent_id.bytes();
+    });
+
+    data += ",\"entities\":[";
+    for (std::size_t index = 0; index < values.size(); ++index) {
+        if (index != 0U) data.push_back(',');
+        const auto& value = *values[index];
+        data += "{\"id\":";
+        append_json_string(data, value.persistent_id.to_string());
+        data += ",\"spatial\":";
+        if (!value.spatial_state.has_value()) {
+            data += "null";
+        } else {
+            data += "{\"global_position\":[";
+            append_double(data, value.spatial_state->global_position.x);
+            data.push_back(',');
+            append_double(data, value.spatial_state->global_position.y);
+            data.push_back(',');
+            append_double(data, value.spatial_state->global_position.z);
+            data += "],\"region\":" + std::to_string(value.spatial_state->region.value) + "}";
+        }
+        data += ",\"authored_transform\":";
+        data += value.authored_transform.has_value() ? "true" : "false";
+        data += ",\"camera\":";
+        data += value.camera.has_value() ? "true" : "false";
+        data += ",\"light\":";
+        data += value.light.has_value() ? "true" : "false";
+        data += ",\"reflection_probe\":";
+        data += value.reflection_probe.has_value() ? "true" : "false";
+
+        auto references = value.resource_references;
+        std::sort(references.begin(), references.end(), [](const auto& lhs, const auto& rhs) {
+            const auto lhs_role = static_cast<std::uint8_t>(lhs.role);
+            const auto rhs_role = static_cast<std::uint8_t>(rhs.role);
+            if (lhs_role != rhs_role) return lhs_role < rhs_role;
+            return lhs.resource.value.bytes() < rhs.resource.value.bytes();
+        });
+        data += ",\"resource_references\":[";
+        for (std::size_t reference_index = 0; reference_index < references.size(); ++reference_index) {
+            if (reference_index != 0U) data.push_back(',');
+            data += "{\"role\":";
+            append_json_string(data, resource_role_name(references[reference_index].role));
+            data += ",\"resource\":";
+            append_json_string(data, references[reference_index].resource.value.to_string());
+            data.push_back('}');
+        }
+        data += "]}";
+    }
+    data.push_back(']');
+}
+
+void append_relations(std::string& data, const world::WorldSnapshot& snapshot) {
+    std::vector<const world::SnapshotRelation*> values;
+    values.reserve(snapshot.relations.size());
+    for (const auto& value : snapshot.relations) values.push_back(&value);
+    std::sort(values.begin(), values.end(), [](const auto* lhs, const auto* rhs) {
+        return std::tie(lhs->subject.bytes(), lhs->kind.bytes(), lhs->object.bytes()) <
+            std::tie(rhs->subject.bytes(), rhs->kind.bytes(), rhs->object.bytes());
+    });
+
+    data += ",\"relations\":[";
+    for (std::size_t index = 0; index < values.size(); ++index) {
+        if (index != 0U) data.push_back(',');
+        const auto& value = *values[index];
+        data += "{\"subject\":";
+        append_json_string(data, value.subject.to_string());
+        data += ",\"kind\":";
+        append_json_string(data, value.kind.to_string());
+        data += ",\"object\":";
+        append_json_string(data, value.object.to_string());
+        data.push_back('}');
+    }
+    data.push_back(']');
+}
+
+[[nodiscard]] CommandResult inspect_world(
+    const std::string_view command,
+    const std::filesystem::path& world_path
+) {
+    if (world_path.extension() != ".vworld") {
+        return failure(exit_validation, command, "Authored World path must use the `.vworld` extension.");
+    }
+
+    std::error_code error;
+    if (!std::filesystem::is_regular_file(world_path, error)) {
+        return failure(
+            exit_unavailable,
+            command,
+            "Authored World is not available at `" + world_path.generic_string() + "`."
+        );
+    }
+
+    std::string read_diagnostics;
+    const auto source = read_text(world_path, read_diagnostics);
+    if (!source.has_value()) {
+        return failure(exit_unavailable, command, std::move(read_diagnostics));
+    }
+
+    const auto parsed = tools::world_cooker::parse_source_manifest(*source);
+    if (!parsed.snapshot.has_value()) {
+        return failure(exit_validation, command, parsed.diagnostics);
+    }
+
+    const auto& snapshot = *parsed.snapshot;
+    std::size_t inactive_regions = 0U;
+    std::size_t reduced_regions = 0U;
+    std::size_t full_regions = 0U;
+    for (const auto& region : snapshot.regions) {
+        switch (region.fidelity) {
+        case world::RegionFidelity::inactive: ++inactive_regions; break;
+        case world::RegionFidelity::reduced: ++reduced_regions; break;
+        case world::RegionFidelity::full: ++full_regions; break;
+        }
+    }
+
+    std::string data;
+    data.reserve(2048U + snapshot.entities.size() * 256U);
+    data += "{\"path\":";
+    append_json_string(data, normalized_path(world_path));
+    data += ",\"summary\":{\"component_types\":" + std::to_string(snapshot.component_types.size());
+    data += ",\"resources\":" + std::to_string(snapshot.resources.size());
+    data += ",\"regions\":" + std::to_string(snapshot.regions.size());
+    data += ",\"entities\":" + std::to_string(snapshot.entities.size());
+    data += ",\"relations\":" + std::to_string(snapshot.relations.size());
+    data += ",\"region_fidelity\":{\"inactive\":" + std::to_string(inactive_regions);
+    data += ",\"reduced\":" + std::to_string(reduced_regions);
+    data += ",\"full\":" + std::to_string(full_regions) + "}},";
+    append_component_types(data, snapshot);
+    append_resources(data, snapshot);
+    append_regions(data, snapshot);
+    append_entities(data, snapshot);
+    append_relations(data, snapshot);
+    data.push_back('}');
+
+    return CommandResult{
+        .exit_code = exit_success,
+        .json = response_json(command, true, {}, data),
+    };
+}
+
+} // namespace
+
+CommandResult execute(const std::span<const std::string_view> arguments) {
+    if (arguments.size() != 3U) {
+        return failure(
+            exit_usage,
+            "usage",
+            "Usage: vice <project|world> <inspect|validate> <path>"
+        );
+    }
+
+    const auto domain = arguments[0];
+    const auto operation = arguments[1];
+    const std::string command = std::string{domain} + "." + std::string{operation};
+    if (operation != "inspect" && operation != "validate") {
+        return failure(
+            exit_usage,
+            command,
+            "Operation must be `inspect` or `validate`."
+        );
+    }
+
+    const std::filesystem::path path{std::string{arguments[2]}};
+    if (domain == "project") {
+        return inspect_project(command, path, operation == "validate");
+    }
+    if (domain == "world") {
+        return inspect_world(command, path);
+    }
+
+    return failure(
+        exit_usage,
+        command,
+        "Domain must be `project` or `world`."
+    );
+}
+
+} // namespace vice::dev
