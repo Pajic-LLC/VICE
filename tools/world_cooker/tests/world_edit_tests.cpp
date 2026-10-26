@@ -124,8 +124,8 @@ int main() {
     const auto race_request = request(original, "set_fidelity 1 full\n");
     std::barrier start{2};
     std::array<FileEditResult, 2> results;
-    std::jthread a{[&] { start.arrive_and_wait(); results[0] = edit_file(path, race_request, false); }};
-    std::jthread b{[&] { start.arrive_and_wait(); results[1] = edit_file(path, race_request, false); }};
+    std::thread a{[&] { start.arrive_and_wait(); results[0] = edit_file(path, race_request, false); }};
+    std::thread b{[&] { start.arrive_and_wait(); results[1] = edit_file(path, race_request, false); }};
     a.join(); b.join();
     require(results[0].success != results[1].success, "only one concurrent stale-base writer succeeds");
     const auto& loser = results[0].success ? results[1] : results[0];
