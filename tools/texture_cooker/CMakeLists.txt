@@ -15,7 +15,7 @@ target_link_libraries(
   PUBLIC
     VICE::Project
     VICE::Render
-  PRIVATE VICE::World
+    VICE::World
 )
 target_compile_features(vice_texture_cooker_lib PUBLIC cxx_std_23)
 vice_enable_warnings(vice_texture_cooker_lib)
