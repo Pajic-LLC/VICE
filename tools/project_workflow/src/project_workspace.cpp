@@ -3,6 +3,7 @@
 #include <filesystem>
 #include <string>
 #include <system_error>
+#include <utility>
 
 namespace vice::dev {
 namespace {
