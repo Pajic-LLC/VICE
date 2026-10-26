@@ -60,6 +60,7 @@ struct CharacterId {
 enum class MotionType : std::uint8_t {
     static_body,
     dynamic_body,
+    kinematic_body,
 };
 
 enum class MotionQuality : std::uint8_t {

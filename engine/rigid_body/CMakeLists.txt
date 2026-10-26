@@ -73,6 +73,7 @@ vice_enable_warnings(vice_rigid_body)
 add_library(
   vice_rigid_body_world
   STATIC
+    src/authored_simulation.cpp
     src/world_activation.cpp
     src/world_box_orchestration.cpp
     src/world_bridge.cpp

@@ -1,4 +1,5 @@
 #include <vice/tools/world_cooker.hpp>
+#include "rigid_box_source.hpp"
 
 #include <vice/world/world.hpp>
 
@@ -118,6 +119,10 @@ std::string serialize_source_manifest(
                 << probe.blend_distance << ' ' << probe.priority << ' ' << enabled_name(probe.enabled);
         }
 
+        if (entity.rigid_box) {
+            output << " rigid_box ";
+            write_rigid_box(output, *entity.rigid_box);
+        }
         for (const auto& reference : entity.resource_references) {
             output << " resource " << resource_role_name(reference.role) << ' '
                 << reference.resource.value.to_string();

@@ -679,7 +679,7 @@ public:
         if (body.motion == MotionType::static_body && !filter.include_static) {
             return false;
         }
-        if (body.motion == MotionType::dynamic_body && !filter.include_dynamic) {
+        if (body.motion != MotionType::static_body && !filter.include_dynamic) {
             return false;
         }
         return true;
@@ -717,7 +717,9 @@ public:
         }
 
         const bool dynamic = desc.motion == MotionType::dynamic_body;
-        if (dynamic && shape->MustBeStatic()) {
+        const bool kinematic = desc.motion == MotionType::kinematic_body;
+        const bool moving = dynamic || kinematic;
+        if ((!moving && desc.motion != MotionType::static_body) || (moving && shape->MustBeStatic())) {
             return false;
         }
 
@@ -725,8 +727,8 @@ public:
             shape,
             jolt_position(desc.position),
             jolt_quaternion(desc.orientation),
-            dynamic ? JPH::EMotionType::Dynamic : JPH::EMotionType::Static,
-            dynamic ? object_layers::dynamic_body : object_layers::static_body
+            dynamic ? JPH::EMotionType::Dynamic : (kinematic ? JPH::EMotionType::Kinematic : JPH::EMotionType::Static),
+            moving ? object_layers::dynamic_body : object_layers::static_body
         };
         body_settings.mFriction = material != nullptr && material->friction.has_value()
             ? *material->friction
@@ -736,7 +738,7 @@ public:
             : desc.restitution;
         body_settings.mIsSensor = desc.trigger;
         body_settings.mUserData = desc.participant.value;
-        if (dynamic) {
+        if (moving) {
             body_settings.mLinearVelocity = jolt_vector(desc.linear_velocity);
             body_settings.mAngularVelocity = jolt_vector(desc.angular_velocity);
         }
@@ -744,7 +746,7 @@ public:
         auto& body_interface = physics_system_.GetBodyInterface();
         const JPH::BodyID body_id = body_interface.CreateAndAddBody(
             body_settings,
-            dynamic ? JPH::EActivation::Activate : JPH::EActivation::DontActivate
+            moving ? JPH::EActivation::Activate : JPH::EActivation::DontActivate
         );
         if (body_id.IsInvalid()) {
             return false;

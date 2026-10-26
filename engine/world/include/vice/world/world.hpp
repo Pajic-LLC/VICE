@@ -82,6 +82,10 @@ public:
     bool clear_reflection_probe(EntityId entity);
     [[nodiscard]] std::optional<ReflectionProbe> reflection_probe(EntityId entity) const noexcept;
 
+    bool set_rigid_box(EntityId entity, const RigidBox& box);
+    bool clear_rigid_box(EntityId entity);
+    [[nodiscard]] std::optional<RigidBox> rigid_box(EntityId entity) const noexcept;
+
     [[nodiscard]] std::optional<SpatialState> spatial_state(EntityId entity) const noexcept;
     [[nodiscard]] std::optional<AuthoredTransform> authored_transform(EntityId entity) const noexcept;
     [[nodiscard]] std::optional<LocalPosition> local_position(EntityId entity) const noexcept;
@@ -99,6 +103,7 @@ private:
         std::optional<Camera> camera;
         std::optional<Light> light;
         std::optional<ReflectionProbe> reflection_probe;
+        std::optional<RigidBox> rigid_box;
         std::vector<ResourceReference> resource_references;
         std::uint32_t generation = 1;
         bool alive = false;

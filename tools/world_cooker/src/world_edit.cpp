@@ -1,4 +1,5 @@
 #include <vice/tools/world_edit.hpp>
+#include "rigid_box_source.hpp"
 
 #include <vice/platform/file.hpp>
 #include <vice/tools/world_cooker.hpp>
@@ -74,6 +75,15 @@ std::optional<Operation> read_operation(const std::string& name, std::istream& i
     } else if (name == "clear_transform") {
         SetEntityTransform op;
         if (read_id(input, op.entity)) return op;
+    } else if (name == "set_rigid_box" || name == "clear_rigid_box") {
+        SetRigidBox op;
+        if (!read_id(input, op.entity)) return std::nullopt;
+        if (name == "set_rigid_box") {
+            world::RigidBox body;
+            if (!world_cooker::read_rigid_box(input, body)) return std::nullopt;
+            op.body = body;
+        }
+        return op;
     } else if (name == "set_fidelity") {
         SetRegionFidelity op;
         if (read_unsigned(input, op.region.value) && read_fidelity(input, op.fidelity)) return op;

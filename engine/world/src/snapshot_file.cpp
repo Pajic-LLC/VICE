@@ -288,6 +288,17 @@ WorldSnapshotEncodeResult encode_world_snapshot(const WorldSnapshot& snapshot_da
             append_u32(payload, std::bit_cast<std::uint32_t>(entity.reflection_probe->priority));
             append_u8(payload, entity.reflection_probe->enabled ? 1U : 0U);
         }
+        append_u8(payload, entity.rigid_box.has_value() ? 1U : 0U);
+        if (entity.rigid_box) {
+            const auto& box = *entity.rigid_box;
+            append_u8(payload, static_cast<std::uint8_t>(box.motion));
+            for (const auto vector : {box.half_extents, box.linear_velocity, box.angular_velocity}) {
+                append_f32(payload, vector.x); append_f32(payload, vector.y); append_f32(payload, vector.z);
+            }
+            append_f32(payload, box.friction); append_f32(payload, box.restitution);
+            append_u8(payload, box.continuous ? 1U : 0U);
+            append_u8(payload, box.trigger ? 1U : 0U);
+        }
         append_u32(payload, static_cast<std::uint32_t>(entity.resource_references.size()));
         for (const auto reference : entity.resource_references) {
             append_u8(payload, static_cast<std::uint8_t>(reference.role));
@@ -562,6 +573,34 @@ WorldSnapshotDecodeResult decode_world_snapshot(const std::span<const std::byte>
             }
         }
 
+        if (version >= 7U) {
+            std::uint8_t present = 0;
+            if (!reader.read_u8(present) || present > 1U) {
+                result.diagnostics = "Invalid rigid box presence flag.";
+                return result;
+            }
+            if (present != 0U) {
+                RigidBox box;
+                std::uint8_t motion = 0, continuous = 0, trigger = 0;
+                if (!reader.read_u8(motion) ||
+                    !reader.read_f32(box.half_extents.x) || !reader.read_f32(box.half_extents.y) || !reader.read_f32(box.half_extents.z) ||
+                    !reader.read_f32(box.linear_velocity.x) || !reader.read_f32(box.linear_velocity.y) || !reader.read_f32(box.linear_velocity.z) ||
+                    !reader.read_f32(box.angular_velocity.x) || !reader.read_f32(box.angular_velocity.y) || !reader.read_f32(box.angular_velocity.z) ||
+                    !reader.read_f32(box.friction) || !reader.read_f32(box.restitution) ||
+                    !reader.read_u8(continuous) || !reader.read_u8(trigger)) {
+                    result.diagnostics = "World snapshot ended inside rigid box data.";
+                    return result;
+                }
+                box.motion = static_cast<RigidMotion>(motion);
+                box.continuous = continuous != 0U;
+                box.trigger = trigger != 0U;
+                if (continuous > 1U || trigger > 1U || !valid(box)) {
+                    result.diagnostics = "World snapshot contains invalid rigid box data.";
+                    return result;
+                }
+                entity.rigid_box = box;
+            }
+        }
         if (version >= 3U) {
             std::uint32_t reference_count = 0;
             if (!reader.read_u32(reference_count) ||

@@ -37,6 +37,7 @@ EntityId World::allocate(const PersistentId persistent_id) {
     slot.camera.reset();
     slot.light.reset();
     slot.reflection_probe.reset();
+    slot.rigid_box.reset();
     slot.resource_references.clear();
     slot.alive = true;
 
@@ -59,6 +60,7 @@ bool World::destroy_entity(const EntityId entity) {
     slot.camera.reset();
     slot.light.reset();
     slot.reflection_probe.reset();
+    slot.rigid_box.reset();
     slot.resource_references.clear();
     slot.alive = false;
 
@@ -277,6 +279,7 @@ bool World::clear_spatial_state(const EntityId entity) {
     slots_[entity.index].camera.reset();
     slots_[entity.index].light.reset();
     slots_[entity.index].reflection_probe.reset();
+    slots_[entity.index].rigid_box.reset();
     return true;
 }
 
@@ -302,6 +305,22 @@ bool World::set_local_position(const EntityId entity, const LocalPosition positi
 
     slot.spatial_state->global_position = *global;
     return true;
+}
+
+bool World::set_rigid_box(const EntityId entity, const RigidBox& box) {
+    if (!alive(entity) || !slots_[entity.index].spatial_state || !valid(box)) return false;
+    slots_[entity.index].rigid_box = box;
+    return true;
+}
+
+bool World::clear_rigid_box(const EntityId entity) {
+    if (!alive(entity)) return false;
+    slots_[entity.index].rigid_box.reset();
+    return true;
+}
+
+std::optional<RigidBox> World::rigid_box(const EntityId entity) const noexcept {
+    return alive(entity) ? slots_[entity.index].rigid_box : std::nullopt;
 }
 
 bool World::handoff_spatial(const EntityId entity, const RegionId target_region) {
