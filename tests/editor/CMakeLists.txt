@@ -74,6 +74,15 @@ if(TARGET vice_editor_project_build)
   add_test(NAME vice_editor_project_build_tests COMMAND vice_editor_project_build_tests)
 
   add_executable(
+    vice_editor_authored_world_tests
+    ../editor_authored_world_tests.cpp
+  )
+  target_link_libraries(vice_editor_authored_world_tests PRIVATE VICE::EditorProjectBuild)
+  target_compile_features(vice_editor_authored_world_tests PRIVATE cxx_std_23)
+  vice_enable_warnings(vice_editor_authored_world_tests)
+  add_test(NAME vice_editor_authored_world_tests COMMAND vice_editor_authored_world_tests)
+
+  add_executable(
     vice_editor_project_mesh_build_tests
     ../editor_project_mesh_build_tests.cpp
   )
