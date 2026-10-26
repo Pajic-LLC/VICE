@@ -5,7 +5,7 @@
 namespace vice::editor {
 
 ProjectMeshCookResult cook_project_meshes(const ProjectSession& session) {
-    return dev::cook_project_meshes(project::Workspace{
+    return tools::cook_project_meshes(project::Workspace{
         .manifest = session.manifest(),
         .manifest_path = session.manifest_path(),
         .asset_root = session.asset_root(),
