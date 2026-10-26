@@ -82,9 +82,33 @@ if(TARGET vice_project_workflow)
 endif()
 
 if(TARGET vice_dev_cli)
+  add_executable(vice_dev_cli_runtime_host dev_cli_runtime_host.cpp)
+  target_compile_features(vice_dev_cli_runtime_host PRIVATE cxx_std_23)
+  vice_enable_warnings(vice_dev_cli_runtime_host)
+
   add_executable(vice_dev_cli_tests dev_cli_tests.cpp)
   target_link_libraries(vice_dev_cli_tests PRIVATE VICE::DevCLI)
+  add_dependencies(vice_dev_cli_tests vice_dev_cli_runtime_host)
+  target_compile_definitions(
+    vice_dev_cli_tests
+    PRIVATE
+      VICE_DEV_CLI_TEST_RUNTIME_HOST="$<TARGET_FILE:vice_dev_cli_runtime_host>"
+  )
   target_compile_features(vice_dev_cli_tests PRIVATE cxx_std_23)
   vice_enable_warnings(vice_dev_cli_tests)
   add_test(NAME vice_dev_cli_tests COMMAND vice_dev_cli_tests)
+
+  add_executable(vice_dev_cli_runtime_session_tests dev_cli_runtime_session_tests.cpp)
+  target_link_libraries(
+    vice_dev_cli_runtime_session_tests
+    PRIVATE
+      VICE::DevCLI
+      VICE::RuntimeDevSession
+  )
+  target_compile_features(vice_dev_cli_runtime_session_tests PRIVATE cxx_std_23)
+  vice_enable_warnings(vice_dev_cli_runtime_session_tests)
+  add_test(
+    NAME vice_dev_cli_runtime_session_tests
+    COMMAND vice_dev_cli_runtime_session_tests
+  )
 endif()

@@ -1,6 +1,9 @@
 #include <vice/dev/cli.hpp>
 
 #include <vice/project/project.hpp>
+#include <vice/project/workspace.hpp>
+#include <vice/runtime/dev_session.hpp>
+#include <vice/tools/project_workflow.hpp>
 #include <vice/tools/world_cooker.hpp>
 #include <vice/world/snapshot.hpp>
 
@@ -234,6 +237,189 @@ void append_double(std::string& output, const double value) {
     };
 }
 
+[[nodiscard]] std::filesystem::path project_cache_base(
+    const std::filesystem::path& manifest_path
+) {
+    auto parent = manifest_path.parent_path();
+    if (parent.empty()) parent = ".";
+    return (parent / ".vice" / "cache").lexically_normal();
+}
+
+[[nodiscard]] tools::ProjectRuntimeSession project_runtime_session(
+    const std::filesystem::path& manifest_path,
+    const CommandEnvironment& environment
+) {
+    auto root = environment.runtime_session_root;
+    if (root.empty()) {
+        root = (project_cache_base(manifest_path).parent_path() / "runtime-sessions").lexically_normal();
+    }
+    auto id = environment.runtime_session_id;
+    if (id.empty()) id = world::PersistentId::random().to_string();
+    return tools::ProjectRuntimeSession{
+        .id = std::move(id),
+        .root = std::move(root),
+    };
+}
+
+void append_optional_path(
+    std::string& data,
+    const std::filesystem::path& path
+) {
+    if (path.empty()) {
+        data += "null";
+        return;
+    }
+    append_json_string(data, normalized_path(path));
+}
+
+[[nodiscard]] std::string project_build_data(
+    const std::string_view state,
+    const project::Workspace& workspace,
+    const tools::ProjectBuildResult& build,
+    const std::optional<tools::ProjectRuntimeSession>& runtime_session = std::nullopt
+) {
+    std::error_code error;
+    const auto game_source = (
+        workspace.manifest_path.parent_path() / "game" / "game.cpp"
+    ).lexically_normal();
+    const bool source_present = std::filesystem::is_regular_file(game_source, error) && !error;
+
+    std::string data;
+    data.reserve(1792U);
+    data += "{\"state\":";
+    append_json_string(data, state);
+    data += ",\"project_id\":";
+    append_json_string(data, workspace.manifest.id.to_string());
+    data += ",\"game_target\":";
+    append_json_string(data, workspace.manifest.game_target);
+    data += ",\"manifest_path\":";
+    append_json_string(data, normalized_path(workspace.manifest_path));
+    data += ",\"startup_world\":";
+    append_json_string(data, normalized_path(workspace.startup_world_source));
+    data += ",\"cooked_startup_world\":";
+    append_json_string(data, normalized_path(workspace.cooked_startup_world));
+    data += ",\"counts\":{\"entities\":" + std::to_string(build.assets.entity_count);
+    data += ",\"regions\":" + std::to_string(build.assets.region_count);
+    data += ",\"meshes\":" + std::to_string(build.assets.mesh_count);
+    data += ",\"textures\":" + std::to_string(build.assets.texture_count);
+    data += ",\"environments\":" + std::to_string(build.assets.environment_count);
+    data += ",\"materials\":" + std::to_string(build.assets.material_count) + "}";
+    data += ",\"game_module\":{\"source_present\":";
+    data += source_present ? "true" : "false";
+    data += ",\"source\":";
+    if (source_present) append_json_string(data, normalized_path(game_source)); else data += "null";
+    data += ",\"output\":";
+    append_optional_path(data, build.game_module);
+    data += "}";
+    data += ",\"game_output_root\":";
+    append_json_string(data, normalized_path(workspace.game_output_root));
+    data += ",\"game_executable\":";
+    append_optional_path(data, build.game_executable);
+    data += ",\"runtime_manifest\":";
+    append_optional_path(data, build.runtime_manifest);
+    data += ",\"runtime_content_root\":";
+    append_optional_path(data, build.runtime_content_root);
+    data += ",\"runtime_session\":";
+    if (!runtime_session.has_value()) {
+        data += "null";
+    } else {
+        data += "{\"id\":";
+        append_json_string(data, runtime_session->id);
+        data += ",\"root\":";
+        append_json_string(data, normalized_path(runtime_session->root));
+        data += ",\"path\":";
+        append_json_string(data, normalized_path(runtime_session->root / runtime_session->id));
+        data.push_back('}');
+    }
+    data.push_back('}');
+    return data;
+}
+
+[[nodiscard]] CommandResult project_workflow_command(
+    const std::string_view command,
+    const std::filesystem::path& manifest_path,
+    const bool launch,
+    const CommandEnvironment& environment
+) {
+    std::error_code error;
+    if (!std::filesystem::is_regular_file(manifest_path, error)) {
+        return failure(
+            exit_unavailable,
+            command,
+            "Project manifest is not available at `" + manifest_path.generic_string() + "`."
+        );
+    }
+
+    const auto opened = project::open_workspace(manifest_path, project_cache_base(manifest_path));
+    if (!opened) {
+        return failure(exit_validation, command, opened.diagnostics);
+    }
+    const auto& workspace = *opened.workspace;
+
+    if (environment.runtime_host_executable.empty()) {
+        return failure(
+            exit_unavailable,
+            command,
+            "VICE runtime host is not available in this developer build."
+        );
+    }
+
+    if (!launch) {
+        const auto built = tools::build_project(workspace, environment.runtime_host_executable);
+        const auto state = built ? "built" : "build_failed";
+        std::vector<std::string> diagnostics;
+        if (!built.diagnostics.empty()) diagnostics.push_back(built.diagnostics);
+        return CommandResult{
+            .exit_code = built ? exit_success : exit_build,
+            .json = response_json(command, static_cast<bool>(built), diagnostics,
+                project_build_data(state, workspace, built)),
+        };
+    }
+
+    const auto requested_session = project_runtime_session(manifest_path, environment);
+    const auto run = tools::run_project_with_session(
+        workspace,
+        environment.runtime_host_executable,
+        requested_session
+    );
+    if (!run.build) {
+        std::vector<std::string> diagnostics;
+        if (!run.diagnostics.empty()) diagnostics.push_back(run.diagnostics);
+        return CommandResult{
+            .exit_code = exit_build,
+            .json = response_json(
+                command,
+                false,
+                diagnostics,
+                project_build_data("build_failed", workspace, run.build)
+            ),
+        };
+    }
+    if (!run.launched) {
+        std::vector<std::string> diagnostics;
+        if (!run.diagnostics.empty()) diagnostics.push_back(run.diagnostics);
+        return CommandResult{
+            .exit_code = exit_launch,
+            .json = response_json(
+                command,
+                false,
+                diagnostics,
+                project_build_data("launch_failed", workspace, run.build)
+            ),
+        };
+    }
+
+    return CommandResult{
+        .exit_code = exit_success,
+        .json = response_json(
+            command,
+            true,
+            {},
+            project_build_data("launched", workspace, run.build, run.runtime_session)
+        ),
+    };
+}
+
 void append_component_types(std::string& data, const world::WorldSnapshot& snapshot) {
     std::vector<const world::ComponentTypeDesc*> values;
     values.reserve(snapshot.component_types.size());
@@ -461,41 +647,135 @@ void append_relations(std::string& data, const world::WorldSnapshot& snapshot) {
     };
 }
 
+[[nodiscard]] std::string_view runtime_snapshot_state_name(
+    const runtime::RuntimeDevSnapshotState state
+) noexcept {
+    switch (state) {
+    case runtime::RuntimeDevSnapshotState::available: return "available";
+    case runtime::RuntimeDevSnapshotState::disconnected: return "disconnected";
+    case runtime::RuntimeDevSnapshotState::invalid: return "invalid";
+    case runtime::RuntimeDevSnapshotState::timed_out: return "timed_out";
+    }
+    return "invalid";
+}
+
+[[nodiscard]] CommandResult inspect_runtime_session(
+    const std::string_view command,
+    const std::filesystem::path& session_path
+) {
+    const auto normalized = session_path.lexically_normal();
+    const auto id = normalized.filename().string();
+    const auto root = normalized.parent_path();
+    const runtime::RuntimeDevSession session{
+        .id = id,
+        .root = root,
+    };
+    if (root.empty() || !runtime::valid_runtime_dev_session_id(id)) {
+        return failure(exit_validation, command, "Runtime session path is invalid.");
+    }
+
+    const auto snapshot = runtime::read_latest_runtime_dev_snapshot(session);
+    std::string data;
+    data.reserve(256U + snapshot.payload.size());
+    data += "{\"state\":";
+    append_json_string(data, runtime_snapshot_state_name(snapshot.state));
+    data += ",\"session_id\":";
+    append_json_string(data, session.id);
+    data += ",\"session_path\":";
+    append_json_string(data, normalized_path(runtime::runtime_dev_session_path(session)));
+    data += ",\"generation\":" + std::to_string(snapshot.generation);
+    data += ",\"payload\":";
+    if (snapshot.payload.empty()) data += "null"; else append_json_string(data, snapshot.payload);
+    data.push_back('}');
+
+    if (snapshot.state == runtime::RuntimeDevSnapshotState::available) {
+        return CommandResult{
+            .exit_code = exit_success,
+            .json = response_json(command, true, {}, data),
+        };
+    }
+
+    std::vector<std::string> diagnostics;
+    if (!snapshot.diagnostics.empty()) diagnostics.push_back(snapshot.diagnostics);
+    return CommandResult{
+        .exit_code = snapshot.state == runtime::RuntimeDevSnapshotState::invalid
+            ? exit_validation
+            : exit_unavailable,
+        .json = response_json(command, false, diagnostics, data),
+    };
+}
+
 } // namespace
 
-CommandResult execute(const std::span<const std::string_view> arguments) {
+CommandEnvironment configured_command_environment() {
+    CommandEnvironment environment;
+#if defined(VICE_DEV_RUNTIME_HOST_EXECUTABLE)
+    environment.runtime_host_executable = std::filesystem::path{VICE_DEV_RUNTIME_HOST_EXECUTABLE};
+#endif
+    return environment;
+}
+
+CommandResult execute(
+    const std::span<const std::string_view> arguments,
+    const CommandEnvironment& environment
+) {
     if (arguments.size() != 3U) {
         return failure(
             exit_usage,
             "usage",
-            "Usage: vice <project|world> <inspect|validate> <path>"
+            "Usage: vice <project|world|runtime> <inspect|validate|build|run> <path>"
         );
     }
 
     const auto domain = arguments[0];
     const auto operation = arguments[1];
     const std::string command = std::string{domain} + "." + std::string{operation};
-    if (operation != "inspect" && operation != "validate") {
+    const std::filesystem::path path{std::string{arguments[2]}};
+
+    if (domain == "project") {
+        if (operation == "inspect" || operation == "validate") {
+            return inspect_project(command, path, operation == "validate");
+        }
+        if (operation == "build") {
+            return project_workflow_command(command, path, false, environment);
+        }
+        if (operation == "run") {
+            return project_workflow_command(command, path, true, environment);
+        }
         return failure(
             exit_usage,
             command,
-            "Operation must be `inspect` or `validate`."
+            "Project operation must be `inspect`, `validate`, `build`, or `run`."
         );
     }
 
-    const std::filesystem::path path{std::string{arguments[2]}};
-    if (domain == "project") {
-        return inspect_project(command, path, operation == "validate");
-    }
     if (domain == "world") {
+        if (operation != "inspect" && operation != "validate") {
+            return failure(
+                exit_usage,
+                command,
+                "World operation must be `inspect` or `validate`."
+            );
+        }
         return inspect_world(command, path);
+    }
+
+    if (domain == "runtime") {
+        if (operation != "inspect") {
+            return failure(exit_usage, command, "Runtime operation must be `inspect`.");
+        }
+        return inspect_runtime_session(command, path);
     }
 
     return failure(
         exit_usage,
         command,
-        "Domain must be `project` or `world`."
+        "Domain must be `project`, `world`, or `runtime`."
     );
+}
+
+CommandResult execute(const std::span<const std::string_view> arguments) {
+    return execute(arguments, configured_command_environment());
 }
 
 } // namespace vice::dev

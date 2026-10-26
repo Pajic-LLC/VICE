@@ -51,3 +51,12 @@ endif()
 # final project cooker configured by the root build, so configure the workflow
 # only after every neutral cooker target is available.
 add_subdirectory(../project_workflow ${CMAKE_CURRENT_BINARY_DIR}/project_workflow)
+
+if(VICE_BUILD_TOOLS AND NOT VICE_BUILD_PLAYER)
+  # Inspect/validate remain available in tool-only builds. Build/run return a
+  # structured unavailable-runtime result because no player target is configured.
+  add_subdirectory(
+    "${PROJECT_SOURCE_DIR}/tools/vice_cli"
+    "${CMAKE_BINARY_DIR}/tools/vice_cli"
+  )
+endif()

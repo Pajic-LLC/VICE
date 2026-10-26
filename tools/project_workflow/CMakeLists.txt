@@ -3,6 +3,7 @@ add_library(
   STATIC
     src/project_workflow.cpp
     src/project_build.cpp
+    src/project_session.cpp
 )
 add_library(VICE::ProjectWorkflow ALIAS vice_project_workflow)
 
@@ -19,6 +20,7 @@ target_link_libraries(
   PRIVATE
     VICE::Platform
     VICE::Runtime
+    VICE::RuntimeDevSession
     VICE::World
     VICE::WorldCooker
     VICE::MeshCooker
