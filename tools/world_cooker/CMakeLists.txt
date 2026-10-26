@@ -2,6 +2,7 @@ add_library(
   vice_world_cooker_lib
   STATIC
     src/world_cooker.cpp
+    src/world_source_serializer.cpp
 )
 add_library(VICE::WorldCooker ALIAS vice_world_cooker_lib)
 
