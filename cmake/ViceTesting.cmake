@@ -1,0 +1,32 @@
+# VICE test executables use the same vice_*_tests name as their CTest entry.
+function(vice_finalize_tests directory)
+  get_property(targets DIRECTORY "${directory}" PROPERTY BUILDSYSTEM_TARGETS)
+  get_property(tests DIRECTORY "${directory}" PROPERTY TESTS)
+  foreach(target IN LISTS targets)
+    if(NOT target MATCHES "^vice_.*_tests$")
+      continue()
+    endif()
+    get_target_property(type "${target}" TYPE)
+    if(NOT type STREQUAL "EXECUTABLE")
+      continue()
+    endif()
+    if(NOT target IN_LIST tests)
+      message(FATAL_ERROR "VICE test executable ${target} has no matching CTest entry.")
+    endif()
+
+    # Release engine libraries retain their normal flags. Only tests need assert
+    # expressions (including setup in older tests) to execute in every config.
+    if(MSVC)
+      target_compile_options("${target}" PRIVATE /UNDEBUG)
+    else()
+      target_compile_options("${target}" PRIVATE -UNDEBUG)
+    endif()
+    target_sources("${target}" PRIVATE "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/TestAssertions.cpp")
+    set_property(GLOBAL APPEND PROPERTY VICE_EXPECTED_TESTS "${target}")
+  endforeach()
+
+  get_property(children DIRECTORY "${directory}" PROPERTY SUBDIRECTORIES)
+  foreach(child IN LISTS children)
+    vice_finalize_tests("${child}")
+  endforeach()
+endfunction()

@@ -30,6 +30,12 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 include(ViceCompiler)
 
+if(VICE_BUILD_TESTS)
+  include(CTest)
+  enable_testing()
+  include(ViceTesting)
+endif()
+
 add_subdirectory(engine/core)
 add_subdirectory(engine/math)
 add_subdirectory(engine/jobs)
@@ -374,8 +380,6 @@ if(VICE_BUILD_EDITOR)
 endif()
 
 if(VICE_BUILD_TESTS)
-  include(CTest)
-  enable_testing()
   add_subdirectory(tests)
   add_subdirectory(tests/project)
   add_subdirectory(tests/runtime)
@@ -402,4 +406,10 @@ if(VICE_BUILD_TESTS)
   if(VICE_BUILD_EDITOR)
     add_subdirectory(tests/editor)
   endif()
+  vice_finalize_tests("${CMAKE_CURRENT_SOURCE_DIR}")
+  get_property(_vice_expected_tests GLOBAL PROPERTY VICE_EXPECTED_TESTS)
+  file(GENERATE
+    OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/vice_expected_tests.cmake"
+    CONTENT "set(VICE_EXPECTED_TESTS \"${_vice_expected_tests}\")\n"
+  )
 endif()
