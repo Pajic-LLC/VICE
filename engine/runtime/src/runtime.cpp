@@ -211,7 +211,8 @@ EventDecision classify_event(
 int run_native_game(
     LoadedProject& runtime_project,
     GameModule& module,
-    const ApplicationConfig& config
+    const ApplicationConfig& config,
+    RuntimeObserver* const observer
 ) {
     using core::LogLevel;
     using core::log;
@@ -300,6 +301,21 @@ int run_native_game(
         return 1;
     }
 
+    std::uint64_t frame_index = 0U;
+    double last_frame_seconds = 0.0;
+    const auto observe = [&](const RuntimeExecutionState execution_state, const double frame_seconds) {
+        if (observer == nullptr) return;
+        observer->on_runtime_observation(RuntimeFrameObservation{
+            .execution_state = execution_state,
+            .frame_index = frame_index,
+            .frame_seconds = frame_seconds,
+            .backend = render_device->backend(),
+            .metrics = metrics,
+            .scene_renderer = &scene_renderer,
+        });
+    };
+    observe(RuntimeExecutionState::starting, 0.0);
+
     core::FrameClock clock;
     int exit_code = 0;
 
@@ -329,6 +345,7 @@ int run_native_game(
 
         clock.tick();
         const double delta_seconds = std::min(clock.delta_seconds(), 0.25);
+        last_frame_seconds = delta_seconds;
         lifecycle.update(delta_seconds);
 
         render::Color clear_color = config.clear_color;
@@ -345,9 +362,12 @@ int run_native_game(
             exit_code = 1;
         }
 
+        ++frame_index;
+        observe(RuntimeExecutionState::running, delta_seconds);
         std::this_thread::sleep_for(std::chrono::milliseconds{1});
     }
 
+    observe(RuntimeExecutionState::stopping, last_frame_seconds);
     (void)render_device->wait_idle();
     lifecycle.stop();
     return exit_code;
