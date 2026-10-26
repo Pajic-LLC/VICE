@@ -2,6 +2,7 @@ add_library(
   vice_project_workflow
   STATIC
     src/project_workflow.cpp
+    src/project_build.cpp
 )
 add_library(VICE::ProjectWorkflow ALIAS vice_project_workflow)
 
@@ -16,6 +17,8 @@ target_link_libraries(
   PUBLIC
     VICE::Project
   PRIVATE
+    VICE::Platform
+    VICE::Runtime
     VICE::World
     VICE::WorldCooker
     VICE::MeshCooker
@@ -24,4 +27,11 @@ target_link_libraries(
     VICE::RenderMaterialCooker
 )
 target_compile_features(vice_project_workflow PUBLIC cxx_std_23)
+target_compile_definitions(
+  vice_project_workflow
+  PRIVATE
+    VICE_PROJECT_WORKFLOW_CMAKE_EXECUTABLE="${CMAKE_COMMAND}"
+    VICE_PROJECT_WORKFLOW_GAME_MODULE_CMAKE_SOURCE="${PROJECT_SOURCE_DIR}/cmake/game_module"
+    VICE_PROJECT_WORKFLOW_GAME_MODULE_INCLUDE="${PROJECT_SOURCE_DIR}/engine/runtime/include"
+)
 vice_enable_warnings(vice_project_workflow)
