@@ -3,6 +3,7 @@
 #include <vice/tools/world_authoring.hpp>
 
 #include <cstddef>
+#include <cstdint>
 #include <filesystem>
 #include <optional>
 #include <string>
