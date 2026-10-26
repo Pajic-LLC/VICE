@@ -8,6 +8,10 @@
 #include <string>
 #include <string_view>
 
+#ifndef VICE_DEV_CLI_TEST_RUNTIME_HOST
+#error "VICE dev CLI tests require a launchable test runtime host"
+#endif
+
 namespace {
 
 void require(const bool condition, const std::string_view message) {
@@ -125,14 +129,8 @@ int main() {
     const auto world_inspect_again = execute("world", "inspect", world_path);
     require(world_inspect_again.json == world_inspect.json, "deterministic World JSON");
 
-#ifdef _WIN32
-    const auto fake_runtime = root / "bin" / "vice_player.exe";
-#else
-    const auto fake_runtime = root / "bin" / "vice_player";
-#endif
-    write_text(fake_runtime, "not a runnable VICE host\n");
     vice::dev::CommandEnvironment workflow_environment;
-    workflow_environment.runtime_host_executable = fake_runtime;
+    workflow_environment.runtime_host_executable = std::filesystem::path{VICE_DEV_CLI_TEST_RUNTIME_HOST};
 
     const auto project_build = execute("project", "build", project_path, workflow_environment);
     require(project_build.exit_code == vice::dev::exit_success, "project build exit status");
@@ -144,11 +142,25 @@ int main() {
     require(project_build.json.find("\"source_present\":false") != std::string::npos, "build optional game module state");
     require(project_build.json.find("vice-agent-game") != std::string::npos, "build game target");
 
-    const auto project_run = execute("project", "run", project_path, workflow_environment);
-    require(project_run.exit_code == vice::dev::exit_launch, "project run distinguishes launch failure");
-    require(project_run.json.find("\"command\":\"project.run\"") != std::string::npos, "project run command");
-    require(project_run.json.find("\"state\":\"launch_failed\"") != std::string::npos, "project launch failure state");
-    require(project_run.json.find("\"ok\":false") != std::string::npos, "launch failure is not success");
+    const auto launched_run = execute("project", "run", project_path, workflow_environment);
+    require(launched_run.exit_code == vice::dev::exit_success, "project run launch exit status");
+    require(launched_run.json.find("\"command\":\"project.run\"") != std::string::npos, "project run command");
+    require(launched_run.json.find("\"state\":\"launched\"") != std::string::npos, "project launch success state");
+    require(launched_run.json.find("\"ok\":true") != std::string::npos, "successful process creation is success");
+
+#ifdef _WIN32
+    const auto fake_runtime = root / "bin" / "invalid_runtime.exe";
+#else
+    const auto fake_runtime = root / "bin" / "invalid_runtime";
+#endif
+    write_text(fake_runtime, "not a runnable VICE host\n");
+    vice::dev::CommandEnvironment failing_launch_environment;
+    failing_launch_environment.runtime_host_executable = fake_runtime;
+
+    const auto failed_launch = execute("project", "run", project_path, failing_launch_environment);
+    require(failed_launch.exit_code == vice::dev::exit_launch, "project run distinguishes launch failure");
+    require(failed_launch.json.find("\"state\":\"launch_failed\"") != std::string::npos, "project launch failure state");
+    require(failed_launch.json.find("\"ok\":false") != std::string::npos, "launch failure is not success");
 
     const vice::dev::CommandEnvironment unavailable_environment;
     const auto unavailable_build = execute("project", "build", project_path, unavailable_environment);
