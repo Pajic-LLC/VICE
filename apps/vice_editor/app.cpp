@@ -209,15 +209,14 @@ constexpr std::string_view cube_id_text = "10000000-0000-4000-8000-000000000002"
         vice::core::log(
             vice::core::LogLevel::info,
             legacy
-                ? "VICE Editor restored the legacy saved World. The next save will scope it to this project."
-                : "VICE Editor restored the project World."
+                ? "VICE Editor restored the legacy saved World. The next save must use an authored project path."
+                : "VICE Editor restored a development working World. The next save must use an authored project path."
         );
         return true;
     };
 
     if (const auto saved = try_saved_world(save_path, false); saved.has_value()) return *saved;
     if (const auto legacy = try_saved_world(legacy_save_path, true); legacy.has_value()) return *legacy;
-
     if (!cooked_startup_world.empty()) {
         std::error_code error;
         const bool exists = std::filesystem::exists(cooked_startup_world, error);
@@ -230,7 +229,10 @@ constexpr std::string_view cube_id_text = "10000000-0000-4000-8000-000000000002"
         }
         if (exists) {
             if (!restore_world_from_file(world, cooked_startup_world, "the project startup World")) return false;
-            vice::core::log(vice::core::LogLevel::info, "VICE Editor loaded the project startup World.");
+            vice::core::log(
+                vice::core::LogLevel::warning,
+                "VICE Editor opened a cooked development fallback. Save As is required before it can become authored project truth."
+            );
             return true;
         }
     }
@@ -254,14 +256,14 @@ constexpr std::string_view cube_id_text = "10000000-0000-4000-8000-000000000002"
         }
         vice::core::log(
             vice::core::LogLevel::warning,
-            "VICE Editor is using the development World fallback because the startup World is not cooked."
+            "VICE Editor is using the development World fallback because the authored startup World could not be opened."
         );
         return true;
     }
 
     vice::core::log(
         vice::core::LogLevel::error,
-        "VICE Editor could not open the project because its startup World is not available in the cooked asset cache."
+        "VICE Editor could not open the project startup World."
     );
     return false;
 }
@@ -426,16 +428,33 @@ int main(const int argc, char** argv) {
         }
 
         vice::editor::WorldDocument document;
+        std::string authored_diagnostics;
+        const bool opened_authored = document.open_authored(
+            startup_world_source,
+            vice::editor::DirtyReplacePolicy::discard,
+            &authored_diagnostics
+        );
         auto& world = document.world();
-        if (!load_editor_world(
-                world,
-                default_save_path,
-                using_development_project ? editor_legacy_save_path() : std::filesystem::path{},
-                project_session->cooked_startup_world(),
-                using_development_project,
-                newly_created_project
-            )) {
-            return 1;
+        if (!opened_authored) {
+            if (!using_development_project || !load_editor_world(
+                    world,
+                    default_save_path,
+                    editor_legacy_save_path(),
+                    project_session->cooked_startup_world(),
+                    true,
+                    newly_created_project
+                )) {
+                log(
+                    LogLevel::error,
+                    "VICE Editor could not open the authored startup World: " + authored_diagnostics
+                );
+                return 1;
+            }
+            log(
+                LogLevel::warning,
+                "VICE Editor opened a development fallback because the authored startup World could not be loaded: " +
+                    authored_diagnostics
+            );
         }
         document.mark_clean();
         bool document_intrinsic_dirty = false;
@@ -516,21 +535,33 @@ int main(const int argc, char** argv) {
 
         const auto save_current_world = [&](const std::optional<std::filesystem::path>& explicit_path) {
             std::string diagnostics;
-            const bool saved = explicit_path.has_value()
-                ? document.save_as(*explicit_path, &diagnostics)
-                : (document.has_path()
-                    ? document.save(&diagnostics)
-                    : document.save_as(default_save_path, &diagnostics));
+            bool saved = false;
+            if (explicit_path.has_value()) {
+                const auto resolved = vice::editor::resolve_project_authored_world_path(
+                    *project_session,
+                    *explicit_path,
+                    false,
+                    &diagnostics
+                );
+                saved = resolved.has_value() && document.save_authored_as(*resolved, &diagnostics);
+            } else if (document.authored()) {
+                saved = document.save_authored(&diagnostics);
+            } else {
+                diagnostics = "World has no authored save path. Use Save As inside the project asset root.";
+            }
             if (!saved) {
                 workflow_diagnostics = diagnostics;
-                log(LogLevel::error, "VICE Editor could not save the World: " + diagnostics);
+                log(LogLevel::error, "VICE Editor could not save the authored World: " + diagnostics);
                 return false;
             }
             history.mark_saved();
             document_intrinsic_dirty = false;
             document.mark_clean();
             workflow_diagnostics.clear();
-            log(LogLevel::info, "VICE Editor saved the World for project " + project.name + ".");
+            if (!assets.refresh(asset_source_root, cooked_asset_root)) {
+                log(LogLevel::warning, "VICE Editor asset index: " + assets.diagnostics());
+            }
+            log(LogLevel::info, "VICE Editor saved authored World " + document.path().generic_string() + ".");
             return true;
         };
 
@@ -568,7 +599,7 @@ int main(const int argc, char** argv) {
             document_intrinsic_dirty = true;
             sync_document_dirty();
             workflow_diagnostics.clear();
-            log(LogLevel::info, "VICE Editor created a new World document.");
+            log(LogLevel::info, "VICE Editor created a new authored World document.");
             return true;
         };
 
@@ -577,7 +608,13 @@ int main(const int argc, char** argv) {
             const vice::editor::DirtyReplacePolicy policy
         ) {
             std::string diagnostics;
-            if (!document.open(path, policy, &diagnostics)) {
+            const auto resolved = vice::editor::resolve_project_authored_world_path(
+                *project_session,
+                path,
+                true,
+                &diagnostics
+            );
+            if (!resolved.has_value() || !document.open_authored(*resolved, policy, &diagnostics)) {
                 workflow_diagnostics = diagnostics;
                 return false;
             }
@@ -585,7 +622,7 @@ int main(const int argc, char** argv) {
             document_intrinsic_dirty = false;
             document.mark_clean();
             workflow_diagnostics.clear();
-            log(LogLevel::info, "VICE Editor opened World document " + document.path().generic_string() + ".");
+            log(LogLevel::info, "VICE Editor opened authored World " + document.path().generic_string() + ".");
             return true;
         };
 
@@ -753,39 +790,49 @@ int main(const int argc, char** argv) {
             }
 
             if (!show_start_surface && project_workflow_ui.consume_build_project_request()) {
-                const auto result = vice::editor::build_project(*project_session);
-                if (result) {
-                    workflow_diagnostics.clear();
-                    if (!assets.refresh(asset_source_root, cooked_asset_root)) {
-                        log(LogLevel::warning, "VICE Editor asset index: " + assets.diagnostics());
-                    }
-                    log(
-                        LogLevel::info,
-                        "VICE Editor built project " + project.name + " · " +
-                            result.cooked_startup_world.generic_string()
-                    );
+                sync_document_dirty();
+                if (document.dirty()) {
+                    workflow_diagnostics = "Save authored World changes before building the project.";
                 } else {
-                    workflow_diagnostics = result.diagnostics;
-                    log(LogLevel::error, "VICE Editor could not build the project: " + result.diagnostics);
-                }
-            }
-
-            if (!show_start_surface && project_workflow_ui.consume_run_project_request()) {
-                const auto player_executable = editor_player_executable();
-                if (player_executable.empty()) {
-                    workflow_diagnostics = "VICE Player is not available in this editor build.";
-                    log(LogLevel::error, workflow_diagnostics);
-                } else {
-                    const auto result = vice::editor::run_project(*project_session, player_executable);
+                    const auto result = vice::editor::build_project(*project_session);
                     if (result) {
                         workflow_diagnostics.clear();
                         if (!assets.refresh(asset_source_root, cooked_asset_root)) {
                             log(LogLevel::warning, "VICE Editor asset index: " + assets.diagnostics());
                         }
-                        log(LogLevel::info, "VICE Editor launched project " + project.name + ".");
+                        log(
+                            LogLevel::info,
+                            "VICE Editor built project " + project.name + " · " +
+                                result.cooked_startup_world.generic_string()
+                        );
                     } else {
                         workflow_diagnostics = result.diagnostics;
-                        log(LogLevel::error, "VICE Editor could not run the project: " + result.diagnostics);
+                        log(LogLevel::error, "VICE Editor could not build the project: " + result.diagnostics);
+                    }
+                }
+            }
+
+            if (!show_start_surface && project_workflow_ui.consume_run_project_request()) {
+                sync_document_dirty();
+                if (document.dirty()) {
+                    workflow_diagnostics = "Save authored World changes before running the project.";
+                } else {
+                    const auto player_executable = editor_player_executable();
+                    if (player_executable.empty()) {
+                        workflow_diagnostics = "VICE Player is not available in this editor build.";
+                        log(LogLevel::error, workflow_diagnostics);
+                    } else {
+                        const auto result = vice::editor::run_project(*project_session, player_executable);
+                        if (result) {
+                            workflow_diagnostics.clear();
+                            if (!assets.refresh(asset_source_root, cooked_asset_root)) {
+                                log(LogLevel::warning, "VICE Editor asset index: " + assets.diagnostics());
+                            }
+                            log(LogLevel::info, "VICE Editor launched project " + project.name + ".");
+                        } else {
+                            workflow_diagnostics = result.diagnostics;
+                            log(LogLevel::error, "VICE Editor could not run the project: " + result.diagnostics);
+                        }
                     }
                 }
             }

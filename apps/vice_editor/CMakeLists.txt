@@ -43,6 +43,7 @@ if(TARGET vice_world_cooker_lib AND
   add_library(
     vice_editor_project_build
     STATIC
+      src/authored_world_document.cpp
       src/project_build.cpp
       src/project_environment_cook.cpp
       src/project_material_cook.cpp
