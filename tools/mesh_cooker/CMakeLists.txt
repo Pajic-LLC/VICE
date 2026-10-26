@@ -3,6 +3,7 @@ add_library(
   STATIC
     src/mesh_cooker.cpp
     src/mesh_cooker_v7.cpp
+    src/project_mesh_cook.cpp
 )
 add_library(VICE::MeshCooker ALIAS vice_mesh_cooker_lib)
 
@@ -20,6 +21,7 @@ target_include_directories(
 target_link_libraries(
   vice_mesh_cooker_lib
   PUBLIC
+    VICE::Project
     VICE::Render
   PRIVATE
     VICE::World
