@@ -1,5 +1,5 @@
-#include <vice/dev/project_workspace.hpp>
 #include <vice/project/project.hpp>
+#include <vice/project/workspace.hpp>
 
 #include <cstdlib>
 #include <filesystem>
@@ -49,7 +49,7 @@ int main() {
     );
     write_text(startup_world, "vice-world-source 1\n");
 
-    const auto opened = vice::dev::open_project_workspace(manifest_path, cache_base);
+    const auto opened = vice::project::open_workspace(manifest_path, cache_base);
     require(static_cast<bool>(opened), "workspace opens");
     require(opened.diagnostics.empty(), "workspace diagnostics clear");
     const auto& workspace = *opened.workspace;
@@ -80,7 +80,7 @@ int main() {
         "game output uses authoritative resolver"
     );
 
-    const auto opened_again = vice::dev::open_project_workspace(manifest_path, cache_base);
+    const auto opened_again = vice::project::open_workspace(manifest_path, cache_base);
     require(static_cast<bool>(opened_again), "workspace reopens");
     require(opened_again.workspace->manifest.id == workspace.manifest.id, "stable project identity");
     require(opened_again.workspace->cooked_root == workspace.cooked_root, "deterministic cooked root");
@@ -96,11 +96,11 @@ int main() {
         "assets \"../assets\"\n"
         "startup_world \"worlds/main.vworld\"\n"
     );
-    const auto invalid = vice::dev::open_project_workspace(invalid_manifest, cache_base);
+    const auto invalid = vice::project::open_workspace(invalid_manifest, cache_base);
     require(!static_cast<bool>(invalid), "invalid project is rejected");
     require(!invalid.diagnostics.empty(), "invalid project has diagnostics");
 
-    const auto missing_cache = vice::dev::open_project_workspace(manifest_path, {});
+    const auto missing_cache = vice::project::open_workspace(manifest_path, {});
     require(!static_cast<bool>(missing_cache), "empty cooked-cache base is rejected");
     require(!missing_cache.diagnostics.empty(), "empty cooked-cache diagnostic");
 
