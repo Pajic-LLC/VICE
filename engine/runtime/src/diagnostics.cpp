@@ -23,6 +23,16 @@ RuntimeWorldDiagnostics summarize_runtime_world(const world::World& world) {
     return result;
 }
 
+RuntimeRendererDiagnostics runtime_renderer_diagnostics(
+    const RuntimeSceneRenderer* scene_renderer
+) noexcept {
+    RuntimeRendererDiagnostics result;
+    if (scene_renderer == nullptr) return result;
+    result.directional_shadow = scene_renderer->directional_shadow_telemetry();
+    result.ray_tracing = scene_renderer->ray_tracing_telemetry();
+    return result;
+}
+
 RuntimeDiagnosticsSnapshot sample_runtime_diagnostics(
     const double frame_seconds,
     const jobs::Scheduler& jobs,
@@ -40,10 +50,7 @@ RuntimeDiagnosticsSnapshot sample_runtime_diagnostics(
     if (simulation != nullptr) result.simulation = simulation->stats();
     result.render = render_device.stats();
     result.world = summarize_runtime_world(world);
-    if (scene_renderer != nullptr) {
-        result.directional_shadow = scene_renderer->directional_shadow_telemetry();
-        result.ray_tracing = scene_renderer->ray_tracing_telemetry();
-    }
+    result.renderer = runtime_renderer_diagnostics(scene_renderer);
     return result;
 }
 
