@@ -1,6 +1,7 @@
 add_library(
   vice_texture_cooker_lib STATIC
   src/texture_cooker.cpp
+  src/project_texture_cook.cpp
 )
 add_library(VICE::TextureCooker ALIAS vice_texture_cooker_lib)
 
@@ -11,8 +12,10 @@ target_include_directories(
 )
 target_link_libraries(
   vice_texture_cooker_lib
-  PUBLIC VICE::Render
-  PRIVATE VICE::World
+  PUBLIC
+    VICE::Project
+    VICE::Render
+    VICE::World
 )
 target_compile_features(vice_texture_cooker_lib PUBLIC cxx_std_23)
 vice_enable_warnings(vice_texture_cooker_lib)

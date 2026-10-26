@@ -1,25 +1,12 @@
 #pragma once
 
 #include <vice/editor/project_session.hpp>
-
-#include <filesystem>
-#include <string>
-#include <vector>
+#include <vice/tools/project_environment_cook.hpp>
 
 namespace vice::editor {
 
-struct CookedProjectEnvironment {
-    std::filesystem::path source;
-    std::filesystem::path cooked;
-};
-
-struct ProjectEnvironmentCookResult {
-    bool success = false;
-    std::vector<CookedProjectEnvironment> environments;
-    std::string diagnostics;
-
-    [[nodiscard]] explicit operator bool() const noexcept { return success; }
-};
+using CookedProjectEnvironment = tools::CookedProjectEnvironment;
+using ProjectEnvironmentCookResult = tools::ProjectEnvironmentCookResult;
 
 [[nodiscard]] ProjectEnvironmentCookResult cook_project_environments(const ProjectSession& session);
 
