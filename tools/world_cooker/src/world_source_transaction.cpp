@@ -8,7 +8,6 @@
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
-#include <iterator>
 #include <string>
 #include <string_view>
 #include <system_error>
@@ -23,7 +22,6 @@ constexpr std::uint64_t revision_mix = 0x9e3779b97f4a7c15ULL;
 constexpr std::uint64_t revision_prime = 0xbf58476d1ce4e5b9ULL;
 
 void append_hex64(std::string& output, const std::uint64_t value) {
-    std::array<char, 16> buffer{};
     std::array<char, 16> digits{};
     const auto converted = std::to_chars(
         digits.data(),
@@ -36,7 +34,7 @@ void append_hex64(std::string& output, const std::uint64_t value) {
         return;
     }
     const auto size = static_cast<std::size_t>(converted.ptr - digits.data());
-    output.append(buffer.size() - size, '0');
+    output.append(16U - size, '0');
     output.append(digits.data(), converted.ptr);
 }
 
@@ -231,12 +229,13 @@ SourceDocument load_source_document(const std::filesystem::path& source_path) {
     if (!parsed.snapshot.has_value()) {
         return fail_document("Authored World source is invalid: " + parsed.diagnostics);
     }
+    const auto revision = source_revision(source);
 
     return SourceDocument{
         .success = true,
         .snapshot = *parsed.snapshot,
         .source = std::move(source),
-        .revision = source_revision(source),
+        .revision = revision,
     };
 }
 
@@ -289,6 +288,20 @@ SourceTransactionResult apply_source_transaction(const SourceTransactionRequest&
         return fail_transaction(std::move(write_diagnostics), current.revision);
     }
 
+    const auto staged = load_source_document(staged_path);
+    if (!staged) {
+        return fail_transaction(
+            "Staged authored World failed validation: " + staged.diagnostics,
+            current.revision
+        );
+    }
+    if (staged.source != edited.serialized_source || staged.revision != next_revision) {
+        return fail_transaction(
+            "Staged authored World bytes do not match the validated transaction result.",
+            current.revision
+        );
+    }
+
     // Detect non-VICE writers that changed the source while this transaction
     // was validating/staging. VICE writers are serialized by the sidecar lock.
     const auto before_publish = load_source_document(request.source_path);
@@ -311,28 +324,16 @@ SourceTransactionResult apply_source_transaction(const SourceTransactionRequest&
     }
     staged_cleanup.release();
 
-    const auto verified = load_source_document(request.source_path);
-    if (!verified) {
-        return fail_transaction(
-            "Authored World was published but post-publication validation failed: " +
-                verified.diagnostics,
-            current.revision
-        );
-    }
-    if (verified.revision != next_revision) {
-        return fail_transaction(
-            "Authored World publication revision does not match the validated transaction result.",
-            current.revision
-        );
-    }
-
+    // The atomic replacement is the transaction commit point. All candidate
+    // validation and staged-byte verification occurs before this point so a
+    // committed write is never reported as a rejected transaction.
     return SourceTransactionResult{
         .success = true,
         .changed = true,
         .published = true,
         .applied_operations = edited.applied_operations,
         .revision_before = current.revision,
-        .revision_after = verified.revision,
+        .revision_after = next_revision,
     };
 }
 
