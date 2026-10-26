@@ -10,8 +10,4 @@ using ProjectTextureCookResult = tools::ProjectTextureCookResult;
 
 [[nodiscard]] ProjectTextureCookResult cook_project_textures(const ProjectSession& session);
 
-[[nodiscard]] std::vector<world::ResourceId> cooked_texture_ids(
-    const ProjectTextureCookResult& result
-);
-
 } // namespace vice::editor
