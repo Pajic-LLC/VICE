@@ -23,7 +23,7 @@ namespace {
 }
 
 [[nodiscard]] ProjectBuildResult fail_build(
-    ProjectBuildResult result,
+    ProjectBuildResult&& result,
     std::string diagnostics
 ) {
     result.success = false;
