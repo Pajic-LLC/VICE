@@ -26,6 +26,15 @@ struct RuntimeWorldDiagnostics {
     friend bool operator==(const RuntimeWorldDiagnostics&, const RuntimeWorldDiagnostics&) = default;
 };
 
+struct RuntimeRendererDiagnostics {
+    std::optional<RuntimeDirectionalShadowTelemetry> directional_shadow;
+    std::optional<RuntimeRayTracingTelemetry> ray_tracing;
+
+    [[nodiscard]] bool available() const noexcept {
+        return directional_shadow.has_value() || ray_tracing.has_value();
+    }
+};
+
 struct RuntimeDiagnosticsSnapshot {
     double frame_seconds = 0.0;
     double frames_per_second = 0.0;
@@ -33,11 +42,14 @@ struct RuntimeDiagnosticsSnapshot {
     std::optional<simulation::CoordinatorStats> simulation;
     render::DeviceStats render{};
     RuntimeWorldDiagnostics world{};
-    std::optional<RuntimeDirectionalShadowTelemetry> directional_shadow;
-    std::optional<RuntimeRayTracingTelemetry> ray_tracing;
+    RuntimeRendererDiagnostics renderer{};
 };
 
 [[nodiscard]] RuntimeWorldDiagnostics summarize_runtime_world(const world::World& world);
+
+[[nodiscard]] RuntimeRendererDiagnostics runtime_renderer_diagnostics(
+    const RuntimeSceneRenderer* scene_renderer
+) noexcept;
 
 [[nodiscard]] RuntimeDiagnosticsSnapshot sample_runtime_diagnostics(
     double frame_seconds,
