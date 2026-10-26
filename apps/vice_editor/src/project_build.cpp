@@ -1,20 +1,10 @@
 #include <vice/editor/project_build.hpp>
-#include <vice/editor/project_environment_cook.hpp>
-#include <vice/editor/project_material_cook.hpp>
-#include <vice/editor/project_mesh_cook.hpp>
-#include <vice/editor/project_texture_cook.hpp>
 
-#include <vice/platform/dynamic_library.hpp>
-#include <vice/project/project.hpp>
-#include <vice/runtime/dade.hpp>
-#include <vice/runtime/package_metadata.hpp>
-#include <vice/tools/world_cooker.hpp>
-#include <vice/world/snapshot_file.hpp>
+#include <vice/project/workspace.hpp>
+#include <vice/tools/project_workflow.hpp>
 
 #include <filesystem>
-#include <fstream>
 #include <optional>
-#include <sstream>
 #include <string>
 #include <utility>
 
@@ -29,483 +19,65 @@ namespace {
     };
 }
 
-[[nodiscard]] std::optional<std::string> read_text(
-    const std::filesystem::path& path,
-    std::string& diagnostics
-) {
-    std::ifstream input{path, std::ios::binary};
-    if (!input) {
-        diagnostics = "Could not read startup World `" + path_text(path) + "`.";
-        return std::nullopt;
-    }
-
-    std::ostringstream contents;
-    contents << input.rdbuf();
-    if (!input.eof() && input.fail()) {
-        diagnostics = "Could not finish reading startup World `" + path_text(path) + "`.";
-        return std::nullopt;
-    }
-    return contents.str();
-}
-
 [[nodiscard]] ProjectBuildResult fail_build(std::string diagnostics) {
     ProjectBuildResult result;
     result.diagnostics = std::move(diagnostics);
     return result;
 }
 
-[[nodiscard]] std::filesystem::path target_executable_path(
-    const std::filesystem::path& root,
-    const std::string& target,
-    const std::filesystem::path& runtime_host
+[[nodiscard]] std::optional<project::Workspace> persisted_workspace(
+    const ProjectSession& session,
+    std::string& diagnostics
 ) {
-    return root / (target + runtime_host.extension().string());
+    const auto opened = project::open_workspace(
+        session.manifest_path(),
+        session.cooked_root().parent_path()
+    );
+    if (!opened) {
+        diagnostics = opened.diagnostics;
+        return std::nullopt;
+    }
+    diagnostics.clear();
+    return *opened.workspace;
 }
 
-[[nodiscard]] std::filesystem::path game_module_source(const ProjectSession& session) {
-    return (session.manifest_path().parent_path() / "game" / "game.cpp").lexically_normal();
-}
-
-[[nodiscard]] std::filesystem::path game_module_filename(const std::string& target) {
-    return std::filesystem::path{
-        target + std::string{platform::dynamic_library_extension()}
-    };
-}
-
-[[nodiscard]] std::string process_failure(
-    const std::string& label,
-    const platform::ProcessRunResult& process
+[[nodiscard]] ProjectBuildResult adapt_asset_cook(
+    const project::Workspace& workspace,
+    const tools::ProjectAssetCookResult& cooked
 ) {
-    std::string message = label;
-    if (!process.diagnostics.empty()) {
-        message += ": " + process.diagnostics;
-    }
-    if (!process.output.empty()) {
-        message += "\n" + process.output;
-    }
-    return message;
-}
-
-struct GameModuleBuild {
-    bool source_present = false;
-    bool success = true;
-    std::filesystem::path source;
-    std::filesystem::path output;
-    std::string diagnostics;
-};
-
-[[nodiscard]] GameModuleBuild build_project_game_module(const ProjectSession& session) {
-    GameModuleBuild result;
-    result.source = game_module_source(session);
-
-    std::error_code error;
-    const bool exists = std::filesystem::exists(result.source, error);
-    if (error) {
-        result.success = false;
-        result.diagnostics = "Could not inspect project game source `" + path_text(result.source) +
-            "`: " + error.message();
-        return result;
-    }
-    if (!exists) {
-        return result;
-    }
-    if (!std::filesystem::is_regular_file(result.source, error) || error) {
-        result.success = false;
-        result.diagnostics = error
-            ? "Could not inspect project game source `" + path_text(result.source) + "`: " + error.message()
-            : "Project game source is not a regular file: " + path_text(result.source);
-        return result;
-    }
-    result.source_present = true;
-
-#if !defined(VICE_EDITOR_CMAKE_EXECUTABLE) || \
-    !defined(VICE_EDITOR_GAME_MODULE_CMAKE_SOURCE) || \
-    !defined(VICE_EDITOR_GAME_MODULE_INCLUDE)
-    result.success = false;
-    result.diagnostics = "This VICE Editor build cannot compile project game modules.";
-    return result;
-#else
-    const auto project_root = session.manifest_path().parent_path();
-    const auto build_root = (
-        project_root / ".vice" / "build" / "game-module" / session.manifest().game_target
-    ).lexically_normal();
-    const auto cmake_build = build_root / "cmake";
-    const auto module_output = build_root / "output";
-    result.output = module_output / game_module_filename(session.manifest().game_target);
-
-    std::filesystem::remove_all(module_output, error);
-    error.clear();
-    std::filesystem::create_directories(module_output, error);
-    if (error) {
-        result.success = false;
-        result.diagnostics = "Could not create game module output directory `" +
-            path_text(module_output) + "`: " + error.message();
-        return result;
-    }
-
-    platform::ProcessLaunchRequest configure;
-    configure.executable = std::filesystem::path{VICE_EDITOR_CMAKE_EXECUTABLE};
-    configure.arguments = {
-        "-S",
-        path_text(std::filesystem::path{VICE_EDITOR_GAME_MODULE_CMAKE_SOURCE}),
-        "-B",
-        path_text(cmake_build),
-        "-DVICE_GAME_SOURCE=" + path_text(result.source),
-        "-DVICE_GAME_TARGET=" + session.manifest().game_target,
-        "-DVICE_GAME_MODULE_INCLUDE=" + path_text(std::filesystem::path{VICE_EDITOR_GAME_MODULE_INCLUDE}),
-        "-DVICE_GAME_OUTPUT=" + path_text(module_output),
-        "-DCMAKE_BUILD_TYPE=Debug",
-    };
-    configure.working_directory = project_root;
-    const auto configured = platform::run_process(configure);
-    if (!configured) {
-        result.success = false;
-        result.diagnostics = process_failure("Could not configure project game module build", configured);
-        return result;
-    }
-
-    platform::ProcessLaunchRequest build;
-    build.executable = std::filesystem::path{VICE_EDITOR_CMAKE_EXECUTABLE};
-    build.arguments = {
-        "--build",
-        path_text(cmake_build),
-        "--config",
-        "Debug",
-        "--target",
-        "vice_project_game",
-    };
-    build.working_directory = project_root;
-    const auto built = platform::run_process(build);
-    if (!built) {
-        result.success = false;
-        result.diagnostics = process_failure("Could not compile project game module", built);
-        return result;
-    }
-
-    if (!std::filesystem::is_regular_file(result.output, error) || error) {
-        result.success = false;
-        result.diagnostics = error
-            ? "Could not inspect compiled game module `" + path_text(result.output) + "`: " + error.message()
-            : "Project game module build did not produce `" + path_text(result.output) + "`.";
-        return result;
-    }
-
-    return result;
-#endif
-}
-
-[[nodiscard]] ProjectBuildResult cook_project(const ProjectSession& session) {
-    const auto& source_path = session.startup_world_source();
-    const auto& output_path = session.cooked_startup_world();
-    if (source_path.empty()) {
-        return fail_build("Project startup World source path is empty.");
-    }
-    if (output_path.empty()) {
-        return fail_build("Project cooked startup World path is empty.");
-    }
-
-    std::string diagnostics;
-    const auto source = read_text(source_path, diagnostics);
-    if (!source.has_value()) {
-        return fail_build(std::move(diagnostics));
-    }
-
-    const auto parsed = tools::world_cooker::parse_source_manifest(*source);
-    if (!parsed.snapshot.has_value()) {
-        return fail_build(
-            "Could not cook startup World `" + path_text(source_path) + "`: " + parsed.diagnostics
-        );
-    }
-
-    std::error_code error;
-    const auto parent = output_path.parent_path();
-    if (!parent.empty()) {
-        std::filesystem::create_directories(parent, error);
-        if (error) {
-            return fail_build(
-                "Could not create project cooked asset directory `" + path_text(parent) + "`: " +
-                error.message()
-            );
-        }
-    }
-
-    std::string save_diagnostics;
-    if (!world::save_world_snapshot(output_path, *parsed.snapshot, &save_diagnostics)) {
-        return fail_build(
-            "Could not write cooked startup World `" + path_text(output_path) + "`: " + save_diagnostics
-        );
-    }
-
-    const auto mesh_cook = cook_project_meshes(session);
-    if (!mesh_cook) {
-        return fail_build(mesh_cook.diagnostics);
-    }
-    const auto texture_cook = cook_project_textures(session);
-    if (!texture_cook) {
-        return fail_build(texture_cook.diagnostics);
-    }
-    const auto environment_cook = cook_project_environments(session);
-    if (!environment_cook) {
-        return fail_build(environment_cook.diagnostics);
-    }
-    const auto texture_ids = cooked_texture_ids(texture_cook);
-    const auto material_cook = cook_project_render_materials(session, texture_ids);
-    if (!material_cook) {
-        return fail_build(material_cook.diagnostics);
-    }
-
     ProjectBuildResult result;
-    result.success = true;
-    result.game_target = session.manifest().game_target;
-    result.cooked_startup_world = output_path;
-    result.entity_count = parsed.snapshot->entities.size();
-    result.region_count = parsed.snapshot->regions.size();
-    result.mesh_count = mesh_cook.meshes.size();
-    result.texture_count = texture_cook.textures.size();
-    result.material_count = material_cook.materials.size();
+    result.success = cooked.success;
+    result.game_target = workspace.manifest.game_target;
+    result.cooked_startup_world = cooked.cooked_startup_world;
+    result.entity_count = cooked.entity_count;
+    result.region_count = cooked.region_count;
+    result.mesh_count = cooked.mesh_count;
+    result.texture_count = cooked.texture_count;
+    result.environment_count = cooked.environment_count;
+    result.material_count = cooked.material_count;
+    result.diagnostics = cooked.diagnostics;
     return result;
 }
 
-[[nodiscard]] bool stage_project_meshes(
-    const ProjectSession& session,
-    const std::filesystem::path& staged_project_content_root,
-    std::string& diagnostics
-) {
-    std::error_code error;
-    std::filesystem::recursive_directory_iterator iterator{
-        session.asset_root(),
-        std::filesystem::directory_options::skip_permission_denied,
-        error,
-    };
-    const std::filesystem::recursive_directory_iterator end;
-    if (error) {
-        diagnostics = "Could not enumerate project meshes for staging: " + error.message();
-        return false;
-    }
-
-    for (; iterator != end; iterator.increment(error)) {
-        if (error) {
-            diagnostics = "Could not enumerate project meshes for staging: " + error.message();
-            return false;
-        }
-        if (!iterator->is_regular_file() || iterator->path().extension() != ".vmesh") continue;
-
-        auto relative = std::filesystem::relative(iterator->path(), session.asset_root(), error);
-        if (error) {
-            diagnostics = "Could not resolve project mesh path for staging: " + error.message();
-            return false;
-        }
-        relative.replace_extension(".vmeshc");
-        const auto source = (session.cooked_root() / relative).lexically_normal();
-        const auto destination = (staged_project_content_root / relative).lexically_normal();
-        std::filesystem::create_directories(destination.parent_path(), error);
-        if (error) {
-            diagnostics = "Could not create staged mesh directory `" +
-                path_text(destination.parent_path()) + "`: " + error.message();
-            return false;
-        }
-        std::filesystem::copy_file(
-            source,
-            destination,
-            std::filesystem::copy_options::overwrite_existing,
-            error
-        );
-        if (error) {
-            diagnostics = "Could not stage cooked mesh `" + path_text(source) + "`: " + error.message();
-            return false;
-        }
-    }
-
-    diagnostics.clear();
-    return true;
-}
-
-[[nodiscard]] bool stage_project_textures(
-    const ProjectSession& session,
-    const std::filesystem::path& staged_project_content_root,
-    std::string& diagnostics
-) {
-    std::error_code error;
-    std::filesystem::recursive_directory_iterator iterator{
-        session.asset_root(),
-        std::filesystem::directory_options::skip_permission_denied,
-        error,
-    };
-    const std::filesystem::recursive_directory_iterator end;
-    if (error) {
-        diagnostics = "Could not enumerate project textures for staging: " + error.message();
-        return false;
-    }
-
-    for (; iterator != end; iterator.increment(error)) {
-        if (error) {
-            diagnostics = "Could not enumerate project textures for staging: " + error.message();
-            return false;
-        }
-        if (!iterator->is_regular_file() || iterator->path().extension() != ".vtex") continue;
-
-        auto relative = std::filesystem::relative(iterator->path(), session.asset_root(), error);
-        if (error) {
-            diagnostics = "Could not resolve project texture path for staging: " + error.message();
-            return false;
-        }
-        relative.replace_extension(".vtexc");
-        const auto source = (session.cooked_root() / relative).lexically_normal();
-        const auto destination = (staged_project_content_root / relative).lexically_normal();
-        std::filesystem::create_directories(destination.parent_path(), error);
-        if (error) {
-            diagnostics = "Could not create staged texture directory `" +
-                path_text(destination.parent_path()) + "`: " + error.message();
-            return false;
-        }
-        std::filesystem::copy_file(
-            source,
-            destination,
-            std::filesystem::copy_options::overwrite_existing,
-            error
-        );
-        if (error) {
-            diagnostics = "Could not stage cooked texture `" + path_text(source) + "`: " + error.message();
-            return false;
-        }
-    }
-
-    diagnostics.clear();
-    return true;
-}
-
-[[nodiscard]] bool stage_project_environments(
-    const ProjectSession& session,
-    const std::filesystem::path& staged_project_content_root,
-    std::string& diagnostics
-) {
-    std::error_code error;
-    std::filesystem::recursive_directory_iterator iterator{
-        session.asset_root(),
-        std::filesystem::directory_options::skip_permission_denied,
-        error,
-    };
-    const std::filesystem::recursive_directory_iterator end;
-    if (error) {
-        diagnostics = "Could not enumerate project environments for staging: " + error.message();
-        return false;
-    }
-
-    for (; iterator != end; iterator.increment(error)) {
-        if (error) {
-            diagnostics = "Could not enumerate project environments for staging: " + error.message();
-            return false;
-        }
-        if (!iterator->is_regular_file() || iterator->path().extension() != ".venv") continue;
-        auto relative = std::filesystem::relative(iterator->path(), session.asset_root(), error);
-        if (error) {
-            diagnostics = "Could not resolve project environment path for staging: " + error.message();
-            return false;
-        }
-        relative.replace_extension(".venvc");
-        const auto source = (session.cooked_root() / relative).lexically_normal();
-        const auto destination = (staged_project_content_root / relative).lexically_normal();
-        std::filesystem::create_directories(destination.parent_path(), error);
-        if (error) {
-            diagnostics = "Could not create staged environment directory `" +
-                path_text(destination.parent_path()) + "`: " + error.message();
-            return false;
-        }
-        std::filesystem::copy_file(
-            source,
-            destination,
-            std::filesystem::copy_options::overwrite_existing,
-            error
-        );
-        if (error) {
-            diagnostics = "Could not stage cooked environment `" + path_text(source) + "`: " + error.message();
-            return false;
-        }
-    }
-    diagnostics.clear();
-    return true;
-}
-
-[[nodiscard]] bool stage_project_render_materials(
-    const ProjectSession& session,
-    const std::filesystem::path& staged_project_content_root,
-    std::string& diagnostics
-) {
-    std::error_code error;
-    std::filesystem::recursive_directory_iterator iterator{
-        session.asset_root(),
-        std::filesystem::directory_options::skip_permission_denied,
-        error,
-    };
-    const std::filesystem::recursive_directory_iterator end;
-    if (error) {
-        diagnostics = "Could not enumerate project render materials for staging: " + error.message();
-        return false;
-    }
-
-    for (; iterator != end; iterator.increment(error)) {
-        if (error) {
-            diagnostics = "Could not enumerate project render materials for staging: " + error.message();
-            return false;
-        }
-        if (!iterator->is_regular_file() || iterator->path().extension() != ".vmat") continue;
-
-        auto relative = std::filesystem::relative(iterator->path(), session.asset_root(), error);
-        if (error) {
-            diagnostics = "Could not resolve project render material path for staging: " + error.message();
-            return false;
-        }
-        const auto material_stem = iterator->path().stem().string();
-        auto cooked_relative = relative;
-        cooked_relative.replace_extension(".vmatc");
-        const auto cooked_material = (session.cooked_root() / cooked_relative).lexically_normal();
-        const auto staged_material = (staged_project_content_root / cooked_relative).lexically_normal();
-        std::filesystem::create_directories(staged_material.parent_path(), error);
-        if (error) {
-            diagnostics = "Could not create staged render material directory: " + error.message();
-            return false;
-        }
-        std::filesystem::copy_file(
-            cooked_material,
-            staged_material,
-            std::filesystem::copy_options::overwrite_existing,
-            error
-        );
-        if (error) {
-            diagnostics = "Could not stage cooked render material `" + path_text(cooked_material) +
-                "`: " + error.message();
-            return false;
-        }
-
-        const auto cooked_shader_root = cooked_material.parent_path() / (material_stem + ".shaders");
-        const auto staged_shader_root = staged_material.parent_path() / (material_stem + ".shaders");
-        if (!std::filesystem::is_directory(cooked_shader_root, error) || error) {
-            diagnostics = error
-                ? "Could not inspect cooked render material shaders: " + error.message()
-                : "Cooked render material shader directory is missing: " + path_text(cooked_shader_root);
-            return false;
-        }
-        std::filesystem::create_directories(staged_shader_root, error);
-        if (error) {
-            diagnostics = "Could not create staged shader directory: " + error.message();
-            return false;
-        }
-        std::filesystem::copy(
-            cooked_shader_root,
-            staged_shader_root,
-            std::filesystem::copy_options::recursive |
-                std::filesystem::copy_options::overwrite_existing,
-            error
-        );
-        if (error) {
-            diagnostics = "Could not stage cooked render material shaders `" +
-                path_text(cooked_shader_root) + "`: " + error.message();
-            return false;
-        }
-    }
-
-    diagnostics.clear();
-    return true;
+[[nodiscard]] ProjectBuildResult adapt_build(const tools::ProjectBuildResult& shared) {
+    ProjectBuildResult result;
+    result.success = shared.success;
+    result.game_target = shared.game_target;
+    result.cooked_startup_world = shared.assets.cooked_startup_world;
+    result.game_module_source = shared.game_module_source;
+    result.game_module = shared.game_module;
+    result.game_output_root = shared.game_output_root;
+    result.game_executable = shared.game_executable;
+    result.runtime_manifest = shared.runtime_manifest;
+    result.runtime_content_root = shared.runtime_content_root;
+    result.entity_count = shared.assets.entity_count;
+    result.region_count = shared.assets.region_count;
+    result.mesh_count = shared.assets.mesh_count;
+    result.texture_count = shared.assets.texture_count;
+    result.environment_count = shared.assets.environment_count;
+    result.material_count = shared.assets.material_count;
+    result.diagnostics = shared.diagnostics;
+    return result;
 }
 
 } // namespace
@@ -517,7 +89,12 @@ ProjectBuildResult build_project(const ProjectSession& session) {
         std::filesystem::path{VICE_EDITOR_RUNTIME_HOST_EXECUTABLE}
     );
 #else
-    return cook_project(session);
+    std::string diagnostics;
+    const auto workspace = persisted_workspace(session, diagnostics);
+    if (!workspace.has_value()) {
+        return fail_build(std::move(diagnostics));
+    }
+    return adapt_asset_cook(*workspace, tools::cook_project_assets(*workspace));
 #endif
 }
 
@@ -525,224 +102,12 @@ ProjectBuildResult build_game_target(
     const ProjectSession& session,
     const std::filesystem::path& runtime_host_executable
 ) {
-    ProjectBuildResult result = cook_project(session);
-    if (!result) return result;
-
-    const auto module_build = build_project_game_module(session);
-    if (!module_build.success) {
-        return fail_build(module_build.diagnostics);
+    std::string diagnostics;
+    const auto workspace = persisted_workspace(session, diagnostics);
+    if (!workspace.has_value()) {
+        return fail_build(std::move(diagnostics));
     }
-    if (module_build.source_present) {
-        result.game_module_source = module_build.source;
-    }
-
-    if (runtime_host_executable.empty()) {
-        return fail_build("VICE runtime host is not available in this editor build.");
-    }
-
-    std::error_code error;
-    if (!std::filesystem::is_regular_file(runtime_host_executable, error) || error) {
-        return fail_build(
-            error
-                ? "Could not inspect VICE runtime host `" + path_text(runtime_host_executable) + "`: " + error.message()
-                : "VICE runtime host does not exist: " + path_text(runtime_host_executable)
-        );
-    }
-
-    const auto dade_requirement = runtime::load_dade_requirement(session.manifest_path());
-    if (!dade_requirement) {
-        return fail_build("Could not read DADE ownership settings: " + dade_requirement.diagnostics);
-    }
-
-    const auto output_root = session.game_output_root();
-    if (output_root.empty()) {
-        return fail_build("Project game output root could not be resolved.");
-    }
-
-    auto staging_root = output_root;
-    staging_root += ".staging";
-    std::filesystem::remove_all(staging_root, error);
-    error.clear();
-    std::filesystem::create_directories(staging_root, error);
-    if (error) {
-        return fail_build(
-            "Could not create game target staging directory `" + path_text(staging_root) + "`: " + error.message()
-        );
-    }
-
-    const auto cleanup_staging = [&]() {
-        std::error_code cleanup_error;
-        std::filesystem::remove_all(staging_root, cleanup_error);
-    };
-
-    const auto staged_executable = target_executable_path(
-        staging_root,
-        session.manifest().game_target,
-        runtime_host_executable
-    );
-    std::filesystem::copy_file(
-        runtime_host_executable,
-        staged_executable,
-        std::filesystem::copy_options::overwrite_existing,
-        error
-    );
-    if (error) {
-        const std::string message = error.message();
-        cleanup_staging();
-        return fail_build(
-            "Could not stage game target executable `" + path_text(staged_executable) + "`: " + message
-        );
-    }
-
-    const auto source_permissions = std::filesystem::status(runtime_host_executable, error).permissions();
-    if (!error) {
-        std::filesystem::permissions(
-            staged_executable,
-            source_permissions,
-            std::filesystem::perm_options::replace,
-            error
-        );
-    }
-    if (error) {
-        const std::string message = error.message();
-        cleanup_staging();
-        return fail_build(
-            "Could not preserve game target executable permissions: " + message
-        );
-    }
-
-    std::string package_diagnostics;
-    if (!runtime::stamp_staged_package_metadata(
-            staged_executable,
-            dade_requirement.required,
-            dade_requirement.asset_id,
-            &package_diagnostics
-        )) {
-        cleanup_staging();
-        return fail_build("Could not protect staged package metadata: " + package_diagnostics);
-    }
-
-    const auto staged_manifest = staging_root / "vice.runtime.viceproj";
-    std::string manifest_diagnostics;
-    if (!project::save_manifest(staged_manifest, session.manifest(), &manifest_diagnostics)) {
-        cleanup_staging();
-        return fail_build("Could not stage runtime project manifest: " + manifest_diagnostics);
-    }
-
-    auto cooked_relative = session.manifest().startup_world;
-    cooked_relative.replace_extension(".vworldc");
-    const auto staged_content_root = staging_root / "content";
-    const auto staged_project_content_root = staged_content_root / session.manifest().id.to_string();
-    const auto staged_world = staged_project_content_root / cooked_relative;
-    std::filesystem::create_directories(staged_world.parent_path(), error);
-    if (error) {
-        const std::string message = error.message();
-        cleanup_staging();
-        return fail_build(
-            "Could not create runtime content directory `" + path_text(staged_world.parent_path()) + "`: " + message
-        );
-    }
-
-    std::filesystem::copy_file(
-        result.cooked_startup_world,
-        staged_world,
-        std::filesystem::copy_options::overwrite_existing,
-        error
-    );
-    if (error) {
-        const std::string message = error.message();
-        cleanup_staging();
-        return fail_build(
-            "Could not stage cooked startup World `" + path_text(staged_world) + "`: " + message
-        );
-    }
-
-    std::string mesh_stage_diagnostics;
-    if (!stage_project_meshes(session, staged_project_content_root, mesh_stage_diagnostics)) {
-        cleanup_staging();
-        return fail_build(std::move(mesh_stage_diagnostics));
-    }
-    std::string texture_stage_diagnostics;
-    if (!stage_project_textures(session, staged_project_content_root, texture_stage_diagnostics)) {
-        cleanup_staging();
-        return fail_build(std::move(texture_stage_diagnostics));
-    }
-    std::string environment_stage_diagnostics;
-    if (!stage_project_environments(
-            session,
-            staged_project_content_root,
-            environment_stage_diagnostics
-        )) {
-        cleanup_staging();
-        return fail_build(std::move(environment_stage_diagnostics));
-    }
-    std::string material_stage_diagnostics;
-    if (!stage_project_render_materials(
-            session,
-            staged_project_content_root,
-            material_stage_diagnostics
-        )) {
-        cleanup_staging();
-        return fail_build(std::move(material_stage_diagnostics));
-    }
-
-    if (module_build.source_present) {
-        const auto staged_module = staging_root / "modules" /
-            game_module_filename(session.manifest().game_target);
-        std::filesystem::create_directories(staged_module.parent_path(), error);
-        if (error) {
-            const std::string message = error.message();
-            cleanup_staging();
-            return fail_build(
-                "Could not create runtime module directory `" + path_text(staged_module.parent_path()) +
-                "`: " + message
-            );
-        }
-        std::filesystem::copy_file(
-            module_build.output,
-            staged_module,
-            std::filesystem::copy_options::overwrite_existing,
-            error
-        );
-        if (error) {
-            const std::string message = error.message();
-            cleanup_staging();
-            return fail_build(
-                "Could not stage project game module `" + path_text(staged_module) + "`: " + message
-            );
-        }
-    }
-
-    std::filesystem::remove_all(output_root, error);
-    if (error) {
-        const std::string message = error.message();
-        cleanup_staging();
-        return fail_build(
-            "Could not replace previous game target output `" + path_text(output_root) + "`: " + message
-        );
-    }
-    std::filesystem::rename(staging_root, output_root, error);
-    if (error) {
-        const std::string message = error.message();
-        cleanup_staging();
-        return fail_build(
-            "Could not publish game target output `" + path_text(output_root) + "`: " + message
-        );
-    }
-
-    result.game_output_root = output_root;
-    result.game_executable = target_executable_path(
-        output_root,
-        session.manifest().game_target,
-        runtime_host_executable
-    );
-    result.runtime_manifest = output_root / "vice.runtime.viceproj";
-    result.runtime_content_root = output_root / "content";
-    if (module_build.source_present) {
-        result.game_module = output_root / "modules" /
-            game_module_filename(session.manifest().game_target);
-    }
-    return result;
+    return adapt_build(tools::build_project(*workspace, runtime_host_executable));
 }
 
 platform::ProcessLaunchRequest project_run_request(
@@ -769,19 +134,18 @@ ProjectRunResult run_project(
     const std::filesystem::path& runtime_host_executable
 ) {
     ProjectRunResult result;
-    result.build = build_game_target(session, runtime_host_executable);
-    if (!result.build) {
-        result.diagnostics = result.build.diagnostics;
+
+    std::string diagnostics;
+    const auto workspace = persisted_workspace(session, diagnostics);
+    if (!workspace.has_value()) {
+        result.diagnostics = std::move(diagnostics);
         return result;
     }
 
-    const auto launch = platform::launch_process(game_run_request(result.build));
-    if (!launch) {
-        result.diagnostics = launch.diagnostics;
-        return result;
-    }
-
-    result.launched = true;
+    const auto shared = tools::run_project(*workspace, runtime_host_executable);
+    result.build = adapt_build(shared.build);
+    result.launched = shared.launched;
+    result.diagnostics = shared.diagnostics;
     return result;
 }
 
