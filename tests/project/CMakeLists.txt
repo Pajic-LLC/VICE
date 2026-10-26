@@ -66,6 +66,19 @@ if(TARGET vice_project_workflow)
   target_compile_features(vice_project_workflow_tests PRIVATE cxx_std_23)
   vice_enable_warnings(vice_project_workflow_tests)
   add_test(NAME vice_project_workflow_tests COMMAND vice_project_workflow_tests)
+
+  add_executable(vice_project_build_workflow_tests project_build_workflow_tests.cpp)
+  target_link_libraries(
+    vice_project_build_workflow_tests
+    PRIVATE
+      VICE::Platform
+      VICE::ProjectWorkflow
+      VICE::Runtime
+      VICE::World
+  )
+  target_compile_features(vice_project_build_workflow_tests PRIVATE cxx_std_23)
+  vice_enable_warnings(vice_project_build_workflow_tests)
+  add_test(NAME vice_project_build_workflow_tests COMMAND vice_project_build_workflow_tests)
 endif()
 
 if(TARGET vice_dev_cli)
