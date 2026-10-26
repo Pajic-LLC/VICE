@@ -148,17 +148,14 @@ int main() {
     require(launched_run.json.find("\"state\":\"launched\"") != std::string::npos, "project launch success state");
     require(launched_run.json.find("\"ok\":true") != std::string::npos, "successful process creation is success");
 
-#ifdef _WIN32
-    const auto missing_runtime = root / "bin" / "missing_runtime.exe";
-#else
-    const auto missing_runtime = root / "bin" / "missing_runtime";
-#endif
-    vice::dev::CommandEnvironment failing_launch_environment;
-    failing_launch_environment.runtime_host_executable = missing_runtime;
+    vice::dev::CommandEnvironment failing_launch_environment = workflow_environment;
+    failing_launch_environment.runtime_session_root = root / "runtime-sessions";
+    failing_launch_environment.runtime_session_id = "..";
 
     const auto failed_launch = execute("project", "run", project_path, failing_launch_environment);
-    require(failed_launch.exit_code == vice::dev::exit_launch, "project run distinguishes launch failure");
+    require(failed_launch.exit_code == vice::dev::exit_launch, "project run distinguishes launch-phase failure");
     require(failed_launch.json.find("\"state\":\"launch_failed\"") != std::string::npos, "project launch failure state");
+    require(failed_launch.json.find("Runtime development session ID is invalid") != std::string::npos, "launch failure diagnostic is preserved");
     require(failed_launch.json.find("\"ok\":false") != std::string::npos, "launch failure is not success");
 
     const vice::dev::CommandEnvironment unavailable_environment;
