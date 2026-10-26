@@ -2,6 +2,7 @@ add_library(
   vice_environment_cooker_lib STATIC
   src/environment_cooker.cpp
   src/radiance_hdr.cpp
+  src/project_environment_cook.cpp
 )
 add_library(VICE::EnvironmentCooker ALIAS vice_environment_cooker_lib)
 
@@ -13,6 +14,7 @@ target_include_directories(
 target_link_libraries(
   vice_environment_cooker_lib
   PUBLIC
+    VICE::Project
     VICE::Render
     VICE::TextureCooker
   PRIVATE
