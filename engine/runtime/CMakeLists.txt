@@ -84,6 +84,7 @@ vice_enable_warnings(vice_runtime)
 add_library(
   vice_runtime_diagnostics
   STATIC
+    src/debug.cpp
     src/diagnostics.cpp
     src/profile.cpp
     src/status.cpp
@@ -126,6 +127,22 @@ target_compile_features(vice_runtime_dev_session PUBLIC cxx_std_23)
 vice_enable_warnings(vice_runtime_dev_session)
 
 if(VICE_BUILD_TESTS)
+  add_executable(
+    vice_runtime_debug_tests
+    tests/debug_tests.cpp
+  )
+  target_link_libraries(
+    vice_runtime_debug_tests
+    PRIVATE
+      VICE::RuntimeDiagnostics
+  )
+  target_compile_features(vice_runtime_debug_tests PRIVATE cxx_std_23)
+  vice_enable_warnings(vice_runtime_debug_tests)
+  add_test(
+    NAME vice_runtime_debug_tests
+    COMMAND vice_runtime_debug_tests
+  )
+
   add_executable(
     vice_runtime_diagnostics_tests
     tests/diagnostics_tests.cpp
