@@ -1,7 +1,7 @@
 #pragma once
 
 #include <vice/platform/types.hpp>
-#include <vice/render/rhi.hpp>
+#include <vice/render/telemetry.hpp>
 
 #include <cstdint>
 
@@ -22,6 +22,8 @@ struct RuntimeFrameObservation {
     double update_seconds = 0.0;
     double render_seconds = 0.0;
     render::Backend backend = render::Backend::metal;
+    render::DeviceCapabilities device_capabilities{};
+    render::DeviceStats device_stats{};
     platform::WindowMetrics metrics{};
     const RuntimeSceneRenderer* scene_renderer = nullptr;
 };

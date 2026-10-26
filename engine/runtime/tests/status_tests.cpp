@@ -68,6 +68,26 @@ int main() {
         .height = 1440U,
         .drawable = true,
     };
+    status.render_device.capabilities = render::DeviceCapabilities{
+        .unified_memory = false,
+        .ray_tracing = true,
+        .mesh_shaders = true,
+        .max_sampler_anisotropy = 16U,
+        .max_texture_dimension_1d = 16384U,
+        .max_texture_dimension_2d = 16384U,
+        .max_texture_dimension_3d = 2048U,
+        .max_texture_array_layers = 2048U,
+        .recommended_frames_in_flight = 3U,
+    };
+    status.render_device.counters = render::DeviceStats{
+        .submitted_command_lists = 42U,
+        .completed_submission = 41U,
+        .created_buffers = 18U,
+        .created_textures = 9U,
+        .created_samplers = 4U,
+        .created_shader_modules = 12U,
+        .created_graphics_pipelines = 6U,
+    };
     status.renderer.directional_shadow = runtime::RuntimeDirectionalShadowTelemetry{
         .requested_mode = runtime::RuntimeDirectionalShadowMode::ray_traced,
         .active_path = runtime::RuntimeDirectionalShadowPath::cascaded,
@@ -108,6 +128,18 @@ int main() {
         json.find("\"update\":0.0035") != std::string::npos, "profile update timing");
     require(json.find("\"render\":0.008") != std::string::npos, "profile render timing");
     require(json.find("\"backend\":\"direct3d12\"") != std::string::npos, "portable backend name");
+    require(json.find("\"ray_tracing\":true") != std::string::npos, "portable RT capability");
+    require(json.find("\"mesh_shaders\":true") != std::string::npos, "portable mesh shader capability");
+    require(json.find("\"max_texture_dimension_2d\":16384") != std::string::npos,
+        "portable texture capability");
+    require(json.find("\"submitted_command_lists\":42") != std::string::npos,
+        "portable submission counter");
+    require(json.find("\"completed_submission\":41") != std::string::npos,
+        "portable completion counter");
+    require(json.find("\"created_graphics_pipelines\":6") != std::string::npos,
+        "portable pipeline counter");
+    require(json.find("MTL") == std::string::npos, "no Metal-native names");
+    require(json.find("ID3D12") == std::string::npos, "no D3D12-native names");
     require(json.find("1000000000000.25") != std::string::npos, "large-world camera x precision");
     require(json.find("-2000000000000.5") != std::string::npos, "large-world camera y precision");
     require(json.find("3000000000000.75") != std::string::npos, "large-world camera z precision");
@@ -146,6 +178,18 @@ int main() {
         0U,
         0.0,
         render::Backend::metal,
+        render::DeviceCapabilities{
+            .unified_memory = true,
+            .ray_tracing = false,
+            .mesh_shaders = false,
+            .max_sampler_anisotropy = 8U,
+            .max_texture_dimension_2d = 8192U,
+            .recommended_frames_in_flight = 2U,
+        },
+        render::DeviceStats{
+            .submitted_command_lists = 2U,
+            .completed_submission = 1U,
+        },
         platform::WindowMetrics{
             .width = 1280U,
             .height = 720U,
@@ -164,6 +208,11 @@ int main() {
     require(sampled.presentation.width == 2560U, "drawable width used");
     require(sampled.presentation.height == 1440U, "drawable height used");
     require(sampled.presentation.drawable, "drawable presentation state");
+    require(sampled.render_device.capabilities.unified_memory, "portable capabilities preserved");
+    require(sampled.render_device.capabilities.max_texture_dimension_2d == 8192U,
+        "portable limits preserved");
+    require(sampled.render_device.counters.submitted_command_lists == 2U,
+        "portable counters preserved");
     require(!sampled.renderer.available(), "missing renderer remains explicitly unavailable");
     require(!sampled.camera.entity.has_value(), "no authored camera is not invented");
 

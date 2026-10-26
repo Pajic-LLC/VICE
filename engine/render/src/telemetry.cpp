@@ -26,7 +26,7 @@ DeviceStats InstrumentedDevice::stats() const noexcept {
 }
 
 Backend InstrumentedDevice::backend() const noexcept {
-    return device_->backend();
+    return device_ != nullptr ? device_->backend() : Backend::metal;
 }
 
 DeviceCapabilities InstrumentedDevice::capabilities() const noexcept {
@@ -77,6 +77,12 @@ std::unique_ptr<GraphicsPipeline> InstrumentedDevice::create_graphics_pipeline(
     return result;
 }
 
+std::unique_ptr<ComputePipeline> InstrumentedDevice::create_compute_pipeline(
+    const ComputePipelineDesc& desc
+) {
+    return device_ != nullptr ? device_->create_compute_pipeline(desc) : nullptr;
+}
+
 std::unique_ptr<CommandList> InstrumentedDevice::create_command_list() {
     return device_ != nullptr ? device_->create_command_list() : nullptr;
 }
@@ -104,6 +110,28 @@ bool InstrumentedDevice::wait_idle() {
 
 std::unique_ptr<Swapchain> InstrumentedDevice::create_swapchain(platform::Window& window) {
     return device_ != nullptr ? device_->create_swapchain(window) : nullptr;
+}
+
+bool InstrumentedDevice::query_acceleration_structure_build_sizes(
+    const AccelerationStructureBuildDesc& desc,
+    AccelerationStructureBuildSizes& sizes
+) {
+    sizes = {};
+    if (device_ == nullptr) return false;
+    auto* ray_tracing = dynamic_cast<RayTracingDevice*>(device_.get());
+    return ray_tracing != nullptr &&
+        ray_tracing->query_acceleration_structure_build_sizes(desc, sizes);
+}
+
+std::unique_ptr<AccelerationStructure> InstrumentedDevice::create_acceleration_structure(
+    const AccelerationStructureBuildDesc& desc,
+    const AccelerationStructureBuildSizes& sizes
+) {
+    if (device_ == nullptr) return nullptr;
+    auto* ray_tracing = dynamic_cast<RayTracingDevice*>(device_.get());
+    return ray_tracing != nullptr
+        ? ray_tracing->create_acceleration_structure(desc, sizes)
+        : nullptr;
 }
 
 std::unique_ptr<InstrumentedDevice> instrument_device(std::unique_ptr<Device> device) noexcept {
