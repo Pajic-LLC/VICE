@@ -1,15 +1,35 @@
 #pragma once
 
-#include <vice/runtime/diagnostics.hpp>
+#include <vice/jobs/jobs.hpp>
+#include <vice/render/telemetry.hpp>
+#include <vice/simulation/simulation.hpp>
+#include <vice/world/world.hpp>
 
 #include <cstddef>
+#include <optional>
 #include <span>
 #include <vector>
 
 namespace vice::editor {
 
-using WorldProfilerStats = runtime::RuntimeWorldDiagnostics;
-using ProfilerSnapshot = runtime::RuntimeDiagnosticsSnapshot;
+struct WorldProfilerStats {
+    std::size_t entities = 0;
+    std::size_t resources = 0;
+    std::size_t relations = 0;
+    std::size_t regions = 0;
+    std::size_t full_regions = 0;
+    std::size_t reduced_regions = 0;
+    std::size_t inactive_regions = 0;
+};
+
+struct ProfilerSnapshot {
+    double frame_seconds = 0.0;
+    double frames_per_second = 0.0;
+    jobs::SchedulerStats jobs{};
+    std::optional<simulation::CoordinatorStats> simulation;
+    render::DeviceStats render{};
+    WorldProfilerStats world{};
+};
 
 class ProfilerHistory {
 public:
