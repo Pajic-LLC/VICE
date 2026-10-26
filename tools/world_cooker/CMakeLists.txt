@@ -1,6 +1,7 @@
 add_library(
   vice_world_cooker_lib
   STATIC
+    src/world_authoring.cpp
     src/world_cooker.cpp
     src/world_source_serializer.cpp
 )
@@ -20,4 +21,23 @@ if(VICE_BUILD_TOOLS)
   target_link_libraries(vice_world_cooker PRIVATE VICE::WorldCooker VICE::World)
   target_compile_features(vice_world_cooker PRIVATE cxx_std_23)
   vice_enable_warnings(vice_world_cooker)
+endif()
+
+if(VICE_BUILD_TESTS)
+  add_executable(
+    vice_world_authoring_tests
+    tests/world_authoring_tests.cpp
+  )
+  target_link_libraries(
+    vice_world_authoring_tests
+    PRIVATE
+      VICE::WorldCooker
+      VICE::World
+  )
+  target_compile_features(vice_world_authoring_tests PRIVATE cxx_std_23)
+  vice_enable_warnings(vice_world_authoring_tests)
+  add_test(
+    NAME vice_world_authoring_tests
+    COMMAND vice_world_authoring_tests
+  )
 endif()
