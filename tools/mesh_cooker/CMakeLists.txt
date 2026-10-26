@@ -46,3 +46,8 @@ if(VICE_BUILD_TOOLS)
   target_compile_features(vice_mesh_cooker PRIVATE cxx_std_23)
   vice_enable_warnings(vice_mesh_cooker)
 endif()
+
+# ProjectWorkflow is the cross-cooker orchestration layer. MeshCooker is the
+# final project cooker configured by the root build, so configure the workflow
+# only after every neutral cooker target is available.
+add_subdirectory(../project_workflow ${CMAKE_CURRENT_BINARY_DIR}/project_workflow)
