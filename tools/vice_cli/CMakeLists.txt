@@ -15,9 +15,17 @@ target_link_libraries(
   vice_dev_cli
   PUBLIC
     VICE::Project
+    VICE::ProjectWorkflow
     VICE::World
     VICE::WorldCooker
 )
+if(VICE_BUILD_PLAYER)
+  target_compile_definitions(
+    vice_dev_cli
+    PRIVATE
+      VICE_DEV_RUNTIME_HOST_EXECUTABLE="$<TARGET_FILE:vice_player>"
+  )
+endif()
 target_compile_features(vice_dev_cli PUBLIC cxx_std_23)
 vice_enable_warnings(vice_dev_cli)
 
