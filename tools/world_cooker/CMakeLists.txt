@@ -15,6 +15,12 @@ target_link_libraries(vice_world_cooker_lib PUBLIC VICE::World)
 target_compile_features(vice_world_cooker_lib PUBLIC cxx_std_23)
 vice_enable_warnings(vice_world_cooker_lib)
 
+# Persisted project build state is shared by VICE Editor and headless developer tools.
+add_subdirectory(
+  "${PROJECT_SOURCE_DIR}/tools/project_workflow"
+  "${CMAKE_BINARY_DIR}/tools/project_workflow"
+)
+
 if(VICE_BUILD_TOOLS)
   add_executable(vice_world_cooker src/main.cpp)
   target_link_libraries(vice_world_cooker PRIVATE VICE::WorldCooker VICE::World)
