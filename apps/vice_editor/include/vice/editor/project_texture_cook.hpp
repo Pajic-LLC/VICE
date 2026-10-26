@@ -7,6 +7,7 @@ namespace vice::editor {
 
 using ProjectTextureCookRecord = tools::ProjectTextureCookRecord;
 using ProjectTextureCookResult = tools::ProjectTextureCookResult;
+using tools::cooked_texture_ids;
 
 [[nodiscard]] ProjectTextureCookResult cook_project_textures(const ProjectSession& session);
 
