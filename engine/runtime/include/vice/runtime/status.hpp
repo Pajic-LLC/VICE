@@ -3,6 +3,7 @@
 #include <vice/platform/window.hpp>
 #include <vice/render/rhi.hpp>
 #include <vice/runtime/diagnostics.hpp>
+#include <vice/runtime/observation.hpp>
 #include <vice/world/persistent_id.hpp>
 #include <vice/world/spatial.hpp>
 #include <vice/world/world.hpp>
@@ -15,12 +16,6 @@
 namespace vice::runtime {
 
 class RuntimeSceneRenderer;
-
-enum class RuntimeExecutionState : std::uint8_t {
-    starting,
-    running,
-    stopping,
-};
 
 struct RuntimeCameraDiagnostics {
     std::optional<world::PersistentId> entity;

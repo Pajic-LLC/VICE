@@ -7,6 +7,8 @@ target_link_libraries(
   vice_player
   PRIVATE
     VICE::Runtime
+    VICE::RuntimeDevSession
+    VICE::RuntimeDiagnostics
 )
 
 target_compile_features(vice_player PRIVATE cxx_std_23)

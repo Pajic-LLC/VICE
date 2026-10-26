@@ -4,6 +4,7 @@
 #include <vice/platform/types.hpp>
 #include <vice/project/project.hpp>
 #include <vice/render/rhi.hpp>
+#include <vice/runtime/observation.hpp>
 #include <vice/world/world.hpp>
 
 #include <cstdint>
@@ -124,7 +125,8 @@ struct ApplicationConfig {
 [[nodiscard]] int run_native_game(
     LoadedProject& runtime_project,
     GameModule& module,
-    const ApplicationConfig& config = {}
+    const ApplicationConfig& config = {},
+    RuntimeObserver* observer = nullptr
 );
 
 } // namespace vice::runtime
