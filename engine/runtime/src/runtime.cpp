@@ -4,6 +4,7 @@
 #include <vice/core/platform.hpp>
 #include <vice/core/time.hpp>
 #include <vice/platform/services.hpp>
+#include <vice/render/telemetry.hpp>
 #include <vice/runtime/scene.hpp>
 #include <vice/world/snapshot_file.hpp>
 
@@ -243,9 +244,14 @@ int run_native_game(
         return 1;
     }
 
-    auto render_device = render::Device::create();
-    if (!render_device) {
+    auto base_render_device = render::Device::create();
+    if (!base_render_device) {
         log(LogLevel::error, "VICE Runtime could not create a render device.");
+        return 1;
+    }
+    auto render_device = render::instrument_device(std::move(base_render_device));
+    if (!render_device || !render_device->valid()) {
+        log(LogLevel::error, "VICE Runtime could not instrument the render device.");
         return 1;
     }
     auto swapchain = render_device->create_swapchain(*window);
@@ -319,6 +325,8 @@ int run_native_game(
             .update_seconds = update_seconds,
             .render_seconds = render_seconds,
             .backend = render_device->backend(),
+            .device_capabilities = render_device->capabilities(),
+            .device_stats = render_device->stats(),
             .metrics = metrics,
             .scene_renderer = &scene_renderer,
         });

@@ -75,6 +75,8 @@ private:
             observation.frame_index,
             observation.frame_seconds,
             observation.backend,
+            observation.device_capabilities,
+            observation.device_stats,
             observation.metrics,
             *project_->world,
             observation.scene_renderer

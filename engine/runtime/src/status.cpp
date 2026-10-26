@@ -183,6 +183,39 @@ void append_ray_tracing_telemetry(
     output.push_back('}');
 }
 
+void append_device_capabilities(
+    std::string& output,
+    const render::DeviceCapabilities& capabilities
+) {
+    output += "{\"unified_memory\":";
+    output += capabilities.unified_memory ? "true" : "false";
+    output += ",\"ray_tracing\":";
+    output += capabilities.ray_tracing ? "true" : "false";
+    output += ",\"mesh_shaders\":";
+    output += capabilities.mesh_shaders ? "true" : "false";
+    output += ",\"max_sampler_anisotropy\":" + std::to_string(capabilities.max_sampler_anisotropy);
+    output += ",\"max_texture_dimension_1d\":" + std::to_string(capabilities.max_texture_dimension_1d);
+    output += ",\"max_texture_dimension_2d\":" + std::to_string(capabilities.max_texture_dimension_2d);
+    output += ",\"max_texture_dimension_3d\":" + std::to_string(capabilities.max_texture_dimension_3d);
+    output += ",\"max_texture_array_layers\":" + std::to_string(capabilities.max_texture_array_layers);
+    output += ",\"recommended_frames_in_flight\":" +
+        std::to_string(capabilities.recommended_frames_in_flight) + "}";
+}
+
+void append_device_counters(
+    std::string& output,
+    const render::DeviceStats& counters
+) {
+    output += "{\"submitted_command_lists\":" + std::to_string(counters.submitted_command_lists);
+    output += ",\"completed_submission\":" + std::to_string(counters.completed_submission);
+    output += ",\"created_buffers\":" + std::to_string(counters.created_buffers);
+    output += ",\"created_textures\":" + std::to_string(counters.created_textures);
+    output += ",\"created_samplers\":" + std::to_string(counters.created_samplers);
+    output += ",\"created_shader_modules\":" + std::to_string(counters.created_shader_modules);
+    output += ",\"created_graphics_pipelines\":" +
+        std::to_string(counters.created_graphics_pipelines) + "}";
+}
+
 } // namespace
 
 RuntimeCameraDiagnostics runtime_camera_diagnostics(
@@ -217,6 +250,8 @@ RuntimeStatusSnapshot make_runtime_status_snapshot(
     const std::uint64_t frame_index,
     const double frame_seconds,
     const render::Backend backend,
+    const render::DeviceCapabilities device_capabilities,
+    const render::DeviceStats device_stats,
     const platform::WindowMetrics metrics,
     const world::World& world,
     const RuntimeSceneRenderer* const scene_renderer
@@ -243,6 +278,10 @@ RuntimeStatusSnapshot make_runtime_status_snapshot(
         .height = metrics.drawable_height,
         .drawable = metrics.drawable_width > 0U && metrics.drawable_height > 0U,
     };
+    result.render_device = RuntimeRenderDeviceDiagnostics{
+        .capabilities = device_capabilities,
+        .counters = device_stats,
+    };
     result.renderer = runtime_renderer_diagnostics(scene_renderer);
     return result;
 }
@@ -252,7 +291,7 @@ std::string serialize_runtime_status_snapshot(
     const std::string_view session_id
 ) {
     std::string output;
-    output.reserve(16384U);
+    output.reserve(18432U);
     output += "{\"schema\":\"vice.dev.runtime.v1\",\"session_id\":";
     append_json_string(output, session_id);
     output += ",\"project_id\":";
@@ -310,6 +349,12 @@ std::string serialize_runtime_status_snapshot(
     output += ",\"height\":" + std::to_string(snapshot.presentation.height);
     output += ",\"drawable\":";
     output += snapshot.presentation.drawable ? "true" : "false";
+    output.push_back('}');
+
+    output += ",\"render_device\":{\"capabilities\":";
+    append_device_capabilities(output, snapshot.render_device.capabilities);
+    output += ",\"counters\":";
+    append_device_counters(output, snapshot.render_device.counters);
     output.push_back('}');
 
     output += ",\"renderer\":{\"available\":";
