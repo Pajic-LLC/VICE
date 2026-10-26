@@ -34,7 +34,7 @@ jobs:
         run: cmake -DVICE_TEST_BUILD_DIR=build -DVICE_TEST_CONFIG=Release -P cmake/VerifyTestDiscovery.cmake
 
       - name: Build
-        run: cmake --build build --config Release --parallel
+        run: cmake --build build --config Release --parallel 4
 
       - name: Test
         run: ctest --test-dir build -C Release --output-on-failure
