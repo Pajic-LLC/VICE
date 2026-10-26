@@ -27,6 +27,13 @@ target_link_libraries(
 target_compile_features(vice_mesh_cooker_lib PUBLIC cxx_std_23)
 vice_enable_warnings(vice_mesh_cooker_lib)
 
+if(NOT TARGET vice_project_workflow)
+  add_subdirectory(
+    "${PROJECT_SOURCE_DIR}/tools/project_workflow"
+    "${CMAKE_BINARY_DIR}/tools/project_workflow"
+  )
+endif()
+
 if(VICE_BUILD_TOOLS)
   add_executable(vice_mesh_cooker src/main.cpp)
   target_link_libraries(vice_mesh_cooker PRIVATE VICE::MeshCooker)
