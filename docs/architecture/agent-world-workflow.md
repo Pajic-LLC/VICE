@@ -21,6 +21,8 @@ Use the session path returned by `project run`. Runtime debug requests select on
 persistent entity ID and read from the normal running World. They do not modify
 simulation or expose arbitrary process memory. A query timeout is bounded to two
 seconds. Runtime payloads are versioned JSON strings inside `data.payload`.
+Session launches discard inherited console streams so a running game cannot keep
+the CLI JSON response pipe open or mix Runtime logs into that response.
 
 ## Edit request version 1
 

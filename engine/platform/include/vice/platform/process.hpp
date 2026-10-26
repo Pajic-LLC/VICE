@@ -10,6 +10,9 @@ struct ProcessLaunchRequest {
     std::filesystem::path executable;
     std::vector<std::string> arguments;
     std::filesystem::path working_directory;
+    // Asynchronous launches may discard inherited streams. run_process captures
+    // output regardless of this flag.
+    bool inherit_standard_streams = true;
 };
 
 struct ProcessLaunchResult {

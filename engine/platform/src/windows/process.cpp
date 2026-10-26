@@ -177,6 +177,13 @@ ProcessLaunchResult launch_process(const ProcessLaunchRequest& request) {
 
     STARTUPINFOW startup{};
     startup.cb = sizeof(startup);
+    if (!request.inherit_standard_streams) {
+        // The child receives no console streams and cannot retain a CLI pipe.
+        startup.dwFlags = STARTF_USESTDHANDLES;
+        startup.hStdInput = nullptr;
+        startup.hStdOutput = nullptr;
+        startup.hStdError = nullptr;
+    }
     PROCESS_INFORMATION process{};
     const wchar_t* const working_directory = prepared.working_directory.empty()
         ? nullptr
@@ -187,7 +194,7 @@ ProcessLaunchResult launch_process(const ProcessLaunchRequest& request) {
         nullptr,
         nullptr,
         FALSE,
-        0,
+        request.inherit_standard_streams ? 0 : CREATE_NO_WINDOW,
         nullptr,
         working_directory,
         &startup,
