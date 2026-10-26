@@ -3,6 +3,7 @@ add_library(
   STATIC
     src/mesh_cooker.cpp
     src/mesh_cooker_v7.cpp
+    src/project_mesh_cook.cpp
 )
 add_library(VICE::MeshCooker ALIAS vice_mesh_cooker_lib)
 
@@ -20,19 +21,13 @@ target_include_directories(
 target_link_libraries(
   vice_mesh_cooker_lib
   PUBLIC
+    VICE::Project
     VICE::Render
   PRIVATE
     VICE::World
 )
 target_compile_features(vice_mesh_cooker_lib PUBLIC cxx_std_23)
 vice_enable_warnings(vice_mesh_cooker_lib)
-
-if(NOT TARGET vice_project_workflow)
-  add_subdirectory(
-    "${PROJECT_SOURCE_DIR}/tools/project_workflow"
-    "${CMAKE_BINARY_DIR}/tools/project_workflow"
-  )
-endif()
 
 if(VICE_BUILD_TOOLS)
   add_executable(vice_mesh_cooker src/main.cpp)
