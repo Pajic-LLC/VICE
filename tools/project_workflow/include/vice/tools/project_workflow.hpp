@@ -4,6 +4,7 @@
 
 #include <cstddef>
 #include <filesystem>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -51,6 +52,11 @@ struct ProjectBuildResult {
     [[nodiscard]] explicit operator bool() const noexcept { return success; }
 };
 
+struct ProjectRuntimeSession {
+    std::string id;
+    std::filesystem::path root;
+};
+
 struct ProjectLaunchRequest {
     std::filesystem::path executable;
     std::vector<std::string> arguments;
@@ -60,6 +66,7 @@ struct ProjectLaunchRequest {
 struct ProjectRunResult {
     bool launched = false;
     ProjectBuildResult build;
+    std::optional<ProjectRuntimeSession> runtime_session;
     std::string diagnostics;
 
     [[nodiscard]] explicit operator bool() const noexcept { return launched; }
@@ -86,6 +93,11 @@ struct ProjectRunResult {
     const ProjectBuildResult& build
 );
 
+[[nodiscard]] ProjectLaunchRequest project_launch_request(
+    const ProjectBuildResult& build,
+    const ProjectRuntimeSession& runtime_session
+);
+
 [[nodiscard]] ProjectRunResult run_project(
     const project::Workspace& workspace,
     const std::filesystem::path& runtime_host_executable,
@@ -95,6 +107,19 @@ struct ProjectRunResult {
 [[nodiscard]] ProjectRunResult run_project(
     const project::Workspace& workspace,
     const std::filesystem::path& runtime_host_executable
+);
+
+[[nodiscard]] ProjectRunResult run_project_with_session(
+    const project::Workspace& workspace,
+    const std::filesystem::path& runtime_host_executable,
+    const ProjectBuildToolchain& toolchain,
+    ProjectRuntimeSession runtime_session
+);
+
+[[nodiscard]] ProjectRunResult run_project_with_session(
+    const project::Workspace& workspace,
+    const std::filesystem::path& runtime_host_executable,
+    ProjectRuntimeSession runtime_session
 );
 
 } // namespace vice::tools
