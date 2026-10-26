@@ -1,6 +1,5 @@
 #include <vice/project/workspace.hpp>
 #include <vice/render/mesh_asset.hpp>
-#include <vice/tools/mesh_cooker.hpp>
 #include <vice/tools/project_mesh_cook.hpp>
 
 #include <cstdlib>
@@ -54,7 +53,8 @@ int main() {
         "startup_world \"worlds/main.vworld\"\n"
     );
     write_text(world_source, "vice-world-source 1\n");
-    constexpr std::string_view mesh_source_text =
+    write_text(
+        mesh_source,
         "vice-mesh-source 1\n"
         "name triangle\n"
         "id 84000000-0000-4000-8000-000000000002\n"
@@ -62,8 +62,8 @@ int main() {
         "vertex -1 0 0 1 0 0\n"
         "vertex 1 0 0 0 1 0\n"
         "vertex 0 1 0 0 0 1\n"
-        "triangle 0 1 2\n";
-    write_text(mesh_source, mesh_source_text);
+        "triangle 0 1 2\n"
+    );
 
     const auto opened = project::open_workspace(manifest_path, cache_base);
     require(static_cast<bool>(opened), "project workspace opens");
@@ -84,9 +84,11 @@ int main() {
     require(std::filesystem::is_regular_file(expected), "cooked mesh exists");
     const auto loaded = render::load_mesh_asset(expected);
     require(loaded.asset.has_value(), "cooked mesh loads");
-    const auto authored = tools::mesh_cooker::parse_source_manifest(mesh_source_text);
-    require(authored.source.has_value(), "authored mesh parses for stable ID comparison");
-    require(loaded.asset->stable_id == authored.source->stable_id, "stable mesh ID preserved");
+    require(
+        world::PersistentId{loaded.asset->stable_id}.to_string() ==
+            "84000000-0000-4000-8000-000000000002",
+        "stable mesh ID preserved"
+    );
 
     write_text(mesh_source, "this is not a VICE mesh\n");
     const auto invalid = tools::cook_project_meshes(*opened.workspace);
