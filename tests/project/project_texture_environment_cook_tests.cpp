@@ -80,11 +80,10 @@ int main() {
     write_ppm(image_path);
     write_text(
         texture_source,
-        "vice-texture 1\n"
+        "vice-texture-source 1\n"
         "id 85000000-0000-4000-8000-000000000002\n"
         "image \"images/checker.ppm\"\n"
         "color_space srgb\n"
-        "sampler repeat linear linear linear 8\n"
     );
     write_text(
         environment_source,
@@ -106,6 +105,7 @@ int main() {
     require(static_cast<bool>(opened), "project workspace opens");
 
     const auto textures = tools::cook_project_textures(*opened.workspace);
+    if (!textures) std::cerr << textures.diagnostics << '\n';
     require(static_cast<bool>(textures), "texture cook succeeds");
     require(textures.diagnostics.empty(), "texture diagnostics clear");
     require(textures.textures.size() == 1U, "one texture cooked");
@@ -130,11 +130,10 @@ int main() {
 
     write_text(
         asset_root / "textures" / "duplicate.vtex",
-        "vice-texture 1\n"
+        "vice-texture-source 1\n"
         "id 85000000-0000-4000-8000-000000000002\n"
         "image \"images/checker.ppm\"\n"
         "color_space srgb\n"
-        "sampler repeat linear linear linear 8\n"
     );
     const auto duplicate_texture = tools::cook_project_textures(*opened.workspace);
     require(!static_cast<bool>(duplicate_texture), "duplicate texture stable ID rejected");
