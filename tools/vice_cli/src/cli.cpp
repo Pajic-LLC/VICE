@@ -378,6 +378,16 @@ void append_optional_path(
     }
 
     const auto requested_session = project_runtime_session(manifest_path, environment);
+    // Reject malformed launch identity before a build can replace a staged
+    // executable that a preceding session may still be using on Windows.
+    if (!runtime::valid_runtime_dev_session_id(requested_session.id)) {
+        return CommandResult{
+            .exit_code = exit_launch,
+            .json = response_json(command, false,
+                {"Runtime development session ID is invalid."},
+                project_build_data("launch_failed", workspace, tools::ProjectBuildResult{})),
+        };
+    }
     const auto run = tools::run_project_with_session(
         workspace,
         environment.runtime_host_executable,

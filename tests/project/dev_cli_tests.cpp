@@ -5,6 +5,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <iterator>
 #include <string>
 #include <string_view>
 
@@ -152,11 +153,19 @@ int main() {
     failing_launch_environment.runtime_session_root = root / "runtime-sessions";
     failing_launch_environment.runtime_session_id = "..";
 
+    // Invalid launch identity must fail before asset validation or staging. This
+    // also avoids rebuilding over the preceding short-lived process on Windows.
+    std::ifstream world_input{world_path, std::ios::binary};
+    const std::string preserved_world{std::istreambuf_iterator<char>{world_input}, std::istreambuf_iterator<char>{}};
+    world_input.close();
+    require(!preserved_world.empty(), "preserve World fixture");
+    write_text(world_path, "vice-world-source 999\n"sv);
     const auto failed_launch = execute("project", "run", project_path, failing_launch_environment);
     require(failed_launch.exit_code == vice::dev::exit_launch, "project run distinguishes launch-phase failure");
     require(failed_launch.json.find("\"state\":\"launch_failed\"") != std::string::npos, "project launch failure state");
     require(failed_launch.json.find("Runtime development session ID is invalid") != std::string::npos, "launch failure diagnostic is preserved");
     require(failed_launch.json.find("\"ok\":false") != std::string::npos, "launch failure is not success");
+    write_text(world_path, preserved_world);
 
     const vice::dev::CommandEnvironment unavailable_environment;
     const auto unavailable_build = execute("project", "build", project_path, unavailable_environment);
