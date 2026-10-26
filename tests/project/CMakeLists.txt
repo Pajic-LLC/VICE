@@ -37,6 +37,24 @@ if(TARGET vice_texture_cooker_lib AND TARGET vice_environment_cooker_lib)
   )
 endif()
 
+if(TARGET vice_render_material_cooker_lib)
+  add_executable(
+    vice_project_render_material_cook_tests
+    project_render_material_cook_tests.cpp
+  )
+  target_link_libraries(
+    vice_project_render_material_cook_tests
+    PRIVATE
+      VICE::RenderMaterialCooker
+  )
+  target_compile_features(vice_project_render_material_cook_tests PRIVATE cxx_std_23)
+  vice_enable_warnings(vice_project_render_material_cook_tests)
+  add_test(
+    NAME vice_project_render_material_cook_tests
+    COMMAND vice_project_render_material_cook_tests
+  )
+endif()
+
 if(TARGET vice_dev_cli)
   add_executable(vice_dev_cli_tests dev_cli_tests.cpp)
   target_link_libraries(vice_dev_cli_tests PRIVATE VICE::DevCLI)
