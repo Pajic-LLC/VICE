@@ -52,6 +52,7 @@ struct AuthoredSimulation::State {
     std::vector<Region> regions;
     std::unordered_map<world::RegionId, Domain*, world::RegionIdHash> domain_lookup;
     std::vector<Body> bodies;
+    std::unordered_map<world::PersistentId, std::size_t, world::PersistentIdHash> body_lookup;
     double accumulator = 0;
 
     const Domain* domain(world::RegionId id) const noexcept {
@@ -123,6 +124,7 @@ bool AuthoredSimulation::reset(world::World& world, jobs::Scheduler& jobs, std::
         if (!next->bridge.create_box(world, next->coordinator, next->bindings, *owner, desc)) {
             return fail(diagnostics, "Could not instantiate authored rigid box: " + entity.persistent_id.to_string());
         }
+        next->body_lookup.emplace(entity.persistent_id, next->bodies.size());
         next->bodies.push_back({entity.persistent_id, desc, *owner, authored, *entity.spatial_state, entity.authored_transform});
     }
     state_ = std::move(next);
@@ -192,7 +194,7 @@ const WorldBridge& AuthoredSimulation::bridge() const noexcept { return state_->
 
 std::optional<BodyDebugSnapshot> AuthoredSimulation::body(const world::PersistentId owner) const noexcept {
     if (!state_->world) return std::nullopt;
-    const auto record = std::find_if(state_->bodies.begin(), state_->bodies.end(), [&](const auto& b) { return b.owner == owner; });
-    return record == state_->bodies.end() ? std::nullopt : state_->observed_body(*record);
+    const auto record = state_->body_lookup.find(owner);
+    return record == state_->body_lookup.end() ? std::nullopt : state_->observed_body(state_->bodies[record->second]);
 }
 } // namespace vice::rigid_body
