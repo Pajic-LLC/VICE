@@ -36,6 +36,17 @@ void write_text(const std::filesystem::path& path, const std::string_view text) 
     return vice::dev::execute(arguments);
 }
 
+[[nodiscard]] vice::dev::CommandResult execute(
+    const std::string_view domain,
+    const std::string_view operation,
+    const std::filesystem::path& path,
+    const vice::dev::CommandEnvironment& environment
+) {
+    const std::string path_text = path.string();
+    const std::array<std::string_view, 3> arguments{domain, operation, path_text};
+    return vice::dev::execute(arguments, environment);
+}
+
 } // namespace
 
 int main() {
@@ -114,6 +125,36 @@ int main() {
     const auto world_inspect_again = execute("world", "inspect", world_path);
     require(world_inspect_again.json == world_inspect.json, "deterministic World JSON");
 
+#ifdef _WIN32
+    const auto fake_runtime = root / "bin" / "vice_player.exe";
+#else
+    const auto fake_runtime = root / "bin" / "vice_player";
+#endif
+    write_text(fake_runtime, "not a runnable VICE host\n");
+    vice::dev::CommandEnvironment workflow_environment;
+    workflow_environment.runtime_host_executable = fake_runtime;
+
+    const auto project_build = execute("project", "build", project_path, workflow_environment);
+    require(project_build.exit_code == vice::dev::exit_success, "project build exit status");
+    require(project_build.json.find("\"command\":\"project.build\"") != std::string::npos, "project build command");
+    require(project_build.json.find("\"state\":\"built\"") != std::string::npos, "project build state");
+    require(project_build.json.find("\"project_id\":\"82000000-0000-4000-8000-000000000001\"") != std::string::npos, "build project identity");
+    require(project_build.json.find("\"entities\":2") != std::string::npos, "build entity count");
+    require(project_build.json.find("\"regions\":1") != std::string::npos, "build region count");
+    require(project_build.json.find("\"source_present\":false") != std::string::npos, "build optional game module state");
+    require(project_build.json.find("vice-agent-game") != std::string::npos, "build game target");
+
+    const auto project_run = execute("project", "run", project_path, workflow_environment);
+    require(project_run.exit_code == vice::dev::exit_launch, "project run distinguishes launch failure");
+    require(project_run.json.find("\"command\":\"project.run\"") != std::string::npos, "project run command");
+    require(project_run.json.find("\"state\":\"launch_failed\"") != std::string::npos, "project launch failure state");
+    require(project_run.json.find("\"ok\":false") != std::string::npos, "launch failure is not success");
+
+    const vice::dev::CommandEnvironment unavailable_environment;
+    const auto unavailable_build = execute("project", "build", project_path, unavailable_environment);
+    require(unavailable_build.exit_code == vice::dev::exit_unavailable, "missing runtime host is unavailable");
+    require(unavailable_build.json.find("runtime host") != std::string::npos, "missing runtime diagnostic");
+
     const auto wrong_world_type = root / "assets" / "worlds" / "main.vworldc";
     write_text(wrong_world_type, "not cooked data"sv);
     const auto wrong_type_result = execute("world", "validate", wrong_world_type);
@@ -145,6 +186,15 @@ int main() {
     require(invalid_startup_result.exit_code == vice::dev::exit_validation, "invalid startup World fails project validation");
     require(invalid_startup_result.json.find("Configured startup World is invalid") != std::string::npos, "startup World validation context");
     require(invalid_startup_result.json.find("World source line 1") != std::string::npos, "startup World parser diagnostic");
+
+    const auto failed_build = execute("project", "build", project_path, workflow_environment);
+    require(failed_build.exit_code == vice::dev::exit_build, "project build failure has distinct exit status");
+    require(failed_build.json.find("\"state\":\"build_failed\"") != std::string::npos, "project build failure state");
+    require(failed_build.json.find("World source line 1") != std::string::npos, "build preserves World cooker diagnostic");
+
+    const auto failed_run = execute("project", "run", project_path, workflow_environment);
+    require(failed_run.exit_code == vice::dev::exit_build, "project run distinguishes build failure");
+    require(failed_run.json.find("\"state\":\"build_failed\"") != std::string::npos, "run build failure state");
 
     const std::array<std::string_view, 0> no_arguments{};
     const auto usage = vice::dev::execute(no_arguments);
