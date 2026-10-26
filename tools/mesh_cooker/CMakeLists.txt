@@ -51,3 +51,11 @@ endif()
 # final project cooker configured by the root build, so configure the workflow
 # only after every neutral cooker target is available.
 add_subdirectory(../project_workflow ${CMAKE_CURRENT_BINARY_DIR}/project_workflow)
+
+if(VICE_BUILD_TOOLS)
+  # The structured developer CLI consumes ProjectWorkflow as its one build truth.
+  add_subdirectory(
+    "${PROJECT_SOURCE_DIR}/tools/vice_cli"
+    "${CMAKE_BINARY_DIR}/tools/vice_cli"
+  )
+endif()
