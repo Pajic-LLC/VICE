@@ -114,6 +114,7 @@ vice_enable_warnings(vice_runtime_diagnostics)
 add_library(
   vice_runtime_dev_session
   STATIC
+    src/debug_session.cpp
     src/dev_session.cpp
 )
 add_library(VICE::RuntimeDevSession ALIAS vice_runtime_dev_session)
@@ -122,6 +123,11 @@ target_include_directories(
   vice_runtime_dev_session
   PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+)
+target_link_libraries(
+  vice_runtime_dev_session
+  PUBLIC
+    VICE::World
 )
 target_compile_features(vice_runtime_dev_session PUBLIC cxx_std_23)
 vice_enable_warnings(vice_runtime_dev_session)
@@ -141,6 +147,22 @@ if(VICE_BUILD_TESTS)
   add_test(
     NAME vice_runtime_debug_tests
     COMMAND vice_runtime_debug_tests
+  )
+
+  add_executable(
+    vice_runtime_debug_session_tests
+    tests/debug_session_tests.cpp
+  )
+  target_link_libraries(
+    vice_runtime_debug_session_tests
+    PRIVATE
+      VICE::RuntimeDevSession
+  )
+  target_compile_features(vice_runtime_debug_session_tests PRIVATE cxx_std_23)
+  vice_enable_warnings(vice_runtime_debug_session_tests)
+  add_test(
+    NAME vice_runtime_debug_session_tests
+    COMMAND vice_runtime_debug_session_tests
   )
 
   add_executable(

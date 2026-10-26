@@ -34,6 +34,11 @@ struct CommandEnvironment {
     const std::filesystem::path& runtime_session_path
 );
 
+[[nodiscard]] CommandResult execute_runtime_debug(
+    const std::filesystem::path& runtime_session_path,
+    std::string_view entity_id
+);
+
 [[nodiscard]] CommandResult execute(
     std::span<const std::string_view> arguments,
     const CommandEnvironment& environment
