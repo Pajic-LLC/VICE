@@ -149,13 +149,12 @@ int main() {
     require(launched_run.json.find("\"ok\":true") != std::string::npos, "successful process creation is success");
 
 #ifdef _WIN32
-    const auto fake_runtime = root / "bin" / "invalid_runtime.exe";
+    const auto missing_runtime = root / "bin" / "missing_runtime.exe";
 #else
-    const auto fake_runtime = root / "bin" / "invalid_runtime";
+    const auto missing_runtime = root / "bin" / "missing_runtime";
 #endif
-    write_text(fake_runtime, "not a runnable VICE host\n");
     vice::dev::CommandEnvironment failing_launch_environment;
-    failing_launch_environment.runtime_host_executable = fake_runtime;
+    failing_launch_environment.runtime_host_executable = missing_runtime;
 
     const auto failed_launch = execute("project", "run", project_path, failing_launch_environment);
     require(failed_launch.exit_code == vice::dev::exit_launch, "project run distinguishes launch failure");
