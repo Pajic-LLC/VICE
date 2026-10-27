@@ -2,6 +2,7 @@
 #include "rigid_box_source.hpp"
 #include "distance_link_source.hpp"
 #include "dependency_source.hpp"
+#include "character_source.hpp"
 
 #include <vice/world/world.hpp>
 
@@ -174,6 +175,11 @@ ParseResult parse_source_manifest(const std::string_view source) {
 
             std::string metadata;
             while (values >> metadata) {
+                if (metadata == "character") {
+                    world::Character c;
+                    if (entity.character || !read_character(values,c)) { fail("invalid or duplicate character record."); return result; }
+                    entity.character = c; continue;
+                }
                 if (metadata == "dependency") {
                     world::Dependency d;
                     if (entity.dependency || !read_dependency(values, d)) { fail("invalid or duplicate dependency record."); return result; }
@@ -392,7 +398,7 @@ ParseResult parse_source_manifest(const std::string_view source) {
         return result;
     }
 
-    if (!world::validate_distance_links(parsed, &result.diagnostics) || !world::validate_dependencies(parsed, &result.diagnostics)) return result;
+    if (!world::validate_distance_links(parsed, &result.diagnostics) || !world::validate_dependencies(parsed, &result.diagnostics) || !world::validate_characters(parsed, &result.diagnostics)) return result;
     world::World canonical;
     if (!canonical.restore(parsed)) {
         result.diagnostics = "World source violates World validation rules.";

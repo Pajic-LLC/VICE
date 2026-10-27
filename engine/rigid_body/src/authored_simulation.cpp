@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <unordered_map>
 #include <tuple>
 #include <unordered_set>
@@ -46,6 +47,15 @@ struct AuthoredSimulation::State {
         world::SpatialState expected_spatial;
         std::optional<world::AuthoredTransform> expected_transform;
     };
+    struct Controller {
+        world::PersistentId owner;
+        world::EntityId entity;
+        world::Character expected;
+        world::SpatialState expected_spatial;
+    };
+    std::vector<Controller> characters;
+    std::unordered_map<world::PersistentId,std::size_t,world::PersistentIdHash> character_lookup;
+    std::uint64_t character_revision = 0;
     struct Link {
         world::PersistentId owner;
         world::EntityId entity;
@@ -80,6 +90,43 @@ struct AuthoredSimulation::State {
             world->authored_transform(*entity) == record.expected_transform;
     }
 
+    bool matches(const Controller& record) const {
+        return world->find(record.owner) == record.entity && world->character(record.entity) == record.expected &&
+            world->spatial_state(record.entity) == record.expected_spatial;
+    }
+    std::optional<CharacterObservation> observed_character(const Controller& record) const noexcept {
+        const auto spatial = world->spatial_state(record.entity);
+        const auto* target = spatial ? domain(spatial->region) : nullptr;
+        if (!target) return std::nullopt;
+        const auto native = bridge.character_id(*world,coordinator,record.entity);
+        const auto state = native ? target->character_state(*native) : std::nullopt;
+        if (!state) return std::nullopt;
+        CharacterObservation result{*state,{},*native};
+        if (state->ground_participant) {
+            const auto body = participant_bodies.find(state->ground_participant->value);
+            if (body != participant_bodies.end()) result.supporting_entity = bodies[body->second].owner;
+        }
+        return result;
+    }
+    bool publish_character(Controller& record) {
+        const auto spatial = world->spatial_state(record.entity);
+        // A transferred controller has new contact caches. Reconstruct support
+        // before publishing so the next SDK read does not invent an airborne tick.
+        if (spatial && spatial->region != record.expected_spatial.region) {
+            const auto native = bridge.character_id(*world,coordinator,record.entity);
+            auto* target = domain_lookup.at(spatial->region);
+            const auto current = native ? target->character_state(*native) : std::nullopt;
+            if (!current || !target->set_character_position(*native,current->position)) return false;
+        }
+        const auto observed = observed_character(record);
+        if (!observed || !spatial) return false;
+        auto c = record.expected;
+        c.velocity = observed->state.velocity; c.horizontal_velocity = observed->state.horizontal_velocity;
+        c.pending_jump_speed = observed->state.pending_jump_speed;
+        if (!world->set_character(record.entity,c)) return false;
+        record.expected = c; record.expected_spatial = *spatial;
+        return true;
+    }
     std::optional<BodyDebugSnapshot> observed_body(const Body& record) const noexcept {
         if (!world) return std::nullopt;
         const auto entity = world->find(record.owner);
@@ -105,7 +152,7 @@ bool AuthoredSimulation::reset(world::World& world, jobs::Scheduler& jobs, std::
     const auto snapshot = world.snapshot();
     std::unordered_set<world::RegionId, world::RegionIdHash> physical_regions;
     for (const auto& entity : snapshot.entities) {
-        if (entity.rigid_box && entity.spatial_state) physical_regions.insert(entity.spatial_state->region);
+        if ((entity.rigid_box || entity.character) && entity.spatial_state) physical_regions.insert(entity.spatial_state->region);
     }
     next->regions.reserve(snapshot.regions.size());
     for (const auto& region : snapshot.regions) {
@@ -170,6 +217,27 @@ bool AuthoredSimulation::reset(world::World& world, jobs::Scheduler& jobs, std::
         next->link_ids.emplace(record.native_id.value, next->links.size());
         next->links.push_back(record);
     }
+    for (const auto& entity : snapshot.entities) {
+        if (!entity.character) continue;
+        const auto owner = world.find(entity.persistent_id);
+        const auto& c = *entity.character;
+        if (!owner || !entity.spatial_state || !world::valid(c) || next->characters.size() >= std::numeric_limits<std::uint32_t>::max()-1U)
+            return fail(diagnostics,"Invalid authored character: " + entity.persistent_id.to_string());
+        auto* target = next->domain_lookup.at(entity.spatial_state->region);
+        CharacterDesc desc;
+        desc.id = CharacterId{static_cast<std::uint32_t>(next->characters.size()+1U)};
+        desc.height=c.height; desc.radius=c.radius; desc.mass=c.mass; desc.max_strength=c.max_strength;
+        desc.max_slope_angle=c.max_slope_angle; desc.step_height=c.step_height; desc.stick_to_floor_distance=c.stick_to_floor_distance;
+        if (!next->bridge.create_character(world,next->coordinator,*owner,desc)) return fail(diagnostics,"Could not instantiate authored character.");
+        const auto native = next->bridge.character_id(world,next->coordinator,*owner);
+        const auto initial = native ? target->character_state(*native) : std::nullopt;
+        if (!native || !initial || !target->set_character_position(*native,initial->position) ||
+            !target->set_character_velocity(*native,c.velocity) || !target->set_character_horizontal_velocity(*native,c.horizontal_velocity) ||
+            (c.pending_jump_speed && !target->request_character_jump(*native,*c.pending_jump_speed))) return fail(diagnostics,"Could not restore authored character motion.");
+        next->character_lookup.emplace(entity.persistent_id,next->characters.size());
+        next->characters.push_back({entity.persistent_id,*owner,c,*entity.spatial_state});
+    }
+    next->character_revision = world.character_revision();
     next->link_revision = world.distance_link_revision();
     state_ = std::move(next);
     if (diagnostics) diagnostics->clear();
@@ -183,6 +251,8 @@ bool AuthoredSimulation::step(std::string* diagnostics) {
         if (state_->world->find(link.owner) != link.entity || state_->world->distance_link(link.entity) != link.expected)
             return fail(diagnostics, "Distance link state changed externally; reset the simulation.");
     }
+    if (state_->world->character_revision() != state_->character_revision) return fail(diagnostics,"Characters were edited externally; reset the simulation.");
+    for (const auto& record : state_->characters) if (!state_->matches(record)) return fail(diagnostics,"Character state changed externally; reset the simulation.");
     // Reject external body edits before advancing or publishing any solver state.
     for (const auto& record : state_->bodies) {
         if (!state_->matches(record)) {
@@ -230,6 +300,9 @@ bool AuthoredSimulation::step(std::string* diagnostics) {
         record.expected_spatial = *state_->world->spatial_state(*entity);
         record.expected_transform = state_->world->authored_transform(*entity);
     }
+    state_->bridge.orchestrate_characters(*state_->world,state_->coordinator);
+    for (auto& c : state_->characters) if (!state_->publish_character(c)) return fail(diagnostics,"Could not publish authoritative character state.");
+    state_->character_revision = state_->world->character_revision();
     if (diagnostics) diagnostics->clear();
     return true;
 }
@@ -271,6 +344,36 @@ BodyControlResult AuthoredSimulation::set_body_velocity(const world::PersistentI
     if (!state_->world->set_rigid_box(record.entity, current)) return BodyControlResult::reset_required;
     record.expected_body = current;
     return BodyControlResult::applied;
+}
+
+std::size_t AuthoredSimulation::character_count() const noexcept { return state_->characters.size(); }
+std::optional<CharacterObservation> AuthoredSimulation::character(world::PersistentId owner) const noexcept {
+    if (!state_->world || state_->world->character_revision() != state_->character_revision) return std::nullopt;
+    const auto found = state_->character_lookup.find(owner);
+    if (found == state_->character_lookup.end() || !state_->matches(state_->characters[found->second])) return std::nullopt;
+    return state_->observed_character(state_->characters[found->second]);
+}
+CharacterControlResult AuthoredSimulation::control_character(world::PersistentId owner, math::Vec3 horizontal, float jump_speed) {
+    const auto finite = [](math::Vec3 v) { return std::isfinite(v.x) && std::isfinite(v.y) && std::isfinite(v.z); };
+    if (!finite(horizontal) || horizontal.y != 0 || !std::isfinite(jump_speed) || jump_speed < 0) return CharacterControlResult::invalid_argument;
+    if (!state_->world) return CharacterControlResult::not_found;
+    const auto found = state_->character_lookup.find(owner);
+    if (found == state_->character_lookup.end()) return CharacterControlResult::not_found;
+    auto& record = state_->characters[found->second];
+    if (state_->world->character_revision() != state_->character_revision || !state_->matches(record)) return CharacterControlResult::reset_required;
+    const auto region = state_->world->region(record.expected_spatial.region);
+    if (!region) return CharacterControlResult::reset_required;
+    if (region->fidelity == world::RegionFidelity::inactive) return CharacterControlResult::inactive_region;
+    const auto observed = state_->observed_character(record);
+    auto* target = state_->domain_lookup.at(region->id);
+    const auto native = state_->bridge.character_id(*state_->world,state_->coordinator,record.entity);
+    if (!observed || !native) return CharacterControlResult::reset_required;
+    if (jump_speed > 0 && (observed->state.ground_state != CharacterGroundState::grounded || observed->state.pending_jump_speed ||
+        observed->state.velocity.y-observed->state.ground_velocity.y >= 0.1F)) return CharacterControlResult::not_grounded;
+    if (!target->set_character_horizontal_velocity(*native,horizontal) ||
+        (jump_speed > 0 && !target->request_character_jump(*native,jump_speed)) || !state_->publish_character(record)) return CharacterControlResult::reset_required;
+    state_->character_revision = state_->world->character_revision();
+    return CharacterControlResult::applied;
 }
 
 const simulation::Coordinator& AuthoredSimulation::coordinator() const noexcept { return state_->coordinator; }

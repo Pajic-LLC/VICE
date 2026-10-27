@@ -137,12 +137,12 @@ struct EntityId { std::uint8_t bytes[16]{}; };
 struct Vector3 { float x = 0, y = 0, z = 0; };
 enum class Result : std::uint32_t {
     success, unavailable, invalid_argument, not_found, no_body,
-    static_body, inactive_region, reset_required, wrong_phase, no_link, no_dependency,
+    static_body, inactive_region, reset_required, wrong_phase, no_link, no_dependency, no_character, not_grounded,
 };
 enum class Motion : std::uint32_t { static_body, kinematic_body, dynamic_body };
 struct EntitySnapshot {
     std::uint32_t size = sizeof(EntitySnapshot);
-    std::uint32_t flags = 0; // bit 0: spatial, bit 1: rigid box
+    std::uint32_t flags = 0; // bit 0: spatial, bit 1: rigid box, bit 2: capsule character
     EntityId id{};
     std::uint64_t region = 0;
     std::uint32_t fidelity = 0; // 0 inactive, 1 reduced, 2 full
@@ -185,6 +185,17 @@ struct DependencySnapshot {
     std::uint64_t break_step = 0;
 };
 
+enum class CharacterGroundState : std::uint32_t { grounded, steep_ground, unsupported, airborne };
+struct CharacterSnapshot {
+    std::uint32_t size = sizeof(CharacterSnapshot);
+    CharacterGroundState ground_state = CharacterGroundState::airborne;
+    double position[3]{};
+    float height=0, radius=0, mass=0, max_strength=0, max_slope_angle=0, step_height=0, stick_to_floor_distance=0;
+    Vector3 velocity{}, horizontal_velocity{}, ground_normal{}, ground_velocity{};
+    float pending_jump_speed = 0;
+    EntityId supporting_entity{};
+};
+
 struct HostApi {
     std::uint32_t abi_version = module::abi_version;
     std::uint32_t size = sizeof(HostApi);
@@ -198,6 +209,8 @@ struct HostApi {
     Result (*read_body_support)(void* context, EntityId id, Vector3 up, float min_up_dot, SupportSnapshot* output) noexcept = nullptr;
     Result (*read_distance_link)(void* context, EntityId id, DistanceLinkSnapshot* output) noexcept = nullptr;
     Result (*read_dependency)(void* context, EntityId id, DependencySnapshot* output) noexcept = nullptr;
+    Result (*read_character)(void* context, EntityId id, CharacterSnapshot* output) noexcept = nullptr;
+    Result (*control_character)(void* context, EntityId id, Vector3 horizontal, float jump_speed) noexcept = nullptr;
 };
 
 inline constexpr std::size_t host_api_v1_size = offsetof(HostApi, read_entity);
@@ -264,6 +277,15 @@ public:
         if (!host_ || host_->size < offsetof(HostApi, read_dependency) + sizeof(host_->read_dependency) || !host_->read_dependency)
             return Result::unavailable;
         return host_->read_dependency(host_->context, id, &output);
+    }
+
+    [[nodiscard]] Result read_character(EntityId id, CharacterSnapshot& output) const noexcept {
+        if (!host_ || host_->size < offsetof(HostApi, read_character) + sizeof(host_->read_character) || !host_->read_character) return Result::unavailable;
+        return host_->read_character(host_->context,id,&output);
+    }
+    [[nodiscard]] Result control_character(EntityId id, Vector3 horizontal, float jump_speed = 0) const noexcept {
+        if (!host_ || host_->size < offsetof(HostApi, control_character) + sizeof(host_->control_character) || !host_->control_character) return Result::unavailable;
+        return host_->control_character(host_->context,id,horizontal,jump_speed);
     }
 
     void log(const LogLevel level, const char* const message) const noexcept {

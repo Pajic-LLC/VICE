@@ -88,6 +88,10 @@ public:
     bool set_distance_link(EntityId entity, const DistanceLink& link);
     bool clear_distance_link(EntityId entity);
     [[nodiscard]] std::optional<DistanceLink> distance_link(EntityId entity) const noexcept;
+    bool set_character(EntityId entity, const Character& character);
+    bool clear_character(EntityId entity);
+    [[nodiscard]] std::optional<Character> character(EntityId entity) const noexcept;
+    [[nodiscard]] std::uint64_t character_revision() const noexcept { return character_revision_; }
     bool set_dependency(EntityId entity, const Dependency& dependency);
     bool clear_dependency(EntityId entity);
     [[nodiscard]] std::optional<Dependency> dependency(EntityId entity) const noexcept;
@@ -116,6 +120,7 @@ private:
         std::optional<RigidBox> rigid_box;
         std::optional<DistanceLink> distance_link;
         std::optional<Dependency> dependency;
+        std::optional<Character> character;
         std::vector<ResourceReference> resource_references;
         std::uint32_t generation = 1;
         bool alive = false;
@@ -136,6 +141,7 @@ private:
     void remove_dependency_references(EntityId entity);
     std::unordered_map<PersistentId, std::vector<EntityId>, PersistentIdHash> dependency_provider_users_;
     std::unordered_map<PersistentId, std::vector<EntityId>, PersistentIdHash> dependency_gate_users_;
+    std::uint64_t character_revision_ = 0;
     std::uint64_t distance_link_revision_ = 0;
     std::unordered_map<PersistentId, std::vector<EntityId>, PersistentIdHash> distance_link_users_;
     std::vector<Slot> slots_;

@@ -240,6 +240,7 @@ WorldSnapshot World::snapshot() const {
             .rigid_box = slot.rigid_box,
             .distance_link = slot.distance_link,
             .dependency = slot.dependency,
+            .character = slot.character,
             .resource_references = slot.resource_references,
         };
         std::sort(
@@ -293,7 +294,7 @@ WorldSnapshot World::snapshot() const {
 }
 
 bool World::restore(const WorldSnapshot& snapshot_data) {
-    if (!validate_distance_links(snapshot_data) || !validate_dependencies(snapshot_data)) return false;
+    if (!validate_distance_links(snapshot_data) || !validate_dependencies(snapshot_data) || !validate_characters(snapshot_data)) return false;
     World restored;
 
     for (const auto& type : snapshot_data.component_types) {
@@ -339,6 +340,7 @@ bool World::restore(const WorldSnapshot& snapshot_data) {
             !restored.set_reflection_probe(*entity, *entity_record.reflection_probe)) {
             return false;
         }
+        if (entity_record.character && !restored.set_character(*entity, *entity_record.character)) return false;
         if (entity_record.rigid_box && !restored.set_rigid_box(*entity, *entity_record.rigid_box)) return false;
         for (const auto reference : entity_record.resource_references) {
             if (!restored.set_resource_reference(*entity, reference)) {

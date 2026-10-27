@@ -312,6 +312,14 @@ WorldSnapshotEncodeResult encode_world_snapshot(const WorldSnapshot& snapshot_da
             append_id(payload, entity.dependency->provider); append_id(payload, entity.dependency->gate);
             append_u8(payload, entity.dependency->enabled ? 1U : 0U);
         }
+        append_u8(payload, entity.character ? 1U : 0U);
+        if (entity.character) {
+            const auto& c = *entity.character;
+            for (const auto x : {c.height,c.radius,c.mass,c.max_strength,c.max_slope_angle,c.step_height,c.stick_to_floor_distance,
+                c.velocity.x,c.velocity.y,c.velocity.z,c.horizontal_velocity.x,c.horizontal_velocity.y,c.horizontal_velocity.z}) append_f32(payload,x);
+            append_u8(payload,c.pending_jump_speed ? 1U : 0U);
+            if (c.pending_jump_speed) append_f32(payload,*c.pending_jump_speed);
+        }
         append_u32(payload, static_cast<std::uint32_t>(entity.resource_references.size()));
         for (const auto reference : entity.resource_references) {
             append_u8(payload, static_cast<std::uint8_t>(reference.role));
@@ -639,6 +647,20 @@ WorldSnapshotDecodeResult decode_world_snapshot(const std::span<const std::byte>
                     result.diagnostics = "Invalid dependency record."; return result;
                 }
                 d.enabled = enabled != 0; entity.dependency = d;
+            }
+        }
+        if (version >= 10U) {
+            std::uint8_t present = 0, jumping = 0; Character c;
+            if (!reader.read_u8(present) || present > 1U) { result.diagnostics = "Invalid character presence flag."; return result; }
+            if (present) {
+                for (auto* x : {&c.height,&c.radius,&c.mass,&c.max_strength,&c.max_slope_angle,&c.step_height,&c.stick_to_floor_distance,
+                    &c.velocity.x,&c.velocity.y,&c.velocity.z,&c.horizontal_velocity.x,&c.horizontal_velocity.y,&c.horizontal_velocity.z}) {
+                    if (!reader.read_f32(*x)) { result.diagnostics = "Truncated character record."; return result; }
+                }
+                if (!reader.read_u8(jumping) || jumping > 1U) { result.diagnostics = "Invalid character jump flag."; return result; }
+                if (jumping) { float speed = 0; if (!reader.read_f32(speed)) { result.diagnostics = "Truncated character jump."; return result; } c.pending_jump_speed = speed; }
+                if (!valid(c)) { result.diagnostics = "Invalid character settings or state."; return result; }
+                entity.character = c;
             }
         }
         if (version >= 3U) {

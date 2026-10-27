@@ -40,6 +40,7 @@ EntityId World::allocate(const PersistentId persistent_id) {
     slot.rigid_box.reset();
     slot.distance_link.reset();
     slot.dependency.reset();
+    slot.character.reset();
     slot.resource_references.clear();
     slot.alive = true;
 
@@ -57,6 +58,7 @@ bool World::destroy_entity(const EntityId entity) {
     }
 
     auto& slot = slots_[entity.index];
+    (void)clear_character(entity);
     (void)clear_dependency(entity);
     (void)clear_distance_link(entity);
     persistent_lookup_.erase(slot.persistent_id);
@@ -69,6 +71,7 @@ bool World::destroy_entity(const EntityId entity) {
     slot.rigid_box.reset();
     slot.distance_link.reset();
     slot.dependency.reset();
+    slot.character.reset();
     slot.resource_references.clear();
     slot.alive = false;
 
@@ -293,6 +296,7 @@ bool World::clear_spatial_state(const EntityId entity) {
     slots_[entity.index].light.reset();
     slots_[entity.index].reflection_probe.reset();
     slots_[entity.index].rigid_box.reset();
+    (void)clear_character(entity);
     return true;
 }
 
@@ -321,7 +325,7 @@ bool World::set_local_position(const EntityId entity, const LocalPosition positi
 }
 
 bool World::set_rigid_box(const EntityId entity, const RigidBox& box) {
-    if (!alive(entity) || !slots_[entity.index].spatial_state || !valid(box)) return false;
+    if (!alive(entity) || !slots_[entity.index].spatial_state || slots_[entity.index].character || !valid(box)) return false;
     const auto& previous = slots_[entity.index].rigid_box;
     if ((!previous || previous->motion != box.motion) &&
         !link_endpoint_change_allowed(entity, slots_[entity.index].spatial_state->region, box.motion)) return false;

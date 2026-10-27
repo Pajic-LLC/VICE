@@ -209,7 +209,7 @@ bool PreviewRuntime::reset(
     }
 
     const auto snapshot = next->world.snapshot();
-    if (game || std::any_of(snapshot.entities.begin(), snapshot.entities.end(), [](const auto& entity) { return entity.rigid_box.has_value(); })) {
+    if (game || std::any_of(snapshot.entities.begin(), snapshot.entities.end(), [](const auto& entity) { return entity.rigid_box.has_value() || entity.character.has_value(); })) {
         next->authored = std::make_unique<rigid_body::AuthoredSimulation>();
         if (!next->authored->reset(next->world, jobs, diagnostics)) return false;
         if (game && !next->start_game(*game, diagnostics)) return false;
@@ -537,10 +537,25 @@ PreviewSnapshot PreviewRuntime::snapshot() const {
         result.regions.push_back(preview_region);
     }
     if (state_->authored) {
+        result.character_region_events.assign(state_->authored->bridge().character_region_events().begin(),state_->authored->bridge().character_region_events().end());
         result.box_region_events.assign(state_->authored->bridge().box_region_events().begin(), state_->authored->bridge().box_region_events().end());
         result.activation_requests.assign(state_->authored->bridge().region_activation_requests().begin(), state_->authored->bridge().region_activation_requests().end());
         for (const auto& record : world_snapshot.entities) {
-            if (!record.rigid_box || !record.spatial_state) continue;
+            if (!record.spatial_state) continue;
+            if (record.character) {
+                const auto observed = state_->authored->character(record.persistent_id);
+                const auto owner = state_->world.find(record.persistent_id);
+                const auto local = owner ? state_->world.local_position(*owner) : std::nullopt;
+                if (observed && local) {
+                    const auto& c = observed->state;
+                    result.characters.push_back(PreviewCharacterSnapshot{
+                        .owner=record.persistent_id,.region=record.spatial_state->region,.global_position=record.spatial_state->global_position,.local_position=*local,
+                        .character={.id=observed->id,.height=record.character->height,.radius=record.character->radius,.position=c.position,.velocity=c.velocity,
+                            .horizontal_velocity=c.horizontal_velocity,.ground_state=c.ground_state,.ground_normal=c.ground_normal,.ground_velocity=c.ground_velocity,
+                            .ground_participant=c.ground_participant,.ground_material=c.ground_material}});
+                }
+            }
+            if (!record.rigid_box) continue;
             const auto body = state_->authored->body(record.persistent_id);
             const auto entity = state_->world.find(record.persistent_id);
             const auto local = entity ? state_->world.local_position(*entity) : std::nullopt;
