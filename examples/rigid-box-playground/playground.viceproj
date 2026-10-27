@@ -1,0 +1,7 @@
+vice-project 1
+id 94000000-0000-4000-8000-000000000001
+name "Rigid Box Playground"
+game_name "Rigid Box Playground"
+game_target "rigid-box-playground"
+assets "assets"
+startup_world "worlds/playground.vworld"

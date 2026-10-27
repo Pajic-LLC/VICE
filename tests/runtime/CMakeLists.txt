@@ -20,6 +20,7 @@ function(vice_add_runtime_module_fixture target source)
 endfunction()
 
 vice_add_runtime_module_fixture(vice_runtime_test_module test_game_module.cpp)
+vice_add_runtime_module_fixture(vice_runtime_legacy_module test_legacy_game_module.cpp)
 vice_add_runtime_module_fixture(vice_runtime_bad_module test_bad_game_module.cpp)
 vice_add_runtime_module_fixture(vice_runtime_incompatible_module test_incompatible_game_module.cpp)
 
@@ -37,6 +38,7 @@ target_link_libraries(
 add_dependencies(
   vice_runtime_tests
   vice_runtime_test_module
+  vice_runtime_legacy_module
   vice_runtime_bad_module
   vice_runtime_incompatible_module
 )
@@ -44,6 +46,7 @@ add_dependencies(
 target_compile_definitions(
   vice_runtime_tests
   PRIVATE
+    VICE_RUNTIME_LEGACY_MODULE="$<TARGET_FILE:vice_runtime_legacy_module>"
     VICE_RUNTIME_TEST_MODULE="$<TARGET_FILE:vice_runtime_test_module>"
     VICE_RUNTIME_BAD_MODULE="$<TARGET_FILE:vice_runtime_bad_module>"
     VICE_RUNTIME_INCOMPATIBLE_MODULE="$<TARGET_FILE:vice_runtime_incompatible_module>"
@@ -463,3 +466,14 @@ add_test(
   COMMAND vice_runtime_pre_pbr_motion_tests
 )
 
+
+if(TARGET vice_rigid_body_world AND TARGET vice_world_cooker_lib)
+  vice_add_runtime_module_fixture(vice_runtime_gameplay_module test_gameplay_module.cpp)
+  add_executable(vice_runtime_gameplay_tests ../runtime_gameplay_tests.cpp)
+  target_link_libraries(vice_runtime_gameplay_tests PRIVATE VICE::Runtime VICE::RigidBodyWorld VICE::WorldCooker VICE::Jobs)
+  target_compile_definitions(vice_runtime_gameplay_tests PRIVATE VICE_RUNTIME_GAMEPLAY_MODULE="$<TARGET_FILE:vice_runtime_gameplay_module>")
+  add_dependencies(vice_runtime_gameplay_tests vice_runtime_gameplay_module)
+  target_compile_features(vice_runtime_gameplay_tests PRIVATE cxx_std_23)
+  vice_enable_warnings(vice_runtime_gameplay_tests)
+  add_test(NAME vice_runtime_gameplay_tests COMMAND vice_runtime_gameplay_tests)
+endif()

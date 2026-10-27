@@ -1,4 +1,7 @@
 #include <vice/runtime/module_loader.hpp>
+#if defined(VICE_RUNTIME_AUTHORED_PHYSICS)
+#include <vice/rigid_body/authored_simulation.hpp>
+#endif
 
 #include <vice/core/log.hpp>
 #include <vice/platform/dynamic_library.hpp>
@@ -17,17 +20,98 @@ namespace {
 
 struct HostBridge {
     GameContext* context = nullptr;
+    bool writable = false;
 };
 
+// A retained HostApi cannot access a callback's World from another thread or phase.
+thread_local HostBridge* active_bridge = nullptr;
+struct CallbackScope {
+    HostBridge& bridge;
+    HostBridge* previous;
+    CallbackScope(HostBridge& b, GameContext& context, bool writable) : bridge{b}, previous{active_bridge} {
+        bridge.context = &context;
+        bridge.writable = writable;
+        active_bridge = &bridge;
+    }
+    ~CallbackScope() { active_bridge = previous; bridge.context = nullptr; bridge.writable = false; }
+};
+HostBridge* current_bridge(void* value) noexcept {
+    return active_bridge == value ? active_bridge : nullptr;
+}
+world::PersistentId persistent_id(module::EntityId id) noexcept {
+    world::PersistentId::Bytes bytes{};
+    for (std::size_t i = 0; i < bytes.size(); ++i) bytes[i] = id.bytes[i];
+    return world::PersistentId{bytes};
+}
+module::Result host_read_entity(void* value, module::EntityId id, module::EntitySnapshot* output) noexcept {
+    const auto* bridge = current_bridge(value);
+    if (!bridge || !bridge->context) return module::Result::wrong_phase;
+    if (!output || output->size < sizeof(module::EntitySnapshot) || persistent_id(id).is_nil()) return module::Result::invalid_argument;
+    const auto& world = bridge->context->world;
+    const auto entity = world.find(persistent_id(id));
+    if (!entity) return module::Result::not_found;
+    module::EntitySnapshot result;
+    result.id = id;
+    if (const auto spatial = world.spatial_state(*entity)) {
+        result.flags |= 1U;
+        result.region = spatial->region.value;
+        result.position[0] = spatial->global_position.x;
+        result.position[1] = spatial->global_position.y;
+        result.position[2] = spatial->global_position.z;
+        if (const auto region = world.region(spatial->region)) result.fidelity = static_cast<std::uint32_t>(region->fidelity);
+    }
+    if (const auto transform = world.authored_transform(*entity)) {
+        result.rotation[0] = transform->rotation.x; result.rotation[1] = transform->rotation.y;
+        result.rotation[2] = transform->rotation.z; result.rotation[3] = transform->rotation.w;
+        result.scale[0] = transform->scale.x; result.scale[1] = transform->scale.y; result.scale[2] = transform->scale.z;
+    }
+    if (const auto box = world.rigid_box(*entity)) {
+        result.flags |= 2U;
+        switch (box->motion) {
+        case world::RigidMotion::static_body: result.motion = module::Motion::static_body; break;
+        case world::RigidMotion::kinematic_body: result.motion = module::Motion::kinematic_body; break;
+        case world::RigidMotion::dynamic_body: result.motion = module::Motion::dynamic_body; break;
+        }
+        result.half_extents = {box->half_extents.x, box->half_extents.y, box->half_extents.z};
+        result.linear_velocity = {box->linear_velocity.x, box->linear_velocity.y, box->linear_velocity.z};
+        result.angular_velocity = {box->angular_velocity.x, box->angular_velocity.y, box->angular_velocity.z};
+    }
+    *output = result;
+    return module::Result::success;
+}
+module::Result host_set_body_velocity(void* value, module::EntityId id, module::Vector3 linear, module::Vector3 angular) noexcept {
+    const auto* bridge = current_bridge(value);
+    if (!bridge || !bridge->context || !bridge->writable) return module::Result::wrong_phase;
+    if (persistent_id(id).is_nil()) return module::Result::invalid_argument;
+    const auto entity = bridge->context->world.find(persistent_id(id));
+    if (!entity) return module::Result::not_found;
+    if (!bridge->context->world.rigid_box(*entity)) return module::Result::no_body;
+#if defined(VICE_RUNTIME_AUTHORED_PHYSICS)
+    if (!bridge->context->physics) return module::Result::unavailable;
+    using C = rigid_body::BodyControlResult;
+    switch (bridge->context->physics->set_body_velocity(persistent_id(id), {linear.x, linear.y, linear.z}, {angular.x, angular.y, angular.z})) {
+    case C::applied: return module::Result::success;
+    case C::not_found: return module::Result::reset_required;
+    case C::invalid_argument: return module::Result::invalid_argument;
+    case C::static_body: return module::Result::static_body;
+    case C::inactive_region: return module::Result::inactive_region;
+    case C::reset_required: return module::Result::reset_required;
+    }
+#else
+    (void)linear; (void)angular;
+#endif
+    return module::Result::unavailable;
+}
+
 [[nodiscard]] std::size_t host_entity_count(void* const value) noexcept {
-    const auto* const bridge = static_cast<HostBridge*>(value);
+    const auto* const bridge = current_bridge(value);
     return bridge != nullptr && bridge->context != nullptr
         ? bridge->context->world.entity_count()
         : 0U;
 }
 
 [[nodiscard]] std::size_t host_resource_count(void* const value) noexcept {
-    const auto* const bridge = static_cast<HostBridge*>(value);
+    const auto* const bridge = current_bridge(value);
     return bridge != nullptr && bridge->context != nullptr
         ? bridge->context->world.resource_count()
         : 0U;
@@ -46,6 +130,76 @@ void host_log(
         case module::LogLevel::error: engine_level = core::LogLevel::error; break;
     }
     core::log(engine_level, message != nullptr ? message : "");
+}
+
+module::Key module_key(platform::Key key) noexcept {
+    switch (key) {
+    case platform::Key::unknown: return module::Key::unknown;
+    case platform::Key::escape: return module::Key::escape;
+    case platform::Key::enter: return module::Key::enter;
+    case platform::Key::tab: return module::Key::tab;
+    case platform::Key::backspace: return module::Key::backspace;
+    case platform::Key::space: return module::Key::space;
+    case platform::Key::left: return module::Key::left;
+    case platform::Key::right: return module::Key::right;
+    case platform::Key::up: return module::Key::up;
+    case platform::Key::down: return module::Key::down;
+    case platform::Key::home: return module::Key::home;
+    case platform::Key::end: return module::Key::end;
+    case platform::Key::page_up: return module::Key::page_up;
+    case platform::Key::page_down: return module::Key::page_down;
+    case platform::Key::insert: return module::Key::insert;
+    case platform::Key::delete_key: return module::Key::delete_key;
+    case platform::Key::a: return module::Key::a;
+    case platform::Key::b: return module::Key::b;
+    case platform::Key::c: return module::Key::c;
+    case platform::Key::d: return module::Key::d;
+    case platform::Key::e: return module::Key::e;
+    case platform::Key::f: return module::Key::f;
+    case platform::Key::g: return module::Key::g;
+    case platform::Key::h: return module::Key::h;
+    case platform::Key::i: return module::Key::i;
+    case platform::Key::j: return module::Key::j;
+    case platform::Key::k: return module::Key::k;
+    case platform::Key::l: return module::Key::l;
+    case platform::Key::m: return module::Key::m;
+    case platform::Key::n: return module::Key::n;
+    case platform::Key::o: return module::Key::o;
+    case platform::Key::p: return module::Key::p;
+    case platform::Key::q: return module::Key::q;
+    case platform::Key::r: return module::Key::r;
+    case platform::Key::s: return module::Key::s;
+    case platform::Key::t: return module::Key::t;
+    case platform::Key::u: return module::Key::u;
+    case platform::Key::v: return module::Key::v;
+    case platform::Key::w: return module::Key::w;
+    case platform::Key::x: return module::Key::x;
+    case platform::Key::y: return module::Key::y;
+    case platform::Key::z: return module::Key::z;
+    case platform::Key::digit_0: return module::Key::digit_0;
+    case platform::Key::digit_1: return module::Key::digit_1;
+    case platform::Key::digit_2: return module::Key::digit_2;
+    case platform::Key::digit_3: return module::Key::digit_3;
+    case platform::Key::digit_4: return module::Key::digit_4;
+    case platform::Key::digit_5: return module::Key::digit_5;
+    case platform::Key::digit_6: return module::Key::digit_6;
+    case platform::Key::digit_7: return module::Key::digit_7;
+    case platform::Key::digit_8: return module::Key::digit_8;
+    case platform::Key::digit_9: return module::Key::digit_9;
+    case platform::Key::f1: return module::Key::f1;
+    case platform::Key::f2: return module::Key::f2;
+    case platform::Key::f3: return module::Key::f3;
+    case platform::Key::f4: return module::Key::f4;
+    case platform::Key::f5: return module::Key::f5;
+    case platform::Key::f6: return module::Key::f6;
+    case platform::Key::f7: return module::Key::f7;
+    case platform::Key::f8: return module::Key::f8;
+    case platform::Key::f9: return module::Key::f9;
+    case platform::Key::f10: return module::Key::f10;
+    case platform::Key::f11: return module::Key::f11;
+    case platform::Key::f12: return module::Key::f12;
+    }
+    return module::Key::unknown;
 }
 
 [[nodiscard]] module::Event translate_event(const platform::Event& event) noexcept {
@@ -73,7 +227,7 @@ void host_log(
             } else if constexpr (std::is_same_v<Payload, platform::KeyEvent>) {
                 translated.kind = module::EventKind::key;
                 translated.window = payload.window;
-                translated.code = static_cast<std::uint32_t>(payload.key);
+                translated.code = static_cast<std::uint32_t>(module_key(payload.key));
                 translated.modifiers = payload.modifiers;
                 translated.flags = (payload.pressed ? 1U : 0U) | (payload.repeat ? 2U : 0U);
             } else if constexpr (std::is_same_v<Payload, platform::TextInputEvent>) {
@@ -115,6 +269,8 @@ public:
         host_.world_entity_count = &host_entity_count;
         host_.world_resource_count = &host_resource_count;
         host_.log = &host_log;
+        host_.read_entity = &host_read_entity;
+        host_.set_body_velocity = &host_set_body_velocity;
     }
 
     ~DynamicGameModule() override {
@@ -163,27 +319,24 @@ public:
     }
 
     bool on_start(GameContext& context) override {
-        bridge_.context = &context;
+        CallbackScope scope{bridge_, context, true};
         const bool result = api_.start(api_.state, &host_);
-        bridge_.context = nullptr;
         return result;
     }
 
     void on_event(GameContext& context, const platform::Event& event) override {
-        bridge_.context = &context;
+        CallbackScope scope{bridge_, context, true};
         const module::Event translated = translate_event(event);
         api_.event(api_.state, &host_, &translated);
-        bridge_.context = nullptr;
     }
 
     void on_update(GameContext& context, const double delta_seconds) override {
-        bridge_.context = &context;
+        CallbackScope scope{bridge_, context, true};
         api_.update(api_.state, &host_, delta_seconds);
-        bridge_.context = nullptr;
     }
 
     void on_frame(GameContext& context, render::Color& clear_color) override {
-        bridge_.context = &context;
+        CallbackScope scope{bridge_, context, false};
         module::Frame frame;
         frame.clear_color = module::Color{
             .red = clear_color.red,
@@ -198,13 +351,11 @@ public:
             .blue = frame.clear_color.blue,
             .alpha = frame.clear_color.alpha,
         };
-        bridge_.context = nullptr;
     }
 
     void on_stop(GameContext& context) override {
-        bridge_.context = &context;
+        CallbackScope scope{bridge_, context, false};
         api_.stop(api_.state, &host_);
-        bridge_.context = nullptr;
     }
 
 private:

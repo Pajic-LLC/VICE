@@ -577,39 +577,19 @@ public:
         }
     }
 
-    [[nodiscard]] const BodyEntry* find(
-        const simulation::ParticipantId participant
-    ) const noexcept {
-        const auto found = std::find_if(
-            bodies_.begin(),
-            bodies_.end(),
-            [&](const BodyEntry& body) {
-                return body.participant == participant;
-            }
-        );
-        return found != bodies_.end() ? &*found : nullptr;
+    [[nodiscard]] const BodyEntry* find(const simulation::ParticipantId participant) const noexcept {
+        const auto found = body_indices_.find(participant.value);
+        return found == body_indices_.end() ? nullptr : &bodies_[found->second];
     }
 
     [[nodiscard]] BodyEntry* find(const simulation::ParticipantId participant) noexcept {
-        const auto found = std::find_if(
-            bodies_.begin(),
-            bodies_.end(),
-            [&](const BodyEntry& body) {
-                return body.participant == participant;
-            }
-        );
-        return found != bodies_.end() ? &*found : nullptr;
+        const auto found = body_indices_.find(participant.value);
+        return found == body_indices_.end() ? nullptr : &bodies_[found->second];
     }
 
     [[nodiscard]] const BodyEntry* find(const JPH::BodyID id) const noexcept {
-        const auto found = std::find_if(
-            bodies_.begin(),
-            bodies_.end(),
-            [id](const BodyEntry& body) {
-                return body.body_id == id;
-            }
-        );
-        return found != bodies_.end() ? &*found : nullptr;
+        const auto found = native_body_indices_.find(id.GetIndexAndSequenceNumber());
+        return found == native_body_indices_.end() ? nullptr : &bodies_[found->second];
     }
 
     [[nodiscard]] const MaterialEntry* find_material(
@@ -752,6 +732,7 @@ public:
             return false;
         }
 
+        const auto index = bodies_.size();
         try {
             bodies_.push_back(BodyEntry{
                 .participant = desc.participant,
@@ -761,7 +742,12 @@ public:
                 .trigger = desc.trigger,
                 .body_id = body_id,
             });
+            body_indices_.emplace(desc.participant.value, index);
+            native_body_indices_.emplace(body_id.GetIndexAndSequenceNumber(), index);
         } catch (...) {
+            body_indices_.erase(desc.participant.value);
+            native_body_indices_.erase(body_id.GetIndexAndSequenceNumber());
+            if (bodies_.size() > index) bodies_.pop_back();
             body_interface.RemoveBody(body_id);
             body_interface.DestroyBody(body_id);
             throw;
@@ -928,6 +914,8 @@ public:
     JPH::JobSystemThreadPool job_system_;
     ContactListener contact_listener_;
     std::vector<BodyEntry> bodies_;
+    std::unordered_map<std::uint64_t, std::size_t> body_indices_;
+    std::unordered_map<std::uint32_t, std::size_t> native_body_indices_;
     std::vector<MaterialEntry> materials_;
     std::vector<MaterialInteractionEntry> material_interactions_;
     std::vector<ShapeEntry> shapes_;
@@ -1220,12 +1208,15 @@ bool Domain::destroy_body(const simulation::ParticipantId participant) {
     auto& body_interface = impl_->physics_system_.GetBodyInterface();
     body_interface.RemoveBody(body_id);
     body_interface.DestroyBody(body_id);
-    std::erase_if(
-        impl_->bodies_,
-        [&](const Impl::BodyEntry& entry) {
-            return entry.participant == participant;
-        }
-    );
+    const auto index = impl_->body_indices_.at(participant.value);
+    impl_->body_indices_.erase(participant.value);
+    impl_->native_body_indices_.erase(body_id.GetIndexAndSequenceNumber());
+    impl_->bodies_.erase(impl_->bodies_.begin() + static_cast<std::ptrdiff_t>(index));
+    for (std::size_t i = index; i < impl_->bodies_.size(); ++i) {
+        const auto& remaining = impl_->bodies_[i];
+        impl_->body_indices_.at(remaining.participant.value) = i;
+        impl_->native_body_indices_.at(remaining.body_id.GetIndexAndSequenceNumber()) = i;
+    }
     return true;
 }
 
@@ -1248,6 +1239,15 @@ bool Domain::set_body_active(
     } else {
         body_interface.DeactivateBody(body->body_id);
     }
+    return true;
+}
+
+bool Domain::set_body_velocity(const simulation::ParticipantId participant, const math::Vec3 linear, const math::Vec3 angular) {
+    auto* body = impl_->find(participant);
+    if (!body || body->motion == MotionType::static_body || !finite(linear) || !finite(angular)) return false;
+    auto& interface = impl_->physics_system_.GetBodyInterface();
+    interface.SetLinearAndAngularVelocity(body->body_id, jolt_vector(linear), jolt_vector(angular));
+    interface.ActivateBody(body->body_id);
     return true;
 }
 

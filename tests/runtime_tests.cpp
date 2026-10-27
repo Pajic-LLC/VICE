@@ -190,6 +190,27 @@ int main() {
         lifecycle.stop();
     }
 
+    auto legacy_module = runtime::load_game_module(VICE_RUNTIME_LEGACY_MODULE);
+    require(static_cast<bool>(legacy_module), "frozen ABI 1 module loads against extended host");
+    {
+        runtime::GameContext context{loaded.project->manifest, *loaded.project->world};
+        runtime::GameModuleLifecycle lifecycle{*legacy_module.module, context};
+        require(lifecycle.start(), "frozen ABI 1 module can call original host prefix");
+    }
+    runtime::module::HostApi old_host;
+    old_host.size = static_cast<std::uint32_t>(runtime::module::host_api_v1_size);
+    runtime::module::ModuleApi compatible_api;
+    require(runtime::module::detail::load<runtime::module::Game>(1, &old_host, &compatible_api),
+        "new SDK module accepts old host prefix");
+    compatible_api.destroy(compatible_api.state);
+    runtime::module::Context old_context{&old_host};
+    runtime::module::EntitySnapshot unavailable;
+    require(old_context.read_entity({}, unavailable) == runtime::module::Result::unavailable &&
+        old_context.set_body_velocity({}, {}) == runtime::module::Result::unavailable,
+        "new methods detect absent extension without accessing beyond old host");
+    old_host.size = 0;
+    require(!runtime::module::detail::load<runtime::module::Game>(1, &old_host, &compatible_api), "truncated original host is rejected");
+
     const auto missing_entrypoint = runtime::load_game_module(
         std::filesystem::path{VICE_RUNTIME_BAD_MODULE}
     );

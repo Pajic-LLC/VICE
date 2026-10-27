@@ -4,6 +4,7 @@
 #include <vice/editor/state.hpp>
 #include <vice/jobs/jobs.hpp>
 #include <vice/rigid_body/debug.hpp>
+#include <vice/rigid_body/authored_simulation.hpp>
 #include <vice/rigid_body/world_bridge.hpp>
 #include <vice/simulation/entity_bindings.hpp>
 #include <vice/simulation/simulation.hpp>
@@ -86,6 +87,7 @@ public:
     void pause() noexcept;
     [[nodiscard]] bool step_once();
     [[nodiscard]] bool update(double delta_seconds);
+    [[nodiscard]] rigid_body::BodyControlResult set_body_velocity(world::PersistentId owner, math::Vec3 linear, math::Vec3 angular = {});
 
     [[nodiscard]] bool active() const noexcept;
     [[nodiscard]] PreviewPlayback playback() const noexcept;

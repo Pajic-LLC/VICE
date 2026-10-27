@@ -8,6 +8,8 @@
 
 namespace vice::rigid_body {
 
+enum class BodyControlResult { applied, not_found, invalid_argument, static_body, inactive_region, reset_required };
+
 // Shared by standalone Runtime and isolated Editor preview. World owns state;
 // domains/handles are derived and rebuilt from persistent authoring records.
 class AuthoredSimulation {
@@ -20,6 +22,7 @@ public:
     bool reset(world::World& world, jobs::Scheduler& jobs, std::string* diagnostics = nullptr);
     bool step(std::string* diagnostics = nullptr);
     bool advance(double delta_seconds, std::string* diagnostics = nullptr);
+    [[nodiscard]] BodyControlResult set_body_velocity(world::PersistentId owner, math::Vec3 linear, math::Vec3 angular);
     [[nodiscard]] const simulation::Coordinator& coordinator() const noexcept;
     [[nodiscard]] std::size_t body_count() const noexcept;
     [[nodiscard]] std::optional<BodyDebugSnapshot> body(world::PersistentId owner) const noexcept;

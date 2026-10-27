@@ -35,6 +35,73 @@ enum class EventKind : std::uint32_t {
     mouse_wheel,
 };
 
+enum class Key : std::uint32_t {
+    unknown,
+    escape,
+    enter,
+    tab,
+    backspace,
+    space,
+    left,
+    right,
+    up,
+    down,
+    home,
+    end,
+    page_up,
+    page_down,
+    insert,
+    delete_key,
+    a,
+    b,
+    c,
+    d,
+    e,
+    f,
+    g,
+    h,
+    i,
+    j,
+    k,
+    l,
+    m,
+    n,
+    o,
+    p,
+    q,
+    r,
+    s,
+    t,
+    u,
+    v,
+    w,
+    x,
+    y,
+    z,
+    digit_0,
+    digit_1,
+    digit_2,
+    digit_3,
+    digit_4,
+    digit_5,
+    digit_6,
+    digit_7,
+    digit_8,
+    digit_9,
+    f1,
+    f2,
+    f3,
+    f4,
+    f5,
+    f6,
+    f7,
+    f8,
+    f9,
+    f10,
+    f11,
+    f12,
+};
+
 struct Event {
     std::uint32_t size = sizeof(Event);
     EventKind kind = EventKind::unknown;
@@ -65,6 +132,29 @@ struct Frame {
     Color clear_color{};
 };
 
+// ABI records contain values only, never engine handles or solver types.
+struct EntityId { std::uint8_t bytes[16]{}; };
+struct Vector3 { float x = 0, y = 0, z = 0; };
+enum class Result : std::uint32_t {
+    success, unavailable, invalid_argument, not_found, no_body,
+    static_body, inactive_region, reset_required, wrong_phase,
+};
+enum class Motion : std::uint32_t { static_body, kinematic_body, dynamic_body };
+struct EntitySnapshot {
+    std::uint32_t size = sizeof(EntitySnapshot);
+    std::uint32_t flags = 0; // bit 0: spatial, bit 1: rigid box
+    EntityId id{};
+    std::uint64_t region = 0;
+    std::uint32_t fidelity = 0; // 0 inactive, 1 reduced, 2 full
+    Motion motion = Motion::static_body;
+    double position[3]{};
+    float rotation[4]{0, 0, 0, 1};
+    float scale[3]{1, 1, 1};
+    Vector3 half_extents{};
+    Vector3 linear_velocity{};
+    Vector3 angular_velocity{};
+};
+
 struct HostApi {
     std::uint32_t abi_version = module::abi_version;
     std::uint32_t size = sizeof(HostApi);
@@ -72,7 +162,12 @@ struct HostApi {
     std::size_t (*world_entity_count)(void* context) noexcept = nullptr;
     std::size_t (*world_resource_count)(void* context) noexcept = nullptr;
     void (*log)(void* context, LogLevel level, const char* message) noexcept = nullptr;
+    // Append-only ABI 1 extension. Check size before accessing these slots.
+    Result (*read_entity)(void* context, EntityId id, EntitySnapshot* output) noexcept = nullptr;
+    Result (*set_body_velocity)(void* context, EntityId id, Vector3 linear, Vector3 angular) noexcept = nullptr;
 };
+
+inline constexpr std::size_t host_api_v1_size = offsetof(HostApi, read_entity);
 
 struct ModuleApi {
     std::uint32_t abi_version = module::abi_version;
@@ -106,6 +201,18 @@ public:
         return host_ != nullptr && host_->world_resource_count != nullptr
             ? host_->world_resource_count(host_->context)
             : 0U;
+    }
+
+    [[nodiscard]] Result read_entity(EntityId id, EntitySnapshot& output) const noexcept {
+        if (!host_ || host_->size < offsetof(HostApi, read_entity) + sizeof(host_->read_entity) || !host_->read_entity)
+            return Result::unavailable;
+        return host_->read_entity(host_->context, id, &output);
+    }
+
+    [[nodiscard]] Result set_body_velocity(EntityId id, Vector3 linear, Vector3 angular = {}) const noexcept {
+        if (!host_ || host_->size < offsetof(HostApi, set_body_velocity) + sizeof(host_->set_body_velocity) || !host_->set_body_velocity)
+            return Result::unavailable;
+        return host_->set_body_velocity(host_->context, id, linear, angular);
     }
 
     void log(const LogLevel level, const char* const message) const noexcept {
@@ -211,7 +318,7 @@ template <typename GameType>
     ModuleApi* const output
 ) noexcept {
     if (host_abi_version != abi_version || host == nullptr || output == nullptr ||
-        host->abi_version != abi_version || host->size < sizeof(HostApi)) {
+        host->abi_version != abi_version || host->size < host_api_v1_size) {
         return false;
     }
 

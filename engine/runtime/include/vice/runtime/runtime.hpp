@@ -13,6 +13,8 @@
 #include <optional>
 #include <string>
 
+namespace vice::rigid_body { class AuthoredSimulation; }
+
 namespace vice::runtime {
 
 struct LaunchPaths {
@@ -49,6 +51,7 @@ struct LoadResult {
 struct GameContext {
     const project::Manifest& project;
     world::World& world;
+    rigid_body::AuthoredSimulation* physics = nullptr;
 };
 
 class GameModule {

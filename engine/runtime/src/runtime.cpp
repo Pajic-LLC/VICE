@@ -318,6 +318,9 @@ int run_native_game(
     GameContext context{
         .project = runtime_project.manifest,
         .world = *runtime_project.world,
+#if defined(VICE_RUNTIME_AUTHORED_PHYSICS)
+        .physics = physics.get(),
+#endif
     };
     GameModuleLifecycle lifecycle{module, context};
     if (!lifecycle.start()) {
