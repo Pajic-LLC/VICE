@@ -242,6 +242,7 @@ WorldSnapshot World::snapshot() const {
             .distance_link = slot.distance_link,
             .dependency = slot.dependency,
             .character = slot.character,
+            .vehicle = slot.vehicle,
             .material = slot.material,
             .resource_references = slot.resource_references,
         };
@@ -299,6 +300,7 @@ WorldSnapshot World::snapshot() const {
 }
 
 bool World::restore(const WorldSnapshot& snapshot_data) {
+    if (!validate_vehicles(snapshot_data)) return false;
     if (!validate_distance_links(snapshot_data) || !validate_dependencies(snapshot_data) || !validate_characters(snapshot_data) || !validate_causal_history(snapshot_data.causal_history)) return false;
     if(!validate_materials(snapshot_data)) return false;
     World restored;
@@ -350,6 +352,7 @@ bool World::restore(const WorldSnapshot& snapshot_data) {
         }
         if (entity_record.character && !restored.set_character(*entity, *entity_record.character)) return false;
         if (entity_record.rigid_box && !restored.set_rigid_box(*entity, *entity_record.rigid_box)) return false;
+        if(entity_record.vehicle && !restored.set_vehicle(*entity,*entity_record.vehicle))return false;
         if(!restored.set_entity_material(*entity,entity_record.material))return false;
         for (const auto reference : entity_record.resource_references) {
             if (!restored.set_resource_reference(*entity, reference)) {
@@ -376,7 +379,7 @@ bool World::restore(const WorldSnapshot& snapshot_data) {
         }
     }
 
-    if(!restored.advance_material_revision())return false;
+    if(!restored.advance_material_revision() || !restored.advance_vehicle_revision())return false;
     restored.causal_id_=snapshot_data.causal_history.id;
     restored.next_causal_sequence_=snapshot_data.causal_history.next_sequence;
     restored.causal_events_.assign(snapshot_data.causal_history.events.begin(),snapshot_data.causal_history.events.end());

@@ -172,6 +172,54 @@ module::Result host_read_dependency(void* value, module::EntityId id, module::De
     *output = result; return module::Result::success;
 }
 
+module::Result host_read_vehicle(void* value,module::EntityId id,module::VehicleSnapshot* output) noexcept {
+    const auto* bridge=current_bridge(value);
+    if(!bridge || !bridge->context)return module::Result::wrong_phase;
+    if(!output || output->size<sizeof(module::VehicleSnapshot) || persistent_id(id).is_nil())return module::Result::invalid_argument;
+    const auto& world=bridge->context->world;
+    const auto entity=world.find(persistent_id(id));
+    if(!entity)return module::Result::not_found;
+    if(!world.vehicle(*entity))return module::Result::no_vehicle;
+#if defined(VICE_RUNTIME_AUTHORED_PHYSICS)
+    if(!bridge->context->physics)return module::Result::unavailable;
+    const auto observed=bridge->context->physics->vehicle(persistent_id(id));
+    if(!observed)return module::Result::reset_required;
+    module::VehicleSnapshot result;
+    result.throttle=observed->state.throttle;result.steering=observed->state.steering;result.brake=observed->state.brake;
+    result.distance=observed->state.distance;result.forward_speed=observed->forward_speed;
+    for(std::size_t i=0;i<4;++i) {
+        const auto& w=observed->wheels[i];auto& o=result.wheels[i];
+        o.grounded=w.grounded?1U:0U;
+        for(std::size_t j=0;j<16;++j){o.supporting_entity.bytes[j]=w.supporting_entity.bytes()[j];o.material.bytes[j]=w.material.bytes()[j];}
+        o.point[0]=w.point.x;o.point[1]=w.point.y;o.point[2]=w.point.z;o.normal={w.normal.x,w.normal.y,w.normal.z};
+        o.suspension_length=w.suspension_length;o.normal_force=w.normal_force;o.longitudinal_force=w.longitudinal_force;o.lateral_force=w.lateral_force;
+    }
+    *output=result;return module::Result::success;
+#else
+    return module::Result::unavailable;
+#endif
+}
+module::Result host_control_vehicle(void* value,module::EntityId id,float throttle,float steering,float brake) noexcept {
+    const auto* bridge=current_bridge(value);
+    if(!bridge || !bridge->context || !bridge->writable)return module::Result::wrong_phase;
+    if(persistent_id(id).is_nil() || !std::isfinite(throttle) || !std::isfinite(steering) || !std::isfinite(brake) ||
+        std::abs(throttle)>1 || std::abs(steering)>1 || brake<0 || brake>1)return module::Result::invalid_argument;
+    const auto entity=bridge->context->world.find(persistent_id(id));
+    if(!entity)return module::Result::not_found;
+    if(!bridge->context->world.vehicle(*entity))return module::Result::no_vehicle;
+#if defined(VICE_RUNTIME_AUTHORED_PHYSICS)
+    if(!bridge->context->physics)return module::Result::unavailable;
+    using C=rigid_body::VehicleControlResult;
+    switch(bridge->context->physics->control_vehicle(persistent_id(id),throttle,steering,brake)) {
+    case C::applied:return module::Result::success;
+    case C::not_found:case C::reset_required:return module::Result::reset_required;
+    case C::invalid_argument:return module::Result::invalid_argument;
+    case C::inactive_region:return module::Result::inactive_region;
+    }
+#endif
+    return module::Result::unavailable;
+}
+
 module::Result host_read_character(void* value, module::EntityId id, module::CharacterSnapshot* output) noexcept {
     const auto* bridge = current_bridge(value);
     if (!bridge || !bridge->context) return module::Result::wrong_phase;
@@ -458,6 +506,8 @@ public:
         host_.set_dependency_enabled = &host_set_dependency_enabled;
         host_.read_material = &host_read_material;
         host_.read_causal_materials = &host_read_causal_materials;
+        host_.read_vehicle=&host_read_vehicle;
+        host_.control_vehicle=&host_control_vehicle;
     }
 
     ~DynamicGameModule() override {

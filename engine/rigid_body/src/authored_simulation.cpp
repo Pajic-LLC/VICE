@@ -53,6 +53,17 @@ struct AuthoredSimulation::State {
         world::Character expected;
         world::SpatialState expected_spatial;
     };
+    struct VehicleRecord {
+        world::PersistentId owner;
+        world::EntityId entity;
+        world::Vehicle expected;
+        VehicleObservation observed;
+    };
+    std::vector<VehicleRecord> vehicles;
+    std::unordered_map<world::PersistentId,std::size_t,world::PersistentIdHash> vehicle_lookup;
+    std::uint64_t vehicle_revision = 0;
+    bool drive_vehicles();
+    bool publish_vehicles();
     std::vector<Controller> characters;
     std::unordered_map<world::PersistentId,std::size_t,world::PersistentIdHash> character_lookup;
     std::uint64_t character_revision = 0;
@@ -144,6 +155,8 @@ struct AuthoredSimulation::State {
         return debug_snapshot(*target, desc);
     }
 };
+
+#include "authored_vehicles.inc"
 
 AuthoredSimulation::AuthoredSimulation() : state_{std::make_unique<State>()} {}
 AuthoredSimulation::~AuthoredSimulation() = default;
@@ -250,6 +263,13 @@ bool AuthoredSimulation::reset(world::World& world, jobs::Scheduler& jobs, std::
         next->character_lookup.emplace(entity.persistent_id,next->characters.size());
         next->characters.push_back({entity.persistent_id,*owner,c,*entity.spatial_state});
     }
+    for(const auto& entity:snapshot.entities) if(entity.vehicle) {
+        const auto owner=world.find(entity.persistent_id);
+        if(!owner || !next->body_lookup.contains(entity.persistent_id) || !world::valid(*entity.vehicle))return fail(diagnostics,"Invalid authored vehicle.");
+        next->vehicle_lookup.emplace(entity.persistent_id,next->vehicles.size());
+        next->vehicles.push_back({entity.persistent_id,*owner,*entity.vehicle,VehicleObservation{*entity.vehicle,0,{}}});
+    }
+    next->vehicle_revision=world.vehicle_revision();
     next->character_revision = world.character_revision();
     next->link_revision = world.distance_link_revision();
     if(!world.begin_causal_recording(true)) return fail(diagnostics,"Causal event sequence is exhausted.");
@@ -269,6 +289,9 @@ bool AuthoredSimulation::step(std::string* diagnostics) {
     }
     if (state_->world->character_revision() != state_->character_revision) return fail(diagnostics,"Characters were edited externally; reset the simulation.");
     for (const auto& record : state_->characters) if (!state_->matches(record)) return fail(diagnostics,"Character state changed externally; reset the simulation.");
+    if(state_->world->vehicle_revision()!=state_->vehicle_revision)return fail(diagnostics,"Vehicles were edited externally; reset the simulation.");
+    for(const auto& v:state_->vehicles) if(state_->world->find(v.owner)!=v.entity || state_->world->vehicle(v.entity)!=v.expected)
+        return fail(diagnostics,"Vehicle state changed externally; reset the simulation.");
     // Reject external body edits before advancing or publishing any solver state.
     for (const auto& record : state_->bodies) {
         if (!state_->matches(record)) {
@@ -281,6 +304,7 @@ bool AuthoredSimulation::step(std::string* diagnostics) {
         if (!current) return fail(diagnostics, "An authored simulation region was removed; reset the simulation.");
         region.domain->set_fidelity(fidelity(current->fidelity));
     }
+    if(!state_->drive_vehicles()) {state_->unpublished_step=true;return fail(diagnostics,"Could not apply vehicle forces; reset the simulation.");}
     state_->coordinator.step();
     state_->unpublished_step=true;
     // Publish broken identity/state before handoff can move the released endpoints.
@@ -320,6 +344,7 @@ bool AuthoredSimulation::step(std::string* diagnostics) {
     state_->bridge.orchestrate_characters(*state_->world,state_->coordinator);
     for (auto& c : state_->characters) if (!state_->publish_character(c)) return fail(diagnostics,"Could not publish authoritative character state.");
     state_->character_revision = state_->world->character_revision();
+    if(!state_->publish_vehicles())return fail(diagnostics,"Could not publish vehicle state; reset the simulation.");
     state_->unpublished_step=false;
     if (diagnostics) diagnostics->clear();
     return true;

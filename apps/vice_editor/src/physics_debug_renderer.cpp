@@ -625,6 +625,14 @@ bool PhysicsDebugRenderer::render(
             }
         }
 
+        if(layers.physics) for(const auto& vehicle:preview.vehicles) {
+            for(const auto& wheel:vehicle.vehicle.wheels) if(wheel.grounded) {
+                const auto point=float_position(wheel.point);
+                const std::array<float,4> color{0.95F,0.72F,0.20F,0.95F};
+                add_ring(vertices,indices,point,vehicle.vehicle.state.wheel_radius,0.018F,color);
+                add_segment(vertices,indices,point,add(point,scaled(wheel.normal,std::clamp(wheel.normal_force/10000.0F,0.1F,2.0F))),0.018F,color);
+            }
+        }
         if (layers.characters) {
             for (const auto& character : preview.characters) {
                 const bool highlighted = selected.has_value() && *selected == character.owner;

@@ -109,7 +109,7 @@ int main(){
  world::World fail;require(fail.restore(rejected),"failed publication fixture");rigid_body::AuthoredSimulation failed;require(failed.reset(fail,jobs) && !failed.step(),"event exhaustion stops solver publication");
  const auto failed_step=failed.coordinator().step_index();require(!failed.step() && failed.coordinator().step_index()==failed_step,"failed publication latches until reset");
 #endif
- world::World legacy;require(legacy.create_entity(id(1)).has_value(),"legacy fixture");auto bytes=world::encode_world_snapshot(legacy.snapshot()).bytes;require(bytes.size()==78,"minimal current format");bytes.resize(bytes.size()-8U);bytes.pop_back();bytes[8]=std::byte{10};rehash(bytes);const auto old=world::decode_world_snapshot(bytes);require(old.snapshot && old.snapshot->causal_history.events.empty(),"v10 remains readable without invented history");
+ world::World legacy;require(legacy.create_entity(id(1)).has_value(),"legacy fixture");auto bytes=world::encode_world_snapshot(legacy.snapshot()).bytes;require(bytes.size()==82,"minimal current format");bytes.resize(bytes.size()-12U);bytes.pop_back();bytes[8]=std::byte{10};rehash(bytes);const auto old=world::decode_world_snapshot(bytes);require(old.snapshot && old.snapshot->causal_history.events.empty(),"v10 remains readable without invented history");
 #if defined(VICE_CAUSAL_EDITOR)
  auto authored=load();auto weak=*authored.distance_link(*authored.find(id(3)));weak.break_threshold=0.001F;require(authored.set_distance_link(*authored.find(id(3)),weak),"preview threshold");
  editor::AssetIndex assets;editor::PreviewRuntime preview;std::string diagnostics;const editor::PreviewGameConfig config{manifest,{}};

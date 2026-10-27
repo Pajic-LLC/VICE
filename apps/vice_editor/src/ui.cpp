@@ -782,6 +782,15 @@ void EditorUi::draw(
                 ImGui::Text("Entity  %s", short_id(inspector->persistent_id).c_str());
                 ImGui::Separator();
 
+                if(inspector->vehicle && ImGui::CollapsingHeader("Vehicle")) {
+                    const auto& v=*inspector->vehicle;
+                    ImGui::Text("Wheelbase %.2f m   Track %.2f m",static_cast<double>(v.wheelbase),static_cast<double>(v.track));
+                    ImGui::Text("Wheel radius %.2f m   Travel %.2f m",static_cast<double>(v.wheel_radius),static_cast<double>(v.suspension_travel));
+                    ImGui::Text("Spring %.0f N/m   Damping %.0f Ns/m",static_cast<double>(v.spring),static_cast<double>(v.damping));
+                    ImGui::Text("Drive %.0f N   Brake %.0f N",static_cast<double>(v.drive_force),static_cast<double>(v.brake_force));
+                    ImGui::Text("Throttle %.2f   Steering %.2f   Brake %.2f",static_cast<double>(v.throttle),static_cast<double>(v.steering),static_cast<double>(v.brake));
+                    ImGui::Text("Travelled %.2f m",v.distance);
+                }
                 if(inspector->material && ImGui::CollapsingHeader("Shared material")) {
                     const auto& material=*inspector->material;
                     const auto definition=world.material(material.id);

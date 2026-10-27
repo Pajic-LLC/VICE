@@ -4,6 +4,7 @@
 #include <vice/world/material.hpp>
 #include <vice/world/causal.hpp>
 #include <vice/world/character.hpp>
+#include <vice/world/vehicle.hpp>
 #include <vice/world/distance_link.hpp>
 #include <vice/world/dependency.hpp>
 #include <vice/world/component.hpp>
@@ -31,6 +32,7 @@ struct SnapshotEntity {
     std::optional<DistanceLink> distance_link;
     std::optional<Dependency> dependency;
     std::optional<Character> character;
+    std::optional<Vehicle> vehicle;
     PersistentId material{};
     std::vector<ResourceReference> resource_references;
 };
@@ -52,6 +54,8 @@ struct WorldSnapshot {
     CausalHistory causal_history;
     std::vector<MaterialDefinition> materials;
 };
+
+[[nodiscard]] bool validate_vehicles(const WorldSnapshot& snapshot, std::string* diagnostics = nullptr);
 
 [[nodiscard]] bool validate_characters(const WorldSnapshot& snapshot, std::string* diagnostics = nullptr);
 

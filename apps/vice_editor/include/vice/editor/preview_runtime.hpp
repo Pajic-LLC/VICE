@@ -43,6 +43,11 @@ struct PreviewCharacterSnapshot {
     rigid_body::CharacterDebugSnapshot character{};
 };
 
+struct PreviewVehicleSnapshot {
+    world::PersistentId owner{};
+    rigid_body::VehicleObservation vehicle;
+};
+
 struct PreviewContactSnapshot {
     world::RegionId region{};
     world::GlobalPosition global_point{};
@@ -60,6 +65,7 @@ struct PreviewSnapshot {
     std::uint64_t step_index = 0;
     std::vector<PreviewBodySnapshot> bodies;
     std::vector<PreviewCharacterSnapshot> characters;
+    std::vector<PreviewVehicleSnapshot> vehicles;
     std::vector<PreviewContactSnapshot> contacts;
     std::vector<rigid_body::CharacterRegionEvent> character_region_events;
     std::vector<rigid_body::BoxRegionEvent> box_region_events;

@@ -4,6 +4,7 @@
 #include <vice/rigid_body/world_bridge.hpp>
 
 #include <memory>
+#include <array>
 #include <string>
 
 namespace vice::rigid_body {
@@ -15,6 +16,24 @@ struct BodySupport {
     math::Vec3 normal{};
     math::Vec3 velocity{};
 };
+
+struct WheelObservation {
+    bool grounded = false;
+    world::PersistentId supporting_entity{};
+    world::PersistentId material{};
+    world::GlobalPosition point{};
+    math::Vec3 normal{};
+    float suspension_length = 0;
+    float normal_force = 0;
+    float longitudinal_force = 0;
+    float lateral_force = 0;
+};
+struct VehicleObservation {
+    world::Vehicle state;
+    float forward_speed = 0;
+    std::array<WheelObservation,4> wheels{}; // front left/right, rear left/right
+};
+enum class VehicleControlResult { applied, not_found, invalid_argument, inactive_region, reset_required };
 
 struct CharacterObservation {
     CharacterState state;
@@ -38,6 +57,9 @@ public:
     bool step(std::string* diagnostics = nullptr);
     bool advance(double delta_seconds, std::string* diagnostics = nullptr);
     [[nodiscard]] BodyControlResult set_body_velocity(world::PersistentId owner, math::Vec3 linear, math::Vec3 angular);
+    [[nodiscard]] VehicleControlResult control_vehicle(world::PersistentId owner, float throttle, float steering, float brake);
+    [[nodiscard]] std::optional<VehicleObservation> vehicle(world::PersistentId owner) const noexcept;
+    [[nodiscard]] std::size_t vehicle_count() const noexcept;
     [[nodiscard]] std::optional<CharacterObservation> character(world::PersistentId owner) const noexcept;
     [[nodiscard]] CharacterControlResult control_character(world::PersistentId owner, math::Vec3 horizontal, float jump_speed = 0);
     [[nodiscard]] std::size_t character_count() const noexcept;

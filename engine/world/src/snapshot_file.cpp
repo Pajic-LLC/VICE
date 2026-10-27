@@ -354,6 +354,14 @@ WorldSnapshotEncodeResult encode_world_snapshot(const WorldSnapshot& snapshot_da
     const auto bindings=std::count_if(snapshot.entities.begin(),snapshot.entities.end(),[](const auto& e){return !e.material.is_nil();});
     append_u32(payload,static_cast<std::uint32_t>(bindings));
     for(const auto& e:snapshot.entities) if(!e.material.is_nil()) {append_id(payload,e.persistent_id);append_id(payload,e.material);}
+    const auto vehicles=std::count_if(snapshot.entities.begin(),snapshot.entities.end(),[](const auto& e){return e.vehicle.has_value();});
+    append_u32(payload,static_cast<std::uint32_t>(vehicles));
+    for(const auto& e:snapshot.entities) if(e.vehicle) {
+        append_id(payload,e.persistent_id); const auto& v=*e.vehicle;
+        for(const auto x:{v.wheelbase,v.track,v.mount_height,v.wheel_radius,v.suspension_travel,v.spring,v.damping,v.drive_force,
+            v.brake_force,v.lateral_stiffness,v.max_steer,v.tire_friction,v.throttle,v.steering,v.brake})append_f32(payload,x);
+        append_f64(payload,v.distance);
+    }
     result.bytes.reserve(header_size + payload.size());
     result.bytes.insert(result.bytes.end(), world_magic.begin(), world_magic.end());
     append_u32(result.bytes, world_snapshot_file_format_version);
@@ -769,6 +777,27 @@ WorldSnapshotDecodeResult decode_world_snapshot(const std::span<const std::byte>
         }
         if(!bindings.empty()) {result.diagnostics="Material binding entity is missing.";return result;}
         if(!validate_materials(snapshot,&result.diagnostics))return result;
+    }
+    if(version>=13U) {
+        std::uint32_t count=0;
+        if(!reader.read_u32(count) || count>snapshot.entities.size()) {result.diagnostics="Invalid vehicle count.";return result;}
+        std::unordered_map<PersistentId,Vehicle,PersistentIdHash> vehicles;
+        vehicles.reserve(count);
+        for(std::uint32_t i=0;i<count;++i) {
+            PersistentId id;Vehicle v;
+            if(!reader.read_id(id)) {result.diagnostics="Truncated vehicle identity.";return result;}
+            for(auto* x:{&v.wheelbase,&v.track,&v.mount_height,&v.wheel_radius,&v.suspension_travel,&v.spring,&v.damping,&v.drive_force,
+                &v.brake_force,&v.lateral_stiffness,&v.max_steer,&v.tire_friction,&v.throttle,&v.steering,&v.brake}) {
+                if(!reader.read_f32(*x)){result.diagnostics="Truncated vehicle profile.";return result;}
+            }
+            if(!reader.read_f64(v.distance) || !valid(v) || !vehicles.emplace(id,v).second){result.diagnostics="Invalid or duplicate vehicle.";return result;}
+        }
+        if(count)for(auto& e:snapshot.entities) {
+            const auto found=vehicles.find(e.persistent_id);
+            if(found!=vehicles.end()){e.vehicle=found->second;vehicles.erase(found);}
+        }
+        if(!vehicles.empty()){result.diagnostics="Vehicle entity is missing.";return result;}
+        if(!validate_vehicles(snapshot,&result.diagnostics))return result;
     }
     if (!reader.finished()) {
         result.diagnostics = "World snapshot contains trailing data.";

@@ -446,6 +446,9 @@ public:
     bool set_body_active(simulation::ParticipantId participant, bool active);
     // Dynamic and kinematic bodies only; wakes the body without changing domain fidelity.
     bool set_body_velocity(simulation::ParticipantId participant, math::Vec3 linear, math::Vec3 angular);
+    // World-space impulse and application point in the domain's local frame.
+    // Dynamic bodies only. Does not change fidelity; callers own step policy.
+    bool apply_body_impulse(simulation::ParticipantId participant, math::Vec3 impulse, math::Vec3 point);
     bool set_body_motion_quality(
         simulation::ParticipantId participant,
         MotionQuality motion_quality

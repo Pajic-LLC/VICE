@@ -98,6 +98,10 @@ public:
     bool set_distance_link(EntityId entity, const DistanceLink& link);
     bool clear_distance_link(EntityId entity);
     [[nodiscard]] std::optional<DistanceLink> distance_link(EntityId entity) const noexcept;
+    bool set_vehicle(EntityId entity, const Vehicle& vehicle);
+    bool clear_vehicle(EntityId entity);
+    [[nodiscard]] std::optional<Vehicle> vehicle(EntityId entity) const noexcept;
+    [[nodiscard]] std::uint64_t vehicle_revision() const noexcept { return vehicle_revision_; }
     bool set_character(EntityId entity, const Character& character);
     bool clear_character(EntityId entity);
     [[nodiscard]] std::optional<Character> character(EntityId entity) const noexcept;
@@ -138,6 +142,7 @@ private:
         std::optional<DistanceLink> distance_link;
         std::optional<Dependency> dependency;
         std::optional<Character> character;
+        std::optional<Vehicle> vehicle;
         PersistentId material{};
         std::vector<ResourceReference> resource_references;
         std::uint32_t generation = 1;
@@ -175,6 +180,8 @@ private:
     std::unordered_map<PersistentId, std::vector<EntityId>, PersistentIdHash> dependency_provider_users_;
     std::unordered_map<PersistentId, std::vector<EntityId>, PersistentIdHash> dependency_gate_users_;
     std::uint64_t character_revision_ = 0;
+    std::uint64_t vehicle_revision_ = 0;
+    bool advance_vehicle_revision() noexcept;
     std::uint64_t distance_link_revision_ = 0;
     std::unordered_map<PersistentId, std::vector<EntityId>, PersistentIdHash> distance_link_users_;
     std::vector<Slot> slots_;

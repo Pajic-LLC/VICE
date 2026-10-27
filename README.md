@@ -14,6 +14,10 @@ Foundation development has started. The current work establishes the build, plat
 
 The first executable is `vice_lab`. It is an integration target for engine systems, not a game template.
 
+The [vehicle playground](examples/vehicle-playground/README.md) demonstrates authored
+ray-suspension chassis, shared-material traction, SDK controls and checkpoint resume.
+See [authored vehicles](docs/architecture/authored-vehicles.md) for the engine contract.
+
 ## Build
 
 VICE requires CMake 3.28 or newer and a C++23 compiler.
