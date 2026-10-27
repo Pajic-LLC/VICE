@@ -547,6 +547,27 @@ void append_entities(std::string& data, const world::WorldSnapshot& snapshot) {
         data += value.light.has_value() ? "true" : "false";
         data += ",\"reflection_probe\":";
         data += value.reflection_probe.has_value() ? "true" : "false";
+        data += ",\"rigid_box\":";
+        if (!value.rigid_box) data += "null";
+        else {
+            const auto& box = *value.rigid_box;
+            data += "{\"motion\":";
+            append_json_string(data, box.motion == world::RigidMotion::static_body ? "static" :
+                (box.motion == world::RigidMotion::kinematic_body ? "kinematic" : "dynamic"));
+            auto vector = [&](std::string_view name, math::Vec3 v) {
+                data += ",\"" + std::string{name} + "\":[";
+                append_double(data, v.x); data += ','; append_double(data, v.y); data += ','; append_double(data, v.z);
+                data += ']';
+            };
+            vector("half_extents", box.half_extents);
+            vector("linear_velocity", box.linear_velocity);
+            vector("angular_velocity", box.angular_velocity);
+            data += ",\"friction\":"; append_double(data, box.friction);
+            data += ",\"restitution\":"; append_double(data, box.restitution);
+            data += ",\"continuous\":"; data += box.continuous ? "true" : "false";
+            data += ",\"trigger\":"; data += box.trigger ? "true" : "false";
+            data += '}';
+        }
 
         auto references = value.resource_references;
         std::sort(references.begin(), references.end(), [](const auto& lhs, const auto& rhs) {

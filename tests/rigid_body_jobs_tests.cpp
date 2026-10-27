@@ -68,12 +68,14 @@ int main() {
         }
         assert(coordinator.unregister_domain(domain->id()));
 
-        assert(submitted.load(std::memory_order_relaxed) > 0U);
-        assert(started.load(std::memory_order_relaxed) > 0U);
-        assert(completed.load(std::memory_order_relaxed) > 0U);
-        assert(completed.load(std::memory_order_relaxed) == submitted.load(std::memory_order_relaxed));
     }
 
+    // Task completion can wake a waiter before its instrumentation callback runs.
+    // Join workers before asserting that all completion events were delivered.
     scheduler.shutdown();
+    assert(submitted.load(std::memory_order_relaxed) > 0U);
+    assert(started.load(std::memory_order_relaxed) > 0U);
+    assert(completed.load(std::memory_order_relaxed) > 0U);
+    assert(completed.load(std::memory_order_relaxed) == submitted.load(std::memory_order_relaxed));
     return 0;
 }

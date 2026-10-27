@@ -1,4 +1,5 @@
 #include <vice/editor/preview_runtime.hpp>
+#include <vice/rigid_body/authored_simulation.hpp>
 
 #include <vice/rigid_body/collision_asset.hpp>
 #include <vice/rigid_body/material_asset.hpp>
@@ -89,6 +90,7 @@ struct PreviewRuntime::State {
 
     jobs::Scheduler* jobs = nullptr;
     world::World world;
+    std::unique_ptr<rigid_body::AuthoredSimulation> authored;
     simulation::Coordinator simulation{1.0 / 120.0};
     simulation::EntityBindings bindings;
     rigid_body::WorldBridge bridge;
@@ -118,6 +120,7 @@ struct PreviewRuntime::State {
     }
 
     [[nodiscard]] bool fixed_step() {
+        if (authored) return authored->step();
         simulation.step();
         bridge.orchestrate_boxes(world, simulation, bindings);
         bridge.orchestrate_characters(world, simulation);
@@ -161,6 +164,13 @@ bool PreviewRuntime::reset(
     }
 
     const auto snapshot = next->world.snapshot();
+    if (std::any_of(snapshot.entities.begin(), snapshot.entities.end(), [](const auto& entity) { return entity.rigid_box.has_value(); })) {
+        next->authored = std::make_unique<rigid_body::AuthoredSimulation>();
+        if (!next->authored->reset(next->world, jobs, diagnostics)) return false;
+        next->playback = PreviewPlayback::paused;
+        state_ = std::move(next);
+        return true;
+    }
     next->regions.reserve(snapshot.regions.size());
     for (std::size_t index = 0; index < snapshot.regions.size(); ++index) {
         const auto& region = snapshot.regions[index];
@@ -382,6 +392,7 @@ bool PreviewRuntime::update(const double delta_seconds) {
         !std::isfinite(delta_seconds) || delta_seconds <= 0.0) {
         return true;
     }
+    if (state_->authored) return state_->authored->advance(delta_seconds);
 
     state_->accumulator += std::min(delta_seconds, 0.25);
     std::size_t steps = 0;
@@ -404,7 +415,8 @@ PreviewPlayback PreviewRuntime::playback() const noexcept {
 }
 
 const simulation::Coordinator* PreviewRuntime::coordinator() const noexcept {
-    return active() ? &state_->simulation : nullptr;
+    if (!active()) return nullptr;
+    return state_->authored ? &state_->authored->coordinator() : &state_->simulation;
 }
 
 const world::World* PreviewRuntime::world() const noexcept {
@@ -416,7 +428,7 @@ PreviewSnapshot PreviewRuntime::snapshot() const {
     if (!active()) return result;
 
     result.playback = state_->playback;
-    result.step_index = state_->simulation.step_index();
+    result.step_index = state_->authored ? state_->authored->coordinator().step_index() : state_->simulation.step_index();
     result.character_region_events = state_->recent_character_events;
     result.box_region_events = state_->recent_box_events;
     result.activation_requests = state_->recent_activation_requests;
@@ -430,6 +442,20 @@ PreviewSnapshot PreviewRuntime::snapshot() const {
             preview_region.global_maximum = world::to_global_position(region.bounds->max, region.origin);
         }
         result.regions.push_back(preview_region);
+    }
+    if (state_->authored) {
+        result.box_region_events.assign(state_->authored->bridge().box_region_events().begin(), state_->authored->bridge().box_region_events().end());
+        result.activation_requests.assign(state_->authored->bridge().region_activation_requests().begin(), state_->authored->bridge().region_activation_requests().end());
+        for (const auto& record : world_snapshot.entities) {
+            if (!record.rigid_box || !record.spatial_state) continue;
+            const auto body = state_->authored->body(record.persistent_id);
+            const auto entity = state_->world.find(record.persistent_id);
+            const auto local = entity ? state_->world.local_position(*entity) : std::nullopt;
+            if (body && local) result.bodies.push_back(PreviewBodySnapshot{
+                .owner = record.persistent_id, .region = record.spatial_state->region,
+                .global_position = record.spatial_state->global_position, .local_position = *local, .body = *body});
+        }
+        return result;
     }
 
     for (const auto& record : state_->boxes) {

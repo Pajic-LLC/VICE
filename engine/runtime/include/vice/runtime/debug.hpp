@@ -31,6 +31,7 @@ struct RuntimeDebugEntitySnapshot {
     world::PersistentId requested_id{};
     std::optional<world::SpatialState> spatial;
     std::optional<world::AuthoredTransform> authored_transform;
+    std::optional<world::RigidBox> rigid_box;
     std::optional<RuntimeDebugRegionSnapshot> region;
     bool camera = false;
     bool light = false;

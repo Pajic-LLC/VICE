@@ -107,6 +107,7 @@ RuntimeDebugEntitySnapshot sample_runtime_debug_entity(
     result.state = RuntimeDebugEntityState::available;
     result.spatial = entity->spatial_state;
     result.authored_transform = entity->authored_transform;
+    result.rigid_box = entity->rigid_box;
     result.camera = entity->camera.has_value();
     result.light = entity->light.has_value();
     result.reflection_probe = entity->reflection_probe.has_value();
@@ -196,6 +197,27 @@ std::string serialize_runtime_debug_entity_snapshot(
         output += "]}";
     }
 
+    output += ",\"rigid_box\":";
+    if (!snapshot.rigid_box) output += "null";
+    else {
+        const auto& box = *snapshot.rigid_box;
+        output += "{\"motion\":";
+        append_json_string(output, box.motion == world::RigidMotion::static_body ? "static" :
+            (box.motion == world::RigidMotion::kinematic_body ? "kinematic" : "dynamic"));
+        auto vector = [&](std::string_view name, math::Vec3 v) {
+            output += ",\"" + std::string{name} + "\":[";
+            append_float(output, v.x); output += ','; append_float(output, v.y); output += ','; append_float(output, v.z);
+            output += ']';
+        };
+        vector("half_extents", box.half_extents);
+        vector("linear_velocity", box.linear_velocity);
+        vector("angular_velocity", box.angular_velocity);
+        output += ",\"friction\":"; append_float(output, box.friction);
+        output += ",\"restitution\":"; append_float(output, box.restitution);
+        output += ",\"continuous\":"; output += box.continuous ? "true" : "false";
+        output += ",\"trigger\":"; output += box.trigger ? "true" : "false";
+        output += '}';
+    }
     output += ",\"region\":";
     if (!snapshot.region.has_value()) {
         output += "null";

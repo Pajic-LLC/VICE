@@ -97,6 +97,14 @@ namespace {
         rollback_entity();
         return false;
     }
+    if (command.entity.reflection_probe && !world.set_reflection_probe(*entity, *command.entity.reflection_probe)) {
+        rollback_entity();
+        return false;
+    }
+    if (command.entity.rigid_box && !world.set_rigid_box(*entity, *command.entity.rigid_box)) {
+        rollback_entity();
+        return false;
+    }
     for (const auto reference : command.entity.resource_references) {
         if (!world.set_resource_reference(*entity, reference)) {
             rollback_entity();
@@ -541,6 +549,7 @@ std::optional<InspectorData> project_inspector(
     inspector.authored_transform = world.authored_transform(*entity);
     inspector.camera = world.camera(*entity);
     inspector.light = world.light(*entity);
+    inspector.rigid_box = world.rigid_box(*entity);
     const auto references = world.resource_references(*entity);
     inspector.resource_references.assign(references.begin(), references.end());
     inspector.simulation_island = world.simulation_island(*entity);

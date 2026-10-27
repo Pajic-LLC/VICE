@@ -1,4 +1,5 @@
 #include <vice/tools/world_cooker.hpp>
+#include "rigid_box_source.hpp"
 
 #include <vice/world/world.hpp>
 
@@ -171,6 +172,15 @@ ParseResult parse_source_manifest(const std::string_view source) {
 
             std::string metadata;
             while (values >> metadata) {
+                if (metadata == "rigid_box") {
+                    world::RigidBox box;
+                    if (entity.rigid_box || !entity.spatial_state || !read_rigid_box(values, box)) {
+                        fail("invalid or duplicate rigid_box; a spatial entity and valid motion, extents, velocities and material values are required.");
+                        return result;
+                    }
+                    entity.rigid_box = box;
+                    continue;
+                }
                 if (metadata == "transform") {
                     if (entity.authored_transform.has_value()) {
                         fail("entity authored transform is duplicated.");

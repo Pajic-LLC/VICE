@@ -9,7 +9,7 @@ import tempfile
 import time
 
 
-def validate(vice, run_runtime):
+def validate(vice, run_runtime, physics=False):
     steps = []
 
     def command(*args, expected=0):
@@ -29,6 +29,10 @@ def validate(vice, run_runtime):
         world.write_text(
             "vice-world-source 1\nregion 1 10 1000000000000 0 0 0 0 0 reduced none\n"
             f"entity {entity} spatial 1000000000000.25 0 0 1\nentity {related} none\n", encoding="utf-8")
+        if physics:
+            with world.open("a", encoding="utf-8") as out:
+                out.write("entity 90000000-0000-4000-8000-000000000203 spatial 1000000000000 -0.5 0 1 "
+                          "rigid_box static 10 0.5 10 0 0 0 0 0 0 0.5 0 discrete solid\n")
         project = root / "workflow.viceproj"
         project.write_text(
             'vice-project 1\nid 90000000-0000-4000-8000-000000000001\n'
@@ -50,6 +54,9 @@ def validate(vice, run_runtime):
             f"set_transform {entity} 0 0 0 1 1 1 1\n"
             f"add_relation {entity} 90000000-0000-4000-8000-000000000301 {related}\n",
             encoding="utf-8")
+        if physics:
+            with request.open("a", encoding="utf-8") as out:
+                out.write(f"set_rigid_box {entity} dynamic 0.5 0.5 0.5 0 0 0 0 0 0 0.5 0 continuous solid\n")
         preview = command("world", "edit", world, request, "--dry-run")
         if world.read_bytes() != before or preview["data"]["published"]:
             raise RuntimeError("Dry-run mutated authored source")
@@ -101,16 +108,38 @@ def validate(vice, run_runtime):
                             raise RuntimeError("Native Runtime did not become observable: " +
                                                (root / "runtime.log").read_text(encoding="utf-8", errors="replace"))
                         time.sleep(0.1)
-                    if payload["world"]["entities"] != 2 or payload["world"]["relations"] != 1:
+                    if payload["world"]["entities"] != (3 if physics else 2) or payload["world"]["relations"] != 1:
                         raise RuntimeError("Runtime did not load the edited authored World")
                     steps.append("native_runtime_inspect")
                     command("runtime", "profile", session)
                     steps.append("native_runtime_profile")
-                    debug = command("runtime", "debug", session, entity)
-                    entity_state = json.loads(debug["data"]["payload"])
-                    if entity_state["state"] != "available" or entity_state["spatial"]["global_position"] != [1000000000001.25, 2.5, 3.75]:
-                        raise RuntimeError("Runtime entity differs from the authored edit")
-                    steps.append("native_runtime_entity_debug_matches_authored_edit")
+                    deadline = time.monotonic() + 10
+                    while True:
+                        debug = command("runtime", "debug", session, entity)
+                        entity_state = json.loads(debug["data"]["payload"])
+                        if entity_state["state"] != "available":
+                            raise RuntimeError("Runtime entity is unavailable")
+                        position = entity_state["spatial"]["global_position"]
+                        if not physics:
+                            if position != [1000000000001.25, 2.5, 3.75]:
+                                raise RuntimeError("Runtime entity differs from the authored edit")
+                            steps.append("native_runtime_entity_debug_matches_authored_edit")
+                            break
+                        # Contact resolution may introduce tiny lateral impulses.
+                        # Preserve centimeter-scale precision at a 1e12 origin.
+                        if abs(position[0] - 1000000000001.25) > 0.01 or abs(position[2] - 3.75) > 0.01:
+                            raise RuntimeError(f"Physics lost large-world horizontal precision: {position}")
+                        if abs(position[1] - 0.5) < 0.05:
+                            if entity_state["rigid_box"]["motion"] != "dynamic":
+                                raise RuntimeError("Runtime did not preserve the physical component")
+                            steps.append("native_authored_body_falls_and_contacts_static_floor")
+                            if world.read_bytes() != updated:
+                                raise RuntimeError("Runtime simulation rewrote authored source")
+                            steps.append("simulation_preserves_authored_source")
+                            break
+                        if process.poll() is not None or time.monotonic() >= deadline:
+                            raise RuntimeError(f"Authored body did not settle on the floor: {entity_state}")
+                        time.sleep(0.1)
                 finally:
                     if process.poll() is None:
                         process.terminate()
@@ -119,16 +148,18 @@ def validate(vice, run_runtime):
                         except subprocess.TimeoutExpired:
                             process.kill()
                             process.wait(timeout=5)
-    return {"schema": "vice.workflow.validation.v1", "ok": True, "native_runtime": run_runtime, "passed": steps}
+    return {"schema": "vice.workflow.validation.v1", "ok": True, "native_runtime": run_runtime,
+            "authored_physics": physics, "passed": steps}
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--vice", type=Path, required=True)
     parser.add_argument("--run-runtime", action="store_true", help="Open and inspect a native game window, then close the test process")
+    parser.add_argument("--physics", action="store_true", help="Author a dynamic box and floor; verify live collision when Runtime runs")
     parser.add_argument("--report", type=Path)
     args = parser.parse_args()
-    report = validate(args.vice.resolve(), args.run_runtime)
+    report = validate(args.vice.resolve(), args.run_runtime, args.physics)
     text = json.dumps(report, indent=2) + "\n"
     if args.report:
         args.report.write_text(text, encoding="utf-8")

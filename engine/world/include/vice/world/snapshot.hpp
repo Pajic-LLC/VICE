@@ -5,6 +5,7 @@
 #include <vice/world/light.hpp>
 #include <vice/world/persistent_id.hpp>
 #include <vice/world/reflection_probe.hpp>
+#include <vice/world/rigid_box.hpp>
 #include <vice/world/resource.hpp>
 #include <vice/world/spatial.hpp>
 
@@ -20,6 +21,7 @@ struct SnapshotEntity {
     std::optional<Camera> camera;
     std::optional<Light> light;
     std::optional<ReflectionProbe> reflection_probe;
+    std::optional<RigidBox> rigid_box;
     std::vector<ResourceReference> resource_references;
 };
 

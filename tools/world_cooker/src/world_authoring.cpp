@@ -108,6 +108,18 @@ namespace {
                 }
                 entity->authored_transform = value.transform;
                 return true;
+            } else if constexpr (std::is_same_v<Value, SetRigidBox>) {
+                auto* const entity = find_entity(candidate, value.entity);
+                if (entity == nullptr || value.entity.is_nil()) {
+                    diagnostics = "Rigid box entity does not exist: " + value.entity.to_string();
+                    return false;
+                }
+                if (value.body && (!entity->spatial_state || !world::valid(*value.body))) {
+                    diagnostics = "Rigid box requires a spatial entity and finite positive dimensions with valid motion/material data.";
+                    return false;
+                }
+                entity->rigid_box = value.body;
+                return true;
             } else if constexpr (std::is_same_v<Value, SetRegionFidelity>) {
                 if (!value.region.valid()) {
                     diagnostics = "Region ID is invalid.";

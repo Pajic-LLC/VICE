@@ -27,6 +27,11 @@ struct SetRegionFidelity {
     world::RegionFidelity fidelity = world::RegionFidelity::full;
 };
 
+struct SetRigidBox {
+    world::PersistentId entity{};
+    std::optional<world::RigidBox> body;
+};
+
 struct AddRelation {
     world::SnapshotRelation relation{};
 };
@@ -49,6 +54,7 @@ using Operation = std::variant<
     SetEntitySpatial,
     SetEntityTransform,
     SetRegionFidelity,
+    SetRigidBox,
     AddRelation,
     RemoveRelation,
     AddResourceReference,

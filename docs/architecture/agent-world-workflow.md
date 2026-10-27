@@ -51,8 +51,11 @@ the entire request. Source files are limited to 16 MiB.
 | `set_fidelity` | region ID, `inactive` / `reduced` / `full` |
 | `add_relation` / `remove_relation` | subject ID, relation-kind ID, object ID |
 | `add_resource` / `remove_resource` | entity ID, resource role, resource ID |
+| `set_rigid_box` | entity ID, motion, half extents, linear/angular velocity, friction, restitution, collision quality, contact kind |
+| `clear_rigid_box` | entity ID |
 
 Resource roles are `render_mesh`, `render_material` and `reflection_environment`.
+Rigid box fields and examples are documented in `authored-physics.md`.
 Relations require existing subject/object entities and a non-nil kind ID. Added
 resource references require an existing resource. Repeated additions/removals are
 idempotent. Transform quaternions must satisfy the canonical World normalization

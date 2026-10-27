@@ -1,4 +1,8 @@
 #include <vice/runtime/runtime.hpp>
+#if defined(VICE_RUNTIME_AUTHORED_PHYSICS)
+#include <vice/jobs/jobs.hpp>
+#include <vice/rigid_body/authored_simulation.hpp>
+#endif
 
 #include <vice/core/log.hpp>
 #include <vice/core/platform.hpp>
@@ -222,6 +226,28 @@ int run_native_game(
         log(LogLevel::error, "VICE Runtime has no authoritative World.");
         return 1;
     }
+    const bool has_authored_bodies = [&] {
+        const auto snapshot = runtime_project.world->snapshot();
+        return std::any_of(snapshot.entities.begin(), snapshot.entities.end(), [](const auto& entity) { return entity.rigid_box.has_value(); });
+    }();
+#if defined(VICE_RUNTIME_AUTHORED_PHYSICS)
+    std::unique_ptr<jobs::Scheduler> physics_jobs;
+    std::unique_ptr<rigid_body::AuthoredSimulation> physics;
+    if (has_authored_bodies) {
+        physics_jobs = std::make_unique<jobs::Scheduler>();
+        physics = std::make_unique<rigid_body::AuthoredSimulation>();
+        std::string physics_diagnostics;
+        if (!physics->reset(*runtime_project.world, *physics_jobs, &physics_diagnostics)) {
+            log(LogLevel::error, "Could not initialize authored physics: " + physics_diagnostics);
+            return 1;
+        }
+    }
+#else
+    if (has_authored_bodies) {
+        log(LogLevel::error, "This Runtime was built without the optional authored Rigid3D capability.");
+        return 1;
+    }
+#endif
     if (core::current_platform() == core::Platform::Unsupported) {
         log(LogLevel::fatal, "This platform is not a VICE runtime target.");
         return 1;
@@ -366,6 +392,17 @@ int run_native_game(
 
         const auto update_begin = std::chrono::steady_clock::now();
         lifecycle.update(delta_seconds);
+#if defined(VICE_RUNTIME_AUTHORED_PHYSICS)
+        if (physics) {
+            std::string physics_diagnostics;
+            if (!physics->advance(delta_seconds, &physics_diagnostics)) {
+                log(LogLevel::error, "Authored physics update failed: " + physics_diagnostics);
+                running = false;
+                exit_code = 1;
+                break;
+            }
+        }
+#endif
         render::Color clear_color = config.clear_color;
         lifecycle.frame(clear_color);
         const auto render_begin = std::chrono::steady_clock::now();
