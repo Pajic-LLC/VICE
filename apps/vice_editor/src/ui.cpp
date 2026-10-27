@@ -782,6 +782,16 @@ void EditorUi::draw(
                 ImGui::Text("Entity  %s", short_id(inspector->persistent_id).c_str());
                 ImGui::Separator();
 
+                if(inspector->material && ImGui::CollapsingHeader("Shared material")) {
+                    const auto& material=*inspector->material;
+                    const auto definition=world.material(material.id);
+                    ImGui::TextUnformatted(definition?definition->name.c_str():"Legacy inline surface");
+                    ImGui::Text("ID  %s",material.id.to_string().c_str());
+                    ImGui::Text("Density %.3f kg/m3",static_cast<double>(material.density));
+                    ImGui::Text("Friction %.3f   Bounce %.3f",static_cast<double>(material.friction),static_cast<double>(material.restitution));
+                    ImGui::Text("Volume %.6f m3   Dynamic mass %.3f kg",material.volume,material.mass);
+                }
+
                 if (inspector->spatial_state.has_value() &&
                     ImGui::CollapsingHeader("Transform", ImGuiTreeNodeFlags_DefaultOpen)) {
                     const auto begin_transaction = [&](const char* label) {

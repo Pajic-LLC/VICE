@@ -27,6 +27,13 @@ struct SetRegionFidelity {
     world::RegionFidelity fidelity = world::RegionFidelity::full;
 };
 
+struct SetWorldMaterial {
+    world::PersistentId id{};
+    std::optional<world::MaterialDefinition> definition;
+};
+struct SetEntityMaterial {
+    world::PersistentId entity{}, material{};
+};
 struct SetRigidBox {
     world::PersistentId entity{};
     std::optional<world::RigidBox> body;
@@ -70,6 +77,8 @@ using Operation = std::variant<
     SetEntityTransform,
     SetRegionFidelity,
     SetRigidBox,
+    SetWorldMaterial,
+    SetEntityMaterial,
     SetDistanceLink,
     SetDependency,
     SetCharacter,

@@ -6,6 +6,8 @@
 #include <Jolt/Core/JobSystemThreadPool.h>
 #include <Jolt/Core/TempAllocator.h>
 #include <Jolt/Physics/Body/BodyCreationSettings.h>
+#include <Jolt/Physics/Body/BodyLock.h>
+#include <Jolt/Physics/Body/MotionProperties.h>
 #include <Jolt/Physics/Collision/BroadPhase/BroadPhaseLayer.h>
 #include <Jolt/Physics/Collision/CastResult.h>
 #include <Jolt/Physics/Collision/CollideShape.h>
@@ -1178,7 +1180,10 @@ bool Domain::create_box(const BoxBodyDesc& desc) {
         return false;
     }
 
+    const double mass=8.0*desc.half_extents.x*desc.half_extents.y*desc.half_extents.z*desc.density;
+    if(!std::isfinite(desc.density) || desc.density<=0 || !std::isfinite(mass) || mass<1.0e-6 || mass>1.0e15)return false;
     JPH::BoxShapeSettings settings{jolt_vector(desc.half_extents)};
+    settings.mDensity=desc.density;
     const auto shape_result = settings.Create();
     if (shape_result.HasError()) {
         return false;
@@ -1264,6 +1269,15 @@ std::optional<BodyState> Domain::body_state(
     const JPH::Quat orientation = body_interface.GetRotation(body->body_id);
     const JPH::Vec3 velocity = body_interface.GetLinearVelocity(body->body_id);
     const JPH::Vec3 angular_velocity = body_interface.GetAngularVelocity(body->body_id);
+    float mass=0;
+    {
+        const JPH::BodyLockRead lock{impl_->physics_system_.GetBodyLockInterface(),body->body_id};
+        if(!lock.Succeeded())return std::nullopt;
+        if(lock.GetBody().IsDynamic()) {
+            const auto inverse=lock.GetBody().GetMotionProperties()->GetInverseMass();
+            if(inverse>0)mass=1.0F/inverse;
+        }
+    }
     return BodyState{
         .position = vec3(position),
         .orientation = math::Quat{
@@ -1275,6 +1289,7 @@ std::optional<BodyState> Domain::body_state(
         .linear_velocity = vec3(velocity),
         .angular_velocity = vec3(angular_velocity),
         .active = body_interface.IsActive(body->body_id),
+        .mass = mass,
     };
 }
 

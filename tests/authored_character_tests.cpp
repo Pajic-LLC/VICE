@@ -114,7 +114,7 @@ int main() {
     rigid_body::AuthoredSimulation resumed_composition; require(resumed_composition.reset(composed_resume,jobs),"resume all composed systems"); ticks(resumed_composition,1);
     require(broken_gate && broken_gate->broken && composed_resume.distance_link(*composed_resume.find(id(4)))==broken_gate &&
         !composed_resume.dependency_state(*composed_resume.find(id(6)))->available && composed_resume.character(*composed_resume.find(id(2)))->velocity.y>1,"airborne character and broken causal gate survive together");
-    world::World legacy; require(legacy.create_entity(id(1)).has_value(),"legacy fixture"); auto bytes=world::encode_world_snapshot(legacy.snapshot()).bytes; require(bytes.size()==70,"current minimal layout"); bytes.pop_back(); bytes.erase(bytes.begin()+64); bytes[8]=std::byte{9}; hash(bytes); const auto old=world::decode_world_snapshot(bytes); require(old.snapshot && !old.snapshot->entities[0].character,"v9 remains readable");
+    world::World legacy; require(legacy.create_entity(id(1)).has_value(),"legacy fixture"); auto bytes=world::encode_world_snapshot(legacy.snapshot()).bytes; require(bytes.size()==78,"current minimal layout"); bytes.resize(bytes.size()-8U);bytes.pop_back(); bytes.erase(bytes.begin()+64); bytes[8]=std::byte{9}; hash(bytes); const auto old=world::decode_world_snapshot(bytes); require(old.snapshot && !old.snapshot->entities[0].character,"v9 remains readable");
 #if defined(VICE_CHARACTER_EDITOR)
     auto authored=load(); editor::AssetIndex assets; editor::PreviewRuntime preview; std::string diagnostics;
     const editor::PreviewGameConfig config{manifest,VICE_CHARACTER_TEST_MODULE};

@@ -173,6 +173,7 @@ struct InspectorData {
     std::optional<world::AuthoredTransform> authored_transform;
     std::optional<world::Camera> camera;
     std::optional<world::Light> light;
+    std::optional<world::MaterialSurface> material;
     std::optional<world::RigidBox> rigid_box;
     std::optional<world::DistanceLink> distance_link;
     std::optional<world::Dependency> dependency;

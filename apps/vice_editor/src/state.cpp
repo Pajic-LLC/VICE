@@ -110,6 +110,7 @@ namespace {
         rollback_entity();
         return false;
     }
+    if(!world.set_entity_material(*entity,command.entity.material)) {rollback_entity();return false;}
     for (const auto reference : command.entity.resource_references) {
         if (!world.set_resource_reference(*entity, reference)) {
             rollback_entity();
@@ -130,6 +131,7 @@ namespace {
 
     const auto snapshot = world.snapshot();
     for (const auto owned_resource : command.owned_resources) {
+        if(std::any_of(snapshot.materials.begin(),snapshot.materials.end(),[&](const auto& m){return m.render_material==owned_resource;}))return false;
         for (const auto& current_entity : snapshot.entities) {
             if (current_entity.persistent_id == command.entity.persistent_id) {
                 continue;
@@ -554,6 +556,7 @@ std::optional<InspectorData> project_inspector(
     inspector.authored_transform = world.authored_transform(*entity);
     inspector.camera = world.camera(*entity);
     inspector.light = world.light(*entity);
+    inspector.material = world.material_surface(*entity);
     inspector.rigid_box = world.rigid_box(*entity);
     inspector.distance_link = world.distance_link(*entity);
     inspector.dependency = world.dependency(*entity);

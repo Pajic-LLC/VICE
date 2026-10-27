@@ -324,6 +324,7 @@ struct BoxBodyDesc {
     float friction = 0.5F;
     float restitution = 0.0F;
     bool trigger = false;
+    float density = 1000.0F;
 };
 
 struct BodyState {
@@ -333,6 +334,7 @@ struct BodyState {
     math::Vec3 angular_velocity{};
     MotionQuality motion_quality = MotionQuality::discrete;
     bool active = false;
+    float mass = 0;
 };
 
 struct ContactEvent {

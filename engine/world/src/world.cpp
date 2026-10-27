@@ -41,6 +41,7 @@ EntityId World::allocate(const PersistentId persistent_id) {
     slot.distance_link.reset();
     slot.dependency.reset();
     slot.character.reset();
+    slot.material={};
     slot.resource_references.clear();
     slot.alive = true;
 
@@ -73,6 +74,7 @@ bool World::destroy_entity(const EntityId entity) {
     slot.distance_link.reset();
     slot.dependency.reset();
     slot.character.reset();
+    if(!slot.material.is_nil()) {slot.material={};++material_revision_;}
     slot.resource_references.clear();
     slot.alive = false;
 
@@ -125,6 +127,10 @@ bool World::set_resource_reference(const EntityId entity, const ResourceReferenc
         return false;
     }
 
+    if(reference.role==ResourceRole::render_material) {
+        const auto m=materials_.find(slots_[entity.index].material);
+        if(m!=materials_.end() && m->second.render_material.valid() && m->second.render_material!=reference.resource) return false;
+    }
     auto& references = slots_[entity.index].resource_references;
     const auto found = std::find_if(
         references.begin(),
@@ -167,6 +173,10 @@ std::optional<ResourceId> World::resource_reference(
 ) const noexcept {
     if (!alive(entity) || !valid(role)) {
         return std::nullopt;
+    }
+    if(role==ResourceRole::render_material) {
+        const auto m=materials_.find(slots_[entity.index].material);
+        if(m!=materials_.end() && m->second.render_material.valid()) return m->second.render_material;
     }
     const auto& references = slots_[entity.index].resource_references;
     const auto found = std::find_if(
@@ -401,7 +411,7 @@ bool World::set_distance_link_impl(const EntityId entity,const DistanceLink& lin
     distance_link_users_[link.second].push_back(entity);
     CausalEvent event;event.kind=kind;event.origin=kind==CausalKind::constraint_broken?CausalOrigin::physics:CausalOrigin::authoring;
     event.subject=owner;event.first=link.first;event.second=link.second;event.value=link.broken;event.region=causal_region(entity);
-    if(kind==CausalKind::constraint_broken){event.quantity_kind=CausalQuantity::linear_impulse;event.quantity=link.last_break_impulse;event.solver_step=link.break_step;}
+    if(kind==CausalKind::constraint_broken){event.quantity_kind=CausalQuantity::linear_impulse;event.quantity=link.last_break_impulse;event.solver_step=link.break_step;event.first_material=entity_material(*first);event.second_material=entity_material(*second);}
     finish_causal_change(std::move(causal_before),event);
     return true;
 }

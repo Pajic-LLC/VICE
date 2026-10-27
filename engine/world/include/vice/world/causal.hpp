@@ -20,6 +20,7 @@ struct CausalEvent {
     CausalKind kind = CausalKind::capture_started;
     CausalOrigin origin = CausalOrigin::runtime;
     PersistentId subject{}, first{}, second{}, root_entity{};
+    PersistentId first_material{}, second_material{};
     bool value = false;
     DependencyReason reason = DependencyReason::available, root_reason = DependencyReason::available;
     CausalQuantity quantity_kind = CausalQuantity::none;

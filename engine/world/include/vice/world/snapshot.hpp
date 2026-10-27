@@ -1,6 +1,7 @@
 #pragma once
 
 #include <vice/world/camera.hpp>
+#include <vice/world/material.hpp>
 #include <vice/world/causal.hpp>
 #include <vice/world/character.hpp>
 #include <vice/world/distance_link.hpp>
@@ -30,6 +31,7 @@ struct SnapshotEntity {
     std::optional<DistanceLink> distance_link;
     std::optional<Dependency> dependency;
     std::optional<Character> character;
+    PersistentId material{};
     std::vector<ResourceReference> resource_references;
 };
 
@@ -48,6 +50,7 @@ struct WorldSnapshot {
     std::vector<SnapshotEntity> entities;
     std::vector<SnapshotRelation> relations;
     CausalHistory causal_history;
+    std::vector<MaterialDefinition> materials;
 };
 
 [[nodiscard]] bool validate_characters(const WorldSnapshot& snapshot, std::string* diagnostics = nullptr);

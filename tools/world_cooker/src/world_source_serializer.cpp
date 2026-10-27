@@ -4,6 +4,7 @@
 #include "dependency_source.hpp"
 #include "character_source.hpp"
 #include "causal_source.hpp"
+#include "material_source.hpp"
 
 #include <vice/world/world.hpp>
 
@@ -58,6 +59,7 @@ std::string serialize_source_manifest(
     output << std::setprecision(std::numeric_limits<double>::max_digits10);
     output << "vice-world-source 1\n\n";
     write_causal_history(output,value.causal_history);
+    for(const auto& m:value.materials) {output<<"material ";write_material(output,m);output<<'\n';}
 
     for (const auto& type : value.component_types) {
         output << "component " << type.id.value.to_string() << ' ' << type.version << ' '
@@ -93,6 +95,7 @@ std::string serialize_source_manifest(
             output << "none";
         }
 
+        if(!entity.material.is_nil()) output<<" material "<<entity.material.to_string();
         if (entity.authored_transform.has_value()) {
             const auto& transform = *entity.authored_transform;
             output << " transform "

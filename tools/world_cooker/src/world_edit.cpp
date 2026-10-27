@@ -3,6 +3,7 @@
 #include "distance_link_source.hpp"
 #include "dependency_source.hpp"
 #include "character_source.hpp"
+#include "material_source.hpp"
 
 #include <vice/platform/file.hpp>
 #include <vice/tools/world_cooker.hpp>
@@ -63,7 +64,15 @@ bool read_reference(std::istream& input, world::ResourceReference& reference) {
 }
 
 std::optional<Operation> read_operation(const std::string& name, std::istream& input) {
-    if (name == "set_spatial") {
+    if(name=="set_material") {
+        world::MaterialDefinition m;
+        if(world_cooker::read_material(input,m))return SetWorldMaterial{m.id,m};
+    } else if(name=="remove_material") {
+        SetWorldMaterial op;if(read_id(input,op.id))return op;
+    } else if(name=="set_entity_material" || name=="clear_entity_material") {
+        SetEntityMaterial op;
+        if(read_id(input,op.entity) && (name=="clear_entity_material" || read_id(input,op.material)))return op;
+    } else if (name == "set_spatial") {
         SetEntitySpatial op;
         if (read_id(input, op.entity) &&
             (input >> op.spatial.global_position.x >> op.spatial.global_position.y >> op.spatial.global_position.z) &&
@@ -136,7 +145,14 @@ void affected(FileEditResult& result, const Transaction& transaction, const worl
     for (const auto& op : transaction.operations) {
         std::visit([&](const auto& value) {
             using T = std::decay_t<decltype(value)>;
-            if constexpr (std::is_same_v<T, SetRegionFidelity>) {
+            if constexpr (std::is_same_v<T, SetWorldMaterial>) {
+                const auto add=[&](const world::WorldSnapshot& s) {
+                    for(const auto& e:s.entities) if(e.material==value.id) {
+                        result.affected_entities.push_back(e.persistent_id);
+                        if(e.spatial_state)result.affected_regions.push_back(e.spatial_state->region);
+                    }
+                };add(before);add(after);
+            } else if constexpr (std::is_same_v<T, SetRegionFidelity>) {
                 result.affected_regions.push_back(value.region);
             } else if constexpr (std::is_same_v<T, AddRelation> || std::is_same_v<T, RemoveRelation>) {
                 result.affected_entities.push_back(value.relation.subject);
@@ -164,7 +180,7 @@ void affected(FileEditResult& result, const Transaction& transaction, const worl
                 if (previous != before.entities.end() && previous->distance_link) add_endpoints(*previous->distance_link);
             } else {
                 result.affected_entities.push_back(value.entity);
-                if constexpr (std::is_same_v<T, SetCharacter>) {
+                if constexpr (std::is_same_v<T, SetCharacter> || std::is_same_v<T, SetEntityMaterial>) {
                     const auto previous = std::find_if(before.entities.begin(),before.entities.end(),[&](const auto& e) { return e.persistent_id == value.entity; });
                     if (previous != before.entities.end() && previous->spatial_state) result.affected_regions.push_back(previous->spatial_state->region);
                 }
