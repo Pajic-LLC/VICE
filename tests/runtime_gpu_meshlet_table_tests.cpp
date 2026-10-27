@@ -161,6 +161,17 @@ template <typename T>
         return false;
     }
 
+    auto streamed = forward.plan;
+    const world::ResourceId alias{required_id("01000000-0000-4000-8000-000000000001")};
+    streamed.mesh_ids.push_back(alias);
+    streamed.meshes.push_back(RuntimeGpuMeshRecord{});
+    if (streamed.mesh_index(alias) != std::optional<std::uint32_t>{3U} ||
+        streamed.mesh_index(world::ResourceId{mesh_c_id}) != std::optional<std::uint32_t>{2U} ||
+        streamed.meshlets[0].mesh_index != forward.plan.meshlets[0].mesh_index) {
+        std::cerr << "Appended streaming aliases broke stable GPU mesh lookup.\n";
+        return false;
+    }
+
     const auto& mesh_a_gpu = forward.plan.meshes[0];
     const auto& mesh_b_gpu = forward.plan.meshes[1];
     const auto& mesh_c_gpu = forward.plan.meshes[2];
