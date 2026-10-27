@@ -58,6 +58,7 @@ bool World::destroy_entity(const EntityId entity) {
     }
 
     auto& slot = slots_[entity.index];
+    if(!causal_room((slot.dependency ? 2U:0U)+(slot.distance_link ? 1U:0U))) return false;
     (void)clear_character(entity);
     (void)clear_dependency(entity);
     (void)clear_distance_link(entity);
@@ -362,7 +363,16 @@ bool World::link_endpoint_change_allowed(const EntityId entity, const std::optio
     return true;
 }
 
-bool World::set_distance_link(const EntityId entity, const DistanceLink& link) {
+bool World::set_distance_link(const EntityId entity,const DistanceLink& link) {
+    return set_distance_link_impl(entity,link,CausalKind::distance_link_changed);
+}
+bool World::publish_distance_link_break(EntityId entity,float impulse,std::uint64_t solver_step) {
+    const auto old=distance_link(entity);
+    if(!old || old->broken || !std::isfinite(impulse) || old->break_threshold<=0 || impulse<=old->break_threshold || solver_step==0) return false;
+    auto broken=*old;broken.broken=true;broken.last_break_impulse=impulse;broken.break_step=solver_step;
+    return set_distance_link_impl(entity,broken,CausalKind::constraint_broken);
+}
+bool World::set_distance_link_impl(const EntityId entity,const DistanceLink& link,CausalKind kind) {
     if (!alive(entity) || !valid(link)) return false;
     const auto owner = slots_[entity.index].persistent_id;
     const auto first = find(link.first), second = find(link.second);
@@ -374,6 +384,8 @@ bool World::set_distance_link(const EntityId entity, const DistanceLink& link) {
             (a->motion != RigidMotion::dynamic_body && b->motion != RigidMotion::dynamic_body)) return false;
     }
     if (slots_[entity.index].distance_link == link) return true;
+    auto causal_before=observe_causal_dependents(entity,false);
+    if(!causal_room(causal_before.size()+1)) return false;
     const auto previous = slots_[entity.index].distance_link;
     if (previous) {
         for (const auto endpoint : {previous->first, previous->second}) {
@@ -387,6 +399,10 @@ bool World::set_distance_link(const EntityId entity, const DistanceLink& link) {
     ++distance_link_revision_;
     distance_link_users_[link.first].push_back(entity);
     distance_link_users_[link.second].push_back(entity);
+    CausalEvent event;event.kind=kind;event.origin=kind==CausalKind::constraint_broken?CausalOrigin::physics:CausalOrigin::authoring;
+    event.subject=owner;event.first=link.first;event.second=link.second;event.value=link.broken;event.region=causal_region(entity);
+    if(kind==CausalKind::constraint_broken){event.quantity_kind=CausalQuantity::linear_impulse;event.quantity=link.last_break_impulse;event.solver_step=link.break_step;}
+    finish_causal_change(std::move(causal_before),event);
     return true;
 }
 
@@ -394,6 +410,9 @@ bool World::clear_distance_link(const EntityId entity) {
     if (!alive(entity) || dependency_gate_users_.contains(slots_[entity.index].persistent_id)) return false;
     auto& link = slots_[entity.index].distance_link;
     if (!link) return true;
+    if(!causal_room(1)) return false;
+    CausalEvent event;event.kind=CausalKind::distance_link_removed;event.origin=CausalOrigin::authoring;
+    event.subject=*persistent_id(entity);event.first=link->first;event.second=link->second;event.region=causal_region(entity);
     for (const auto endpoint : {link->first, link->second}) {
         const auto users = distance_link_users_.find(endpoint);
         if (users == distance_link_users_.end()) continue;
@@ -402,6 +421,7 @@ bool World::clear_distance_link(const EntityId entity) {
     }
     link.reset();
     ++distance_link_revision_;
+    finish_causal_change({},event);
     return true;
 }
 

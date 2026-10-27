@@ -332,6 +332,18 @@ WorldSnapshotEncodeResult encode_world_snapshot(const WorldSnapshot& snapshot_da
         append_id(payload, relation.object);
     }
 
+    const auto& history=snapshot.causal_history;
+    append_u8(payload,history.id.is_nil()?0U:1U);
+    if(!history.id.is_nil()) {
+        append_id(payload,history.id);append_u64(payload,history.next_sequence);append_u32(payload,static_cast<std::uint32_t>(history.events.size()));
+        for(const auto& e:history.events) {
+            append_id(payload,e.id);append_id(payload,e.parent_id);append_id(payload,e.capture_id);append_u64(payload,e.sequence);append_u64(payload,e.parent_sequence);
+            append_u8(payload,static_cast<std::uint8_t>(e.kind));append_u8(payload,static_cast<std::uint8_t>(e.origin));
+            for(const auto id:{e.subject,e.first,e.second,e.root_entity})append_id(payload,id);
+            append_u8(payload,e.value?1U:0U);append_u8(payload,static_cast<std::uint8_t>(e.reason));append_u8(payload,static_cast<std::uint8_t>(e.root_reason));
+            append_u8(payload,static_cast<std::uint8_t>(e.quantity_kind));append_f32(payload,e.quantity);append_u64(payload,e.solver_step);append_u64(payload,e.region.value);
+        }
+    }
     result.bytes.reserve(header_size + payload.size());
     result.bytes.insert(result.bytes.end(), world_magic.begin(), world_magic.end());
     append_u32(result.bytes, world_snapshot_file_format_version);
@@ -699,6 +711,27 @@ WorldSnapshotDecodeResult decode_world_snapshot(const std::span<const std::byte>
         snapshot.relations.push_back(relation);
     }
 
+    if(version>=11U) {
+        std::uint8_t present=0;
+        if(!reader.read_u8(present) || present>1U){result.diagnostics="Invalid causal history presence.";return result;}
+        if(present) {
+            auto& h=snapshot.causal_history;std::uint32_t count=0;
+            if(!reader.read_id(h.id) || h.id.is_nil() || !reader.read_u64(h.next_sequence) || !reader.read_u32(count) || count>causal_history_capacity) {
+                result.diagnostics="Invalid causal history header.";return result;
+            }
+            h.events.reserve(count);
+            for(std::uint32_t i=0;i<count;++i) {
+                CausalEvent e;std::uint8_t kind=0,origin=0,value=0,reason=0,root_reason=0,quantity=0;
+                if(!reader.read_id(e.id) || !reader.read_id(e.parent_id) || !reader.read_id(e.capture_id) || !reader.read_u64(e.sequence) || !reader.read_u64(e.parent_sequence) ||
+                    !reader.read_u8(kind) || !reader.read_u8(origin) || !reader.read_id(e.subject) || !reader.read_id(e.first) || !reader.read_id(e.second) || !reader.read_id(e.root_entity) ||
+                    !reader.read_u8(value) || value>1U || !reader.read_u8(reason) || !reader.read_u8(root_reason) || !reader.read_u8(quantity) ||
+                    !reader.read_f32(e.quantity) || !reader.read_u64(e.solver_step) || !reader.read_u64(e.region.value)) {result.diagnostics="Truncated or invalid causal event.";return result;}
+                e.kind=static_cast<CausalKind>(kind);e.origin=static_cast<CausalOrigin>(origin);e.value=value!=0;e.reason=static_cast<DependencyReason>(reason);
+                e.root_reason=static_cast<DependencyReason>(root_reason);e.quantity_kind=static_cast<CausalQuantity>(quantity);h.events.push_back(e);
+            }
+            if(!validate_causal_history(h,&result.diagnostics))return result;
+        }
+    }
     if (!reader.finished()) {
         result.diagnostics = "World snapshot contains trailing data.";
         return result;

@@ -52,6 +52,7 @@ jobs:
           subprocess.run([sys.executable, "scripts/validate_distance_link_workflow.py", "--vice", str(executable)], check=True)
           subprocess.run([sys.executable, "scripts/validate_dependency_workflow.py", "--vice", str(executable)], check=True)
           subprocess.run([sys.executable, "scripts/validate_character_workflow.py", "--vice", str(executable)], check=True)
+          subprocess.run([sys.executable, "scripts/validate_causal_workflow.py", "--vice", str(executable)], check=True)
 
       - name: Shader cooker DXIL smoke test
         if: runner.os == 'Windows'

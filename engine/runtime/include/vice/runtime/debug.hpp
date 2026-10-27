@@ -39,6 +39,7 @@ struct RuntimeDebugEntitySnapshot {
     world::PersistentId requested_id{};
     std::optional<world::SpatialState> spatial;
     std::optional<world::AuthoredTransform> authored_transform;
+    world::CausalContext causal_history;
     std::optional<world::Character> character;
     std::optional<CharacterRuntimeDebug> character_state;
     std::optional<world::RigidBox> rigid_box;

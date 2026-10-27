@@ -1,6 +1,8 @@
 #include <vice/dev/cli.hpp>
 
 #include <vice/runtime/debug_session.hpp>
+#include <vice/runtime/checkpoint.hpp>
+#include <vice/platform/file.hpp>
 #include <vice/world/persistent_id.hpp>
 
 #include <chrono>
@@ -165,6 +167,46 @@ CommandResult execute_runtime_debug(
             : exit_unavailable,
         .json = debug_response(false, response_diagnostics, session, entity_id_text, response),
     };
+}
+
+CommandResult execute_runtime_checkpoint(
+    const std::filesystem::path& session_path, const std::filesystem::path& output_path
+) {
+    const auto normalized = session_path.lexically_normal();
+    const runtime::RuntimeDevSession session{.id=normalized.filename().string(), .root=normalized.parent_path()};
+    runtime::RuntimeDebugResponse response{.state=runtime::RuntimeDebugResponseState::invalid};
+    auto finish = [&](const bool ok, const std::string& message, const int code) {
+        auto json = debug_response(ok, message.empty() ? std::vector<std::string>{} :
+            std::vector<std::string>{message}, session, {}, response);
+        json.replace(json.find("runtime.debug"), std::string_view{"runtime.debug"}.size(), "runtime.checkpoint");
+        // Output path is explicit and JSON escaped, including on failure.
+        json.erase(json.size()-3U);
+        json += ",\"snapshot_path\":";
+        append_json_string(json, normalized_path(output_path));
+        json += "}}\n";
+        return CommandResult{.exit_code=code, .json=std::move(json)};
+    };
+    std::error_code error;
+    const auto parent = std::filesystem::canonical(output_path.has_parent_path() ?
+        output_path.parent_path() : std::filesystem::path{"."}, error);
+    if (error || output_path.filename().empty() || session.root.empty() ||
+        !runtime::valid_runtime_dev_session_id(session.id))
+        return finish(false, "Checkpoint session or output path is invalid.", exit_validation);
+    const auto destination = parent / output_path.filename();
+    if (std::filesystem::exists(destination, error) || error)
+        return finish(false, "Checkpoint output must be a new file.", exit_validation);
+    response.request_id = world::PersistentId::random().to_string();
+    std::string diagnostics;
+    if (!runtime::publish_runtime_checkpoint_request(session, response.request_id, &diagnostics))
+        return finish(false, diagnostics, exit_unavailable);
+    response = runtime::wait_for_runtime_debug_response(session, response.request_id, std::chrono::seconds{10});
+    if (!response) return finish(false, response.diagnostics, exit_unavailable);
+    const auto snapshot = runtime::read_runtime_world_checkpoint(session, response.payload);
+    if (!snapshot) return finish(false, snapshot.diagnostics, exit_validation);
+    const auto saved = platform::replace_file_if_unchanged(destination, std::nullopt, snapshot.bytes);
+    if (saved.state != platform::FileReplaceState::updated)
+        return finish(false, saved.diagnostics, exit_validation);
+    return finish(true, {}, exit_success);
 }
 
 } // namespace vice::dev

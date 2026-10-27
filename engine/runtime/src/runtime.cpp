@@ -163,6 +163,7 @@ GameModuleLifecycle::~GameModuleLifecycle() {
 
 bool GameModuleLifecycle::start() {
     if (started_ || stopped_ || module_ == nullptr) return false;
+    if (!context_.world.begin_causal_recording()) return false;
     if (!module_->on_start(context_)) return false;
     started_ = true;
     return true;

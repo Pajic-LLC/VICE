@@ -1,5 +1,6 @@
 #include <vice/runtime/dade.hpp>
 #include <vice/runtime/debug.hpp>
+#include <vice/runtime/checkpoint.hpp>
 #include <vice/runtime/debug_session.hpp>
 #include <vice/runtime/dev_session.hpp>
 #include <vice/runtime/module_loader.hpp>
@@ -53,15 +54,17 @@ private:
         const auto request = vice::runtime::read_runtime_debug_request(session_);
         if (!request || request.request_id == last_debug_request_id_) return;
 
-        const auto snapshot = vice::runtime::sample_runtime_debug_entity(
-            *project_->world,
-            request.entity_id, physics
-        );
-        const auto payload = vice::runtime::serialize_runtime_debug_entity_snapshot(
-            snapshot,
-            session_.id
-        );
         std::string diagnostics;
+        std::string payload;
+        if (request.kind == vice::runtime::RuntimeDebugRequestKind::world_checkpoint) {
+            payload = vice::runtime::publish_runtime_world_checkpoint(
+                session_, project_->world->snapshot(), &diagnostics);
+            if (!diagnostics.empty()) std::cerr << "VICE checkpoint: " << diagnostics << '\n';
+        } else {
+            const auto snapshot = vice::runtime::sample_runtime_debug_entity(
+                *project_->world, request.entity_id, physics);
+            payload = vice::runtime::serialize_runtime_debug_entity_snapshot(snapshot, session_.id);
+        }
         if (vice::runtime::publish_runtime_debug_response(
                 session_,
                 request.request_id,

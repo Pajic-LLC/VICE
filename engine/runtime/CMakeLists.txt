@@ -122,6 +122,7 @@ endif()
 add_library(
   vice_runtime_dev_session
   STATIC
+    src/checkpoint.cpp
     src/debug_session.cpp
     src/dev_session.cpp
 )
@@ -137,6 +138,7 @@ target_link_libraries(
   PUBLIC
     VICE::World
 )
+target_link_libraries(vice_runtime_dev_session PUBLIC VICE::Platform)
 target_compile_features(vice_runtime_dev_session PUBLIC cxx_std_23)
 vice_enable_warnings(vice_runtime_dev_session)
 

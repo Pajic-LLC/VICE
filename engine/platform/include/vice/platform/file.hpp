@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <filesystem>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 
@@ -39,6 +40,13 @@ struct FileReplaceResult {
     const std::filesystem::path& canonical_path,
     std::optional<std::string_view> expected_contents,
     std::string_view replacement
+);
+
+// Binary-safe variant with the same bounded, atomic compare-and-replace contract.
+[[nodiscard]] FileReplaceResult replace_file_if_unchanged(
+    const std::filesystem::path& canonical_path,
+    std::optional<std::span<const std::byte>> expected_contents,
+    std::span<const std::byte> replacement
 );
 
 } // namespace vice::platform

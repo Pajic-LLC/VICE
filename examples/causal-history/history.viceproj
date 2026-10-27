@@ -1,0 +1,7 @@
+vice-project 1
+id 9d000000-0000-4000-8000-000000000001
+name "Causal History"
+game_name "Causal History"
+game_target "causal-history"
+assets "assets"
+startup_world "worlds/history.vworld"
