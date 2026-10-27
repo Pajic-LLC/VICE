@@ -34,6 +34,15 @@ public:
     [[nodiscard]] std::optional<PersistentId> persistent_id(EntityId entity) const noexcept;
     [[nodiscard]] std::optional<EntityId> find(PersistentId persistent_id) const noexcept;
 
+    bool set_material(const MaterialDefinition& material);
+    bool remove_material(PersistentId material);
+    [[nodiscard]] std::optional<MaterialDefinition> material(PersistentId id) const;
+    bool set_entity_material(EntityId entity,PersistentId material);
+    [[nodiscard]] PersistentId entity_material(EntityId entity) const noexcept;
+    [[nodiscard]] std::optional<MaterialSurface> material_surface(EntityId entity) const noexcept;
+    // Opaque process-local generation. Compare for equality; do not persist.
+    [[nodiscard]] std::uint64_t material_revision() const noexcept { return material_revision_; }
+
     bool register_component_type(ComponentTypeDesc type);
     bool unregister_component_type(ComponentTypeId id);
     [[nodiscard]] std::optional<ComponentTypeDesc> component_type(ComponentTypeId id) const;
@@ -129,6 +138,7 @@ private:
         std::optional<DistanceLink> distance_link;
         std::optional<Dependency> dependency;
         std::optional<Character> character;
+        PersistentId material{};
         std::vector<ResourceReference> resource_references;
         std::uint32_t generation = 1;
         bool alive = false;
@@ -153,6 +163,9 @@ private:
     CausalKey append_causal(CausalEvent event,CausalKey parent);
     void finish_causal_change(CausalBefore before,CausalEvent producer);
     bool set_distance_link_impl(EntityId entity,const DistanceLink& link,CausalKind kind);
+    std::unordered_map<PersistentId,MaterialDefinition,PersistentIdHash> materials_;
+    std::uint64_t material_revision_=0;
+    bool advance_material_revision() noexcept;
     PersistentId causal_id_{}, capture_id_{};
     std::uint64_t next_causal_sequence_ = 1;
     std::deque<CausalEvent> causal_events_;

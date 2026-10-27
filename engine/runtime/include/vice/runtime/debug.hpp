@@ -40,6 +40,8 @@ struct RuntimeDebugEntitySnapshot {
     std::optional<world::SpatialState> spatial;
     std::optional<world::AuthoredTransform> authored_transform;
     world::CausalContext causal_history;
+    std::optional<world::MaterialSurface> material;
+    std::optional<float> native_mass;
     std::optional<world::Character> character;
     std::optional<CharacterRuntimeDebug> character_state;
     std::optional<world::RigidBox> rigid_box;

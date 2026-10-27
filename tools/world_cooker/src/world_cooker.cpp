@@ -4,6 +4,7 @@
 #include "dependency_source.hpp"
 #include "character_source.hpp"
 #include "causal_source.hpp"
+#include "material_source.hpp"
 #include <algorithm>
 
 #include <vice/world/world.hpp>
@@ -92,7 +93,11 @@ ParseResult parse_source_manifest(const std::string_view source) {
             continue;
         }
 
-        if(keyword=="causal_history") {
+        if(keyword=="material") {
+            world::MaterialDefinition m;
+            if(parsed.materials.size()>=world::max_world_materials || !read_material(values,m)) {fail("invalid or oversized material catalog.");return result;}
+            parsed.materials.push_back(std::move(m));
+        } else if(keyword=="causal_history") {
             if(!parsed.causal_history.id.is_nil() || !read_causal_id(values,parsed.causal_history.id) || parsed.causal_history.id.is_nil() || !read_causal_u64(values,parsed.causal_history.next_sequence)) {fail("invalid or duplicate causal history header.");return result;}
         } else if(keyword=="causal_event") {
             world::CausalEvent e;
@@ -349,6 +354,10 @@ ParseResult parse_source_manifest(const std::string_view source) {
                     continue;
                 }
 
+                if(metadata=="material") {
+                    if(!entity.material.is_nil() || !read_causal_id(values,entity.material) || entity.material.is_nil()) {fail("invalid or duplicate entity material.");return result;}
+                    continue;
+                }
                 if (metadata == "resource") {
                     std::string role_text;
                     std::string resource_text;
@@ -406,6 +415,7 @@ ParseResult parse_source_manifest(const std::string_view source) {
         return result;
     }
 
+    if(!world::validate_materials(parsed,&result.diagnostics))return result;
     std::sort(parsed.causal_history.events.begin(),parsed.causal_history.events.end(),[](const auto& a,const auto& b){return a.sequence<b.sequence;});
     if(!world::validate_causal_history(parsed.causal_history,&result.diagnostics))return result;
     if (!world::validate_distance_links(parsed, &result.diagnostics) || !world::validate_dependencies(parsed, &result.diagnostics) || !world::validate_characters(parsed, &result.diagnostics)) return result;

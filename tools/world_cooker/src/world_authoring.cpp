@@ -71,7 +71,21 @@ namespace {
         [&](const auto& value) -> bool {
             using Value = std::decay_t<decltype(value)>;
 
-            if constexpr (std::is_same_v<Value, SetEntitySpatial>) {
+            if constexpr (std::is_same_v<Value, SetWorldMaterial>) {
+                if(value.id.is_nil() || (value.definition && (value.definition->id!=value.id || !world::valid(*value.definition)))) {
+                    diagnostics="Invalid World material definition.";return false;
+                }
+                const auto found=std::find_if(candidate.materials.begin(),candidate.materials.end(),[&](const auto& m){return m.id==value.id;});
+                if(value.definition) {
+                    if(found!=candidate.materials.end())*found=*value.definition;
+                    else candidate.materials.push_back(*value.definition);
+                } else if(found!=candidate.materials.end()) candidate.materials.erase(found);
+                return true;
+            } else if constexpr (std::is_same_v<Value, SetEntityMaterial>) {
+                auto* entity=find_entity(candidate,value.entity);
+                if(!entity){diagnostics="Material entity does not exist.";return false;}
+                entity->material=value.material;return true;
+            } else if constexpr (std::is_same_v<Value, SetEntitySpatial>) {
                 if (value.entity.is_nil()) {
                     diagnostics = "Entity ID is nil.";
                     return false;

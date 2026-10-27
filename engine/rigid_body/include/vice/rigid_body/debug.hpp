@@ -19,6 +19,7 @@ struct BodyDebugSnapshot {
     std::optional<math::Vec3> box_half_extents;
     bool trigger = false;
     bool active = false;
+    float mass = 0;
 };
 
 struct CharacterDebugSnapshot {

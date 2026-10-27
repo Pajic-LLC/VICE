@@ -130,6 +130,10 @@ RuntimeDebugEntitySnapshot sample_runtime_debug_entity(
     (void)physics;
 #endif
     result.rigid_box = entity->rigid_box;
+    if(const auto owner=world.find(persistent_id))result.material=world.material_surface(*owner);
+#if defined(VICE_RUNTIME_AUTHORED_PHYSICS)
+    if(physics)if(const auto body=physics->body(persistent_id))result.native_mass=body->mass;
+#endif
     result.distance_link = entity->distance_link;
     result.dependency = world.dependency_state(*world.find(persistent_id));
     result.camera = entity->camera.has_value();
@@ -183,6 +187,9 @@ std::string serialize_runtime_debug_entity_snapshot(
     }
 
     output += ",\"causal_history\":"+world::serialize_causal_context(snapshot.causal_history);
+    output += ",\"material\":"+world::serialize_material_surface(snapshot.material);
+    output += ",\"native_mass\":";
+    if(snapshot.native_mass)append_float(output,*snapshot.native_mass);else output+="null";
     output += ",\"spatial\":";
     if (!snapshot.spatial.has_value()) {
         output += "null";

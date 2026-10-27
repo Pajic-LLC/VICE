@@ -518,6 +518,9 @@ void append_entities(std::string& data, const world::WorldSnapshot& snapshot) {
     world::World observed; (void)observed.restore(snapshot);
     const world::CausalContext history{observed.causal_info(),snapshot.causal_history.events,observed.causal_info().first_sequence>1};
     data += ",\"causal_history\":"+world::serialize_causal_context(history);
+    data += ",\"materials\":[";
+    for(std::size_t i=0;i<snapshot.materials.size();++i) {if(i)data+=',';data+=world::serialize_material_definition(snapshot.materials[i]);}
+    data+=']';
     std::vector<const world::SnapshotEntity*> values;
     values.reserve(snapshot.entities.size());
     for (const auto& value : snapshot.entities) values.push_back(&value);
@@ -551,6 +554,8 @@ void append_entities(std::string& data, const world::WorldSnapshot& snapshot) {
         data += value.light.has_value() ? "true" : "false";
         data += ",\"reflection_probe\":";
         data += value.reflection_probe.has_value() ? "true" : "false";
+        const auto material_owner=observed.find(value.persistent_id);
+        data += ",\"material\":"+world::serialize_material_surface(material_owner?observed.material_surface(*material_owner):std::nullopt);
         data += ",\"rigid_box\":";
         if (!value.rigid_box) data += "null";
         else {
@@ -686,6 +691,7 @@ void append_relations(std::string& data, const world::WorldSnapshot& snapshot) {
     append_json_string(data, revision);
     data += ",\"summary\":{\"component_types\":" + std::to_string(snapshot.component_types.size());
     data += ",\"resources\":" + std::to_string(snapshot.resources.size());
+    data += ",\"materials\":" + std::to_string(snapshot.materials.size());
     data += ",\"regions\":" + std::to_string(snapshot.regions.size());
     data += ",\"entities\":" + std::to_string(snapshot.entities.size());
     data += ",\"relations\":" + std::to_string(snapshot.relations.size());

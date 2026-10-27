@@ -23,6 +23,7 @@ namespace {
         .angular_velocity = state.angular_velocity,
         .trigger = trigger,
         .active = state.active,
+        .mass = state.mass,
     };
 }
 

@@ -56,6 +56,7 @@ struct AuthoredSimulation::State {
     std::vector<Controller> characters;
     std::unordered_map<world::PersistentId,std::size_t,world::PersistentIdHash> character_lookup;
     std::uint64_t character_revision = 0;
+    std::uint64_t material_revision = 0;
     struct Link {
         world::PersistentId owner;
         world::EntityId entity;
@@ -86,13 +87,13 @@ struct AuthoredSimulation::State {
     bool matches(const Body& record) const {
         const auto entity = world->find(record.owner);
         const auto authored = entity ? world->rigid_box(*entity) : std::nullopt;
-        return entity && *entity == record.entity && authored && same_body(*authored, record.expected_body) &&
+        return world->material_revision()==material_revision && entity && *entity == record.entity && authored && same_body(*authored, record.expected_body) &&
             world->spatial_state(*entity) == record.expected_spatial &&
             world->authored_transform(*entity) == record.expected_transform;
     }
 
     bool matches(const Controller& record) const {
-        return world->find(record.owner) == record.entity && world->character(record.entity) == record.expected &&
+        return world->material_revision()==material_revision && world->find(record.owner) == record.entity && world->character(record.entity) == record.expected &&
             world->spatial_state(record.entity) == record.expected_spatial;
     }
     std::optional<CharacterObservation> observed_character(const Controller& record) const noexcept {
@@ -129,7 +130,7 @@ struct AuthoredSimulation::State {
         return true;
     }
     std::optional<BodyDebugSnapshot> observed_body(const Body& record) const noexcept {
-        if (!world) return std::nullopt;
+        if (!world || world->material_revision()!=material_revision) return std::nullopt;
         const auto entity = world->find(record.owner);
         if (!entity) return std::nullopt;
         const auto spatial = world->spatial_state(*entity);
@@ -151,6 +152,9 @@ bool AuthoredSimulation::reset(world::World& world, jobs::Scheduler& jobs, std::
     auto next = std::make_unique<State>();
     next->world = &world;
     const auto snapshot = world.snapshot();
+    next->material_revision=world.material_revision();
+    std::unordered_map<world::PersistentId,simulation::MaterialId,world::PersistentIdHash> material_ids;
+    for(std::size_t i=0;i<snapshot.materials.size();++i) material_ids.emplace(snapshot.materials[i].id,simulation::MaterialId{static_cast<std::uint64_t>(i)+1U});
     std::unordered_set<world::RegionId, world::RegionIdHash> physical_regions;
     for (const auto& entity : snapshot.entities) {
         if ((entity.rigid_box || entity.character) && entity.spatial_state) physical_regions.insert(entity.spatial_state->region);
@@ -161,6 +165,12 @@ bool AuthoredSimulation::reset(world::World& world, jobs::Scheduler& jobs, std::
         auto domain = Domain::create(simulation::DomainId{region.id.value},
             "authored.region." + std::to_string(region.id.value), jobs);
         if (!domain) return fail(diagnostics, "Could not create authored rigid-body domain.");
+        for(const auto& definition:snapshot.materials) {
+            simulation::Material material;
+            if(!material.set_property(std::string{material_property_owner},std::string{material_friction_property},static_cast<double>(definition.friction)) ||
+               !material.set_property(std::string{material_property_owner},std::string{material_restitution_property},static_cast<double>(definition.restitution)) ||
+               !domain->register_material(material_ids.at(definition.id),material)) return fail(diagnostics,"Could not register shared physical material.");
+        }
         domain->set_fidelity(fidelity(region.fidelity));
         if (!next->coordinator.register_domain(*domain) ||
             !next->bridge.register_region(world, next->coordinator, region.id, *domain)) {
@@ -186,8 +196,10 @@ bool AuthoredSimulation::reset(world::World& world, jobs::Scheduler& jobs, std::
         desc.orientation = {transform.rotation.x, transform.rotation.y, transform.rotation.z, transform.rotation.w};
         desc.linear_velocity = authored.linear_velocity;
         desc.angular_velocity = authored.angular_velocity;
-        desc.friction = authored.friction;
-        desc.restitution = authored.restitution;
+        const auto surface=world.material_surface(*owner);
+        if(!surface) return fail(diagnostics,"Invalid physical material surface.");
+        desc.density=surface->density;desc.friction=surface->friction;desc.restitution=surface->restitution;
+        if(!surface->id.is_nil())desc.material=material_ids.at(surface->id);
         desc.trigger = authored.trigger;
         if (!next->bridge.create_box(world, next->coordinator, next->bindings, *owner, desc)) {
             return fail(diagnostics, "Could not instantiate authored rigid box: " + entity.persistent_id.to_string());
@@ -248,6 +260,7 @@ bool AuthoredSimulation::reset(world::World& world, jobs::Scheduler& jobs, std::
 
 bool AuthoredSimulation::step(std::string* diagnostics) {
     if (!state_->world) return fail(diagnostics, "Authored simulation has not been initialized.");
+    if(state_->world->material_revision()!=state_->material_revision)return fail(diagnostics,"Shared materials changed; reset the simulation.");
     if(state_->unpublished_step) return fail(diagnostics,"The previous solver step could not publish; reset the simulation.");
     if (state_->world->distance_link_revision() != state_->link_revision) return fail(diagnostics, "Distance links were edited externally; reset the simulation.");
     for (const auto& link : state_->links) {
@@ -388,7 +401,8 @@ const WorldBridge& AuthoredSimulation::bridge() const noexcept { return state_->
 std::optional<BodyDebugSnapshot> AuthoredSimulation::body(const world::PersistentId owner) const noexcept {
     if (!state_->world) return std::nullopt;
     const auto record = state_->body_lookup.find(owner);
-    return record == state_->body_lookup.end() ? std::nullopt : state_->observed_body(state_->bodies[record->second]);
+    if(record==state_->body_lookup.end() || !state_->matches(state_->bodies[record->second]))return std::nullopt;
+    return state_->observed_body(state_->bodies[record->second]);
 }
 std::optional<BodySupport> AuthoredSimulation::body_support(const world::PersistentId owner, const math::Vec3 up, const float min_up_dot) const noexcept {
     const double length = std::hypot(static_cast<double>(up.x), static_cast<double>(up.y), static_cast<double>(up.z));

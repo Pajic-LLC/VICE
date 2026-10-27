@@ -14,6 +14,7 @@
 #include <span>
 #include <string>
 #include <vector>
+#include <unordered_map>
 
 namespace vice::world {
 namespace {
@@ -342,8 +343,17 @@ WorldSnapshotEncodeResult encode_world_snapshot(const WorldSnapshot& snapshot_da
             for(const auto id:{e.subject,e.first,e.second,e.root_entity})append_id(payload,id);
             append_u8(payload,e.value?1U:0U);append_u8(payload,static_cast<std::uint8_t>(e.reason));append_u8(payload,static_cast<std::uint8_t>(e.root_reason));
             append_u8(payload,static_cast<std::uint8_t>(e.quantity_kind));append_f32(payload,e.quantity);append_u64(payload,e.solver_step);append_u64(payload,e.region.value);
+            append_id(payload,e.first_material);append_id(payload,e.second_material);
         }
     }
+    append_u32(payload,static_cast<std::uint32_t>(snapshot.materials.size()));
+    for(const auto& m:snapshot.materials) {
+        append_id(payload,m.id);append_string(payload,m.name);append_f32(payload,m.density);
+        append_f32(payload,m.friction);append_f32(payload,m.restitution);append_id(payload,m.render_material.value);
+    }
+    const auto bindings=std::count_if(snapshot.entities.begin(),snapshot.entities.end(),[](const auto& e){return !e.material.is_nil();});
+    append_u32(payload,static_cast<std::uint32_t>(bindings));
+    for(const auto& e:snapshot.entities) if(!e.material.is_nil()) {append_id(payload,e.persistent_id);append_id(payload,e.material);}
     result.bytes.reserve(header_size + payload.size());
     result.bytes.insert(result.bytes.end(), world_magic.begin(), world_magic.end());
     append_u32(result.bytes, world_snapshot_file_format_version);
@@ -727,10 +737,38 @@ WorldSnapshotDecodeResult decode_world_snapshot(const std::span<const std::byte>
                     !reader.read_u8(value) || value>1U || !reader.read_u8(reason) || !reader.read_u8(root_reason) || !reader.read_u8(quantity) ||
                     !reader.read_f32(e.quantity) || !reader.read_u64(e.solver_step) || !reader.read_u64(e.region.value)) {result.diagnostics="Truncated or invalid causal event.";return result;}
                 e.kind=static_cast<CausalKind>(kind);e.origin=static_cast<CausalOrigin>(origin);e.value=value!=0;e.reason=static_cast<DependencyReason>(reason);
-                e.root_reason=static_cast<DependencyReason>(root_reason);e.quantity_kind=static_cast<CausalQuantity>(quantity);h.events.push_back(e);
+                e.root_reason=static_cast<DependencyReason>(root_reason);e.quantity_kind=static_cast<CausalQuantity>(quantity);
+                if(version>=12U && (!reader.read_id(e.first_material) || !reader.read_id(e.second_material))) {result.diagnostics="Truncated causal material identities.";return result;}
+                h.events.push_back(e);
             }
             if(!validate_causal_history(h,&result.diagnostics))return result;
         }
+    }
+    if(version>=12U) {
+        std::uint32_t count=0;
+        if(!reader.read_u32(count) || count>max_world_materials) {result.diagnostics="Invalid material catalog size.";return result;}
+        snapshot.materials.reserve(count);
+        for(std::uint32_t i=0;i<count;++i) {
+            MaterialDefinition m;
+            if(!reader.read_id(m.id) || !reader.read_string(m.name) || !reader.read_f32(m.density) || !reader.read_f32(m.friction) ||
+               !reader.read_f32(m.restitution) || !reader.read_id(m.render_material.value)) {result.diagnostics="Truncated World material.";return result;}
+            snapshot.materials.push_back(std::move(m));
+        }
+        if(!reader.read_u32(count) || count>snapshot.entities.size()) {result.diagnostics="Invalid material binding count.";return result;}
+        std::unordered_map<PersistentId,PersistentId,PersistentIdHash> bindings;
+        bindings.reserve(count);
+        for(std::uint32_t i=0;i<count;++i) {
+            PersistentId entity,material;
+            if(!reader.read_id(entity) || !reader.read_id(material) || material.is_nil() || !bindings.emplace(entity,material).second) {
+                result.diagnostics="Invalid or duplicate material binding.";return result;
+            }
+        }
+        if(count)for(auto& e:snapshot.entities) {
+            const auto found=bindings.find(e.persistent_id);
+            if(found!=bindings.end()) {e.material=found->second;bindings.erase(found);}
+        }
+        if(!bindings.empty()) {result.diagnostics="Material binding entity is missing.";return result;}
+        if(!validate_materials(snapshot,&result.diagnostics))return result;
     }
     if (!reader.finished()) {
         result.diagnostics = "World snapshot contains trailing data.";

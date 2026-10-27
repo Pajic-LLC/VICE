@@ -138,7 +138,8 @@ bool World::destroy_resource(const ResourceHandle resource) {
             );
         }
     );
-    if (referenced) {
+    const bool material_reference=std::any_of(materials_.begin(),materials_.end(),[&](const auto& m){return m.second.render_material==id;});
+    if (referenced || material_reference) {
         return false;
     }
 
@@ -241,6 +242,7 @@ WorldSnapshot World::snapshot() const {
             .distance_link = slot.distance_link,
             .dependency = slot.dependency,
             .character = slot.character,
+            .material = slot.material,
             .resource_references = slot.resource_references,
         };
         std::sort(
@@ -290,12 +292,15 @@ WorldSnapshot World::snapshot() const {
         }
     );
 
+    for(const auto& [id,m]:materials_) { (void)id;output.materials.push_back(m); }
+    std::sort(output.materials.begin(),output.materials.end(),[](const auto& a,const auto& b){return a.id.bytes()<b.id.bytes();});
     output.causal_history=causal_snapshot();
     return output;
 }
 
 bool World::restore(const WorldSnapshot& snapshot_data) {
     if (!validate_distance_links(snapshot_data) || !validate_dependencies(snapshot_data) || !validate_characters(snapshot_data) || !validate_causal_history(snapshot_data.causal_history)) return false;
+    if(!validate_materials(snapshot_data)) return false;
     World restored;
 
     for (const auto& type : snapshot_data.component_types) {
@@ -309,6 +314,8 @@ bool World::restore(const WorldSnapshot& snapshot_data) {
             return false;
         }
     }
+
+    for(const auto& m:snapshot_data.materials) if(!restored.set_material(m))return false;
 
     for (const auto& region_desc : snapshot_data.regions) {
         if (!restored.register_region(region_desc)) {
@@ -343,6 +350,7 @@ bool World::restore(const WorldSnapshot& snapshot_data) {
         }
         if (entity_record.character && !restored.set_character(*entity, *entity_record.character)) return false;
         if (entity_record.rigid_box && !restored.set_rigid_box(*entity, *entity_record.rigid_box)) return false;
+        if(!restored.set_entity_material(*entity,entity_record.material))return false;
         for (const auto reference : entity_record.resource_references) {
             if (!restored.set_resource_reference(*entity, reference)) {
                 return false;
@@ -368,6 +376,7 @@ bool World::restore(const WorldSnapshot& snapshot_data) {
         }
     }
 
+    if(!restored.advance_material_revision())return false;
     restored.causal_id_=snapshot_data.causal_history.id;
     restored.next_causal_sequence_=snapshot_data.causal_history.next_sequence;
     restored.causal_events_.assign(snapshot_data.causal_history.events.begin(),snapshot_data.causal_history.events.end());

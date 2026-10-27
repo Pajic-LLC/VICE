@@ -247,6 +247,31 @@ module::Result host_read_causal_event(void* value,module::EntityId history,std::
     result.id=module_id(e->id);result.parent_id=module_id(e->parent_id);result.capture_id=module_id(e->capture_id);result.subject=module_id(e->subject);
     result.first=module_id(e->first);result.second=module_id(e->second);result.root_entity=module_id(e->root_entity);*output=result;return module::Result::success;
 }
+module::Result host_read_material(void* value,module::EntityId id,module::MaterialSnapshot* output) noexcept {
+    const auto* b=current_bridge(value);if(!b || !b->context)return module::Result::wrong_phase;
+    if(!output || output->size<sizeof(module::MaterialSnapshot) || persistent_id(id).is_nil())return module::Result::invalid_argument;
+    const auto entity=b->context->world.find(persistent_id(id));if(!entity)return module::Result::not_found;
+    const auto surface=b->context->world.material_surface(*entity);if(!surface)return module::Result::unavailable;
+    module::MaterialSnapshot result;
+    result.id=module_id(surface->id);result.render_material=module_id(surface->render_material.value);
+    result.density=surface->density;result.friction=surface->friction;result.restitution=surface->restitution;result.volume=surface->volume;result.mass=surface->mass;
+#if defined(VICE_RUNTIME_AUTHORED_PHYSICS)
+    if(b->context->physics && b->context->world.rigid_box(*entity)) {
+        const auto body=b->context->physics->body(persistent_id(id));if(!body)return module::Result::reset_required;
+        result.has_native_mass=1;result.native_mass=body->mass;
+    }
+#endif
+    *output=result;return module::Result::success;
+}
+module::Result host_read_causal_materials(void* value,module::EntityId history,std::uint64_t sequence,module::CausalMaterialSnapshot* output) noexcept {
+    const auto* b=current_bridge(value);if(!b || !b->context)return module::Result::wrong_phase;
+    if(!output || output->size<sizeof(module::CausalMaterialSnapshot))return module::Result::invalid_argument;
+    module::CausalEventSnapshot check;
+    const auto state=host_read_causal_event(value,history,sequence,&check);if(state!=module::Result::success)return state;
+    const auto e=b->context->world.causal_event(sequence);
+    module::CausalMaterialSnapshot result;result.event_id=module_id(e->id);
+    result.first_material=module_id(e->first_material);result.second_material=module_id(e->second_material);*output=result;return module::Result::success;
+}
 module::Result host_set_dependency_enabled(void* value,module::EntityId id,std::uint32_t enabled) noexcept {
     const auto* b=current_bridge(value);if(!b || !b->context || !b->writable)return module::Result::wrong_phase;
     if(persistent_id(id).is_nil() || enabled>1U)return module::Result::invalid_argument;
@@ -431,6 +456,8 @@ public:
         host_.read_causal_history = &host_read_causal_history;
         host_.read_causal_event = &host_read_causal_event;
         host_.set_dependency_enabled = &host_set_dependency_enabled;
+        host_.read_material = &host_read_material;
+        host_.read_causal_materials = &host_read_causal_materials;
     }
 
     ~DynamicGameModule() override {

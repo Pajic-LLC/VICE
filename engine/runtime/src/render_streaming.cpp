@@ -59,6 +59,7 @@ RuntimeRenderResidentSceneBuildResult build_runtime_render_resident_scene(
             if (reference.role == world::ResourceRole::render_mesh) mesh = reference.resource;
             if (reference.role == world::ResourceRole::render_material) material = reference.resource;
         }
+        if(const auto owner=world.find(entity.persistent_id)) material=world.resource_reference(*owner,world::ResourceRole::render_material);
         if (mesh.has_value()) {
             result.scene.meshes.push_back(RenderMeshInstance{
                 .entity = entity.persistent_id,

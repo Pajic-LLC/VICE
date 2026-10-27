@@ -1,6 +1,7 @@
 add_library(
   vice_world
   STATIC
+    src/material.cpp
     src/causal.cpp
     src/character.cpp
     src/dependency.cpp

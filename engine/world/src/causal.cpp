@@ -33,6 +33,7 @@ bool valid_event(const CausalEvent& e) {
         (e.parent_sequence==0)!=e.parent_id.is_nil() || e.id==e.parent_id ||
         static_cast<unsigned>(e.kind)>7 || static_cast<unsigned>(e.origin)>4 || static_cast<unsigned>(e.reason)>3 ||
         static_cast<unsigned>(e.root_reason)>3 || static_cast<unsigned>(e.quantity_kind)>1 || !std::isfinite(e.quantity) || e.quantity<0) return false;
+    if(e.kind!=CausalKind::constraint_broken && (!e.first_material.is_nil() || !e.second_material.is_nil()))return false;
     if(e.kind==CausalKind::capture_started) return e.capture_id==e.id && e.origin==CausalOrigin::runtime && e.subject.is_nil() && e.first.is_nil() && e.second.is_nil() &&
         e.root_entity.is_nil() && !e.value && !e.parent_sequence && !e.region.valid() && e.reason==DependencyReason::available &&
         e.root_reason==DependencyReason::available && e.quantity_kind==CausalQuantity::none && e.quantity==0 && e.solver_step==0;
@@ -209,6 +210,7 @@ std::string serialize_causal_context(const CausalContext& c) {
         out<<"{\"id\":"<<id(e.id)<<",\"capture_id\":"<<id(e.capture_id)<<",\"sequence\":"<<e.sequence<<",\"parent_id\":"<<id(e.parent_id)<<",\"parent_sequence\":"<<e.parent_sequence
            <<",\"parent_state\":\""<<parent<<"\",\"kind\":\""<<causal_kind_name(e.kind)<<"\",\"origin\":\""<<causal_origin_name(e.origin)
            <<"\",\"subject\":"<<id(e.subject)<<",\"first\":"<<id(e.first)<<",\"second\":"<<id(e.second)<<",\"root_entity\":"<<id(e.root_entity)
+           <<",\"first_material\":"<<id(e.first_material)<<",\"second_material\":"<<id(e.second_material)
            <<",\"value\":"<<(e.value?"true":"false")<<",\"reason\":\""<<dependency_reason_name(e.reason)<<"\",\"root_reason\":\""<<dependency_reason_name(e.root_reason)
            <<"\",\"quantity_kind\":\""<<(e.quantity_kind==CausalQuantity::linear_impulse?"linear_impulse":"none")<<"\",\"quantity\":"<<e.quantity
            <<",\"solver_step\":"<<e.solver_step<<",\"region\":"<<e.region.value<<'}';

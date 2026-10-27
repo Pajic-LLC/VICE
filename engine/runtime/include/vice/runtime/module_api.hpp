@@ -219,6 +219,16 @@ struct CausalEventSnapshot {
     float quantity=0;
 };
 
+struct MaterialSnapshot {
+    std::uint32_t size=sizeof(MaterialSnapshot), has_native_mass=0;
+    EntityId id{}, render_material{};
+    float density=1000, friction=0.5F, restitution=0, native_mass=0;
+    double volume=0, mass=0;
+};
+struct CausalMaterialSnapshot {
+    std::uint32_t size=sizeof(CausalMaterialSnapshot);
+    EntityId event_id{}, first_material{}, second_material{};
+};
 struct HostApi {
     std::uint32_t abi_version = module::abi_version;
     std::uint32_t size = sizeof(HostApi);
@@ -237,6 +247,8 @@ struct HostApi {
     Result (*read_causal_history)(void* context,CausalHistorySnapshot* output) noexcept = nullptr;
     Result (*read_causal_event)(void* context,EntityId history_id,std::uint64_t sequence,CausalEventSnapshot* output) noexcept = nullptr;
     Result (*set_dependency_enabled)(void* context,EntityId id,std::uint32_t enabled) noexcept = nullptr;
+    Result (*read_material)(void* context,EntityId entity,MaterialSnapshot* output) noexcept = nullptr;
+    Result (*read_causal_materials)(void* context,EntityId history,std::uint64_t sequence,CausalMaterialSnapshot* output) noexcept = nullptr;
 };
 
 inline constexpr std::size_t host_api_v1_size = offsetof(HostApi, read_entity);
@@ -327,6 +339,14 @@ public:
         return host_->set_dependency_enabled(host_->context,id,enabled?1U:0U);
     }
 
+    [[nodiscard]] Result read_material(EntityId entity,MaterialSnapshot& output) const noexcept {
+        if(!host_ || host_->size<offsetof(HostApi,read_material)+sizeof(host_->read_material) || !host_->read_material)return Result::unavailable;
+        return host_->read_material(host_->context,entity,&output);
+    }
+    [[nodiscard]] Result read_causal_materials(EntityId history,std::uint64_t sequence,CausalMaterialSnapshot& output) const noexcept {
+        if(!host_ || host_->size<offsetof(HostApi,read_causal_materials)+sizeof(host_->read_causal_materials) || !host_->read_causal_materials)return Result::unavailable;
+        return host_->read_causal_materials(host_->context,history,sequence,&output);
+    }
     void log(const LogLevel level, const char* const message) const noexcept {
         if (host_ != nullptr && host_->log != nullptr) {
             host_->log(host_->context, level, message != nullptr ? message : "");

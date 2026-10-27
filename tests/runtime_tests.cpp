@@ -221,6 +221,10 @@ int main() {
     runtime::module::CausalHistorySnapshot unavailable_history;
     runtime::module::CausalEventSnapshot unavailable_event;
     require(old_context.read_causal_history(unavailable_history)==runtime::module::Result::unavailable && old_context.read_causal_event({},1,unavailable_event)==runtime::module::Result::unavailable && old_context.set_dependency_enabled({},false)==runtime::module::Result::unavailable,"old host lacks causal extensions safely");
+    runtime::module::MaterialSnapshot unavailable_material;
+    runtime::module::CausalMaterialSnapshot unavailable_material_pair;
+    require(old_context.read_material({},unavailable_material)==runtime::module::Result::unavailable &&
+        old_context.read_causal_materials({},1,unavailable_material_pair)==runtime::module::Result::unavailable,"old host lacks material extensions safely");
     old_host.size = 0;
     require(!runtime::module::detail::load<runtime::module::Game>(1, &old_host, &compatible_api), "truncated original host is rejected");
 
