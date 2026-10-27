@@ -109,8 +109,11 @@ RuntimeDebugEntitySnapshot sample_runtime_debug_entity(
     result.authored_transform = entity->authored_transform;
     result.rigid_box = entity->rigid_box;
     result.distance_link = entity->distance_link;
+    result.dependency = world.dependency_state(*world.find(persistent_id));
     result.camera = entity->camera.has_value();
     result.light = entity->light.has_value();
+    result.light_enabled = entity->light && entity->light->enabled;
+    result.light_supplied = result.light_enabled && world.dependency_available(*world.find(persistent_id));
     result.reflection_probe = entity->reflection_probe.has_value();
     result.resource_reference_count = entity->resource_references.size();
 
@@ -234,6 +237,7 @@ std::string serialize_runtime_debug_entity_snapshot(
         output += ",\"last_break_impulse\":"; append_float(output, link.last_break_impulse);
         output += ",\"break_step\":" + std::to_string(link.break_step) + "}";
     }
+    output += ",\"dependency\":" + world::serialize_dependency_state(snapshot.dependency);
     output += ",\"region\":";
     if (!snapshot.region.has_value()) {
         output += "null";
@@ -256,6 +260,8 @@ std::string serialize_runtime_debug_entity_snapshot(
         output.push_back('}');
     }
 
+    output += ",\"light_enabled\":"; output += snapshot.light_enabled ? "true" : "false";
+    output += ",\"light_supplied\":"; output += snapshot.light_supplied ? "true" : "false";
     output += ",\"components\":{\"camera\":";
     output += snapshot.camera ? "true" : "false";
     output += ",\"light\":";

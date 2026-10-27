@@ -39,6 +39,7 @@ EntityId World::allocate(const PersistentId persistent_id) {
     slot.reflection_probe.reset();
     slot.rigid_box.reset();
     slot.distance_link.reset();
+    slot.dependency.reset();
     slot.resource_references.clear();
     slot.alive = true;
 
@@ -49,12 +50,14 @@ EntityId World::allocate(const PersistentId persistent_id) {
 }
 
 bool World::destroy_entity(const EntityId entity) {
-    if (alive(entity) && distance_link_users_.contains(slots_[entity.index].persistent_id)) return false;
+    if (alive(entity) && (distance_link_users_.contains(slots_[entity.index].persistent_id) ||
+        dependency_provider_users_.contains(slots_[entity.index].persistent_id) || dependency_gate_users_.contains(slots_[entity.index].persistent_id))) return false;
     if (!alive(entity)) {
         return false;
     }
 
     auto& slot = slots_[entity.index];
+    (void)clear_dependency(entity);
     (void)clear_distance_link(entity);
     persistent_lookup_.erase(slot.persistent_id);
     slot.persistent_id = PersistentId{};
@@ -65,6 +68,7 @@ bool World::destroy_entity(const EntityId entity) {
     slot.reflection_probe.reset();
     slot.rigid_box.reset();
     slot.distance_link.reset();
+    slot.dependency.reset();
     slot.resource_references.clear();
     slot.alive = false;
 
@@ -366,7 +370,15 @@ bool World::set_distance_link(const EntityId entity, const DistanceLink& link) {
             (a->motion != RigidMotion::dynamic_body && b->motion != RigidMotion::dynamic_body)) return false;
     }
     if (slots_[entity.index].distance_link == link) return true;
-    (void)clear_distance_link(entity);
+    const auto previous = slots_[entity.index].distance_link;
+    if (previous) {
+        for (const auto endpoint : {previous->first, previous->second}) {
+            const auto users = distance_link_users_.find(endpoint);
+            if (users == distance_link_users_.end()) continue;
+            std::erase(users->second, entity);
+            if (users->second.empty()) distance_link_users_.erase(users);
+        }
+    }
     slots_[entity.index].distance_link = link;
     ++distance_link_revision_;
     distance_link_users_[link.first].push_back(entity);
@@ -375,7 +387,7 @@ bool World::set_distance_link(const EntityId entity, const DistanceLink& link) {
 }
 
 bool World::clear_distance_link(const EntityId entity) {
-    if (!alive(entity)) return false;
+    if (!alive(entity) || dependency_gate_users_.contains(slots_[entity.index].persistent_id)) return false;
     auto& link = slots_[entity.index].distance_link;
     if (!link) return true;
     for (const auto endpoint : {link->first, link->second}) {

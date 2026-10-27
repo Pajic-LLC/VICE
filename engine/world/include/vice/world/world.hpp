@@ -88,6 +88,12 @@ public:
     bool set_distance_link(EntityId entity, const DistanceLink& link);
     bool clear_distance_link(EntityId entity);
     [[nodiscard]] std::optional<DistanceLink> distance_link(EntityId entity) const noexcept;
+    bool set_dependency(EntityId entity, const Dependency& dependency);
+    bool clear_dependency(EntityId entity);
+    [[nodiscard]] std::optional<Dependency> dependency(EntityId entity) const noexcept;
+    [[nodiscard]] std::optional<DependencyState> dependency_state(EntityId entity) const;
+    // No component means no supply requirement. Allocation-free, bounded render predicate.
+    [[nodiscard]] bool dependency_available(EntityId entity) const noexcept;
     [[nodiscard]] std::uint64_t distance_link_revision() const noexcept { return distance_link_revision_; }
 
     [[nodiscard]] std::optional<SpatialState> spatial_state(EntityId entity) const noexcept;
@@ -109,6 +115,7 @@ private:
         std::optional<ReflectionProbe> reflection_probe;
         std::optional<RigidBox> rigid_box;
         std::optional<DistanceLink> distance_link;
+        std::optional<Dependency> dependency;
         std::vector<ResourceReference> resource_references;
         std::uint32_t generation = 1;
         bool alive = false;
@@ -125,6 +132,10 @@ private:
 
     [[nodiscard]] bool link_endpoint_change_allowed(EntityId entity, std::optional<RegionId> region,
         std::optional<RigidMotion> motion) const;
+    void install_dependency(EntityId entity, const Dependency& dependency);
+    void remove_dependency_references(EntityId entity);
+    std::unordered_map<PersistentId, std::vector<EntityId>, PersistentIdHash> dependency_provider_users_;
+    std::unordered_map<PersistentId, std::vector<EntityId>, PersistentIdHash> dependency_gate_users_;
     std::uint64_t distance_link_revision_ = 0;
     std::unordered_map<PersistentId, std::vector<EntityId>, PersistentIdHash> distance_link_users_;
     std::vector<Slot> slots_;

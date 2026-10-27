@@ -1,6 +1,7 @@
 #include <vice/tools/world_edit.hpp>
 #include "rigid_box_source.hpp"
 #include "distance_link_source.hpp"
+#include "dependency_source.hpp"
 
 #include <vice/platform/file.hpp>
 #include <vice/tools/world_cooker.hpp>
@@ -11,6 +12,8 @@
 #include <locale>
 #include <sstream>
 #include <type_traits>
+#include <unordered_map>
+#include <unordered_set>
 
 namespace vice::tools::world_authoring {
 namespace {
@@ -76,6 +79,15 @@ std::optional<Operation> read_operation(const std::string& name, std::istream& i
     } else if (name == "clear_transform") {
         SetEntityTransform op;
         if (read_id(input, op.entity)) return op;
+    } else if (name == "set_dependency" || name == "clear_dependency") {
+        SetDependency op;
+        if (!read_id(input, op.entity)) return std::nullopt;
+        if (name == "set_dependency") {
+            world::Dependency d;
+            if (!world_cooker::read_dependency(input, d)) return std::nullopt;
+            op.dependency = d;
+        }
+        return op;
     } else if (name == "set_distance_link" || name == "clear_distance_link") {
         SetDistanceLink op;
         if (!read_id(input, op.entity)) return std::nullopt;
@@ -114,7 +126,7 @@ std::optional<Operation> read_operation(const std::string& name, std::istream& i
     return std::nullopt;
 }
 
-void affected(FileEditResult& result, const Transaction& transaction, const world::WorldSnapshot& before) {
+void affected(FileEditResult& result, const Transaction& transaction, const world::WorldSnapshot& before, const world::WorldSnapshot& after) {
     for (const auto& op : transaction.operations) {
         std::visit([&](const auto& value) {
             using T = std::decay_t<decltype(value)>;
@@ -123,6 +135,15 @@ void affected(FileEditResult& result, const Transaction& transaction, const worl
             } else if constexpr (std::is_same_v<T, AddRelation> || std::is_same_v<T, RemoveRelation>) {
                 result.affected_entities.push_back(value.relation.subject);
                 result.affected_entities.push_back(value.relation.object);
+            } else if constexpr (std::is_same_v<T, SetDependency>) {
+                result.affected_entities.push_back(value.entity);
+                const auto add = [&](const world::Dependency& d) {
+                    if (!d.provider.is_nil()) result.affected_entities.push_back(d.provider);
+                    if (!d.gate.is_nil()) result.affected_entities.push_back(d.gate);
+                };
+                if (value.dependency) add(*value.dependency);
+                const auto old = std::find_if(before.entities.begin(), before.entities.end(), [&](const auto& e) { return e.persistent_id == value.entity; });
+                if (old != before.entities.end() && old->dependency) add(*old->dependency);
             } else if constexpr (std::is_same_v<T, SetDistanceLink>) {
                 result.affected_entities.push_back(value.entity);
                 const auto add_endpoints = [&](const world::DistanceLink& link) {
@@ -147,6 +168,33 @@ void affected(FileEditResult& result, const Transaction& transaction, const worl
                 }
             }
         }, op);
+    }
+    // Include conservative downstream supply impact from both sides of a rewire.
+    std::unordered_map<world::PersistentId, std::vector<world::PersistentId>, world::PersistentIdHash> users;
+    const auto index = [&](const world::WorldSnapshot& snapshot) {
+        for (const auto& e : snapshot.entities) {
+            if (!e.dependency) continue;
+            for (const auto ref : {e.dependency->provider, e.dependency->gate}) {
+                if (!ref.is_nil()) users[ref].push_back(e.persistent_id);
+            }
+        }
+    };
+    index(before); index(after);
+    if (!users.empty()) {
+        std::unordered_set<world::PersistentId, world::PersistentIdHash> impacted(result.affected_entities.begin(), result.affected_entities.end());
+        std::vector<world::PersistentId> queue(impacted.begin(), impacted.end());
+        for (std::size_t i = 0; i < queue.size(); ++i) {
+            const auto found = users.find(queue[i]);
+            if (found == users.end()) continue;
+            for (const auto dependent : found->second) if (impacted.insert(dependent).second) queue.push_back(dependent);
+        }
+        result.affected_entities.assign(queue.begin(), queue.end());
+        const auto regions = [&](const world::WorldSnapshot& snapshot) {
+            for (const auto& e : snapshot.entities) {
+                if (impacted.contains(e.persistent_id) && e.spatial_state) result.affected_regions.push_back(e.spatial_state->region);
+            }
+        };
+        regions(before); regions(after);
     }
     std::sort(result.affected_entities.begin(), result.affected_entities.end(), [](const auto& a, const auto& b) {
         return a.bytes() < b.bytes();
@@ -258,7 +306,7 @@ FileEditResult edit_file(const std::filesystem::path& path, const EditRequest& r
     result.revision = next_revision;
     result.proposed_source = next_source;
     result.validated_operations = proposed.applied_operations;
-    affected(result, request.transaction, *parsed.snapshot);
+    affected(result, request.transaction, *parsed.snapshot, proposed.snapshot);
     return result;
 }
 } // namespace vice::tools::world_authoring

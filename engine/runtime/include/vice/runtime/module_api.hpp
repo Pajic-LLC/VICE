@@ -137,7 +137,7 @@ struct EntityId { std::uint8_t bytes[16]{}; };
 struct Vector3 { float x = 0, y = 0, z = 0; };
 enum class Result : std::uint32_t {
     success, unavailable, invalid_argument, not_found, no_body,
-    static_body, inactive_region, reset_required, wrong_phase, no_link,
+    static_body, inactive_region, reset_required, wrong_phase, no_link, no_dependency,
 };
 enum class Motion : std::uint32_t { static_body, kinematic_body, dynamic_body };
 struct EntitySnapshot {
@@ -173,6 +173,18 @@ struct DistanceLinkSnapshot {
     std::uint64_t break_step = 0;
 };
 
+enum class DependencyReason : std::uint32_t { available, disabled, link_broken, upstream_unavailable };
+struct DependencySnapshot {
+    std::uint32_t size = sizeof(DependencySnapshot);
+    std::uint32_t available = 0;
+    DependencyReason reason = DependencyReason::available;
+    DependencyReason root_reason = DependencyReason::available;
+    EntityId provider{}, gate{}, root_cause{};
+    float break_impulse = 0;
+    std::uint32_t path_length = 0;
+    std::uint64_t break_step = 0;
+};
+
 struct HostApi {
     std::uint32_t abi_version = module::abi_version;
     std::uint32_t size = sizeof(HostApi);
@@ -185,6 +197,7 @@ struct HostApi {
     Result (*set_body_velocity)(void* context, EntityId id, Vector3 linear, Vector3 angular) noexcept = nullptr;
     Result (*read_body_support)(void* context, EntityId id, Vector3 up, float min_up_dot, SupportSnapshot* output) noexcept = nullptr;
     Result (*read_distance_link)(void* context, EntityId id, DistanceLinkSnapshot* output) noexcept = nullptr;
+    Result (*read_dependency)(void* context, EntityId id, DependencySnapshot* output) noexcept = nullptr;
 };
 
 inline constexpr std::size_t host_api_v1_size = offsetof(HostApi, read_entity);
@@ -245,6 +258,12 @@ public:
         if (!host_ || host_->size < offsetof(HostApi, read_distance_link) + sizeof(host_->read_distance_link) || !host_->read_distance_link)
             return Result::unavailable;
         return host_->read_distance_link(host_->context, id, &output);
+    }
+
+    [[nodiscard]] Result read_dependency(EntityId id, DependencySnapshot& output) const noexcept {
+        if (!host_ || host_->size < offsetof(HostApi, read_dependency) + sizeof(host_->read_dependency) || !host_->read_dependency)
+            return Result::unavailable;
+        return host_->read_dependency(host_->context, id, &output);
     }
 
     void log(const LogLevel level, const char* const message) const noexcept {

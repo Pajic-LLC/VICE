@@ -108,6 +108,11 @@ namespace {
                 }
                 entity->authored_transform = value.transform;
                 return true;
+            } else if constexpr (std::is_same_v<Value, SetDependency>) {
+                auto* entity = find_entity(candidate, value.entity);
+                if (!entity) { diagnostics = "Dependency entity does not exist."; return false; }
+                entity->dependency = value.dependency;
+                return true;
             } else if constexpr (std::is_same_v<Value, SetDistanceLink>) {
                 auto* entity = find_entity(candidate, value.entity);
                 if (!entity) { diagnostics = "Entity does not exist: " + value.entity.to_string(); return false; }
