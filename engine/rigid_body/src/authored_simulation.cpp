@@ -46,6 +46,16 @@ struct AuthoredSimulation::State {
         world::SpatialState expected_spatial;
         std::optional<world::AuthoredTransform> expected_transform;
     };
+    struct Link {
+        world::PersistentId owner;
+        world::EntityId entity;
+        world::DistanceLink expected;
+        world::RegionId region;
+        ConstraintId native_id;
+    };
+    std::vector<Link> links;
+    std::unordered_map<std::uint64_t, std::size_t> link_ids;
+    std::uint64_t link_revision = 0;
     world::World* world = nullptr;
     simulation::Coordinator coordinator{1.0 / 120.0};
     simulation::EntityBindings bindings;
@@ -138,6 +148,29 @@ bool AuthoredSimulation::reset(world::World& world, jobs::Scheduler& jobs, std::
         next->participant_bodies.emplace(desc.participant.value, next->bodies.size());
         next->bodies.push_back({entity.persistent_id, desc, *owner, authored, *entity.spatial_state, entity.authored_transform});
     }
+    for (const auto& entity : snapshot.entities) {
+        if (!entity.distance_link) continue;
+        const auto owner = world.find(entity.persistent_id);
+        const auto& link = *entity.distance_link;
+        State::Link record{entity.persistent_id, *owner, link, {}, {static_cast<std::uint64_t>(next->links.size()) + 1U}};
+        if (!link.broken) {
+            const auto first = next->body_lookup.find(link.first), second = next->body_lookup.find(link.second);
+            if (first == next->body_lookup.end() || second == next->body_lookup.end()) return fail(diagnostics, "Distance link endpoints require authored rigid boxes.");
+            const auto& a = next->bodies[first->second]; const auto& b = next->bodies[second->second];
+            record.region = a.expected_spatial.region;
+            const auto target = next->domain_lookup.find(record.region);
+            if (target == next->domain_lookup.end() || record.region != b.expected_spatial.region) return fail(diagnostics, "Distance link endpoints require one physical region.");
+            DistanceConstraintDesc desc;
+            desc.id = record.native_id; desc.first = a.desc.participant; desc.second = b.desc.participant;
+            desc.min_distance = link.min_distance; desc.max_distance = link.max_distance;
+            desc.limits_spring = {link.frequency_hz, link.damping_ratio};
+            if (link.break_threshold > 0) desc.break_thresholds.linear_impulse = link.break_threshold;
+            if (!target->second->create_constraint(desc)) return fail(diagnostics, "Could not instantiate distance link: " + entity.persistent_id.to_string());
+        }
+        next->link_ids.emplace(record.native_id.value, next->links.size());
+        next->links.push_back(record);
+    }
+    next->link_revision = world.distance_link_revision();
     state_ = std::move(next);
     if (diagnostics) diagnostics->clear();
     return true;
@@ -145,6 +178,11 @@ bool AuthoredSimulation::reset(world::World& world, jobs::Scheduler& jobs, std::
 
 bool AuthoredSimulation::step(std::string* diagnostics) {
     if (!state_->world) return fail(diagnostics, "Authored simulation has not been initialized.");
+    if (state_->world->distance_link_revision() != state_->link_revision) return fail(diagnostics, "Distance links were edited externally; reset the simulation.");
+    for (const auto& link : state_->links) {
+        if (state_->world->find(link.owner) != link.entity || state_->world->distance_link(link.entity) != link.expected)
+            return fail(diagnostics, "Distance link state changed externally; reset the simulation.");
+    }
     // Reject external body edits before advancing or publishing any solver state.
     for (const auto& record : state_->bodies) {
         if (!state_->matches(record)) {
@@ -158,6 +196,21 @@ bool AuthoredSimulation::step(std::string* diagnostics) {
         region.domain->set_fidelity(fidelity(current->fidelity));
     }
     state_->coordinator.step();
+    // Publish broken identity/state before handoff can move the released endpoints.
+    for (const auto& region : state_->regions) {
+        for (const auto& event : region.domain->constraint_break_events()) {
+            const auto found = state_->link_ids.find(event.id.value);
+            if (found == state_->link_ids.end()) continue;
+            auto& link = state_->links[found->second];
+            if (link.region != region.id || link.expected.broken) continue;
+            auto broken = link.expected;
+            broken.broken = true; broken.last_break_impulse = event.linear_impulse;
+            broken.break_step = state_->coordinator.step_index();
+            if (!state_->world->set_distance_link(link.entity, broken)) return fail(diagnostics, "Could not publish broken distance link state.");
+            link.expected = broken;
+        }
+    }
+    state_->link_revision = state_->world->distance_link_revision();
     state_->bridge.orchestrate_boxes(*state_->world, state_->coordinator, state_->bindings);
     for (auto& record : state_->bodies) {
         const auto entity = state_->world->find(record.owner);

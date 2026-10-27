@@ -37,16 +37,17 @@ int main() {
     require(tools::world_cooker::serialize_source_manifest(*tools::world_cooker::parse_source_manifest(canonical).snapshot) == canonical,
         "source round trip deterministic");
     const auto encoded = world::encode_world_snapshot(*parsed.snapshot);
-    require(static_cast<bool>(encoded), "cooked World v7 encoding");
+    require(static_cast<bool>(encoded), "current cooked World encoding");
     const auto decoded = world::decode_world_snapshot(encoded.bytes);
     require(decoded.snapshot && decoded.snapshot->entities[1].rigid_box &&
         decoded.snapshot->entities[1].rigid_box->continuous, "cooked physics data survives");
-    // Build an independent v6 one-entity fixture by removing v7's presence byte
+    // Build an independent v6 one-entity fixture by removing v8/v7 presence bytes
     // and updating the documented payload fingerprint in the fixed header.
     world::World legacy_world;
     require(legacy_world.create_entity(id(falling_id)).has_value(), "legacy entity fixture");
     auto legacy = world::encode_world_snapshot(legacy_world.snapshot()).bytes;
-    require(legacy.size() == 66U, "minimal v7 fixture size");
+    require(legacy.size() == 67U, "minimal v8 fixture size");
+    legacy.erase(legacy.begin() + 62);
     legacy.erase(legacy.begin() + 61);
     legacy[8] = std::byte{6};
     std::uint64_t hash = 14695981039346656037ULL;

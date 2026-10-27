@@ -1,5 +1,6 @@
 #include <vice/tools/world_edit.hpp>
 #include "rigid_box_source.hpp"
+#include "distance_link_source.hpp"
 
 #include <vice/platform/file.hpp>
 #include <vice/tools/world_cooker.hpp>
@@ -75,6 +76,15 @@ std::optional<Operation> read_operation(const std::string& name, std::istream& i
     } else if (name == "clear_transform") {
         SetEntityTransform op;
         if (read_id(input, op.entity)) return op;
+    } else if (name == "set_distance_link" || name == "clear_distance_link") {
+        SetDistanceLink op;
+        if (!read_id(input, op.entity)) return std::nullopt;
+        if (name == "set_distance_link") {
+            world::DistanceLink link;
+            if (!world_cooker::read_distance_link(input, link)) return std::nullopt;
+            op.link = link;
+        }
+        return op;
     } else if (name == "set_rigid_box" || name == "clear_rigid_box") {
         SetRigidBox op;
         if (!read_id(input, op.entity)) return std::nullopt;
@@ -113,6 +123,18 @@ void affected(FileEditResult& result, const Transaction& transaction, const worl
             } else if constexpr (std::is_same_v<T, AddRelation> || std::is_same_v<T, RemoveRelation>) {
                 result.affected_entities.push_back(value.relation.subject);
                 result.affected_entities.push_back(value.relation.object);
+            } else if constexpr (std::is_same_v<T, SetDistanceLink>) {
+                result.affected_entities.push_back(value.entity);
+                const auto add_endpoints = [&](const world::DistanceLink& link) {
+                    for (const auto id : {link.first, link.second}) {
+                        result.affected_entities.push_back(id);
+                        const auto found = std::find_if(before.entities.begin(), before.entities.end(), [&](const auto& e) { return e.persistent_id == id; });
+                        if (found != before.entities.end() && found->spatial_state) result.affected_regions.push_back(found->spatial_state->region);
+                    }
+                };
+                if (value.link) add_endpoints(*value.link);
+                const auto previous = std::find_if(before.entities.begin(), before.entities.end(), [&](const auto& e) { return e.persistent_id == value.entity; });
+                if (previous != before.entities.end() && previous->distance_link) add_endpoints(*previous->distance_link);
             } else {
                 result.affected_entities.push_back(value.entity);
                 if constexpr (std::is_same_v<T, SetEntitySpatial>) {

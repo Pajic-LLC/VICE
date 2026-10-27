@@ -569,6 +569,22 @@ void append_entities(std::string& data, const world::WorldSnapshot& snapshot) {
             data += '}';
         }
 
+    data += ",\"distance_link\":";
+    if (!value.distance_link) data += "null";
+    else {
+        const auto& link = *value.distance_link;
+        data += "{\"first\":"; append_json_string(data, link.first.to_string());
+        data += ",\"second\":"; append_json_string(data, link.second.to_string());
+        data += ",\"min_distance\":"; append_double(data, link.min_distance);
+        data += ",\"max_distance\":"; append_double(data, link.max_distance);
+        data += ",\"frequency_hz\":"; append_double(data, link.frequency_hz);
+        data += ",\"damping_ratio\":"; append_double(data, link.damping_ratio);
+        data += ",\"break_threshold\":"; append_double(data, link.break_threshold);
+        data += ",\"broken\":"; data += link.broken ? "true" : "false";
+        data += ",\"last_break_impulse\":"; append_double(data, link.last_break_impulse);
+        data += ",\"break_step\":" + std::to_string(link.break_step) + "}";
+    }
+
         auto references = value.resource_references;
         std::sort(references.begin(), references.end(), [](const auto& lhs, const auto& rhs) {
             const auto lhs_role = static_cast<std::uint8_t>(lhs.role);

@@ -108,6 +108,12 @@ namespace {
                 }
                 entity->authored_transform = value.transform;
                 return true;
+            } else if constexpr (std::is_same_v<Value, SetDistanceLink>) {
+                auto* entity = find_entity(candidate, value.entity);
+                if (!entity) { diagnostics = "Entity does not exist: " + value.entity.to_string(); return false; }
+                if (value.link && !world::valid(*value.link)) { diagnostics = "Distance link values are invalid."; return false; }
+                entity->distance_link = value.link;
+                return true;
             } else if constexpr (std::is_same_v<Value, SetRigidBox>) {
                 auto* const entity = find_entity(candidate, value.entity);
                 if (entity == nullptr || value.entity.is_nil()) {

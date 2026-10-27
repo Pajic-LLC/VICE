@@ -85,6 +85,10 @@ public:
     bool set_rigid_box(EntityId entity, const RigidBox& box);
     bool clear_rigid_box(EntityId entity);
     [[nodiscard]] std::optional<RigidBox> rigid_box(EntityId entity) const noexcept;
+    bool set_distance_link(EntityId entity, const DistanceLink& link);
+    bool clear_distance_link(EntityId entity);
+    [[nodiscard]] std::optional<DistanceLink> distance_link(EntityId entity) const noexcept;
+    [[nodiscard]] std::uint64_t distance_link_revision() const noexcept { return distance_link_revision_; }
 
     [[nodiscard]] std::optional<SpatialState> spatial_state(EntityId entity) const noexcept;
     [[nodiscard]] std::optional<AuthoredTransform> authored_transform(EntityId entity) const noexcept;
@@ -104,6 +108,7 @@ private:
         std::optional<Light> light;
         std::optional<ReflectionProbe> reflection_probe;
         std::optional<RigidBox> rigid_box;
+        std::optional<DistanceLink> distance_link;
         std::vector<ResourceReference> resource_references;
         std::uint32_t generation = 1;
         bool alive = false;
@@ -118,6 +123,10 @@ private:
     [[nodiscard]] EntityId allocate(PersistentId persistent_id);
     [[nodiscard]] ResourceHandle allocate_resource(ResourceId resource_id);
 
+    [[nodiscard]] bool link_endpoint_change_allowed(EntityId entity, std::optional<RegionId> region,
+        std::optional<RigidMotion> motion) const;
+    std::uint64_t distance_link_revision_ = 0;
+    std::unordered_map<PersistentId, std::vector<EntityId>, PersistentIdHash> distance_link_users_;
     std::vector<Slot> slots_;
     std::vector<std::uint32_t> free_indices_;
     std::unordered_map<PersistentId, EntityId, PersistentIdHash> persistent_lookup_;

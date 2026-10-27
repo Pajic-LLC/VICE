@@ -20,6 +20,33 @@ namespace {
 
 } // namespace
 
+bool validate_distance_links(const WorldSnapshot& snapshot, std::string* diagnostics) {
+    if (diagnostics) diagnostics->clear();
+    if (!std::any_of(snapshot.entities.begin(), snapshot.entities.end(), [](const auto& e) { return e.distance_link.has_value(); })) return true;
+    std::unordered_map<PersistentId, const SnapshotEntity*, PersistentIdHash> entities;
+    for (const auto& entity : snapshot.entities) entities.emplace(entity.persistent_id, &entity);
+    for (const auto& owner : snapshot.entities) {
+        if (!owner.distance_link) continue;
+        const auto& link = *owner.distance_link;
+        const auto fail = [&](const char* reason) {
+            if (diagnostics) *diagnostics = "Distance link " + owner.persistent_id.to_string() + ": " + reason;
+            return false;
+        };
+        if (!valid(link)) return fail("invalid identities, limits, spring, break threshold or evidence.");
+        const auto a = entities.find(link.first), b = entities.find(link.second);
+        if (a == entities.end() || b == entities.end()) return fail("missing endpoint entity.");
+        if (owner.persistent_id == link.first || owner.persistent_id == link.second) return fail("owner cannot be its own endpoint.");
+        if (link.broken) continue;
+        if (!a->second->rigid_box || !b->second->rigid_box || !a->second->spatial_state || !b->second->spatial_state)
+            return fail("intact endpoints require spatial rigid boxes.");
+        if (a->second->spatial_state->region != b->second->spatial_state->region) return fail("intact endpoints must share a physical region.");
+        if (a->second->rigid_box->motion != RigidMotion::dynamic_body && b->second->rigid_box->motion != RigidMotion::dynamic_body)
+            return fail("at least one intact endpoint must be dynamic.");
+    }
+    if (diagnostics) diagnostics->clear();
+    return true;
+}
+
 bool World::register_component_type(ComponentTypeDesc type) {
     if (!type.id.valid() || type.name.empty() || type.version == 0U ||
         component_types_.contains(type.id)) {
@@ -211,6 +238,7 @@ WorldSnapshot World::snapshot() const {
             .light = slot.light,
             .reflection_probe = slot.reflection_probe,
             .rigid_box = slot.rigid_box,
+            .distance_link = slot.distance_link,
             .resource_references = slot.resource_references,
         };
         std::sort(
@@ -264,6 +292,7 @@ WorldSnapshot World::snapshot() const {
 }
 
 bool World::restore(const WorldSnapshot& snapshot_data) {
+    if (!validate_distance_links(snapshot_data)) return false;
     World restored;
 
     for (const auto& type : snapshot_data.component_types) {
@@ -315,6 +344,11 @@ bool World::restore(const WorldSnapshot& snapshot_data) {
                 return false;
             }
         }
+    }
+
+    for (const auto& entity_record : snapshot_data.entities) {
+        if (entity_record.distance_link &&
+            !restored.set_distance_link(*restored.find(entity_record.persistent_id), *entity_record.distance_link)) return false;
     }
 
     for (const auto& relation_record : snapshot_data.relations) {

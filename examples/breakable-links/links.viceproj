@@ -1,0 +1,7 @@
+vice-project 1
+id 97000000-0000-4000-8000-000000000001
+name "Breakable Links"
+game_name "Breakable Links"
+game_target "breakable-links"
+assets "assets"
+startup_world "worlds/links.vworld"

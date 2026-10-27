@@ -299,6 +299,14 @@ WorldSnapshotEncodeResult encode_world_snapshot(const WorldSnapshot& snapshot_da
             append_u8(payload, box.continuous ? 1U : 0U);
             append_u8(payload, box.trigger ? 1U : 0U);
         }
+        append_u8(payload, entity.distance_link ? 1U : 0U);
+        if (entity.distance_link) {
+            const auto& link = *entity.distance_link;
+            append_id(payload, link.first); append_id(payload, link.second);
+            for (const auto value : {link.min_distance, link.max_distance, link.frequency_hz, link.damping_ratio, link.break_threshold}) append_f32(payload, value);
+            append_u8(payload, link.broken ? 1U : 0U);
+            append_f32(payload, link.last_break_impulse); append_u64(payload, link.break_step);
+        }
         append_u32(payload, static_cast<std::uint32_t>(entity.resource_references.size()));
         for (const auto reference : entity.resource_references) {
             append_u8(payload, static_cast<std::uint8_t>(reference.role));
@@ -599,6 +607,22 @@ WorldSnapshotDecodeResult decode_world_snapshot(const std::span<const std::byte>
                     return result;
                 }
                 entity.rigid_box = box;
+            }
+        }
+        if (version >= 8U) {
+            std::uint8_t present = 0, broken = 0;
+            DistanceLink link;
+            if (!reader.read_u8(present) || present > 1U) { result.diagnostics = "Invalid distance link presence flag."; return result; }
+            if (present) {
+                if (!reader.read_id(link.first) || !reader.read_id(link.second) ||
+                    !reader.read_f32(link.min_distance) || !reader.read_f32(link.max_distance) ||
+                    !reader.read_f32(link.frequency_hz) || !reader.read_f32(link.damping_ratio) || !reader.read_f32(link.break_threshold) ||
+                    !reader.read_u8(broken) || broken > 1U || !reader.read_f32(link.last_break_impulse) || !reader.read_u64(link.break_step)) {
+                    result.diagnostics = "World snapshot ended inside invalid distance link data."; return result;
+                }
+                link.broken = broken != 0;
+                if (!valid(link)) { result.diagnostics = "World snapshot contains invalid distance link data."; return result; }
+                entity.distance_link = link;
             }
         }
         if (version >= 3U) {
