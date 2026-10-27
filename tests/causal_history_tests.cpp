@@ -83,6 +83,19 @@ int main(){
  const auto limited=w.causal_context(id(6),8,1);require(limited.truncated && limited.events.size()==1,"query budget truncation is explicit");
  for(unsigned i=0;i<600;++i)require(w.set_dependency_enabled(*w.find(id(4)),i%2!=0),"bounded recording under repeated supply changes");
  const auto info=w.causal_info();require(info.retained_count==world::causal_history_capacity && info.first_sequence>1 && !w.causal_event(1) && world::validate_causal_history(w.causal_snapshot()),"bounded retention and pruned range");
+ // A single wide propagation can prune its own producer before the last consumer.
+ // Parent UUIDs must remain valid evidence even when those records are no longer retained.
+ world::World wide;const auto supply_id=world::PersistentId::random();
+ const auto supply=*wide.create_entity(supply_id);require(wide.set_dependency(supply,{}),"wide source");
+ for(std::size_t i=0;i<world::causal_history_capacity+16;++i) {
+     const auto consumer=wide.create_entity();
+     require(wide.set_dependency(consumer,world::Dependency{.provider=supply_id}),"wide consumer");
+ }
+ require(wide.begin_causal_recording() && wide.set_dependency_enabled(supply,false),"wide propagation");
+ const auto wide_history=wide.causal_snapshot();
+ require(wide_history.events.size()==world::causal_history_capacity && world::validate_causal_history(wide_history),"wide propagation stays bounded and validates");
+ for(const auto& event:wide_history.events) require(event.kind==world::CausalKind::dependency_state_changed &&
+     event.parent_sequence<wide.causal_info().first_sequence && !event.parent_id.is_nil(),"pruned producer keeps its stable UUID throughout propagation");
  const auto first=*w.causal_event(info.first_sequence);require(first.parent_sequence<info.first_sequence && first.parent_sequence>0,"retention can prune an ancestor");
  const world::CausalContext slice{info,{first},true};require(world::serialize_causal_context(slice).find("pruned")!=std::string::npos,"missing parent is reported as pruned");
  lifecycle.event(platform::Event{platform::KeyEvent{.key=platform::Key::up,.pressed=true}});lifecycle.frame(color);require(color.red==1,"SDK distinguishes pruned event from future/mismatched event");lifecycle.stop();
