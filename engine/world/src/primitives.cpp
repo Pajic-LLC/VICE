@@ -376,6 +376,7 @@ bool World::restore(const WorldSnapshot& snapshot_data) {
         }
     }
 
+    if(!restored.advance_material_revision())return false;
     restored.causal_id_=snapshot_data.causal_history.id;
     restored.next_causal_sequence_=snapshot_data.causal_history.next_sequence;
     restored.causal_events_.assign(snapshot_data.causal_history.events.begin(),snapshot_data.causal_history.events.end());

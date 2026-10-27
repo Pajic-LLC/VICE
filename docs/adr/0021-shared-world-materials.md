@@ -51,7 +51,11 @@ A material revision changes on definition/assignment mutation, including removal
 of an assigned entity. Shared physical simulation observes it before stepping or
 accepting body/controller commands. A changed catalog or assignment requires reset;
 the solver cannot continue with stale density or friction. This conservatively
-includes name-only and render-only catalog edits. Same-value writes are no-ops.
+includes name-only and render-only catalog edits. Same-value writes are no-ops. Successful World restore advances the existing
+material generation rather than copying a reconstructed count. Generations are
+process-unique, so equal-sized catalog/assignment replacement and World copy
+replacement cannot alias the active solver generation. Generation
+exhaustion rejects mutations instead of wrapping.
 Reset constructs replacement derived state before publishing it. The existing
 failed-publication latch and World authority rules remain in effect.
 

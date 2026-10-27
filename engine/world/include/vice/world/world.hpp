@@ -40,6 +40,7 @@ public:
     bool set_entity_material(EntityId entity,PersistentId material);
     [[nodiscard]] PersistentId entity_material(EntityId entity) const noexcept;
     [[nodiscard]] std::optional<MaterialSurface> material_surface(EntityId entity) const noexcept;
+    // Opaque process-local generation. Compare for equality; do not persist.
     [[nodiscard]] std::uint64_t material_revision() const noexcept { return material_revision_; }
 
     bool register_component_type(ComponentTypeDesc type);
@@ -164,6 +165,7 @@ private:
     bool set_distance_link_impl(EntityId entity,const DistanceLink& link,CausalKind kind);
     std::unordered_map<PersistentId,MaterialDefinition,PersistentIdHash> materials_;
     std::uint64_t material_revision_=0;
+    bool advance_material_revision() noexcept;
     PersistentId causal_id_{}, capture_id_{};
     std::uint64_t next_causal_sequence_ = 1;
     std::deque<CausalEvent> causal_events_;

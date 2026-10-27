@@ -111,6 +111,14 @@ int main(){using namespace vice;
  require(resumed.set_entity_material(*resumed.find(id(6)),{}) && resumed.set_entity_material(*resumed.find(id(3)),{}) && resumed.set_entity_material(*resumed.find(id(5)),{}) && resumed.remove_material(id(0x103)),"catalog removal allowed after detaching all live users");
  require(world::validate_causal_history(resumed.causal_snapshot()) && resumed.causal_event(event->sequence)->first_material==id(0x103),"historical material UUID survives live catalog removal");
  const auto debug=runtime::sample_runtime_debug_entity(w,id(2));require(debug.material && debug.material->id==id(0x102),"Runtime debug resolves same shared material");
+#if defined(VICE_MATERIAL_PHYSICS)
+ auto replacement=w.snapshot();for(auto& m:replacement.materials)if(m.id==id(0x103))m.density=3000;
+ const auto old_revision=w.material_revision(),old_step=physics.coordinator().step_index();
+ require(w.restore(replacement) && w.material_revision()>old_revision && !physics.step() && physics.coordinator().step_index()==old_step && !physics.body(id(3)),"live restore invalidates native material state even with identical catalog/assignment counts");
+ auto copied=load();rigid_body::AuthoredSimulation copy_physics;require(copy_physics.reset(copied,jobs),"copy replacement fixture");
+ auto distinct=load();auto dense=*distinct.material(id(0x102));dense.density=600;require(distinct.set_material(dense),"distinct material state");
+ copied=distinct;require(!copy_physics.step() && !copy_physics.body(id(2)),"World copy replacement cannot alias material generations");
+#endif
  // Version 11 marker fixture predates material IDs and catalog tails.
  world::World old;require(old.begin_causal_recording(),"old capture fixture");auto legacy=world::encode_world_snapshot(old.snapshot()).bytes;
  require(legacy.size()==263,"known v12 empty capture layout");legacy.resize(legacy.size()-8);legacy.erase(legacy.begin()+223,legacy.begin()+255);legacy[8]=std::byte{11};rehash(legacy);

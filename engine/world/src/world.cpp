@@ -60,6 +60,7 @@ bool World::destroy_entity(const EntityId entity) {
 
     auto& slot = slots_[entity.index];
     if(!causal_room((slot.dependency ? 2U:0U)+(slot.distance_link ? 1U:0U))) return false;
+    if(!slot.material.is_nil() && !advance_material_revision())return false;
     (void)clear_character(entity);
     (void)clear_dependency(entity);
     (void)clear_distance_link(entity);
@@ -74,7 +75,7 @@ bool World::destroy_entity(const EntityId entity) {
     slot.distance_link.reset();
     slot.dependency.reset();
     slot.character.reset();
-    if(!slot.material.is_nil()) {slot.material={};++material_revision_;}
+    slot.material={};
     slot.resource_references.clear();
     slot.alive = false;
 

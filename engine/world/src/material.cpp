@@ -2,9 +2,23 @@
 #include <algorithm>
 #include <iomanip>
 #include <locale>
+#include <limits>
+#include <atomic>
 #include <sstream>
 #include <unordered_set>
 namespace vice::world {
+bool World::advance_material_revision() noexcept {
+    // A generation identifies material state across World replacement/copies,
+    // not only the number of writes performed on one World instance.
+    static std::atomic<std::uint64_t> next{1};
+    auto value=next.load(std::memory_order_relaxed);
+    for(;;) {
+        if(value==std::numeric_limits<std::uint64_t>::max())return false;
+        if(next.compare_exchange_weak(value,value+1,std::memory_order_relaxed)) {
+            material_revision_=value;return true;
+        }
+    }
+}
 bool validate_materials(const WorldSnapshot& s,std::string* diagnostics) {
     if(diagnostics) diagnostics->clear();
     const auto fail=[&](const char* message){if(diagnostics)*diagnostics=message;return false;};
@@ -34,12 +48,14 @@ bool World::set_material(const MaterialDefinition& definition) {
         if(!s.alive || s.material!=definition.id) continue;
         for(const auto& ref:s.resource_references) if(ref.role==ResourceRole::render_material && ref.resource!=definition.render_material) return false;
     }
-    materials_.insert_or_assign(definition.id,definition);++material_revision_;return true;
+    if(!advance_material_revision())return false;
+    materials_.insert_or_assign(definition.id,definition);return true;
 }
 bool World::remove_material(PersistentId id) {
     if(!materials_.contains(id)) return false;
     for(const auto& s:slots_) if(s.alive && s.material==id) return false;
-    materials_.erase(id);++material_revision_;return true;
+    if(!advance_material_revision())return false;
+    materials_.erase(id);return true;
 }
 std::optional<MaterialDefinition> World::material(PersistentId id) const {
     const auto found=materials_.find(id);return found==materials_.end()?std::nullopt:std::optional{found->second};
@@ -52,7 +68,8 @@ bool World::set_entity_material(EntityId entity,PersistentId id) {
         if(m->second.render_material.valid()) for(const auto& ref:slots_[entity.index].resource_references)
             if(ref.role==ResourceRole::render_material && ref.resource!=m->second.render_material) return false;
     }
-    slots_[entity.index].material=id;++material_revision_;return true;
+    if(!advance_material_revision())return false;
+    slots_[entity.index].material=id;return true;
 }
 PersistentId World::entity_material(EntityId entity) const noexcept {
     return alive(entity)?slots_[entity.index].material:PersistentId{};
