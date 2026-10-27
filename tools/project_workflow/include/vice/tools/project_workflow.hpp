@@ -36,6 +36,21 @@ struct ProjectBuildToolchain {
     }
 };
 
+struct ProjectGameModuleBuildResult {
+    bool source_present = false;
+    bool success = true;
+    std::filesystem::path source;
+    std::filesystem::path output;
+    std::string diagnostics;
+    [[nodiscard]] explicit operator bool() const noexcept { return success; }
+};
+
+[[nodiscard]] ProjectGameModuleBuildResult build_project_game_module(
+    const project::Workspace& workspace,
+    const ProjectBuildToolchain& toolchain
+);
+[[nodiscard]] ProjectGameModuleBuildResult build_project_game_module(const project::Workspace& workspace);
+
 struct ProjectBuildResult {
     bool success = false;
     std::string project_id;

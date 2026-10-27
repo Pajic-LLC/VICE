@@ -73,6 +73,12 @@ void test_workspace_frame() {
     assert(selection.selected() == persistent);
     assert(!history.dirty());
     assert(ui.transform_tool() == editor::TransformTool::move);
+    const platform::Event save_key{platform::KeyEvent{.key = platform::Key::s,
+        .modifiers = static_cast<platform::ModifierMask>(platform::Modifier::control), .pressed = true}};
+    ui.handle_event(save_key, false);
+    assert(!ui.consume_save_request());
+    ui.handle_event(save_key);
+    assert(ui.consume_save_request());
     assert(!ui.consume_quit_request());
     assert(!ui.consume_save_request());
     assert(!ui.consume_undo_request());

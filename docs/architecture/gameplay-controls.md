@@ -34,6 +34,9 @@ python3 scripts/validate_gameplay_workflow.py --vice build/tools/vice_cli/vice -
 The first command compiles the real project module and stages its authored scene.
 The second launches a native game and observes module-driven platform motion and
 dynamic floor contact. Automated loaded-module tests additionally deliver input
-and verify control, callback restrictions and saved-state resume. Editor preview
-exposes the same service operation for authored bodies; project-module callbacks
-inside Editor preview are not yet wired.
+and verify control, callback restrictions and saved-state resume. Editor Play/Reset compiles the same project module and runs its callbacks against
+an isolated clone of the current World, including unsaved changes. Focus the
+Scene viewport to send game input. Pause freezes callbacks and physics; Step runs
+one fixed gameplay/physics tick. Reset rebuilds the module with fresh globals; a
+failed build or start leaves the current preview intact. The scene renderers show
+live preview poses. Stop restores authoring interaction. See ADR 0015.
