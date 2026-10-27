@@ -39,6 +39,16 @@ jobs:
       - name: Test
         run: ctest --test-dir build -C Release --output-on-failure
 
+      - name: Verify agent World edit and build workflow
+        shell: python
+        run: |
+          import os
+          import subprocess
+          import sys
+          from pathlib import Path
+          executable = Path("build/tools/vice_cli") / ("Release/vice.exe" if os.name == "nt" else "vice")
+          subprocess.run([sys.executable, "scripts/validate_agent_world_workflow.py", "--vice", str(executable)], check=True)
+
       - name: Shader cooker DXIL smoke test
         if: runner.os == 'Windows'
         shell: pwsh

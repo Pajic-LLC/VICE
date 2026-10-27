@@ -2,7 +2,9 @@ add_library(
   vice_dev_cli
   STATIC
     src/cli.cpp
+    src/runtime_debug.cpp
     src/runtime_profile.cpp
+    src/world_edit.cpp
 )
 add_library(VICE::DevCLI ALIAS vice_dev_cli)
 
@@ -20,6 +22,7 @@ target_link_libraries(
     VICE::World
     VICE::WorldCooker
   PRIVATE
+    VICE::Platform
     VICE::RuntimeDevSession
 )
 if(VICE_BUILD_PLAYER)
@@ -39,6 +42,29 @@ vice_enable_warnings(vice_cli)
 set_target_properties(vice_cli PROPERTIES OUTPUT_NAME vice)
 
 if(VICE_BUILD_TESTS)
+  add_executable(vice_world_edit_cli_tests tests/world_edit_tests.cpp)
+  target_link_libraries(vice_world_edit_cli_tests PRIVATE VICE::DevCLI VICE::Platform)
+  target_compile_features(vice_world_edit_cli_tests PRIVATE cxx_std_23)
+  vice_enable_warnings(vice_world_edit_cli_tests)
+  add_test(NAME vice_world_edit_cli_tests COMMAND vice_world_edit_cli_tests)
+
+  add_executable(
+    vice_runtime_debug_cli_tests
+    tests/runtime_debug_tests.cpp
+  )
+  target_link_libraries(
+    vice_runtime_debug_cli_tests
+    PRIVATE
+      VICE::DevCLI
+      VICE::RuntimeDevSession
+  )
+  target_compile_features(vice_runtime_debug_cli_tests PRIVATE cxx_std_23)
+  vice_enable_warnings(vice_runtime_debug_cli_tests)
+  add_test(
+    NAME vice_runtime_debug_cli_tests
+    COMMAND vice_runtime_debug_cli_tests
+  )
+
   add_executable(
     vice_runtime_profile_cli_tests
     tests/runtime_profile_tests.cpp

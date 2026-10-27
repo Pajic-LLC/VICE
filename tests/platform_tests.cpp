@@ -17,6 +17,16 @@ int main(const int argc, char** argv) {
         std::cout << "VICE process child output\n";
         return 7;
     }
+    if (argc == 2 && std::string{argv[1]} == "--vice-silent-launch-parent") {
+        ProcessLaunchRequest request;
+        request.executable = std::filesystem::absolute(argv[0]);
+        request.arguments = {"--vice-process-child"};
+        request.inherit_standard_streams = false;
+        const auto launched = launch_process(request);
+        if (!launched) return 1;
+        std::cout << "VICE launch parent output\n";
+        return 0;
+    }
 
     const WindowMetrics metrics{1280, 720, 2560, 1440, 2.0F};
     const Event resize{WindowMetricsChanged{7, metrics}};
@@ -63,6 +73,12 @@ int main(const int argc, char** argv) {
     assert(!child);
     assert(child.output.find("VICE process child output") != std::string::npos);
     assert(!child.diagnostics.empty());
+
+    child_request.arguments = {"--vice-silent-launch-parent"};
+    const auto launched_parent = run_process(child_request);
+    assert(launched_parent);
+    assert(launched_parent.output == "VICE launch parent output\n" ||
+        launched_parent.output == "VICE launch parent output\r\n");
 
     std::string library_diagnostics;
     const auto invalid_library = DynamicLibrary::load({}, &library_diagnostics);

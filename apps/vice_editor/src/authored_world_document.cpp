@@ -1,5 +1,7 @@
 #include <vice/editor/project_session.hpp>
 
+#include <vice/platform/file.hpp>
+#include <vice/tools/world_authoring.hpp>
 #include <vice/tools/world_cooker.hpp>
 
 #include <filesystem>
@@ -29,7 +31,7 @@ namespace {
     }
     auto result = std::filesystem::absolute(path, error);
     if (error) return {};
-    return result.lexically_normal();
+    return std::filesystem::weakly_canonical(result, error);
 }
 
 [[nodiscard]] bool contains_parent_traversal(const std::filesystem::path& path) {
@@ -49,24 +51,6 @@ namespace {
         if (component == "..") return false;
     }
     return true;
-}
-
-[[nodiscard]] std::optional<std::string> read_text(
-    const std::filesystem::path& path,
-    std::string& diagnostics
-) {
-    std::ifstream input{path, std::ios::binary};
-    if (!input) {
-        diagnostics = "Could not open authored World `" + path.generic_string() + "`.";
-        return std::nullopt;
-    }
-    std::ostringstream contents;
-    contents << input.rdbuf();
-    if (!input.eof() && input.fail()) {
-        diagnostics = "Could not read authored World `" + path.generic_string() + "`.";
-        return std::nullopt;
-    }
-    return contents.str();
 }
 
 } // namespace
@@ -135,11 +119,10 @@ bool WorldDocument::open_authored(
         return fail(diagnostics, "Could not resolve authored World path: " + error.message());
     }
 
-    std::string read_diagnostics;
-    const auto source = read_text(resolved, read_diagnostics);
-    if (!source.has_value()) return fail(diagnostics, std::move(read_diagnostics));
+    const auto source = platform::read_text_file(resolved);
+    if (!source) return fail(diagnostics, source.diagnostics);
 
-    const auto parsed = tools::world_cooker::parse_source_manifest(*source);
+    const auto parsed = tools::world_cooker::parse_source_manifest(source.contents);
     if (!parsed.snapshot.has_value()) {
         return fail(
             diagnostics,
@@ -154,6 +137,7 @@ bool WorldDocument::open_authored(
 
     *world_ = std::move(replacement);
     path_ = resolved;
+    authored_source_ = source.contents;
     dirty_ = false;
     if (diagnostics != nullptr) diagnostics->clear();
     return true;
@@ -189,7 +173,7 @@ bool WorldDocument::save_authored_as(
     }
 
     std::string serialize_diagnostics;
-    const std::string text = tools::world_cooker::serialize_source_manifest(
+    std::string text = tools::world_cooker::serialize_source_manifest(
         world_->snapshot(),
         &serialize_diagnostics
     );
@@ -202,33 +186,45 @@ bool WorldDocument::save_authored_as(
         );
     }
 
-    const auto temporary = std::filesystem::path{resolved.string() + ".tmp"};
-    {
-        std::ofstream output{temporary, std::ios::binary | std::ios::trunc};
-        if (!output) return fail(diagnostics, "Could not create temporary authored World file.");
-        output.write(text.data(), static_cast<std::streamsize>(text.size()));
-        if (!output) {
-            output.close();
-            std::error_code cleanup_error;
-            std::filesystem::remove(temporary, cleanup_error);
-            return fail(diagnostics, "Could not write temporary authored World file.");
-        }
+    std::optional<std::string> expected;
+    if (resolved == path_ && authored_source_) {
+        expected = authored_source_;
+    } else if (std::filesystem::exists(resolved, error)) {
+        const auto current = platform::read_text_file(resolved);
+        if (!current) return fail(diagnostics, current.diagnostics);
+        expected = current.contents;
+    } else if (error) {
+        return fail(diagnostics, "Could not inspect authored World save target: " + error.message());
     }
-
-    std::filesystem::copy_file(
-        temporary,
-        resolved,
-        std::filesystem::copy_options::overwrite_existing,
-        error
-    );
-    std::error_code cleanup_error;
-    std::filesystem::remove(temporary, cleanup_error);
-    if (error) {
-        return fail(diagnostics, "Could not replace authored World file: " + error.message());
+    // A semantic no-op preserves source comments/whitespace and its revision.
+    if (expected) {
+        const auto parsed = tools::world_cooker::parse_source_manifest(*expected);
+        if (parsed.snapshot && tools::world_cooker::serialize_source_manifest(*parsed.snapshot) == text) text = *expected;
+    }
+    const auto published = platform::replace_text_file_if_unchanged(resolved,
+        expected ? std::optional<std::string_view>{*expected} : std::nullopt, text);
+    if (published.state != platform::FileReplaceState::updated &&
+        published.state != platform::FileReplaceState::unchanged) {
+        return fail(diagnostics, "Could not save authored World. Reload external changes before retrying: " + published.diagnostics);
     }
 
     path_ = resolved;
+    authored_source_ = std::move(text);
     dirty_ = false;
+    if (diagnostics != nullptr) diagnostics->clear();
+    return true;
+}
+
+bool WorldDocument::apply_authoring_transaction(
+    const tools::world_authoring::Transaction& transaction,
+    std::string* const diagnostics
+) {
+    const auto result = tools::world_authoring::apply(world_->snapshot(), transaction);
+    if (!result) return fail(diagnostics, result.diagnostics);
+    if (result.changed) {
+        if (!world_->restore(result.snapshot)) return fail(diagnostics, "Could not restore validated World edit.");
+        dirty_ = true;
+    }
     if (diagnostics != nullptr) diagnostics->clear();
     return true;
 }

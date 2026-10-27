@@ -1,4 +1,6 @@
 #include <vice/runtime/dade.hpp>
+#include <vice/runtime/debug.hpp>
+#include <vice/runtime/debug_session.hpp>
 #include <vice/runtime/dev_session.hpp>
 #include <vice/runtime/module_loader.hpp>
 #include <vice/runtime/package_metadata.hpp>
@@ -47,6 +49,37 @@ public:
 private:
     static constexpr double publish_interval_seconds = 0.10;
 
+    void service_debug_request() {
+        const auto request = vice::runtime::read_runtime_debug_request(session_);
+        if (!request || request.request_id == last_debug_request_id_) return;
+
+        const auto snapshot = vice::runtime::sample_runtime_debug_entity(
+            *project_->world,
+            request.entity_id
+        );
+        const auto payload = vice::runtime::serialize_runtime_debug_entity_snapshot(
+            snapshot,
+            session_.id
+        );
+        std::string diagnostics;
+        if (vice::runtime::publish_runtime_debug_response(
+                session_,
+                request.request_id,
+                payload,
+                &diagnostics
+            )) {
+            last_debug_request_id_ = request.request_id;
+            debug_error_reported_ = false;
+            return;
+        }
+
+        if (!debug_error_reported_) {
+            std::cerr << "VICE Runtime debug response publication failed: "
+                      << diagnostics << '\n';
+            debug_error_reported_ = true;
+        }
+    }
+
     void publish_observation(const vice::runtime::RuntimeFrameObservation& observation) {
         if (project_ == nullptr || project_->world == nullptr || generation_ ==
             std::numeric_limits<std::uint64_t>::max()) {
@@ -93,6 +126,7 @@ private:
             )) {
             generation_ = next_generation;
             publication_error_reported_ = false;
+            service_debug_request();
             return;
         }
 
@@ -108,7 +142,9 @@ private:
     vice::runtime::RuntimeProfileHistory profile_history_{};
     std::uint64_t generation_ = 0U;
     double elapsed_seconds_ = 0.0;
+    std::string last_debug_request_id_;
     bool publication_error_reported_ = false;
+    bool debug_error_reported_ = false;
 };
 
 [[nodiscard]] constexpr std::string_view dade_platform() noexcept {
@@ -237,7 +273,7 @@ int main(const int argc, char** argv) {
         );
         std::error_code error;
         const bool module_exists = std::filesystem::is_regular_file(module_path, error);
-        if (error) {
+        if (error && error != std::errc::no_such_file_or_directory) {
             std::cerr
                 << "VICE Runtime could not inspect project game module `"
                 << module_path.generic_string()

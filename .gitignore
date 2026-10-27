@@ -52,3 +52,7 @@ Thumbs.db
 *.so
 *.exe
 *.pdb
+
+# Authored source publication locks and temporary files
+*.vice-lock
+*.vice-tmp-*

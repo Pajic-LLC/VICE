@@ -61,6 +61,9 @@ ProjectRunResult run_project_with_session(
     launch_request.executable = launch_spec.executable;
     launch_request.arguments = launch_spec.arguments;
     launch_request.working_directory = launch_spec.working_directory;
+    // Development observations use the session transport. A running game must
+    // not retain the CLI's JSON pipe or mix its logs into the command response.
+    launch_request.inherit_standard_streams = false;
     const auto launched = platform::launch_process(launch_request);
     if (!launched) {
         std::string cleanup_diagnostics;

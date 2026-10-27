@@ -363,6 +363,7 @@ bool WorldDocument::new_empty(
     if (!replacement_allowed(policy, diagnostics)) return false;
     *world_ = world::World{};
     path_.clear();
+    authored_source_.reset();
     dirty_ = false;
     if (diagnostics != nullptr) diagnostics->clear();
     return true;
@@ -400,6 +401,7 @@ bool WorldDocument::open(
 
     *world_ = std::move(replacement);
     path_ = resolved_path;
+    authored_source_.reset();
     dirty_ = false;
     if (diagnostics != nullptr) diagnostics->clear();
     return true;
@@ -443,6 +445,7 @@ bool WorldDocument::save_as(
     }
 
     path_ = resolved_path;
+    authored_source_.reset();
     dirty_ = false;
     if (diagnostics != nullptr) diagnostics->clear();
     return true;

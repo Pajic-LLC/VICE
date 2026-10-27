@@ -94,6 +94,13 @@ ProcessLaunchResult launch_process(const ProcessLaunchRequest& request) {
             return fail_launch(std::move(diagnostics));
         }
 
+        if (!request.inherit_standard_streams) {
+            NSFileHandle* null_device = [NSFileHandle fileHandleWithNullDevice];
+            task.standardInput = null_device;
+            task.standardOutput = null_device;
+            task.standardError = null_device;
+        }
+
         NSError* error = nil;
         if (![task launchAndReturnError:&error]) {
             return fail_launch(task_error(error));
