@@ -7,6 +7,7 @@
 #include <vice/tools/project_workflow.hpp>
 #include <vice/tools/world_cooker.hpp>
 #include <vice/world/snapshot.hpp>
+#include <vice/world/world.hpp>
 
 #include <algorithm>
 #include <array>
@@ -514,6 +515,7 @@ void append_regions(std::string& data, const world::WorldSnapshot& snapshot) {
 }
 
 void append_entities(std::string& data, const world::WorldSnapshot& snapshot) {
+    world::World observed; (void)observed.restore(snapshot);
     std::vector<const world::SnapshotEntity*> values;
     values.reserve(snapshot.entities.size());
     for (const auto& value : snapshot.entities) values.push_back(&value);
@@ -585,6 +587,8 @@ void append_entities(std::string& data, const world::WorldSnapshot& snapshot) {
         data += ",\"break_step\":" + std::to_string(link.break_step) + "}";
     }
 
+        const auto owner = observed.find(value.persistent_id);
+        data += ",\"dependency\":" + world::serialize_dependency_state(owner ? observed.dependency_state(*owner) : std::nullopt);
         auto references = value.resource_references;
         std::sort(references.begin(), references.end(), [](const auto& lhs, const auto& rhs) {
             const auto lhs_role = static_cast<std::uint8_t>(lhs.role);

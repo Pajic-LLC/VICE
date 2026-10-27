@@ -214,6 +214,8 @@ int main() {
     runtime::module::DistanceLinkSnapshot unavailable_link;
     require(old_context.read_distance_link({}, unavailable_link) == runtime::module::Result::unavailable,
         "link query detects an absent extension on old hosts");
+    runtime::module::DependencySnapshot unavailable_dependency;
+    require(old_context.read_dependency({}, unavailable_dependency) == runtime::module::Result::unavailable, "old host has no dependency callback");
     old_host.size = 0;
     require(!runtime::module::detail::load<runtime::module::Game>(1, &old_host, &compatible_api), "truncated original host is rejected");
 

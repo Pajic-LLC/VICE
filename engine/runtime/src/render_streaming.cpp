@@ -69,7 +69,12 @@ RuntimeRenderResidentSceneBuildResult build_runtime_render_resident_scene(
             });
         }
 
-        if (entity.light.has_value() && entity.light->enabled &&
+        bool supplied = true;
+        if (entity.light && entity.light->enabled && entity.dependency) {
+            const auto owner = world.find(entity.persistent_id);
+            supplied = owner && world.dependency_available(*owner);
+        }
+        if (entity.light.has_value() && entity.light->enabled && supplied &&
             result.scene.lights.size() < max_runtime_lights) {
             const auto authored = entity.authored_transform.value_or(world::AuthoredTransform{});
             RuntimeLight light{

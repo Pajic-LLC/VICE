@@ -1257,6 +1257,10 @@ std::vector<RuntimeLight> collect_runtime_lights(const world::World& world) {
             continue;
         }
 
+        if (entity.dependency) {
+            const auto owner = world.find(entity.persistent_id);
+            if (!owner || !world.dependency_available(*owner)) continue;
+        }
         const auto authored = entity.authored_transform.value_or(world::AuthoredTransform{});
         RuntimeLight light{
             .entity = entity.persistent_id,

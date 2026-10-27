@@ -1,6 +1,7 @@
 add_library(
   vice_world
   STATIC
+    src/dependency.cpp
     src/persistent_id.cpp
     src/primitives.cpp
     src/snapshot_file.cpp

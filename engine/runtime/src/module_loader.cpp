@@ -149,6 +149,28 @@ module::Result host_read_distance_link(void* value, module::EntityId id, module:
     return module::Result::success;
 }
 
+module::Result host_read_dependency(void* value, module::EntityId id, module::DependencySnapshot* output) noexcept {
+    const auto* bridge = current_bridge(value);
+    if (!bridge || !bridge->context) return module::Result::wrong_phase;
+    if (!output || output->size < sizeof(module::DependencySnapshot) || persistent_id(id).is_nil()) return module::Result::invalid_argument;
+    const auto entity = bridge->context->world.find(persistent_id(id));
+    if (!entity) return module::Result::not_found;
+    const auto state = bridge->context->world.dependency_state(*entity);
+    if (!state) return module::Result::no_dependency;
+    module::DependencySnapshot result;
+    for (std::size_t i = 0; i < 16; ++i) {
+        result.provider.bytes[i] = state->dependency.provider.bytes()[i];
+        result.gate.bytes[i] = state->dependency.gate.bytes()[i];
+        result.root_cause.bytes[i] = state->root_cause.bytes()[i];
+    }
+    result.available = state->available ? 1U : 0U;
+    result.reason = static_cast<module::DependencyReason>(state->reason);
+    result.root_reason = static_cast<module::DependencyReason>(state->root_reason);
+    result.break_impulse = state->break_impulse; result.break_step = state->break_step;
+    result.path_length = static_cast<std::uint32_t>(state->path.size());
+    *output = result; return module::Result::success;
+}
+
 [[nodiscard]] std::size_t host_entity_count(void* const value) noexcept {
     const auto* const bridge = current_bridge(value);
     return bridge != nullptr && bridge->context != nullptr
@@ -319,6 +341,7 @@ public:
         host_.set_body_velocity = &host_set_body_velocity;
         host_.read_body_support = &host_read_body_support;
         host_.read_distance_link = &host_read_distance_link;
+        host_.read_dependency = &host_read_dependency;
     }
 
     ~DynamicGameModule() override {

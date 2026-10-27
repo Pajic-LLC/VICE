@@ -1,6 +1,7 @@
 #include <vice/tools/world_cooker.hpp>
 #include "rigid_box_source.hpp"
 #include "distance_link_source.hpp"
+#include "dependency_source.hpp"
 
 #include <vice/world/world.hpp>
 
@@ -42,7 +43,7 @@ std::string serialize_source_manifest(
     const world::WorldSnapshot& snapshot,
     std::string* const diagnostics
 ) {
-    if (!world::validate_distance_links(snapshot, diagnostics)) return {};
+    if (!world::validate_distance_links(snapshot, diagnostics) || !world::validate_dependencies(snapshot, diagnostics)) return {};
     world::World canonical;
     if (!canonical.restore(snapshot)) {
         if (diagnostics != nullptr) *diagnostics = "World snapshot violates World validation rules.";
@@ -124,6 +125,9 @@ std::string serialize_source_manifest(
         if (entity.rigid_box) {
             output << " rigid_box ";
             write_rigid_box(output, *entity.rigid_box);
+        }
+        if (entity.dependency) {
+            output << " dependency "; write_dependency(output, *entity.dependency);
         }
         if (entity.distance_link) {
             output << " distance_link ";

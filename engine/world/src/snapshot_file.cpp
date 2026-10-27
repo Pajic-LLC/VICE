@@ -307,6 +307,11 @@ WorldSnapshotEncodeResult encode_world_snapshot(const WorldSnapshot& snapshot_da
             append_u8(payload, link.broken ? 1U : 0U);
             append_f32(payload, link.last_break_impulse); append_u64(payload, link.break_step);
         }
+        append_u8(payload, entity.dependency ? 1U : 0U);
+        if (entity.dependency) {
+            append_id(payload, entity.dependency->provider); append_id(payload, entity.dependency->gate);
+            append_u8(payload, entity.dependency->enabled ? 1U : 0U);
+        }
         append_u32(payload, static_cast<std::uint32_t>(entity.resource_references.size()));
         for (const auto reference : entity.resource_references) {
             append_u8(payload, static_cast<std::uint8_t>(reference.role));
@@ -623,6 +628,17 @@ WorldSnapshotDecodeResult decode_world_snapshot(const std::span<const std::byte>
                 link.broken = broken != 0;
                 if (!valid(link)) { result.diagnostics = "World snapshot contains invalid distance link data."; return result; }
                 entity.distance_link = link;
+            }
+        }
+        if (version >= 9U) {
+            std::uint8_t present = 0, enabled = 0;
+            Dependency d;
+            if (!reader.read_u8(present) || present > 1U) { result.diagnostics = "Invalid dependency presence flag."; return result; }
+            if (present) {
+                if (!reader.read_id(d.provider) || !reader.read_id(d.gate) || !reader.read_u8(enabled) || enabled > 1U) {
+                    result.diagnostics = "Invalid dependency record."; return result;
+                }
+                d.enabled = enabled != 0; entity.dependency = d;
             }
         }
         if (version >= 3U) {

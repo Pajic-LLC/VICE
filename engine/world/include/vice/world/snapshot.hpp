@@ -2,6 +2,7 @@
 
 #include <vice/world/camera.hpp>
 #include <vice/world/distance_link.hpp>
+#include <vice/world/dependency.hpp>
 #include <vice/world/component.hpp>
 #include <vice/world/light.hpp>
 #include <vice/world/persistent_id.hpp>
@@ -25,6 +26,7 @@ struct SnapshotEntity {
     std::optional<ReflectionProbe> reflection_probe;
     std::optional<RigidBox> rigid_box;
     std::optional<DistanceLink> distance_link;
+    std::optional<Dependency> dependency;
     std::vector<ResourceReference> resource_references;
 };
 
@@ -43,6 +45,8 @@ struct WorldSnapshot {
     std::vector<SnapshotEntity> entities;
     std::vector<SnapshotRelation> relations;
 };
+
+[[nodiscard]] bool validate_dependencies(const WorldSnapshot& snapshot, std::string* diagnostics = nullptr);
 
 [[nodiscard]] bool validate_distance_links(const WorldSnapshot& snapshot, std::string* diagnostics = nullptr);
 

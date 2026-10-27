@@ -239,6 +239,7 @@ WorldSnapshot World::snapshot() const {
             .reflection_probe = slot.reflection_probe,
             .rigid_box = slot.rigid_box,
             .distance_link = slot.distance_link,
+            .dependency = slot.dependency,
             .resource_references = slot.resource_references,
         };
         std::sort(
@@ -292,7 +293,7 @@ WorldSnapshot World::snapshot() const {
 }
 
 bool World::restore(const WorldSnapshot& snapshot_data) {
-    if (!validate_distance_links(snapshot_data)) return false;
+    if (!validate_distance_links(snapshot_data) || !validate_dependencies(snapshot_data)) return false;
     World restored;
 
     for (const auto& type : snapshot_data.component_types) {
@@ -349,6 +350,10 @@ bool World::restore(const WorldSnapshot& snapshot_data) {
     for (const auto& entity_record : snapshot_data.entities) {
         if (entity_record.distance_link &&
             !restored.set_distance_link(*restored.find(entity_record.persistent_id), *entity_record.distance_link)) return false;
+    }
+
+    for (const auto& e : snapshot_data.entities) {
+        if (e.dependency) restored.install_dependency(*restored.find(e.persistent_id), *e.dependency);
     }
 
     for (const auto& relation_record : snapshot_data.relations) {

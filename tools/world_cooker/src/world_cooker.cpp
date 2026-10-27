@@ -1,6 +1,7 @@
 #include <vice/tools/world_cooker.hpp>
 #include "rigid_box_source.hpp"
 #include "distance_link_source.hpp"
+#include "dependency_source.hpp"
 
 #include <vice/world/world.hpp>
 
@@ -173,6 +174,11 @@ ParseResult parse_source_manifest(const std::string_view source) {
 
             std::string metadata;
             while (values >> metadata) {
+                if (metadata == "dependency") {
+                    world::Dependency d;
+                    if (entity.dependency || !read_dependency(values, d)) { fail("invalid or duplicate dependency record."); return result; }
+                    entity.dependency = d; continue;
+                }
                 if (metadata == "distance_link") {
                     world::DistanceLink link;
                     if (entity.distance_link || !read_distance_link(values, link)) {
@@ -386,7 +392,7 @@ ParseResult parse_source_manifest(const std::string_view source) {
         return result;
     }
 
-    if (!world::validate_distance_links(parsed, &result.diagnostics)) return result;
+    if (!world::validate_distance_links(parsed, &result.diagnostics) || !world::validate_dependencies(parsed, &result.diagnostics)) return result;
     world::World canonical;
     if (!canonical.restore(parsed)) {
         result.diagnostics = "World source violates World validation rules.";

@@ -1,0 +1,7 @@
+vice-project 1
+id 99000000-0000-4000-8000-000000000001
+name "Supply Failure"
+game_name "Supply Failure"
+game_target "supply-failure"
+assets "assets"
+startup_world "worlds/supply.vworld"

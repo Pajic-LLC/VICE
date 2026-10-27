@@ -33,9 +33,12 @@ struct RuntimeDebugEntitySnapshot {
     std::optional<world::AuthoredTransform> authored_transform;
     std::optional<world::RigidBox> rigid_box;
     std::optional<world::DistanceLink> distance_link;
+    std::optional<world::DependencyState> dependency;
     std::optional<RuntimeDebugRegionSnapshot> region;
     bool camera = false;
     bool light = false;
+    bool light_enabled = false;
+    bool light_supplied = false;
     bool reflection_probe = false;
     std::size_t resource_reference_count = 0U;
     std::size_t outgoing_relation_count = 0U;
