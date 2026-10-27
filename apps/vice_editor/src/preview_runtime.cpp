@@ -410,6 +410,11 @@ bool PreviewRuntime::active() const noexcept {
     return state_ != nullptr && state_->playback != PreviewPlayback::stopped;
 }
 
+rigid_body::BodyControlResult PreviewRuntime::set_body_velocity(const world::PersistentId owner, const math::Vec3 linear, const math::Vec3 angular) {
+    if (!active() || !state_->authored) return rigid_body::BodyControlResult::not_found;
+    return state_->authored->set_body_velocity(owner, linear, angular);
+}
+
 PreviewPlayback PreviewRuntime::playback() const noexcept {
     return state_ != nullptr ? state_->playback : PreviewPlayback::stopped;
 }

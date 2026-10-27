@@ -145,7 +145,9 @@ template <typename T>
 std::optional<std::uint32_t> RuntimeGpuMeshletTablePlan::mesh_index(
     const world::ResourceId resource_id
 ) const noexcept {
-    const auto found = std::lower_bound(mesh_ids.begin(), mesh_ids.end(), resource_id, resource_less);
+    // Streamed virtual-geometry aliases append stable rows after the sorted cook.
+    // Their UUID order is unconstrained; sorting here would invalidate GPU indices.
+    const auto found = std::find(mesh_ids.begin(), mesh_ids.end(), resource_id);
     if (found == mesh_ids.end() || *found != resource_id) return std::nullopt;
     return static_cast<std::uint32_t>(std::distance(mesh_ids.begin(), found));
 }

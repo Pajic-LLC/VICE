@@ -89,5 +89,20 @@ int main() {
     assert(rigid->destroy_body(floor_participant));
     assert(rigid->body_count() == 0U);
 
+    // Removing a middle entry must retain lookup identity for shifted bodies.
+    for (std::uint64_t value = 10; value < 13; ++value) {
+        box.participant = simulation::ParticipantId{value};
+        box.position = {static_cast<float>(value), 10, 0};
+        assert(rigid->create_box(box));
+    }
+    assert(rigid->destroy_body(simulation::ParticipantId{11}));
+    assert(rigid->set_body_velocity(simulation::ParticipantId{12}, {7, 0, 0}, {}));
+    assert(rigid->body_state(simulation::ParticipantId{12})->linear_velocity.x == 7);
+    assert(rigid->body_state(simulation::ParticipantId{10})->linear_velocity.x == 0);
+    box.participant = simulation::ParticipantId{11};
+    assert(rigid->create_box(box));
+    assert(rigid->body_state(simulation::ParticipantId{11}).has_value());
+    assert(rigid->destroy_body(simulation::ParticipantId{10}));
+    assert(rigid->body_state(simulation::ParticipantId{12})->linear_velocity.x == 7);
     return 0;
 }

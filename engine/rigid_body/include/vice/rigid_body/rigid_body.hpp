@@ -442,6 +442,8 @@ public:
     bool create_box(const BoxBodyDesc& desc);
     bool destroy_body(simulation::ParticipantId participant);
     bool set_body_active(simulation::ParticipantId participant, bool active);
+    // Dynamic and kinematic bodies only; wakes the body without changing domain fidelity.
+    bool set_body_velocity(simulation::ParticipantId participant, math::Vec3 linear, math::Vec3 angular);
     bool set_body_motion_quality(
         simulation::ParticipantId participant,
         MotionQuality motion_quality

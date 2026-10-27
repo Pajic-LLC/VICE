@@ -99,6 +99,14 @@ int main() {
     require(preview.world() && std::abs(height(*preview.world()) - height(b)) < 1e-5 &&
         preview.snapshot().bodies.size() == 3 && preview.coordinator()->step_index() == 240,
         "Editor and standalone service produce the same body states");
+    require(preview.set_body_velocity(id(falling_id), {2, 6, 0}) == rigid_body::BodyControlResult::applied &&
+        second.set_body_velocity(id(falling_id), {2, 6, 0}, {}) == rigid_body::BodyControlResult::applied,
+        "same controls accepted by preview and standalone service");
+    for (int step = 0; step < 30; ++step) require(preview.update(1.0 / 120.0) && second.step(), "controlled preview parity updates");
+    const auto controlled = preview.world()->spatial_state(*preview.world()->find(id(falling_id)))->global_position;
+    require(std::abs(controlled.y - height(b)) < 1e-5 &&
+        std::abs(controlled.x - b.spatial_state(*b.find(id(falling_id)))->global_position.x) < 1e-5,
+        "controlled preview and standalone body states agree");
     require(height(authored) == 5, "preview simulation does not mutate authored source World");
     const auto authored_mover = *authored.find(id(moving_id));
     require(authored.set_reflection_probe(authored_mover, world::ReflectionProbe{}), "probe on physical entity");
