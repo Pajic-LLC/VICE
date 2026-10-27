@@ -1,5 +1,6 @@
 #include <vice/tools/world_cooker.hpp>
 #include "rigid_box_source.hpp"
+#include "distance_link_source.hpp"
 
 #include <vice/world/world.hpp>
 
@@ -172,6 +173,14 @@ ParseResult parse_source_manifest(const std::string_view source) {
 
             std::string metadata;
             while (values >> metadata) {
+                if (metadata == "distance_link") {
+                    world::DistanceLink link;
+                    if (entity.distance_link || !read_distance_link(values, link)) {
+                        fail("invalid or duplicate distance_link record."); return result;
+                    }
+                    entity.distance_link = link;
+                    continue;
+                }
                 if (metadata == "rigid_box") {
                     world::RigidBox box;
                     if (entity.rigid_box || !entity.spatial_state || !read_rigid_box(values, box)) {
@@ -377,6 +386,7 @@ ParseResult parse_source_manifest(const std::string_view source) {
         return result;
     }
 
+    if (!world::validate_distance_links(parsed, &result.diagnostics)) return result;
     world::World canonical;
     if (!canonical.restore(parsed)) {
         result.diagnostics = "World source violates World validation rules.";

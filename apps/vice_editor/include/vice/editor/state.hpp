@@ -174,6 +174,7 @@ struct InspectorData {
     std::optional<world::Camera> camera;
     std::optional<world::Light> light;
     std::optional<world::RigidBox> rigid_box;
+    std::optional<world::DistanceLink> distance_link;
     std::vector<world::ResourceReference> resource_references;
     std::optional<world::RegionDesc> region;
     std::optional<world::SimulationIslandId> simulation_island;

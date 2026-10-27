@@ -108,6 +108,7 @@ RuntimeDebugEntitySnapshot sample_runtime_debug_entity(
     result.spatial = entity->spatial_state;
     result.authored_transform = entity->authored_transform;
     result.rigid_box = entity->rigid_box;
+    result.distance_link = entity->distance_link;
     result.camera = entity->camera.has_value();
     result.light = entity->light.has_value();
     result.reflection_probe = entity->reflection_probe.has_value();
@@ -217,6 +218,21 @@ std::string serialize_runtime_debug_entity_snapshot(
         output += ",\"continuous\":"; output += box.continuous ? "true" : "false";
         output += ",\"trigger\":"; output += box.trigger ? "true" : "false";
         output += '}';
+    }
+    output += ",\"distance_link\":";
+    if (!snapshot.distance_link) output += "null";
+    else {
+        const auto& link = *snapshot.distance_link;
+        output += "{\"first\":"; append_json_string(output, link.first.to_string());
+        output += ",\"second\":"; append_json_string(output, link.second.to_string());
+        output += ",\"min_distance\":"; append_float(output, link.min_distance);
+        output += ",\"max_distance\":"; append_float(output, link.max_distance);
+        output += ",\"frequency_hz\":"; append_float(output, link.frequency_hz);
+        output += ",\"damping_ratio\":"; append_float(output, link.damping_ratio);
+        output += ",\"break_threshold\":"; append_float(output, link.break_threshold);
+        output += ",\"broken\":"; output += link.broken ? "true" : "false";
+        output += ",\"last_break_impulse\":"; append_float(output, link.last_break_impulse);
+        output += ",\"break_step\":" + std::to_string(link.break_step) + "}";
     }
     output += ",\"region\":";
     if (!snapshot.region.has_value()) {

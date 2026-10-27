@@ -32,6 +32,11 @@ struct SetRigidBox {
     std::optional<world::RigidBox> body;
 };
 
+struct SetDistanceLink {
+    world::PersistentId entity{};
+    std::optional<world::DistanceLink> link;
+};
+
 struct AddRelation {
     world::SnapshotRelation relation{};
 };
@@ -55,6 +60,7 @@ using Operation = std::variant<
     SetEntityTransform,
     SetRegionFidelity,
     SetRigidBox,
+    SetDistanceLink,
     AddRelation,
     RemoveRelation,
     AddResourceReference,

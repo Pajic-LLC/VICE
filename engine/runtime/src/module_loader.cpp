@@ -131,6 +131,24 @@ module::Result host_read_body_support(void* value, module::EntityId id, module::
 #endif
 }
 
+module::Result host_read_distance_link(void* value, module::EntityId id, module::DistanceLinkSnapshot* output) noexcept {
+    const auto* bridge = current_bridge(value);
+    if (!bridge || !bridge->context) return module::Result::wrong_phase;
+    if (!output || output->size < sizeof(module::DistanceLinkSnapshot) || persistent_id(id).is_nil()) return module::Result::invalid_argument;
+    const auto entity = bridge->context->world.find(persistent_id(id));
+    if (!entity) return module::Result::not_found;
+    const auto link = bridge->context->world.distance_link(*entity);
+    if (!link) return module::Result::no_link;
+    module::DistanceLinkSnapshot result;
+    for (std::size_t i = 0; i < 16; ++i) { result.first.bytes[i] = link->first.bytes()[i]; result.second.bytes[i] = link->second.bytes()[i]; }
+    result.min_distance = link->min_distance; result.max_distance = link->max_distance;
+    result.frequency_hz = link->frequency_hz; result.damping_ratio = link->damping_ratio;
+    result.break_threshold = link->break_threshold; result.last_break_impulse = link->last_break_impulse;
+    result.broken = link->broken ? 1U : 0U; result.break_step = link->break_step;
+    *output = result;
+    return module::Result::success;
+}
+
 [[nodiscard]] std::size_t host_entity_count(void* const value) noexcept {
     const auto* const bridge = current_bridge(value);
     return bridge != nullptr && bridge->context != nullptr
@@ -300,6 +318,7 @@ public:
         host_.read_entity = &host_read_entity;
         host_.set_body_velocity = &host_set_body_velocity;
         host_.read_body_support = &host_read_body_support;
+        host_.read_distance_link = &host_read_distance_link;
     }
 
     ~DynamicGameModule() override {

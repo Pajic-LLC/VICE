@@ -38,6 +38,7 @@ EntityId World::allocate(const PersistentId persistent_id) {
     slot.light.reset();
     slot.reflection_probe.reset();
     slot.rigid_box.reset();
+    slot.distance_link.reset();
     slot.resource_references.clear();
     slot.alive = true;
 
@@ -48,11 +49,13 @@ EntityId World::allocate(const PersistentId persistent_id) {
 }
 
 bool World::destroy_entity(const EntityId entity) {
+    if (alive(entity) && distance_link_users_.contains(slots_[entity.index].persistent_id)) return false;
     if (!alive(entity)) {
         return false;
     }
 
     auto& slot = slots_[entity.index];
+    (void)clear_distance_link(entity);
     persistent_lookup_.erase(slot.persistent_id);
     slot.persistent_id = PersistentId{};
     slot.spatial_state.reset();
@@ -61,6 +64,7 @@ bool World::destroy_entity(const EntityId entity) {
     slot.light.reset();
     slot.reflection_probe.reset();
     slot.rigid_box.reset();
+    slot.distance_link.reset();
     slot.resource_references.clear();
     slot.alive = false;
 
@@ -266,6 +270,10 @@ bool World::set_spatial_state(const EntityId entity, const SpatialState state) {
         return false;
     }
 
+    const auto& previous = slots_[entity.index].spatial_state;
+    if ((!previous || previous->region != state.region) &&
+        !link_endpoint_change_allowed(entity, state.region,
+            slots_[entity.index].rigid_box ? std::optional{slots_[entity.index].rigid_box->motion} : std::nullopt)) return false;
     slots_[entity.index].spatial_state = state;
     return true;
 }
@@ -274,6 +282,7 @@ bool World::clear_spatial_state(const EntityId entity) {
     if (!alive(entity) || !slots_[entity.index].spatial_state.has_value()) {
         return false;
     }
+    if (!link_endpoint_change_allowed(entity, std::nullopt, std::nullopt)) return false;
     slots_[entity.index].spatial_state.reset();
     slots_[entity.index].authored_transform.reset();
     slots_[entity.index].camera.reset();
@@ -309,18 +318,79 @@ bool World::set_local_position(const EntityId entity, const LocalPosition positi
 
 bool World::set_rigid_box(const EntityId entity, const RigidBox& box) {
     if (!alive(entity) || !slots_[entity.index].spatial_state || !valid(box)) return false;
+    const auto& previous = slots_[entity.index].rigid_box;
+    if ((!previous || previous->motion != box.motion) &&
+        !link_endpoint_change_allowed(entity, slots_[entity.index].spatial_state->region, box.motion)) return false;
     slots_[entity.index].rigid_box = box;
     return true;
 }
 
 bool World::clear_rigid_box(const EntityId entity) {
-    if (!alive(entity)) return false;
+    if (!alive(entity) || !link_endpoint_change_allowed(entity, std::nullopt, std::nullopt)) return false;
     slots_[entity.index].rigid_box.reset();
     return true;
 }
 
 std::optional<RigidBox> World::rigid_box(const EntityId entity) const noexcept {
     return alive(entity) ? slots_[entity.index].rigid_box : std::nullopt;
+}
+
+bool World::link_endpoint_change_allowed(const EntityId entity, const std::optional<RegionId> region_id,
+    const std::optional<RigidMotion> motion) const {
+    const auto owner = slots_[entity.index].persistent_id;
+    const auto users = distance_link_users_.find(owner);
+    if (users == distance_link_users_.end()) return true;
+    for (const auto user : users->second) {
+        const auto& link = slots_[user.index].distance_link;
+        if (!link || link->broken) continue;
+        if (!region_id || !motion) return false;
+        const auto other = find(link->first == owner ? link->second : link->first);
+        if (!other) return false;
+        const auto spatial = spatial_state(*other);
+        const auto body = rigid_box(*other);
+        if (!spatial || !body || spatial->region != *region_id ||
+            (*motion != RigidMotion::dynamic_body && body->motion != RigidMotion::dynamic_body)) return false;
+    }
+    return true;
+}
+
+bool World::set_distance_link(const EntityId entity, const DistanceLink& link) {
+    if (!alive(entity) || !valid(link)) return false;
+    const auto owner = slots_[entity.index].persistent_id;
+    const auto first = find(link.first), second = find(link.second);
+    if (!first || !second || owner == link.first || owner == link.second) return false;
+    if (!link.broken) {
+        const auto a = rigid_box(*first), b = rigid_box(*second);
+        const auto pa = spatial_state(*first), pb = spatial_state(*second);
+        if (!a || !b || !pa || !pb || pa->region != pb->region ||
+            (a->motion != RigidMotion::dynamic_body && b->motion != RigidMotion::dynamic_body)) return false;
+    }
+    if (slots_[entity.index].distance_link == link) return true;
+    (void)clear_distance_link(entity);
+    slots_[entity.index].distance_link = link;
+    ++distance_link_revision_;
+    distance_link_users_[link.first].push_back(entity);
+    distance_link_users_[link.second].push_back(entity);
+    return true;
+}
+
+bool World::clear_distance_link(const EntityId entity) {
+    if (!alive(entity)) return false;
+    auto& link = slots_[entity.index].distance_link;
+    if (!link) return true;
+    for (const auto endpoint : {link->first, link->second}) {
+        const auto users = distance_link_users_.find(endpoint);
+        if (users == distance_link_users_.end()) continue;
+        std::erase(users->second, entity);
+        if (users->second.empty()) distance_link_users_.erase(users);
+    }
+    link.reset();
+    ++distance_link_revision_;
+    return true;
+}
+
+std::optional<DistanceLink> World::distance_link(const EntityId entity) const noexcept {
+    return alive(entity) ? slots_[entity.index].distance_link : std::nullopt;
 }
 
 bool World::handoff_spatial(const EntityId entity, const RegionId target_region) {
@@ -333,6 +403,7 @@ bool World::handoff_spatial(const EntityId entity, const RegionId target_region)
         return false;
     }
 
+    if (!link_endpoint_change_allowed(entity, target_region, slot.rigid_box ? std::optional{slot.rigid_box->motion} : std::nullopt)) return false;
     slot.spatial_state->region = target_region;
     return true;
 }

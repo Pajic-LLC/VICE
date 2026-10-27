@@ -92,3 +92,7 @@ invalid batches, validate and stage a project. The optional second command opens
 the staged native game, inspects/profiles it, verifies the selected entity matches
 the authored large-world edit, and terminates only that validation process.
 On multi-config Windows builds, pass `build/tools/vice_cli/Release/vice.exe`.
+
+Authored physical connections use `set_distance_link` and `clear_distance_link`.
+They share this transaction/publication contract; see `authored-distance-links.md`
+for fields, dependency checks and persistent break evidence.
