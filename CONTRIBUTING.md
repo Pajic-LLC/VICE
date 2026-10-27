@@ -51,3 +51,9 @@ cmake -S . -B build -DVICE_BUILD_TESTS=ON -DVICE_BUILD_LAB=ON
 cmake --build build --config Debug --parallel
 ctest --test-dir build -C Debug --output-on-failure
 ```
+
+CTest is initialized before engine and tool subdirectories so their tests are
+discovered alongside the main suite. Name each test executable `vice_*_tests`
+and register a matching CTest entry. Test executables keep C and C++ assertions
+active in every configuration; engine libraries retain their normal build flags.
+CI checks that CTest discovers every configured VICE test executable before building.

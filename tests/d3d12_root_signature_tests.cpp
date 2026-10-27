@@ -221,7 +221,14 @@ int main() {
     const D3D12RootSignatureResult compute_root = serialize_d3d12_root_signature(compute_layout);
     assert(compute_root.success);
     assert(compute_root.bindings.size() == 4U);
-    assert(compute_root.tables.size() == 3U);
+    // Bounded CBV/SRV/UAV ranges with the same stage visibility share one
+    // resource descriptor table, including acceleration-structure SRVs.
+    assert(compute_root.tables.size() == 1U);
+    assert(compute_root.tables.front().bounded_descriptor_count == 4U);
+    for (const auto& binding : compute_root.bindings) {
+        assert(binding.root_parameter_index == compute_root.tables.front().root_parameter_index);
+        assert(binding.table_offset < 4U);
+    }
 
     ComPtr<ID3D12RootSignatureDeserializer> compute_deserializer;
     const HRESULT compute_result = D3D12CreateRootSignatureDeserializer(
@@ -233,7 +240,8 @@ int main() {
     assert(compute_deserializer != nullptr);
     const D3D12_ROOT_SIGNATURE_DESC* compute_desc = compute_deserializer->GetRootSignatureDesc();
     assert(compute_desc != nullptr);
-    assert(compute_desc->NumParameters == 3U);
+    assert(compute_desc->NumParameters == 1U);
+    assert(compute_desc->pParameters[0].DescriptorTable.NumDescriptorRanges == 4U);
     for (UINT parameter_index = 0; parameter_index < compute_desc->NumParameters; ++parameter_index) {
         const auto& parameter = compute_desc->pParameters[parameter_index];
         assert(parameter.ParameterType == D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE);

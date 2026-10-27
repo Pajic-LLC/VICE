@@ -426,7 +426,9 @@ bool record_acceleration_structure_build(
     const std::uint64_t required_scratch = update
         ? resources.sizes.update_scratch_size
         : resources.sizes.build_scratch_size;
-    if (required_scratch == 0U || resource_size(resources.scratch.Get()) < required_scratch) {
+    // Some DXR devices require no scratch for an update. The initial build
+    // allocation still owns a valid scratch buffer; zero is not an undersize.
+    if (resource_size(resources.scratch.Get()) < required_scratch) {
         set_diagnostics(diagnostics, "D3D12 acceleration-structure scratch memory is undersized.");
         return false;
     }

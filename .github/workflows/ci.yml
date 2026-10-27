@@ -28,10 +28,13 @@ jobs:
         uses: actions/checkout@v6
 
       - name: Configure
-        run: cmake -S . -B build -DVICE_BUILD_TESTS=ON -DVICE_BUILD_LAB=ON -DVICE_BUILD_TOOLS=ON
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DVICE_BUILD_TESTS=ON -DVICE_BUILD_LAB=ON -DVICE_BUILD_TOOLS=ON
+
+      - name: Verify test discovery
+        run: cmake -DVICE_TEST_BUILD_DIR=build -DVICE_TEST_CONFIG=Release -P cmake/VerifyTestDiscovery.cmake
 
       - name: Build
-        run: cmake --build build --config Release --parallel
+        run: cmake --build build --config Release --parallel 4
 
       - name: Test
         run: ctest --test-dir build -C Release --output-on-failure
