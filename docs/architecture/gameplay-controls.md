@@ -40,3 +40,11 @@ Scene viewport to send game input. Pause freezes callbacks and physics; Step run
 one fixed gameplay/physics tick. Reset rebuilds the module with fresh globals; a
 failed build or start leaves the current preview intact. The scene renderers show
 live preview poses. Stop restores authoring interaction. See ADR 0015.
+
+`Context::read_body_support` queries solid support using the body's current
+geometry, a caller-selected up vector and minimum normal alignment. It returns
+support identity, global contact point, normal and linear-plus-angular surface
+velocity. The query includes sleeping bodies, excludes triggers and uses a 2 cm
+near-contact margin. No support state is serialized or inferred from an entity's
+absolute height. The playground uses this query to gate jumping and inherit
+platform velocity. See ADR 0016 for semantics and limits.

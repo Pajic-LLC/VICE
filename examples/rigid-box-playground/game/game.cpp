@@ -17,7 +17,7 @@ public:
     bool on_start(Context& context) override {
         EntitySnapshot state;
         if (context.read_entity(actor, state) != Result::success || state.motion != Motion::dynamic_body) return false;
-        context.log(LogLevel::info, "Rigid Box Playground: arrow keys move, Space jumps near the floor.");
+        context.log(LogLevel::info, "Rigid Box Playground: arrow keys move, Space jumps from physical support.");
         return true;
     }
     void on_event(Context&, const Event& event) override {
@@ -39,10 +39,11 @@ public:
         EntitySnapshot body;
         if (context.read_entity(actor, body) == Result::success) {
             auto velocity = body.linear_velocity;
-            velocity.x = (static_cast<float>(right_) - static_cast<float>(left_)) * 4;
-            velocity.z = (static_cast<float>(backward_) - static_cast<float>(forward_)) * 4;
-            // Demonstration heuristic only; a character controller needs contact-based grounding.
-            if (jump_ && body.position[1] < 0.6) velocity.y = 6;
+            SupportSnapshot support;
+            const bool grounded = context.read_body_support(actor, support) == Result::success && support.supported != 0;
+            velocity.x = (static_cast<float>(right_) - static_cast<float>(left_)) * 4 + (grounded ? support.velocity.x : 0);
+            velocity.z = (static_cast<float>(backward_) - static_cast<float>(forward_)) * 4 + (grounded ? support.velocity.z : 0);
+            if (jump_ && grounded && velocity.y - support.velocity.y <= 0.1F) velocity.y = support.velocity.y + 6;
             (void)context.set_body_velocity(actor, velocity);
         }
         jump_ = false;

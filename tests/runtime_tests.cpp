@@ -208,6 +208,9 @@ int main() {
     require(old_context.read_entity({}, unavailable) == runtime::module::Result::unavailable &&
         old_context.set_body_velocity({}, {}) == runtime::module::Result::unavailable,
         "new methods detect absent extension without accessing beyond old host");
+    runtime::module::SupportSnapshot unavailable_support;
+    require(old_context.read_body_support({}, unavailable_support) == runtime::module::Result::unavailable,
+        "support query detects an absent extension on old hosts");
     old_host.size = 0;
     require(!runtime::module::detail::load<runtime::module::Game>(1, &old_host, &compatible_api), "truncated original host is rejected");
 

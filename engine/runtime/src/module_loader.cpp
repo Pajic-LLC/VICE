@@ -8,6 +8,7 @@
 #include <vice/runtime/module_api.hpp>
 
 #include <cstdint>
+#include <cmath>
 #include <filesystem>
 #include <memory>
 #include <string>
@@ -101,6 +102,33 @@ module::Result host_set_body_velocity(void* value, module::EntityId id, module::
     (void)linear; (void)angular;
 #endif
     return module::Result::unavailable;
+}
+
+module::Result host_read_body_support(void* value, module::EntityId id, module::Vector3 up, float min_up_dot, module::SupportSnapshot* output) noexcept {
+    const auto* bridge = current_bridge(value);
+    if (!bridge || !bridge->context) return module::Result::wrong_phase;
+    const double length = std::hypot(static_cast<double>(up.x), static_cast<double>(up.y), static_cast<double>(up.z));
+    if (!output || output->size < sizeof(module::SupportSnapshot) || persistent_id(id).is_nil() ||
+        !std::isfinite(length) || length <= 0 || !std::isfinite(min_up_dot) || min_up_dot < -1 || min_up_dot > 1)
+        return module::Result::invalid_argument;
+    const auto entity = bridge->context->world.find(persistent_id(id));
+    if (!entity) return module::Result::not_found;
+    if (!bridge->context->world.rigid_box(*entity)) return module::Result::no_body;
+#if defined(VICE_RUNTIME_AUTHORED_PHYSICS)
+    if (!bridge->context->physics) return module::Result::unavailable;
+    const auto support = bridge->context->physics->body_support(persistent_id(id), {up.x, up.y, up.z}, min_up_dot);
+    if (!support) return module::Result::reset_required;
+    module::SupportSnapshot result;
+    result.supported = support->supported ? 1U : 0U;
+    for (std::size_t i = 0; i < 16; ++i) result.supporting_entity.bytes[i] = support->supporting_entity.bytes()[i];
+    result.point[0] = support->point.x; result.point[1] = support->point.y; result.point[2] = support->point.z;
+    result.normal = {support->normal.x, support->normal.y, support->normal.z};
+    result.velocity = {support->velocity.x, support->velocity.y, support->velocity.z};
+    *output = result;
+    return module::Result::success;
+#else
+    return module::Result::unavailable;
+#endif
 }
 
 [[nodiscard]] std::size_t host_entity_count(void* const value) noexcept {
@@ -271,6 +299,7 @@ public:
         host_.log = &host_log;
         host_.read_entity = &host_read_entity;
         host_.set_body_velocity = &host_set_body_velocity;
+        host_.read_body_support = &host_read_body_support;
     }
 
     ~DynamicGameModule() override {

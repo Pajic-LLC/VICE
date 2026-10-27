@@ -8,6 +8,14 @@
 
 namespace vice::rigid_body {
 
+struct BodySupport {
+    bool supported = false;
+    world::PersistentId supporting_entity{};
+    world::GlobalPosition point{};
+    math::Vec3 normal{};
+    math::Vec3 velocity{};
+};
+
 enum class BodyControlResult { applied, not_found, invalid_argument, static_body, inactive_region, reset_required };
 
 // Shared by standalone Runtime and isolated Editor preview. World owns state;
@@ -27,6 +35,8 @@ public:
     [[nodiscard]] std::size_t body_count() const noexcept;
     [[nodiscard]] std::optional<BodyDebugSnapshot> body(world::PersistentId owner) const noexcept;
     [[nodiscard]] const WorldBridge& bridge() const noexcept;
+    [[nodiscard]] std::optional<BodySupport> body_support(world::PersistentId owner,
+        math::Vec3 up = {0, 1, 0}, float min_up_dot = 0.7F) const noexcept;
 
 private:
     struct State;
