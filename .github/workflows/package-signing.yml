@@ -1,0 +1,242 @@
+name: Package Signing
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  sign-and-tamper:
+    name: ${{ matrix.name }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macOS ARM64
+            os: macos-15
+          - name: Windows x64
+            os: windows-2025
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Configure
+        run: >-
+          cmake -S . -B build
+          -DVICE_BUILD_TESTS=OFF
+          -DVICE_BUILD_LAB=OFF
+          -DVICE_BUILD_EDITOR=OFF
+          -DVICE_BUILD_TOOLS=ON
+          -DVICE_ENABLE_JOLT_RIGID_BODY=OFF
+
+      - name: Build package tools
+        run: cmake --build build --config Release --target vice_player vice_package_signer --parallel
+
+      - name: Sign and tamper macOS package
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp build/apps/vice_player/vice_player build/vice-sign-test
+
+          build/tools/package_signer/vice_package_signer \
+            --executable build/vice-sign-test \
+            --stamp-asset com.pajic.vice \
+            --identity -
+
+          codesign --verify --strict --verbose=2 build/vice-sign-test
+
+          export VICE_SIGN_TEST="$PWD/build/vice-sign-test"
+          python3 <<'PY'
+          import os
+          from pathlib import Path
+
+          path = Path(os.environ["VICE_SIGN_TEST"])
+          data = bytearray(path.read_bytes())
+          start = b"VICEPKG1"
+          end = b"1GKPECIV"
+          matches = [
+              index
+              for index in range(0, len(data) - 319)
+              if data[index:index + 8] == start
+              and data[index + 312:index + 320] == end
+          ]
+          if len(matches) != 1:
+              raise SystemExit(f"expected one VICE package record, found {len(matches)}")
+          data[matches[0] + 20] ^= 1
+          path.write_bytes(data)
+          PY
+
+          if codesign --verify --strict --verbose=2 build/vice-sign-test; then
+            echo "Tampered macOS package still passed code signature verification."
+            exit 1
+          fi
+
+      - name: Prepare Windows signing certificate
+        if: runner.os == 'Windows'
+        timeout-minutes: 1
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $player = Resolve-Path "build/apps/vice_player/Release/vice_player.exe"
+          $target = Join-Path $PWD "build/vice-sign-test.exe"
+          Copy-Item $player $target -Force
+
+          $sdkBin = "${env:ProgramFiles(x86)}\Windows Kits\10\bin"
+          $signtool = Get-ChildItem "$sdkBin\*\x64\signtool.exe" -File |
+            Sort-Object FullName -Descending |
+            Select-Object -First 1
+          if (-not $signtool) {
+            throw "signtool.exe was not found in the Windows SDK."
+          }
+
+          $certmgr = Get-ChildItem "$sdkBin\*\x64\certmgr.exe" -File |
+            Sort-Object FullName -Descending |
+            Select-Object -First 1
+          if (-not $certmgr) {
+            $certmgr = Get-ChildItem "$sdkBin\*\x86\certmgr.exe" -File |
+              Sort-Object FullName -Descending |
+              Select-Object -First 1
+          }
+          if (-not $certmgr) {
+            throw "certmgr.exe was not found in the Windows SDK."
+          }
+
+          $openssl = Get-Command openssl.exe -ErrorAction SilentlyContinue
+          if (-not $openssl) {
+            $gitOpenSsl = Join-Path $env:ProgramFiles "Git\usr\bin\openssl.exe"
+            if (Test-Path $gitOpenSsl) {
+              $openssl = Get-Item $gitOpenSsl
+            }
+          }
+          if (-not $openssl) {
+            throw "openssl.exe was not found."
+          }
+
+          $password = "vice-ci-signing"
+          $rootKey = Join-Path $PWD "build/vice-ci-root.key.pem"
+          $rootPem = Join-Path $PWD "build/vice-ci-root.cert.pem"
+          $rootCer = Join-Path $PWD "build/vice-ci-root.cer"
+          $leafKey = Join-Path $PWD "build/vice-ci-signing.key.pem"
+          $leafCsr = Join-Path $PWD "build/vice-ci-signing.csr.pem"
+          $leafPem = Join-Path $PWD "build/vice-ci-signing.cert.pem"
+          $leafExtensions = Join-Path $PWD "build/vice-ci-signing.ext"
+          $pfx = Join-Path $PWD "build/vice-ci-signing.pfx"
+
+          & $openssl.Source req -x509 -newkey rsa:2048 -sha256 -nodes `
+            -subj "/CN=VICE CI Test Root" `
+            -addext "basicConstraints=critical,CA:TRUE" `
+            -addext "keyUsage=critical,keyCertSign,cRLSign" `
+            -days 1 `
+            -keyout $rootKey `
+            -out $rootPem
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+          & $openssl.Source req -new -newkey rsa:2048 -sha256 -nodes `
+            -subj "/CN=VICE CI Package Signing" `
+            -keyout $leafKey `
+            -out $leafCsr
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+          @"
+          basicConstraints=critical,CA:FALSE
+          keyUsage=critical,digitalSignature
+          extendedKeyUsage=codeSigning
+          subjectKeyIdentifier=hash
+          authorityKeyIdentifier=keyid,issuer
+          "@ | Set-Content -Path $leafExtensions -Encoding ascii
+
+          & $openssl.Source x509 -req `
+            -in $leafCsr `
+            -CA $rootPem `
+            -CAkey $rootKey `
+            -CAcreateserial `
+            -days 1 `
+            -sha256 `
+            -extfile $leafExtensions `
+            -out $leafPem
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+          & $openssl.Source pkcs12 -export `
+            -out $pfx `
+            -inkey $leafKey `
+            -in $leafPem `
+            -certfile $rootPem `
+            -passout "pass:$password"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+          & $openssl.Source x509 -in $rootPem -outform der -out $rootCer
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+          & $certmgr.FullName -add $rootCer -s -r localMachine root
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+          "VICE_SIGN_TEST=$target" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "SIGNTOOL_PATH=$($signtool.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "CERT_FILE=$pfx" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "CERT_PASSWORD=$password" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Sign Windows package
+        if: runner.os == 'Windows'
+        timeout-minutes: 2
+        shell: pwsh
+        run: |
+          $signer = Resolve-Path "build/tools/package_signer/Release/vice_package_signer.exe"
+          & $signer `
+            --executable $env:VICE_SIGN_TEST `
+            --stamp-asset com.pajic.vice `
+            --signtool $env:SIGNTOOL_PATH `
+            --certificate-file $env:CERT_FILE `
+            --certificate-password $env:CERT_PASSWORD
+          if ($LASTEXITCODE -ne 0) {
+            exit $LASTEXITCODE
+          }
+
+      - name: Verify and tamper Windows package
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          & $env:SIGNTOOL_PATH verify /pa /all /v $env:VICE_SIGN_TEST
+          if ($LASTEXITCODE -ne 0) {
+            exit $LASTEXITCODE
+          }
+
+          @'
+          import os
+          from pathlib import Path
+
+          path = Path(os.environ["VICE_SIGN_TEST"])
+          data = bytearray(path.read_bytes())
+          start = b"VICEPKG1"
+          end = b"1GKPECIV"
+          matches = [
+              index
+              for index in range(0, len(data) - 319)
+              if data[index:index + 8] == start
+              and data[index + 312:index + 320] == end
+          ]
+          if len(matches) != 1:
+              raise SystemExit(f"expected one VICE package record, found {len(matches)}")
+          data[matches[0] + 20] ^= 1
+          path.write_bytes(data)
+          '@ | python -
+          if ($LASTEXITCODE -ne 0) {
+            exit $LASTEXITCODE
+          }
+
+          & $env:SIGNTOOL_PATH verify /pa /all /v $env:VICE_SIGN_TEST
+          $tamperedVerification = $LASTEXITCODE
+          if ($tamperedVerification -eq 0) {
+            throw "Tampered Windows package still passed Authenticode verification."
+          }
+
+          Write-Host "Tampered Windows package was rejected by Authenticode as expected."
+          exit 0

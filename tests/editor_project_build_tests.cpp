@@ -13,6 +13,10 @@
 #include <string>
 #include <string_view>
 
+#ifndef VICE_EDITOR_TEST_RUNTIME_HOST
+#error VICE_EDITOR_TEST_RUNTIME_HOST must be defined
+#endif
+
 namespace {
 
 void require(const bool condition, const std::string_view message) {
@@ -119,25 +123,13 @@ int main() {
     require(loaded.snapshot.has_value(), "cooked startup World loads");
     require(loaded.snapshot->regions.size() == 1U, "cooked startup World region count");
 
+    const auto runtime_host = std::filesystem::path{VICE_EDITOR_TEST_RUNTIME_HOST};
+    require(std::filesystem::is_regular_file(runtime_host), "real vice_player runtime host exists");
 #ifdef _WIN32
-    const auto runtime_host = root / "bin" / "vice_player.exe";
     const std::string target_filename = "palma-game.exe";
 #else
-    const auto runtime_host = root / "bin" / "vice_player";
     const std::string target_filename = "palma-game";
 #endif
-    write_text(runtime_host, "VICE runtime host placeholder\n");
-
-    std::error_code permission_error;
-    const auto host_permissions = std::filesystem::status(runtime_host, permission_error).permissions();
-    require(!permission_error, "runtime host permissions read");
-    std::filesystem::permissions(
-        runtime_host,
-        host_permissions | std::filesystem::perms::owner_exec,
-        std::filesystem::perm_options::replace,
-        permission_error
-    );
-    require(!permission_error, "runtime host permissions write");
 
     write_text(
         game_source,

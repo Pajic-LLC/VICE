@@ -27,6 +27,14 @@ target_compile_definitions(
   PRIVATE
     VICE_DADE_TEST_PROVIDER="$<TARGET_FILE:vice_dade_test_provider>"
 )
+if(TARGET vice_player)
+  add_dependencies(vice_dade_tests vice_player)
+  target_compile_definitions(
+    vice_dade_tests
+    PRIVATE
+      VICE_DADE_TEST_PLAYER="$<TARGET_FILE:vice_player>"
+  )
+endif()
 target_compile_features(vice_dade_tests PRIVATE cxx_std_23)
 vice_enable_warnings(vice_dade_tests)
 add_test(NAME vice_dade_tests COMMAND vice_dade_tests)
