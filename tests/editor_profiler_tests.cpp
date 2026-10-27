@@ -54,6 +54,14 @@ void test_scheduler_stats() {
     using namespace vice;
 
     jobs::Scheduler scheduler{jobs::SchedulerConfig{.worker_count = 1}};
+    auto running_retired = std::make_shared<std::promise<void>>();
+    auto running_retired_future = running_retired->get_future();
+    auto failure_retired = std::make_shared<std::promise<void>>();
+    auto failure_retired_future = failure_retired->get_future();
+    scheduler.set_event_sink([running_retired, failure_retired](const jobs::JobEvent& event) {
+        if (event.type == jobs::JobEventType::completed && event.name == "telemetry-running") running_retired->set_value();
+        if (event.type == jobs::JobEventType::failed && event.name == "telemetry-failure") failure_retired->set_value();
+    });
     auto stats = scheduler.stats();
     assert(stats.worker_count == 1U);
     assert(stats.outstanding_tasks == 0U);
@@ -80,6 +88,9 @@ void test_scheduler_stats() {
 
     release_promise->set_value();
     assert(scheduler.wait(running) == jobs::Status::succeeded);
+    // Terminal task status can precede completion bookkeeping. The existing event
+    // is emitted after outstanding/running counters retire, so telemetry is stable.
+    running_retired_future.wait();
 
     auto failing = scheduler.schedule(jobs::TaskDesc{
         .function = [] { throw std::runtime_error{"expected telemetry failure"}; },
@@ -87,6 +98,7 @@ void test_scheduler_stats() {
     });
     assert(failing.valid());
     assert(scheduler.wait(failing) == jobs::Status::failed);
+    failure_retired_future.wait();
 
     auto main_task = scheduler.schedule(jobs::TaskDesc{
         .function = [] {},
