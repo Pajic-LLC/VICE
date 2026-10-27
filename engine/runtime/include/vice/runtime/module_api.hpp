@@ -155,6 +155,15 @@ struct EntitySnapshot {
     Vector3 angular_velocity{};
 };
 
+struct SupportSnapshot {
+    std::uint32_t size = sizeof(SupportSnapshot);
+    std::uint32_t supported = 0;
+    EntityId supporting_entity{};
+    double point[3]{};
+    Vector3 normal{};
+    Vector3 velocity{};
+};
+
 struct HostApi {
     std::uint32_t abi_version = module::abi_version;
     std::uint32_t size = sizeof(HostApi);
@@ -165,6 +174,7 @@ struct HostApi {
     // Append-only ABI 1 extension. Check size before accessing these slots.
     Result (*read_entity)(void* context, EntityId id, EntitySnapshot* output) noexcept = nullptr;
     Result (*set_body_velocity)(void* context, EntityId id, Vector3 linear, Vector3 angular) noexcept = nullptr;
+    Result (*read_body_support)(void* context, EntityId id, Vector3 up, float min_up_dot, SupportSnapshot* output) noexcept = nullptr;
 };
 
 inline constexpr std::size_t host_api_v1_size = offsetof(HostApi, read_entity);
@@ -213,6 +223,12 @@ public:
         if (!host_ || host_->size < offsetof(HostApi, set_body_velocity) + sizeof(host_->set_body_velocity) || !host_->set_body_velocity)
             return Result::unavailable;
         return host_->set_body_velocity(host_->context, id, linear, angular);
+    }
+
+    [[nodiscard]] Result read_body_support(EntityId id, SupportSnapshot& output, Vector3 up = {0, 1, 0}, float min_up_dot = 0.7F) const noexcept {
+        if (!host_ || host_->size < offsetof(HostApi, read_body_support) + sizeof(host_->read_body_support) || !host_->read_body_support)
+            return Result::unavailable;
+        return host_->read_body_support(host_->context, id, up, min_up_dot, &output);
     }
 
     void log(const LogLevel level, const char* const message) const noexcept {

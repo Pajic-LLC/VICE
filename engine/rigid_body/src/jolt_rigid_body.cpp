@@ -1472,6 +1472,30 @@ std::optional<QueryHit> Domain::sweep_shape(
     return closest;
 }
 
+std::vector<QueryHit> Domain::body_contacts(const simulation::ParticipantId participant, const float max_separation, const QueryFilter& filter) const {
+    std::vector<QueryHit> results;
+    const auto* source = impl_->find(participant);
+    if (!source || !std::isfinite(max_separation) || max_separation < 0 || source->trigger) return results;
+    const auto& interface = impl_->physics_system_.GetBodyInterface();
+    const auto shape = interface.GetShape(source->body_id);
+    JPH::AllHitCollisionCollector<JPH::CollideShapeCollector> collector;
+    JPH::CollideShapeSettings settings;
+    settings.mMaxSeparationDistance = max_separation;
+    impl_->physics_system_.GetNarrowPhaseQuery().CollideShape(shape.GetPtr(), JPH::Vec3::sOne(),
+        interface.GetCenterOfMassTransform(source->body_id), settings, JPH::RVec3::sZero(), collector);
+    for (const auto& hit : collector.mHits) {
+        const auto* target = impl_->find(hit.mBodyID2);
+        if (!target || target->participant == participant || !impl_->accepts_query_body(*target, filter)) continue;
+        auto normal = -hit.mPenetrationAxis;
+        if (normal.LengthSq() < 0.000001F) continue;
+        normal = normal.Normalized();
+        results.push_back(QueryHit{.participant = target->participant, .material = target->material, .trigger = target->trigger,
+            .point = vec3(hit.mContactPointOn2), .normal = vec3(normal), .distance = std::max(0.0F, -hit.mPenetrationDepth),
+            .penetration_depth = hit.mPenetrationDepth});
+    }
+    return results;
+}
+
 std::span<const ContactEvent> Domain::contact_events() const noexcept {
     return impl_->contact_events_;
 }

@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <unordered_map>
+#include <tuple>
 #include <unordered_set>
 
 namespace vice::rigid_body {
@@ -51,6 +52,7 @@ struct AuthoredSimulation::State {
     WorldBridge bridge;
     std::vector<Region> regions;
     std::unordered_map<world::RegionId, Domain*, world::RegionIdHash> domain_lookup;
+    std::unordered_map<std::uint64_t, std::size_t> participant_bodies;
     std::vector<Body> bodies;
     std::unordered_map<world::PersistentId, std::size_t, world::PersistentIdHash> body_lookup;
     double accumulator = 0;
@@ -133,6 +135,7 @@ bool AuthoredSimulation::reset(world::World& world, jobs::Scheduler& jobs, std::
             return fail(diagnostics, "Could not instantiate authored rigid box: " + entity.persistent_id.to_string());
         }
         next->body_lookup.emplace(entity.persistent_id, next->bodies.size());
+        next->participant_bodies.emplace(desc.participant.value, next->bodies.size());
         next->bodies.push_back({entity.persistent_id, desc, *owner, authored, *entity.spatial_state, entity.authored_transform});
     }
     state_ = std::move(next);
@@ -225,5 +228,46 @@ std::optional<BodyDebugSnapshot> AuthoredSimulation::body(const world::Persisten
     if (!state_->world) return std::nullopt;
     const auto record = state_->body_lookup.find(owner);
     return record == state_->body_lookup.end() ? std::nullopt : state_->observed_body(state_->bodies[record->second]);
+}
+std::optional<BodySupport> AuthoredSimulation::body_support(const world::PersistentId owner, const math::Vec3 up, const float min_up_dot) const noexcept {
+    const double length = std::hypot(static_cast<double>(up.x), static_cast<double>(up.y), static_cast<double>(up.z));
+    if (!std::isfinite(length) || length <= 0 || !std::isfinite(min_up_dot) || min_up_dot < -1 || min_up_dot > 1) return std::nullopt;
+    const auto found = state_->body_lookup.find(owner);
+    if (!state_->world || found == state_->body_lookup.end()) return std::nullopt;
+    const auto& record = state_->bodies[found->second];
+    if (!state_->matches(record)) return std::nullopt;
+    const auto region = state_->world->region(record.expected_spatial.region);
+    if (!region) return std::nullopt;
+    if (region->fidelity == world::RegionFidelity::inactive || record.expected_body.trigger) return BodySupport{};
+    const auto domain = state_->domain_lookup.find(region->id);
+    if (domain == state_->domain_lookup.end()) return std::nullopt;
+    const auto participant = state_->bindings.find(*state_->world, state_->coordinator, record.entity, domain->second->id());
+    if (!participant) return std::nullopt;
+    const math::Vec3 direction{static_cast<float>(up.x / length), static_cast<float>(up.y / length), static_cast<float>(up.z / length)};
+    BodySupport result;
+    float best = min_up_dot;
+    const QueryFilter solid_only{.include_triggers = false};
+    for (const auto& contact : domain->second->body_contacts(*participant, 0.02F, solid_only)) {
+        const auto other = state_->participant_bodies.find(contact.participant.value);
+        if (other == state_->participant_bodies.end()) continue;
+        const auto& supporting = state_->bodies[other->second];
+        if (!state_->matches(supporting)) return std::nullopt;
+        if (supporting.expected_spatial.region != region->id) continue;
+        const auto other_state = domain->second->body_state(contact.participant);
+        if (!other_state) continue;
+        const float alignment = math::dot(contact.normal, direction);
+        if (alignment < best) continue;
+        const auto angular = math::cross(other_state->angular_velocity,
+            {contact.point.x - other_state->position.x, contact.point.y - other_state->position.y, contact.point.z - other_state->position.z});
+        const BodySupport candidate{true, supporting.owner,
+            {region->origin.x + contact.point.x, region->origin.y + contact.point.y, region->origin.z + contact.point.z}, contact.normal,
+            {other_state->linear_velocity.x + angular.x, other_state->linear_velocity.y + angular.y, other_state->linear_velocity.z + angular.z}};
+        if (result.supported && alignment == best &&
+            !(std::tuple{candidate.supporting_entity.bytes(), candidate.point.x, candidate.point.y, candidate.point.z} <
+              std::tuple{result.supporting_entity.bytes(), result.point.x, result.point.y, result.point.z})) continue;
+        result = candidate;
+        best = alignment;
+    }
+    return result;
 }
 } // namespace vice::rigid_body

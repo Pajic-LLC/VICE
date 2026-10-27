@@ -493,6 +493,9 @@ public:
     ) const;
 
     [[nodiscard]] std::span<const ContactEvent> contact_events() const noexcept;
+    // Narrow-phase contacts for the current body pose, including sleeping bodies.
+    [[nodiscard]] std::vector<QueryHit> body_contacts(simulation::ParticipantId participant,
+        float max_separation = 0.02F, const QueryFilter& filter = {}) const;
     [[nodiscard]] std::span<const ConstraintBreakEvent> constraint_break_events() const noexcept;
     [[nodiscard]] std::size_t body_count() const noexcept;
     [[nodiscard]] std::size_t character_count() const noexcept;

@@ -12,11 +12,12 @@ build/tools/vice_cli/vice project build examples/rigid-box-playground/playground
 build/tools/vice_cli/vice project run examples/rigid-box-playground/playground.viceproj
 ```
 
-Use arrow keys to move the dynamic box and Space to jump near the floor. The
+Use arrow keys to move the dynamic box and Space to jump from physical support. The
 platform moves automatically. Losing focus clears held inputs. Movement sets
 velocity through the shared simulation service, preserving vertical velocity
-between jumps. This is a box-control demonstration, not a character controller;
-the jump condition is a height heuristic. The camera is fixed and leaving the
+between jumps. Support comes from narrow-phase solid-contact queries, including sleeping bodies
+and moving/rotating platform velocity. This is a box-control demonstration, not a
+capsule character controller. The camera is fixed and leaving the
 floor is possible. Relaunch to reset.
 
 The build command compiles `game/game.cpp` as a separate shared module and cooks
