@@ -1,6 +1,8 @@
 #pragma once
 
 #include <vice/editor/asset_index.hpp>
+#include <vice/runtime/runtime.hpp>
+#include <filesystem>
 #include <vice/editor/state.hpp>
 #include <vice/jobs/jobs.hpp>
 #include <vice/rigid_body/debug.hpp>
@@ -65,6 +67,11 @@ struct PreviewSnapshot {
     std::vector<PreviewRegionSnapshot> regions;
 };
 
+struct PreviewGameConfig {
+    project::Manifest manifest;
+    std::filesystem::path module_path;
+};
+
 class PreviewRuntime {
 public:
     PreviewRuntime();
@@ -79,12 +86,17 @@ public:
         const world::World& authored_world,
         jobs::Scheduler& jobs,
         const AssetIndex& assets,
-        std::string* diagnostics = nullptr
+        std::string* diagnostics = nullptr,
+        const PreviewGameConfig* game = nullptr
     );
 
     void stop() noexcept;
     void play() noexcept;
     void pause() noexcept;
+    void set_input_focus(bool focused);
+    [[nodiscard]] bool handle_event(const platform::Event& event, double origin_x = 0, double origin_y = 0);
+    [[nodiscard]] bool has_game_module() const noexcept;
+    [[nodiscard]] render::Color clear_color() const noexcept;
     [[nodiscard]] bool step_once();
     [[nodiscard]] bool update(double delta_seconds);
     [[nodiscard]] rigid_body::BodyControlResult set_body_velocity(world::PersistentId owner, math::Vec3 linear, math::Vec3 angular = {});

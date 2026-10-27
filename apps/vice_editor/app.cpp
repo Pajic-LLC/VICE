@@ -10,6 +10,7 @@
 #include <vice/editor/asset_index.hpp>
 #include <vice/editor/physics_debug_ui.hpp>
 #include <vice/editor/preview_runtime.hpp>
+#include <vice/editor/project_preview.hpp>
 #include <vice/editor/profiler.hpp>
 #include <vice/editor/profiler_ui.hpp>
 #include <vice/editor/project_build.hpp>
@@ -626,11 +627,18 @@ int main(const int argc, char** argv) {
             return true;
         };
 
+        bool application_focused = true;
         while (running) {
             vice::platform::Event event{vice::platform::QuitRequested{}};
             while (platform_services->poll_event(event)) {
-                ui.handle_event(event);
-                if (!show_start_surface && route_event_to_scene(event, active_viewport)) {
+                if (const auto* button = std::get_if<vice::platform::MouseButtonEvent>(&event.payload);
+                    button && button->pressed &&
+                    !(button->x >= active_viewport.x && button->x < active_viewport.x + active_viewport.width &&
+                      button->y >= active_viewport.y && button->y < active_viewport.y + active_viewport.height)) preview.set_input_focus(false);
+                const bool gameplay_input = !show_start_surface && preview.handle_event(event, active_viewport.x, active_viewport.y);
+                // Keep ImGui key state current without running authoring shortcuts for game input.
+                ui.handle_event(event, !gameplay_input);
+                if (!gameplay_input && !show_start_surface && !preview.active() && route_event_to_scene(event, active_viewport)) {
                     const auto selection_before_event = selection.selected();
                     scene_renderer.handle_event(
                         event,
@@ -664,6 +672,8 @@ int main(const int argc, char** argv) {
                             std::is_same_v<Payload, vice::platform::WindowCloseRequested>
                         ) {
                             running = false;
+                        } else if constexpr (std::is_same_v<Payload, vice::platform::WindowFocusChanged>) {
+                            application_focused = payload.focused;
                         } else if constexpr (std::is_same_v<Payload, vice::platform::WindowMetricsChanged>) {
                             if (payload.metrics.drawable_width == 0U || payload.metrics.drawable_height == 0U) return;
                             if (!render_device->wait_idle() || !swapchain->resize(payload.metrics)) {
@@ -762,6 +772,7 @@ int main(const int argc, char** argv) {
 
             ui.end_frame();
             active_viewport = show_start_surface ? vice::editor::SceneViewport{} : ui.scene_viewport();
+            preview.set_input_focus(!show_start_surface && application_focused && active_viewport.focused);
 
             if (!show_start_surface) {
                 if (const auto settings_request = project_settings_ui.consume_save_request();
@@ -936,7 +947,7 @@ int main(const int argc, char** argv) {
                 if (stop_preview) preview.stop();
                 if (start_preview || reset_preview) {
                     std::string diagnostics;
-                    if (preview.reset(world, jobs, assets, &diagnostics)) {
+                    if (vice::editor::reset_project_preview(preview, *project_session, world, jobs, assets, &diagnostics)) {
                         preview_history_size = history.size();
                         preview_history_cursor = history.applied_count();
                         log(LogLevel::info, "VICE Editor Live Preview reset from the authored World.");
@@ -961,10 +972,13 @@ int main(const int argc, char** argv) {
                 break;
             }
 
+            const auto& displayed_world = preview.world() ? *preview.world() : world;
+            const vice::editor::SelectionModel no_preview_gizmo;
+            const auto& rendered_selection = preview.active() ? no_preview_gizmo : selection;
             vice::render::RenderPassDesc pass;
             pass.clear_color = show_start_surface
                 ? vice::render::Color{0.018F, 0.022F, 0.030F, 1.0F}
-                : vice::render::Color{0.020F, 0.024F, 0.032F, 1.0F};
+                : (preview.has_game_module() ? preview.clear_color() : vice::render::Color{0.020F, 0.024F, 0.032F, 1.0F});
             pass.depth_attachment = depth_target.get();
             pass.clear_depth = 1.0F;
             pass.clear_color_attachment = true;
@@ -973,7 +987,7 @@ int main(const int argc, char** argv) {
             if (!commands->begin_render_pass(*swapchain, pass) ||
                 (!show_start_surface && active_viewport.drawable() &&
                     !resource_mesh_renderer.render(
-                        world,
+                        displayed_world,
                         selection,
                         assets,
                         *commands,
@@ -982,8 +996,8 @@ int main(const int argc, char** argv) {
                     )) ||
                 (!show_start_surface && active_viewport.drawable() &&
                     !scene_renderer.render(
-                        world,
-                        selection,
+                        displayed_world,
+                        rendered_selection,
                         ui.transform_tool(),
                         *commands,
                         active_viewport,

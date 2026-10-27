@@ -361,7 +361,7 @@ bool EditorUi::valid() const noexcept {
     return state_ != nullptr && state_->context != nullptr;
 }
 
-void EditorUi::handle_event(const platform::Event& event) {
+void EditorUi::handle_event(const platform::Event& event, const bool allow_shortcuts) {
     if (!valid()) {
         return;
     }
@@ -385,7 +385,7 @@ void EditorUi::handle_event(const platform::Event& event) {
                     );
                 }
 
-                if (payload.pressed && !payload.repeat) {
+                if (allow_shortcuts && payload.pressed && !payload.repeat) {
                     const bool command =
                         platform::has_modifier(payload.modifiers, platform::Modifier::control) ||
                         platform::has_modifier(payload.modifiers, platform::Modifier::super);

@@ -1,4 +1,5 @@
 #include <vice/editor/preview_runtime.hpp>
+#include <vice/runtime/module_loader.hpp>
 #include <vice/rigid_body/authored_simulation.hpp>
 
 #include <vice/rigid_body/collision_asset.hpp>
@@ -91,6 +92,49 @@ struct PreviewRuntime::State {
     jobs::Scheduler* jobs = nullptr;
     world::World world;
     std::unique_ptr<rigid_body::AuthoredSimulation> authored;
+    project::Manifest manifest;
+    std::filesystem::path module_image_directory;
+    std::unique_ptr<runtime::GameModule> game_module;
+    std::unique_ptr<runtime::GameModuleLifecycle> game_lifecycle;
+    render::Color game_color{0.020F, 0.024F, 0.032F, 1.0F};
+    bool input_focus = false;
+
+    ~State() {
+        // Stop callbacks and unload before deleting the private DLL/image on Windows.
+        game_lifecycle.reset();
+        game_module.reset();
+        if (!module_image_directory.empty()) {
+            std::error_code error;
+            std::filesystem::remove_all(module_image_directory, error);
+        }
+    }
+    bool start_game(const PreviewGameConfig& config, std::string* diagnostics) {
+        manifest = config.manifest;
+        if (config.module_path.empty()) return true;
+        const auto fail = [&](std::string message) { if (diagnostics) *diagnostics = std::move(message); return false; };
+        std::error_code error;
+        if (!std::filesystem::is_regular_file(config.module_path, error) || error)
+            return fail("Preview game module is missing or not a regular file.");
+        const auto temporary = std::filesystem::temp_directory_path(error);
+        if (error) return fail("Could not locate the preview module cache: " + error.message());
+        const auto directory = temporary / ("vice-preview-module-" + world::PersistentId::random().to_string());
+        if (!std::filesystem::create_directory(directory, error) || error)
+            return fail("Could not create a private preview module directory: " + error.message());
+        module_image_directory = directory;
+        const auto image = directory / (directory.filename().string() + config.module_path.extension().string());
+        if (!std::filesystem::copy_file(config.module_path, image, error) || error)
+            return fail("Could not copy the preview game module: " + error.message());
+        auto loaded = runtime::load_game_module(image);
+        if (!loaded) return fail(loaded.diagnostics);
+        game_module = std::move(loaded.module);
+        game_lifecycle = std::make_unique<runtime::GameModuleLifecycle>(*game_module,
+            runtime::GameContext{manifest, world, authored.get()});
+        if (!game_lifecycle->start()) return fail("Project game module rejected preview startup.");
+        game_lifecycle->frame(game_color);
+        return true;
+    }
+    void frame() { if (game_lifecycle) game_lifecycle->frame(game_color); }
+
     simulation::Coordinator simulation{1.0 / 120.0};
     simulation::EntityBindings bindings;
     rigid_body::WorldBridge bridge;
@@ -154,7 +198,8 @@ bool PreviewRuntime::reset(
     const world::World& authored_world,
     jobs::Scheduler& jobs,
     const AssetIndex& assets,
-    std::string* diagnostics
+    std::string* diagnostics,
+    const PreviewGameConfig* game
 ) {
     auto next = std::make_unique<State>();
     next->jobs = &jobs;
@@ -164,9 +209,10 @@ bool PreviewRuntime::reset(
     }
 
     const auto snapshot = next->world.snapshot();
-    if (std::any_of(snapshot.entities.begin(), snapshot.entities.end(), [](const auto& entity) { return entity.rigid_box.has_value(); })) {
+    if (game || std::any_of(snapshot.entities.begin(), snapshot.entities.end(), [](const auto& entity) { return entity.rigid_box.has_value(); })) {
         next->authored = std::make_unique<rigid_body::AuthoredSimulation>();
         if (!next->authored->reset(next->world, jobs, diagnostics)) return false;
+        if (game && !next->start_game(*game, diagnostics)) return false;
         next->playback = PreviewPlayback::paused;
         state_ = std::move(next);
         return true;
@@ -380,11 +426,17 @@ void PreviewRuntime::play() noexcept {
 }
 
 void PreviewRuntime::pause() noexcept {
+    set_input_focus(false);
     if (active()) state_->playback = PreviewPlayback::paused;
 }
 
 bool PreviewRuntime::step_once() {
-    return active() && state_->fixed_step();
+    if (!active()) return false;
+    const auto delta = state_->authored ? state_->authored->coordinator().fixed_delta_seconds() : state_->simulation.fixed_delta_seconds();
+    if (state_->game_lifecycle) state_->game_lifecycle->update(delta);
+    if (!state_->fixed_step()) return false;
+    state_->frame();
+    return true;
 }
 
 bool PreviewRuntime::update(const double delta_seconds) {
@@ -392,7 +444,12 @@ bool PreviewRuntime::update(const double delta_seconds) {
         !std::isfinite(delta_seconds) || delta_seconds <= 0.0) {
         return true;
     }
-    if (state_->authored) return state_->authored->advance(delta_seconds);
+    if (state_->game_lifecycle) state_->game_lifecycle->update(delta_seconds);
+    if (state_->authored) {
+        if (!state_->authored->advance(delta_seconds)) return false;
+        state_->frame();
+        return true;
+    }
 
     state_->accumulator += std::min(delta_seconds, 0.25);
     std::size_t steps = 0;
@@ -405,6 +462,37 @@ bool PreviewRuntime::update(const double delta_seconds) {
     if (steps == max_preview_steps_per_frame) state_->accumulator = 0.0;
     return true;
 }
+
+void PreviewRuntime::set_input_focus(bool focused) {
+    if (!active() || !state_->game_lifecycle) return;
+    focused = focused && state_->playback == PreviewPlayback::running;
+    if (state_->input_focus == focused) return;
+    state_->input_focus = focused;
+    state_->game_lifecycle->event(platform::Event{platform::WindowFocusChanged{.focused = focused}});
+}
+
+bool PreviewRuntime::handle_event(const platform::Event& event, const double origin_x, const double origin_y) {
+    if (!active() || !state_->game_lifecycle) return false;
+    if (const auto* focus = std::get_if<platform::WindowFocusChanged>(&event.payload); focus && !focus->focused) {
+        set_input_focus(false);
+        return false;
+    }
+    if (state_->playback != PreviewPlayback::running || !state_->input_focus) return false;
+    const bool input = std::holds_alternative<platform::KeyEvent>(event.payload) ||
+        std::holds_alternative<platform::TextInputEvent>(event.payload) ||
+        std::holds_alternative<platform::MouseMoveEvent>(event.payload) ||
+        std::holds_alternative<platform::MouseButtonEvent>(event.payload) ||
+        std::holds_alternative<platform::MouseWheelEvent>(event.payload);
+    if (!input) return false;
+    auto local = event;
+    if (auto* move = std::get_if<platform::MouseMoveEvent>(&local.payload)) { move->x -= origin_x; move->y -= origin_y; }
+    if (auto* button = std::get_if<platform::MouseButtonEvent>(&local.payload)) { button->x -= origin_x; button->y -= origin_y; }
+    state_->game_lifecycle->event(local);
+    return true;
+}
+
+bool PreviewRuntime::has_game_module() const noexcept { return active() && state_->game_lifecycle != nullptr; }
+render::Color PreviewRuntime::clear_color() const noexcept { return state_ ? state_->game_color : render::Color{}; }
 
 bool PreviewRuntime::active() const noexcept {
     return state_ != nullptr && state_->playback != PreviewPlayback::stopped;

@@ -23,3 +23,10 @@ The build command compiles `game/game.cpp` as a separate shared module and cooks
 and stages the same World and mesh data used by normal projects. Runtime debug
 can inspect the actor `94000000-0000-4000-8000-000000000202` and platform
 `94000000-0000-4000-8000-000000000203`. Playing leaves authored source unchanged.
+
+Open this project in VICE Editor and use **Debug → Play In Editor → Play**.
+Click the Scene viewport to send arrow-key/Space input. Pause/Resume freezes or
+continues gameplay; Step runs one tick; Reset rebuilds code and starts fresh.
+The preview uses an isolated clone, including unsaved World edits, and displays
+live poses through the editor camera. Stop returns to authoring. Build/start
+errors preserve the previous preview session.

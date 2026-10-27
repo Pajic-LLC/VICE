@@ -42,7 +42,7 @@ public:
 
     [[nodiscard]] bool valid() const noexcept;
 
-    void handle_event(const platform::Event& event);
+    void handle_event(const platform::Event& event, bool allow_shortcuts = true);
     [[nodiscard]] bool begin_frame(platform::WindowMetrics metrics, float delta_seconds);
     void draw(
         world::World& world,

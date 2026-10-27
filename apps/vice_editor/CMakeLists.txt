@@ -46,6 +46,7 @@ if(TARGET vice_world_cooker_lib AND
     STATIC
       src/authored_world_document.cpp
       src/project_build.cpp
+    src/project_preview.cpp
       src/project_environment_cook.cpp
       src/project_material_cook.cpp
       src/project_mesh_cook.cpp
@@ -64,6 +65,7 @@ if(TARGET vice_world_cooker_lib AND
     vice_editor_project_build
     PUBLIC
       VICE::EditorState
+      VICE::EditorPreview
       VICE::EnvironmentCooker
       VICE::MeshCooker
       VICE::Platform
@@ -148,6 +150,7 @@ target_link_libraries(
   vice_editor_preview
   PUBLIC
     VICE::EditorAssetIndex
+    VICE::Runtime
     VICE::Jobs
     VICE::RigidBody
     VICE::RigidBodyWorld

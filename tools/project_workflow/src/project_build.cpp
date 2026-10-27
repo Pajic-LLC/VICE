@@ -65,19 +65,11 @@ namespace {
     return message;
 }
 
-struct GameModuleBuild {
-    bool source_present = false;
-    bool success = true;
-    std::filesystem::path source;
-    std::filesystem::path output;
-    std::string diagnostics;
-};
-
-[[nodiscard]] GameModuleBuild build_project_game_module(
+[[nodiscard]] ProjectGameModuleBuildResult build_game_module_impl(
     const project::Workspace& workspace,
     const ProjectBuildToolchain& toolchain
 ) {
-    GameModuleBuild result;
+    ProjectGameModuleBuildResult result;
     result.source = game_module_source(workspace);
 
     std::error_code error;
@@ -150,6 +142,7 @@ struct GameModuleBuild {
     build.arguments = {
         "--build",
         path_text(cmake_build),
+        "--clean-first",
         "--config",
         "Debug",
         "--target",
@@ -318,6 +311,13 @@ struct GameModuleBuild {
 }
 
 } // namespace
+
+ProjectGameModuleBuildResult build_project_game_module(const project::Workspace& workspace, const ProjectBuildToolchain& toolchain) {
+    return build_game_module_impl(workspace, toolchain);
+}
+ProjectGameModuleBuildResult build_project_game_module(const project::Workspace& workspace) {
+    return build_project_game_module(workspace, configured_project_build_toolchain());
+}
 
 ProjectBuildToolchain configured_project_build_toolchain() {
     ProjectBuildToolchain toolchain;
