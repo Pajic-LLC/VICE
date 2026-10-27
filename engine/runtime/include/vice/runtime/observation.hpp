@@ -5,6 +5,8 @@
 
 #include <cstdint>
 
+namespace vice::rigid_body { class AuthoredSimulation; }
+
 namespace vice::runtime {
 
 class RuntimeSceneRenderer;
@@ -26,6 +28,7 @@ struct RuntimeFrameObservation {
     render::DeviceStats device_stats{};
     platform::WindowMetrics metrics{};
     const RuntimeSceneRenderer* scene_renderer = nullptr;
+    const rigid_body::AuthoredSimulation* physics = nullptr;
 };
 
 class RuntimeObserver {

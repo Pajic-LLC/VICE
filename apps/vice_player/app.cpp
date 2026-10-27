@@ -49,13 +49,13 @@ public:
 private:
     static constexpr double publish_interval_seconds = 0.10;
 
-    void service_debug_request() {
+    void service_debug_request(const vice::rigid_body::AuthoredSimulation* physics) {
         const auto request = vice::runtime::read_runtime_debug_request(session_);
         if (!request || request.request_id == last_debug_request_id_) return;
 
         const auto snapshot = vice::runtime::sample_runtime_debug_entity(
             *project_->world,
-            request.entity_id
+            request.entity_id, physics
         );
         const auto payload = vice::runtime::serialize_runtime_debug_entity_snapshot(
             snapshot,
@@ -126,7 +126,7 @@ private:
             )) {
             generation_ = next_generation;
             publication_error_reported_ = false;
-            service_debug_request();
+            service_debug_request(observation.physics);
             return;
         }
 

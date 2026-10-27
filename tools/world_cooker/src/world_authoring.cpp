@@ -108,6 +108,11 @@ namespace {
                 }
                 entity->authored_transform = value.transform;
                 return true;
+            } else if constexpr (std::is_same_v<Value, SetCharacter>) {
+                auto* entity = find_entity(candidate,value.entity);
+                if (!entity) { diagnostics = "Character entity does not exist."; return false; }
+                if (value.character && !world::valid(*value.character)) { diagnostics = "Invalid character profile or motion."; return false; }
+                entity->character = value.character; return true;
             } else if constexpr (std::is_same_v<Value, SetDependency>) {
                 auto* entity = find_entity(candidate, value.entity);
                 if (!entity) { diagnostics = "Dependency entity does not exist."; return false; }

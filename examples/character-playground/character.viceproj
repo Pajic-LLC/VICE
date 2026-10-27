@@ -1,0 +1,7 @@
+vice-project 1
+id 9b000000-0000-4000-8000-000000000001
+name "Character Playground"
+game_name "Character Playground"
+game_target "character-playground"
+assets "assets"
+startup_world "worlds/playground.vworld"

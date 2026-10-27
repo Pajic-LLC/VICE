@@ -10,6 +10,8 @@
 #include <string>
 #include <string_view>
 
+namespace vice::rigid_body { class AuthoredSimulation; }
+
 namespace vice::runtime {
 
 enum class RuntimeDebugEntityState : std::uint8_t {
@@ -26,11 +28,19 @@ struct RuntimeDebugRegionSnapshot {
     world::RegionFidelity fidelity = world::RegionFidelity::inactive;
 };
 
+struct CharacterRuntimeDebug {
+    std::string ground_state;
+    world::PersistentId supporting_entity{};
+    math::Vec3 ground_normal{}, ground_velocity{};
+};
+
 struct RuntimeDebugEntitySnapshot {
     RuntimeDebugEntityState state = RuntimeDebugEntityState::invalid_request;
     world::PersistentId requested_id{};
     std::optional<world::SpatialState> spatial;
     std::optional<world::AuthoredTransform> authored_transform;
+    std::optional<world::Character> character;
+    std::optional<CharacterRuntimeDebug> character_state;
     std::optional<world::RigidBox> rigid_box;
     std::optional<world::DistanceLink> distance_link;
     std::optional<world::DependencyState> dependency;
@@ -47,7 +57,8 @@ struct RuntimeDebugEntitySnapshot {
 
 [[nodiscard]] RuntimeDebugEntitySnapshot sample_runtime_debug_entity(
     const world::World& world,
-    world::PersistentId persistent_id
+    world::PersistentId persistent_id,
+    const rigid_body::AuthoredSimulation* physics = nullptr
 );
 
 [[nodiscard]] std::string serialize_runtime_debug_entity_snapshot(

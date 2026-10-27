@@ -1,4 +1,7 @@
 #include <vice/runtime/debug.hpp>
+#if defined(VICE_RUNTIME_AUTHORED_PHYSICS)
+#include <vice/rigid_body/authored_simulation.hpp>
+#endif
 
 #include <vice/world/snapshot.hpp>
 
@@ -82,7 +85,8 @@ void append_float(std::string& output, const float value) {
 
 RuntimeDebugEntitySnapshot sample_runtime_debug_entity(
     const world::World& world,
-    const world::PersistentId persistent_id
+    const world::PersistentId persistent_id,
+    const rigid_body::AuthoredSimulation* physics
 ) {
     RuntimeDebugEntitySnapshot result;
     result.requested_id = persistent_id;
@@ -107,6 +111,23 @@ RuntimeDebugEntitySnapshot sample_runtime_debug_entity(
     result.state = RuntimeDebugEntityState::available;
     result.spatial = entity->spatial_state;
     result.authored_transform = entity->authored_transform;
+    result.character = entity->character;
+#if defined(VICE_RUNTIME_AUTHORED_PHYSICS)
+    if (physics && result.character) {
+        if (const auto c = physics->character(persistent_id)) {
+            std::string ground;
+            switch (c->state.ground_state) {
+            case rigid_body::CharacterGroundState::grounded: ground="grounded"; break;
+            case rigid_body::CharacterGroundState::steep_ground: ground="steep_ground"; break;
+            case rigid_body::CharacterGroundState::unsupported: ground="unsupported"; break;
+            case rigid_body::CharacterGroundState::airborne: ground="airborne"; break;
+            }
+            result.character_state = CharacterRuntimeDebug{ground,c->supporting_entity,c->state.ground_normal,c->state.ground_velocity};
+        }
+    }
+#else
+    (void)physics;
+#endif
     result.rigid_box = entity->rigid_box;
     result.distance_link = entity->distance_link;
     result.dependency = world.dependency_state(*world.find(persistent_id));
@@ -201,6 +222,17 @@ std::string serialize_runtime_debug_entity_snapshot(
         output += "]}";
     }
 
+    output += ",\"character\":" + world::serialize_character(snapshot.character);
+    output += ",\"character_state\":";
+    if (!snapshot.character_state) output += "null";
+    else {
+        const auto& c = *snapshot.character_state;
+        output += "{\"ground_state\":"; append_json_string(output,c.ground_state);
+        output += ",\"supporting_entity\":";
+        if (c.supporting_entity.is_nil()) output += "null"; else append_json_string(output,c.supporting_entity.to_string());
+        const auto vector = [&](math::Vec3 v) { output += '['; append_float(output,v.x); output += ','; append_float(output,v.y); output += ','; append_float(output,v.z); output += ']'; };
+        output += ",\"ground_normal\":"; vector(c.ground_normal); output += ",\"ground_velocity\":"; vector(c.ground_velocity); output += '}';
+    }
     output += ",\"rigid_box\":";
     if (!snapshot.rigid_box) output += "null";
     else {

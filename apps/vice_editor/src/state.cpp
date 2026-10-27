@@ -101,6 +101,7 @@ namespace {
         rollback_entity();
         return false;
     }
+    if (command.entity.character && !world.set_character(*entity,*command.entity.character)) { rollback_entity(); return false; }
     if (command.entity.dependency && !world.set_dependency(*entity, *command.entity.dependency)) { rollback_entity(); return false; }
     if (command.entity.distance_link && !world.set_distance_link(*entity, *command.entity.distance_link)) {
         rollback_entity(); return false;
@@ -556,6 +557,7 @@ std::optional<InspectorData> project_inspector(
     inspector.rigid_box = world.rigid_box(*entity);
     inspector.distance_link = world.distance_link(*entity);
     inspector.dependency = world.dependency(*entity);
+    inspector.character = world.character(*entity);
     const auto references = world.resource_references(*entity);
     inspector.resource_references.assign(references.begin(), references.end());
     inspector.simulation_island = world.simulation_island(*entity);

@@ -77,6 +77,7 @@ module::Result host_read_entity(void* value, module::EntityId id, module::Entity
         result.linear_velocity = {box->linear_velocity.x, box->linear_velocity.y, box->linear_velocity.z};
         result.angular_velocity = {box->angular_velocity.x, box->angular_velocity.y, box->angular_velocity.z};
     }
+    if (const auto c = world.character(*entity)) { result.flags |= 4U; result.linear_velocity = {c->velocity.x,c->velocity.y,c->velocity.z}; }
     *output = result;
     return module::Result::success;
 }
@@ -169,6 +170,57 @@ module::Result host_read_dependency(void* value, module::EntityId id, module::De
     result.break_impulse = state->break_impulse; result.break_step = state->break_step;
     result.path_length = static_cast<std::uint32_t>(state->path.size());
     *output = result; return module::Result::success;
+}
+
+module::Result host_read_character(void* value, module::EntityId id, module::CharacterSnapshot* output) noexcept {
+    const auto* bridge = current_bridge(value);
+    if (!bridge || !bridge->context) return module::Result::wrong_phase;
+    if (!output || output->size < sizeof(module::CharacterSnapshot) || persistent_id(id).is_nil()) return module::Result::invalid_argument;
+    const auto& world = bridge->context->world;
+    const auto entity = world.find(persistent_id(id));
+    if (!entity) return module::Result::not_found;
+    const auto c = world.character(*entity);
+    if (!c) return module::Result::no_character;
+#if defined(VICE_RUNTIME_AUTHORED_PHYSICS)
+    if (!bridge->context->physics) return module::Result::unavailable;
+    const auto observed = bridge->context->physics->character(persistent_id(id));
+    if (!observed) return module::Result::reset_required;
+    module::CharacterSnapshot result;
+    const auto spatial = world.spatial_state(*entity);
+    if (!spatial) return module::Result::reset_required;
+    result.position[0]=spatial->global_position.x; result.position[1]=spatial->global_position.y; result.position[2]=spatial->global_position.z;
+    result.height=c->height; result.radius=c->radius; result.mass=c->mass; result.max_strength=c->max_strength;
+    result.max_slope_angle=c->max_slope_angle; result.step_height=c->step_height; result.stick_to_floor_distance=c->stick_to_floor_distance;
+    const auto vector = [](math::Vec3 v) { return module::Vector3{v.x,v.y,v.z}; };
+    result.velocity=vector(observed->state.velocity); result.horizontal_velocity=vector(observed->state.horizontal_velocity);
+    result.ground_normal=vector(observed->state.ground_normal); result.ground_velocity=vector(observed->state.ground_velocity);
+    result.pending_jump_speed=observed->state.pending_jump_speed.value_or(0);
+    result.ground_state=static_cast<module::CharacterGroundState>(observed->state.ground_state);
+    for (std::size_t i=0;i<16;++i) result.supporting_entity.bytes[i]=observed->supporting_entity.bytes()[i];
+    *output=result; return module::Result::success;
+#else
+    return module::Result::unavailable;
+#endif
+}
+module::Result host_control_character(void* value, module::EntityId id, module::Vector3 horizontal, float jump_speed) noexcept {
+    const auto* bridge = current_bridge(value);
+    if (!bridge || !bridge->context || !bridge->writable) return module::Result::wrong_phase;
+    if (persistent_id(id).is_nil() || !std::isfinite(horizontal.x) || horizontal.y != 0 || !std::isfinite(horizontal.z) || !std::isfinite(jump_speed) || jump_speed < 0) return module::Result::invalid_argument;
+    const auto entity = bridge->context->world.find(persistent_id(id));
+    if (!entity) return module::Result::not_found;
+    if (!bridge->context->world.character(*entity)) return module::Result::no_character;
+#if defined(VICE_RUNTIME_AUTHORED_PHYSICS)
+    if (!bridge->context->physics) return module::Result::unavailable;
+    using C = rigid_body::CharacterControlResult;
+    switch (bridge->context->physics->control_character(persistent_id(id),{horizontal.x,horizontal.y,horizontal.z},jump_speed)) {
+    case C::applied: return module::Result::success;
+    case C::not_found: case C::reset_required: return module::Result::reset_required;
+    case C::invalid_argument: return module::Result::invalid_argument;
+    case C::inactive_region: return module::Result::inactive_region;
+    case C::not_grounded: return module::Result::not_grounded;
+    }
+#endif
+    return module::Result::unavailable;
 }
 
 [[nodiscard]] std::size_t host_entity_count(void* const value) noexcept {
@@ -342,6 +394,8 @@ public:
         host_.read_body_support = &host_read_body_support;
         host_.read_distance_link = &host_read_distance_link;
         host_.read_dependency = &host_read_dependency;
+        host_.read_character = &host_read_character;
+        host_.control_character = &host_control_character;
     }
 
     ~DynamicGameModule() override {

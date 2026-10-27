@@ -2,6 +2,7 @@
 #include "rigid_box_source.hpp"
 #include "distance_link_source.hpp"
 #include "dependency_source.hpp"
+#include "character_source.hpp"
 
 #include <vice/platform/file.hpp>
 #include <vice/tools/world_cooker.hpp>
@@ -79,6 +80,11 @@ std::optional<Operation> read_operation(const std::string& name, std::istream& i
     } else if (name == "clear_transform") {
         SetEntityTransform op;
         if (read_id(input, op.entity)) return op;
+    } else if (name == "set_character" || name == "clear_character") {
+        SetCharacter op;
+        if (!read_id(input,op.entity)) return std::nullopt;
+        if (name == "set_character") { world::Character c; if (!world_cooker::read_character(input,c)) return std::nullopt; op.character = c; }
+        return op;
     } else if (name == "set_dependency" || name == "clear_dependency") {
         SetDependency op;
         if (!read_id(input, op.entity)) return std::nullopt;
@@ -158,6 +164,10 @@ void affected(FileEditResult& result, const Transaction& transaction, const worl
                 if (previous != before.entities.end() && previous->distance_link) add_endpoints(*previous->distance_link);
             } else {
                 result.affected_entities.push_back(value.entity);
+                if constexpr (std::is_same_v<T, SetCharacter>) {
+                    const auto previous = std::find_if(before.entities.begin(),before.entities.end(),[&](const auto& e) { return e.persistent_id == value.entity; });
+                    if (previous != before.entities.end() && previous->spatial_state) result.affected_regions.push_back(previous->spatial_state->region);
+                }
                 if constexpr (std::is_same_v<T, SetEntitySpatial>) {
                     result.affected_regions.push_back(value.spatial.region);
                     const auto previous = std::find_if(before.entities.begin(), before.entities.end(),

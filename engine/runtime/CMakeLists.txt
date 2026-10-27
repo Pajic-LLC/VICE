@@ -114,6 +114,10 @@ target_link_libraries(
 )
 target_compile_features(vice_runtime_diagnostics PUBLIC cxx_std_23)
 vice_enable_warnings(vice_runtime_diagnostics)
+if(TARGET vice_rigid_body_world)
+  target_link_libraries(vice_runtime_diagnostics PRIVATE VICE::RigidBodyWorld)
+  target_compile_definitions(vice_runtime_diagnostics PRIVATE VICE_RUNTIME_AUTHORED_PHYSICS=1)
+endif()
 
 add_library(
   vice_runtime_dev_session

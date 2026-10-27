@@ -228,7 +228,7 @@ int run_native_game(
     }
     const bool has_authored_bodies = [&] {
         const auto snapshot = runtime_project.world->snapshot();
-        return std::any_of(snapshot.entities.begin(), snapshot.entities.end(), [](const auto& entity) { return entity.rigid_box.has_value(); });
+        return std::any_of(snapshot.entities.begin(), snapshot.entities.end(), [](const auto& entity) { return entity.rigid_box.has_value() || entity.character.has_value(); });
     }();
 #if defined(VICE_RUNTIME_AUTHORED_PHYSICS)
     std::unique_ptr<jobs::Scheduler> physics_jobs;
@@ -358,6 +358,9 @@ int run_native_game(
             .device_stats = render_device->stats(),
             .metrics = metrics,
             .scene_renderer = &scene_renderer,
+#if defined(VICE_RUNTIME_AUTHORED_PHYSICS)
+            .physics = physics.get(),
+#endif
         });
     };
     observe(RuntimeExecutionState::starting, 0.0, 0.0, 0.0);
