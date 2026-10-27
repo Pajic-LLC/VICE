@@ -137,7 +137,7 @@ struct EntityId { std::uint8_t bytes[16]{}; };
 struct Vector3 { float x = 0, y = 0, z = 0; };
 enum class Result : std::uint32_t {
     success, unavailable, invalid_argument, not_found, no_body,
-    static_body, inactive_region, reset_required, wrong_phase, no_link, no_dependency, no_character, not_grounded,
+    static_body, inactive_region, reset_required, wrong_phase, no_link, no_dependency, no_character, not_grounded, history_mismatch, event_pruned, sequence_exhausted,
 };
 enum class Motion : std::uint32_t { static_body, kinematic_body, dynamic_body };
 struct EntitySnapshot {
@@ -196,6 +196,29 @@ struct CharacterSnapshot {
     EntityId supporting_entity{};
 };
 
+enum class CausalKind : std::uint32_t { capture_started, distance_link_changed, distance_link_removed, constraint_broken,
+    dependency_configured, dependency_removed, dependency_enabled, dependency_state_changed };
+enum class CausalOrigin : std::uint32_t { runtime, authoring, physics, gameplay, derived };
+enum class CausalQuantity : std::uint32_t { none, linear_impulse };
+struct CausalHistorySnapshot {
+    std::uint32_t size=sizeof(CausalHistorySnapshot), capturing=0;
+    EntityId history_id{}, capture_id{};
+    std::uint64_t first_sequence=1,next_sequence=1;
+    std::uint32_t retained_count=0,capacity=0;
+};
+struct CausalEventSnapshot {
+    std::uint32_t size=sizeof(CausalEventSnapshot);
+    CausalKind kind=CausalKind::capture_started;
+    CausalOrigin origin=CausalOrigin::runtime;
+    std::uint32_t value=0;
+    CausalQuantity quantity_kind=CausalQuantity::none;
+    DependencyReason reason=DependencyReason::available,root_reason=DependencyReason::available;
+    std::uint32_t parent_retained=0;
+    std::uint64_t sequence=0,parent_sequence=0,solver_step=0,region=0;
+    EntityId id{},parent_id{},capture_id{},subject{},first{},second{},root_entity{};
+    float quantity=0;
+};
+
 struct HostApi {
     std::uint32_t abi_version = module::abi_version;
     std::uint32_t size = sizeof(HostApi);
@@ -211,6 +234,9 @@ struct HostApi {
     Result (*read_dependency)(void* context, EntityId id, DependencySnapshot* output) noexcept = nullptr;
     Result (*read_character)(void* context, EntityId id, CharacterSnapshot* output) noexcept = nullptr;
     Result (*control_character)(void* context, EntityId id, Vector3 horizontal, float jump_speed) noexcept = nullptr;
+    Result (*read_causal_history)(void* context,CausalHistorySnapshot* output) noexcept = nullptr;
+    Result (*read_causal_event)(void* context,EntityId history_id,std::uint64_t sequence,CausalEventSnapshot* output) noexcept = nullptr;
+    Result (*set_dependency_enabled)(void* context,EntityId id,std::uint32_t enabled) noexcept = nullptr;
 };
 
 inline constexpr std::size_t host_api_v1_size = offsetof(HostApi, read_entity);
@@ -286,6 +312,19 @@ public:
     [[nodiscard]] Result control_character(EntityId id, Vector3 horizontal, float jump_speed = 0) const noexcept {
         if (!host_ || host_->size < offsetof(HostApi, control_character) + sizeof(host_->control_character) || !host_->control_character) return Result::unavailable;
         return host_->control_character(host_->context,id,horizontal,jump_speed);
+    }
+
+    [[nodiscard]] Result read_causal_history(CausalHistorySnapshot& output) const noexcept {
+        if(!host_ || host_->size<offsetof(HostApi,read_causal_history)+sizeof(host_->read_causal_history) || !host_->read_causal_history) return Result::unavailable;
+        return host_->read_causal_history(host_->context,&output);
+    }
+    [[nodiscard]] Result read_causal_event(EntityId history_id,std::uint64_t sequence,CausalEventSnapshot& output) const noexcept {
+        if(!host_ || host_->size<offsetof(HostApi,read_causal_event)+sizeof(host_->read_causal_event) || !host_->read_causal_event) return Result::unavailable;
+        return host_->read_causal_event(host_->context,history_id,sequence,&output);
+    }
+    [[nodiscard]] Result set_dependency_enabled(EntityId id,bool enabled) const noexcept {
+        if(!host_ || host_->size<offsetof(HostApi,set_dependency_enabled)+sizeof(host_->set_dependency_enabled) || !host_->set_dependency_enabled) return Result::unavailable;
+        return host_->set_dependency_enabled(host_->context,id,enabled?1U:0U);
     }
 
     void log(const LogLevel level, const char* const message) const noexcept {

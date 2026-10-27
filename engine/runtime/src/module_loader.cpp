@@ -223,6 +223,38 @@ module::Result host_control_character(void* value, module::EntityId id, module::
     return module::Result::unavailable;
 }
 
+module::EntityId module_id(world::PersistentId id) noexcept { module::EntityId result;for(std::size_t i=0;i<16;++i)result.bytes[i]=id.bytes()[i];return result; }
+module::Result host_read_causal_history(void* value,module::CausalHistorySnapshot* output) noexcept {
+    const auto* b=current_bridge(value);if(!b || !b->context)return module::Result::wrong_phase;
+    if(!output || output->size<sizeof(module::CausalHistorySnapshot))return module::Result::invalid_argument;
+    const auto info=b->context->world.causal_info();module::CausalHistorySnapshot result;
+    result.history_id=module_id(info.id);result.capture_id=module_id(info.capture_id);result.capturing=info.capturing?1U:0U;
+    result.first_sequence=info.first_sequence;result.next_sequence=info.next_sequence;result.retained_count=static_cast<std::uint32_t>(info.retained_count);result.capacity=world::causal_history_capacity;
+    *output=result;return module::Result::success;
+}
+module::Result host_read_causal_event(void* value,module::EntityId history,std::uint64_t sequence,module::CausalEventSnapshot* output) noexcept {
+    const auto* b=current_bridge(value);if(!b || !b->context)return module::Result::wrong_phase;
+    if(!output || output->size<sizeof(module::CausalEventSnapshot) || sequence==0 || persistent_id(history).is_nil())return module::Result::invalid_argument;
+    const auto info=b->context->world.causal_info();
+    if(info.id!=persistent_id(history))return module::Result::history_mismatch;
+    if(sequence<info.first_sequence)return module::Result::event_pruned;
+    const auto e=b->context->world.causal_event(sequence);if(!e)return module::Result::not_found;
+    module::CausalEventSnapshot result;
+    result.kind=static_cast<module::CausalKind>(e->kind);result.origin=static_cast<module::CausalOrigin>(e->origin);result.value=e->value?1U:0U;
+    result.quantity_kind=static_cast<module::CausalQuantity>(e->quantity_kind);result.reason=static_cast<module::DependencyReason>(e->reason);result.root_reason=static_cast<module::DependencyReason>(e->root_reason);
+    result.parent_retained=e->parent_sequence>=info.first_sequence && e->parent_sequence?1U:0U;
+    result.sequence=e->sequence;result.parent_sequence=e->parent_sequence;result.solver_step=e->solver_step;result.region=e->region.value;result.quantity=e->quantity;
+    result.id=module_id(e->id);result.parent_id=module_id(e->parent_id);result.capture_id=module_id(e->capture_id);result.subject=module_id(e->subject);
+    result.first=module_id(e->first);result.second=module_id(e->second);result.root_entity=module_id(e->root_entity);*output=result;return module::Result::success;
+}
+module::Result host_set_dependency_enabled(void* value,module::EntityId id,std::uint32_t enabled) noexcept {
+    const auto* b=current_bridge(value);if(!b || !b->context || !b->writable)return module::Result::wrong_phase;
+    if(persistent_id(id).is_nil() || enabled>1U)return module::Result::invalid_argument;
+    const auto e=b->context->world.find(persistent_id(id));if(!e)return module::Result::not_found;
+    if(!b->context->world.dependency(*e))return module::Result::no_dependency;
+    return b->context->world.set_dependency_enabled(*e,enabled!=0)?module::Result::success:module::Result::sequence_exhausted;
+}
+
 [[nodiscard]] std::size_t host_entity_count(void* const value) noexcept {
     const auto* const bridge = current_bridge(value);
     return bridge != nullptr && bridge->context != nullptr
@@ -396,6 +428,9 @@ public:
         host_.read_dependency = &host_read_dependency;
         host_.read_character = &host_read_character;
         host_.control_character = &host_control_character;
+        host_.read_causal_history = &host_read_causal_history;
+        host_.read_causal_event = &host_read_causal_event;
+        host_.set_dependency_enabled = &host_set_dependency_enabled;
     }
 
     ~DynamicGameModule() override {

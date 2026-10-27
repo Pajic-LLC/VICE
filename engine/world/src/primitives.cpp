@@ -290,11 +290,12 @@ WorldSnapshot World::snapshot() const {
         }
     );
 
+    output.causal_history=causal_snapshot();
     return output;
 }
 
 bool World::restore(const WorldSnapshot& snapshot_data) {
-    if (!validate_distance_links(snapshot_data) || !validate_dependencies(snapshot_data) || !validate_characters(snapshot_data)) return false;
+    if (!validate_distance_links(snapshot_data) || !validate_dependencies(snapshot_data) || !validate_characters(snapshot_data) || !validate_causal_history(snapshot_data.causal_history)) return false;
     World restored;
 
     for (const auto& type : snapshot_data.component_types) {
@@ -367,6 +368,9 @@ bool World::restore(const WorldSnapshot& snapshot_data) {
         }
     }
 
+    restored.causal_id_=snapshot_data.causal_history.id;
+    restored.next_causal_sequence_=snapshot_data.causal_history.next_sequence;
+    restored.causal_events_.assign(snapshot_data.causal_history.events.begin(),snapshot_data.causal_history.events.end());
     *this = std::move(restored);
     return true;
 }

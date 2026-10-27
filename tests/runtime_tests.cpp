@@ -218,6 +218,9 @@ int main() {
     require(old_context.read_dependency({}, unavailable_dependency) == runtime::module::Result::unavailable, "old host has no dependency callback");
     runtime::module::CharacterSnapshot unavailable_character;
     require(old_context.read_character({},unavailable_character)==runtime::module::Result::unavailable && old_context.control_character({},{})==runtime::module::Result::unavailable,"old host lacks optional character capabilities");
+    runtime::module::CausalHistorySnapshot unavailable_history;
+    runtime::module::CausalEventSnapshot unavailable_event;
+    require(old_context.read_causal_history(unavailable_history)==runtime::module::Result::unavailable && old_context.read_causal_event({},1,unavailable_event)==runtime::module::Result::unavailable && old_context.set_dependency_enabled({},false)==runtime::module::Result::unavailable,"old host lacks causal extensions safely");
     old_host.size = 0;
     require(!runtime::module::detail::load<runtime::module::Game>(1, &old_host, &compatible_api), "truncated original host is rejected");
 

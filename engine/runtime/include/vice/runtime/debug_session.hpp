@@ -23,7 +23,10 @@ enum class RuntimeDebugRequestState : std::uint8_t {
     invalid,
 };
 
+enum class RuntimeDebugRequestKind : std::uint8_t { entity, world_checkpoint };
+
 struct RuntimeDebugRequest {
+    RuntimeDebugRequestKind kind = RuntimeDebugRequestKind::entity;
     RuntimeDebugRequestState state = RuntimeDebugRequestState::none;
     std::string request_id;
     world::PersistentId entity_id{};
@@ -56,6 +59,11 @@ struct RuntimeDebugResponse {
     const RuntimeDevSession& session,
     std::string_view request_id,
     world::PersistentId entity_id,
+    std::string* diagnostics = nullptr
+);
+
+[[nodiscard]] bool publish_runtime_checkpoint_request(
+    const RuntimeDevSession& session, std::string_view request_id,
     std::string* diagnostics = nullptr
 );
 

@@ -141,6 +141,19 @@ constexpr std::string_view response_filename = "debug-response.json";
         result.diagnostics = "Runtime debug request schema is invalid.";
         return result;
     }
+    constexpr std::string_view checkpoint_suffix = "\",\"kind\":\"world_checkpoint\"}\n";
+    if (contents.ends_with(checkpoint_suffix)) {
+        result.request_id = std::string{contents.substr(prefix.size(),
+            contents.size() - prefix.size() - checkpoint_suffix.size())};
+        if (!valid_request_id(result.request_id)) {
+            result.state = RuntimeDebugRequestState::invalid;
+            result.diagnostics = "Runtime checkpoint request ID is invalid.";
+            return result;
+        }
+        result.kind = RuntimeDebugRequestKind::world_checkpoint;
+        result.state = RuntimeDebugRequestState::available;
+        return result;
+    }
     const auto request_begin = prefix.size();
     const auto marker = contents.find(entity_marker, request_begin);
     if (marker == std::string_view::npos) {
@@ -224,6 +237,23 @@ constexpr std::string_view response_filename = "debug-response.json";
 }
 
 } // namespace
+
+bool publish_runtime_checkpoint_request(
+    const RuntimeDevSession& session, const std::string_view request_id,
+    std::string* const diagnostics
+) {
+    std::string message;
+    if (!valid_request_id(request_id) || !session_available(session, message)) {
+        if (diagnostics) *diagnostics = message.empty() ? "Invalid checkpoint request ID." : message;
+        return false;
+    }
+    const auto contents = "{\"schema\":\"" + std::string{runtime_debug_request_schema} +
+        "\",\"request_id\":\"" + std::string{request_id} +
+        "\",\"kind\":\"world_checkpoint\"}\n";
+    const bool ok = write_atomic(request_path(session), contents, message);
+    if (diagnostics) *diagnostics = std::move(message);
+    return ok;
+}
 
 bool publish_runtime_debug_request(
     const RuntimeDevSession& session,

@@ -95,6 +95,7 @@ RuntimeDebugEntitySnapshot sample_runtime_debug_entity(
         return result;
     }
 
+    result.causal_history=world.causal_context(persistent_id);
     const auto snapshot = world.snapshot();
     const auto entity = std::find_if(
         snapshot.entities.begin(),
@@ -181,6 +182,7 @@ std::string serialize_runtime_debug_entity_snapshot(
         append_json_string(output, snapshot.requested_id.to_string());
     }
 
+    output += ",\"causal_history\":"+world::serialize_causal_context(snapshot.causal_history);
     output += ",\"spatial\":";
     if (!snapshot.spatial.has_value()) {
         output += "null";

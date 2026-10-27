@@ -3,6 +3,8 @@
 #include "distance_link_source.hpp"
 #include "dependency_source.hpp"
 #include "character_source.hpp"
+#include "causal_source.hpp"
+#include <algorithm>
 
 #include <vice/world/world.hpp>
 
@@ -90,7 +92,13 @@ ParseResult parse_source_manifest(const std::string_view source) {
             continue;
         }
 
-        if (keyword == "component") {
+        if(keyword=="causal_history") {
+            if(!parsed.causal_history.id.is_nil() || !read_causal_id(values,parsed.causal_history.id) || parsed.causal_history.id.is_nil() || !read_causal_u64(values,parsed.causal_history.next_sequence)) {fail("invalid or duplicate causal history header.");return result;}
+        } else if(keyword=="causal_event") {
+            world::CausalEvent e;
+            if(parsed.causal_history.events.size()>=world::causal_history_capacity || !read_causal_event(values,e)){fail("invalid or oversized causal event history.");return result;}
+            parsed.causal_history.events.push_back(e);
+        } else if (keyword == "component") {
             std::string id_text;
             world::ComponentTypeDesc type;
             if (!(values >> id_text >> type.version >> std::quoted(type.name))) {
@@ -398,6 +406,8 @@ ParseResult parse_source_manifest(const std::string_view source) {
         return result;
     }
 
+    std::sort(parsed.causal_history.events.begin(),parsed.causal_history.events.end(),[](const auto& a,const auto& b){return a.sequence<b.sequence;});
+    if(!world::validate_causal_history(parsed.causal_history,&result.diagnostics))return result;
     if (!world::validate_distance_links(parsed, &result.diagnostics) || !world::validate_dependencies(parsed, &result.diagnostics) || !world::validate_characters(parsed, &result.diagnostics)) return result;
     world::World canonical;
     if (!canonical.restore(parsed)) {

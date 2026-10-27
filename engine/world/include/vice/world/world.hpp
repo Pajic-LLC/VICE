@@ -13,6 +13,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <deque>
 #include <optional>
 #include <span>
 #include <unordered_map>
@@ -92,6 +93,13 @@ public:
     bool clear_character(EntityId entity);
     [[nodiscard]] std::optional<Character> character(EntityId entity) const noexcept;
     [[nodiscard]] std::uint64_t character_revision() const noexcept { return character_revision_; }
+    bool begin_causal_recording(bool new_segment = false);
+    [[nodiscard]] CausalInfo causal_info() const noexcept;
+    [[nodiscard]] CausalHistory causal_snapshot() const;
+    [[nodiscard]] std::optional<CausalEvent> causal_event(std::uint64_t sequence) const noexcept;
+    [[nodiscard]] CausalContext causal_context(PersistentId subject = {}, std::size_t latest = 8, std::size_t budget = causal_query_max_events) const;
+    bool publish_distance_link_break(EntityId entity,float impulse,std::uint64_t solver_step);
+    bool set_dependency_enabled(EntityId entity,bool enabled);
     bool set_dependency(EntityId entity, const Dependency& dependency);
     bool clear_dependency(EntityId entity);
     [[nodiscard]] std::optional<Dependency> dependency(EntityId entity) const noexcept;
@@ -137,6 +145,18 @@ private:
 
     [[nodiscard]] bool link_endpoint_change_allowed(EntityId entity, std::optional<RegionId> region,
         std::optional<RigidMotion> motion) const;
+    struct CausalKey { std::uint64_t sequence = 0; PersistentId id{}; };
+    using CausalBefore = std::vector<std::pair<EntityId,std::optional<DependencyState>>>;
+    [[nodiscard]] bool causal_room(std::size_t count) const noexcept;
+    [[nodiscard]] CausalBefore observe_causal_dependents(EntityId entity,bool include_self) const;
+    [[nodiscard]] RegionId causal_region(EntityId entity,PersistentId root = {}) const noexcept;
+    CausalKey append_causal(CausalEvent event,CausalKey parent);
+    void finish_causal_change(CausalBefore before,CausalEvent producer);
+    bool set_distance_link_impl(EntityId entity,const DistanceLink& link,CausalKind kind);
+    PersistentId causal_id_{}, capture_id_{};
+    std::uint64_t next_causal_sequence_ = 1;
+    std::deque<CausalEvent> causal_events_;
+    bool capturing_causality_ = false;
     void install_dependency(EntityId entity, const Dependency& dependency);
     void remove_dependency_references(EntityId entity);
     std::unordered_map<PersistentId, std::vector<EntityId>, PersistentIdHash> dependency_provider_users_;

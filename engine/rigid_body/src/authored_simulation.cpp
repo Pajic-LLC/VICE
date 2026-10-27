@@ -76,6 +76,7 @@ struct AuthoredSimulation::State {
     std::vector<Body> bodies;
     std::unordered_map<world::PersistentId, std::size_t, world::PersistentIdHash> body_lookup;
     double accumulator = 0;
+    bool unpublished_step = false;
 
     const Domain* domain(world::RegionId id) const noexcept {
         const auto found = domain_lookup.find(id);
@@ -239,6 +240,7 @@ bool AuthoredSimulation::reset(world::World& world, jobs::Scheduler& jobs, std::
     }
     next->character_revision = world.character_revision();
     next->link_revision = world.distance_link_revision();
+    if(!world.begin_causal_recording(true)) return fail(diagnostics,"Causal event sequence is exhausted.");
     state_ = std::move(next);
     if (diagnostics) diagnostics->clear();
     return true;
@@ -246,6 +248,7 @@ bool AuthoredSimulation::reset(world::World& world, jobs::Scheduler& jobs, std::
 
 bool AuthoredSimulation::step(std::string* diagnostics) {
     if (!state_->world) return fail(diagnostics, "Authored simulation has not been initialized.");
+    if(state_->unpublished_step) return fail(diagnostics,"The previous solver step could not publish; reset the simulation.");
     if (state_->world->distance_link_revision() != state_->link_revision) return fail(diagnostics, "Distance links were edited externally; reset the simulation.");
     for (const auto& link : state_->links) {
         if (state_->world->find(link.owner) != link.entity || state_->world->distance_link(link.entity) != link.expected)
@@ -266,6 +269,7 @@ bool AuthoredSimulation::step(std::string* diagnostics) {
         region.domain->set_fidelity(fidelity(current->fidelity));
     }
     state_->coordinator.step();
+    state_->unpublished_step=true;
     // Publish broken identity/state before handoff can move the released endpoints.
     for (const auto& region : state_->regions) {
         for (const auto& event : region.domain->constraint_break_events()) {
@@ -276,7 +280,7 @@ bool AuthoredSimulation::step(std::string* diagnostics) {
             auto broken = link.expected;
             broken.broken = true; broken.last_break_impulse = event.linear_impulse;
             broken.break_step = state_->coordinator.step_index();
-            if (!state_->world->set_distance_link(link.entity, broken)) return fail(diagnostics, "Could not publish broken distance link state.");
+            if (!state_->world->publish_distance_link_break(link.entity,event.linear_impulse,state_->coordinator.step_index())) return fail(diagnostics, "Could not publish broken distance link state.");
             link.expected = broken;
         }
     }
@@ -303,6 +307,7 @@ bool AuthoredSimulation::step(std::string* diagnostics) {
     state_->bridge.orchestrate_characters(*state_->world,state_->coordinator);
     for (auto& c : state_->characters) if (!state_->publish_character(c)) return fail(diagnostics,"Could not publish authoritative character state.");
     state_->character_revision = state_->world->character_revision();
+    state_->unpublished_step=false;
     if (diagnostics) diagnostics->clear();
     return true;
 }

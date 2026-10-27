@@ -1,6 +1,7 @@
 #pragma once
 
 #include <vice/world/camera.hpp>
+#include <vice/world/causal.hpp>
 #include <vice/world/character.hpp>
 #include <vice/world/distance_link.hpp>
 #include <vice/world/dependency.hpp>
@@ -46,6 +47,7 @@ struct WorldSnapshot {
     std::vector<RegionDesc> regions;
     std::vector<SnapshotEntity> entities;
     std::vector<SnapshotRelation> relations;
+    CausalHistory causal_history;
 };
 
 [[nodiscard]] bool validate_characters(const WorldSnapshot& snapshot, std::string* diagnostics = nullptr);

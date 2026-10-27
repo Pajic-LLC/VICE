@@ -112,8 +112,8 @@ int main() {
     require(!deep.restore(chain) && deep.entity_count() == 256, "over-limit chain rejected transactionally");
     // Minimal old v8 file: remove only the new optional presence byte and rehash.
     world::World empty; require(empty.create_entity(id(1)).has_value(), "old fixture");
-    auto bytes = world::encode_world_snapshot(empty.snapshot()).bytes; require(bytes.size() == 69, "minimal current format");
-    bytes.erase(bytes.begin()+64); bytes.erase(bytes.begin()+63); bytes[8]=std::byte{8};
+    auto bytes = world::encode_world_snapshot(empty.snapshot()).bytes; require(bytes.size() == 70, "minimal current format");
+    bytes.pop_back(); bytes.erase(bytes.begin()+64); bytes.erase(bytes.begin()+63); bytes[8]=std::byte{8};
     std::uint64_t hash=14695981039346656037ULL; for (std::size_t i=40;i<bytes.size();++i) { hash ^= std::to_integer<std::uint8_t>(bytes[i]); hash *= 1099511628211ULL; }
     for (std::size_t i=0;i<8;++i) bytes[32+i]=static_cast<std::byte>((hash>>(8U*i))&255U);
     const auto old=world::decode_world_snapshot(bytes); require(old.snapshot && !old.snapshot->entities[0].dependency, "old v8 remains readable");

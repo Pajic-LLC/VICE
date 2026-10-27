@@ -46,7 +46,8 @@ int main() {
     world::World legacy_world;
     require(legacy_world.create_entity(id(falling_id)).has_value(), "legacy entity fixture");
     auto legacy = world::encode_world_snapshot(legacy_world.snapshot()).bytes;
-    require(legacy.size() == 69U, "minimal current fixture size");
+    require(legacy.size() == 70U, "minimal current fixture size");
+    legacy.pop_back();
     legacy.erase(legacy.begin() + 64);
     legacy.erase(legacy.begin() + 63);
     legacy.erase(legacy.begin() + 62);

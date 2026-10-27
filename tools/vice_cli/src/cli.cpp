@@ -516,6 +516,8 @@ void append_regions(std::string& data, const world::WorldSnapshot& snapshot) {
 
 void append_entities(std::string& data, const world::WorldSnapshot& snapshot) {
     world::World observed; (void)observed.restore(snapshot);
+    const world::CausalContext history{observed.causal_info(),snapshot.causal_history.events,observed.causal_info().first_sequence>1};
+    data += ",\"causal_history\":"+world::serialize_causal_context(history);
     std::vector<const world::SnapshotEntity*> values;
     values.reserve(snapshot.entities.size());
     for (const auto& value : snapshot.entities) values.push_back(&value);
@@ -786,6 +788,9 @@ CommandResult execute(
     if (arguments.size() == 3U && arguments[0] == "runtime" && arguments[1] == "profile") {
         return execute_runtime_profile(std::filesystem::path{std::string{arguments[2]}});
     }
+    if (arguments.size() == 4U && arguments[0] == "runtime" && arguments[1] == "checkpoint") {
+        return execute_runtime_checkpoint(std::filesystem::path{arguments[2]}, std::filesystem::path{arguments[3]});
+    }
     if (arguments.size() == 4U && arguments[0] == "runtime" && arguments[1] == "debug") {
         return execute_runtime_debug(std::filesystem::path{std::string{arguments[2]}}, arguments[3]);
     }
@@ -793,7 +798,7 @@ CommandResult execute(
         return failure(
             exit_usage,
             "usage",
-            "Usage: vice <project|world|runtime> <inspect|validate|build|run> <path>"
+            "Usage: vice <project|world|runtime> <inspect|validate|build|run> <path>; vice runtime checkpoint <session> <new-output.vworldc>"
         );
     }
 

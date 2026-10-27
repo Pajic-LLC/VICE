@@ -64,13 +64,25 @@ bool World::set_dependency(EntityId entity, const Dependency& d) {
     const auto id = slots_[entity.index].persistent_id;
     for (auto& e : candidate.entities) if (e.persistent_id == id) e.dependency = d;
     if (!validate_dependencies(candidate)) return false;
+    auto before=observe_causal_dependents(entity,true);
+    if(!causal_room(before.size()+1)) return false;
     install_dependency(entity, d);
+    CausalEvent event;event.kind=CausalKind::dependency_configured;event.origin=CausalOrigin::authoring;
+    event.subject=id;event.first=d.provider;event.second=d.gate;event.value=d.enabled;event.region=causal_region(entity);
+    finish_causal_change(std::move(before),event);
     return true;
 }
 bool World::clear_dependency(EntityId entity) {
     if (!alive(entity) || dependency_provider_users_.contains(slots_[entity.index].persistent_id)) return false;
+    const auto previous=dependency(entity);
+    if(!previous) return true;
+    auto before=observe_causal_dependents(entity,true);
+    if(!causal_room(before.size()+1)) return false;
+    CausalEvent event;event.kind=CausalKind::dependency_removed;event.origin=CausalOrigin::authoring;event.subject=*persistent_id(entity);
+    event.first=previous->provider;event.second=previous->gate;event.region=causal_region(entity);
     remove_dependency_references(entity);
     slots_[entity.index].dependency.reset();
+    finish_causal_change(std::move(before),event);
     return true;
 }
 std::optional<Dependency> World::dependency(EntityId entity) const noexcept {

@@ -35,4 +35,17 @@ TextFileResult read_text_file(const std::filesystem::path& path, const std::size
     return result;
 }
 
+FileReplaceResult replace_file_if_unchanged(
+    const std::filesystem::path& path,
+    const std::optional<std::span<const std::byte>> expected,
+    const std::span<const std::byte> replacement
+) {
+    const auto view = [](const std::span<const std::byte> bytes) {
+        return bytes.empty() ? std::string_view{} : std::string_view{
+            reinterpret_cast<const char*>(bytes.data()), bytes.size()};
+    };
+    return replace_text_file_if_unchanged(path,
+        expected ? std::optional{view(*expected)} : std::nullopt, view(replacement));
+}
+
 } // namespace vice::platform

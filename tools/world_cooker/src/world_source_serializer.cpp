@@ -3,6 +3,7 @@
 #include "distance_link_source.hpp"
 #include "dependency_source.hpp"
 #include "character_source.hpp"
+#include "causal_source.hpp"
 
 #include <vice/world/world.hpp>
 
@@ -45,6 +46,7 @@ std::string serialize_source_manifest(
     std::string* const diagnostics
 ) {
     if (!world::validate_distance_links(snapshot, diagnostics) || !world::validate_dependencies(snapshot, diagnostics) || !world::validate_characters(snapshot, diagnostics)) return {};
+    if(!world::validate_causal_history(snapshot.causal_history,diagnostics))return {};
     world::World canonical;
     if (!canonical.restore(snapshot)) {
         if (diagnostics != nullptr) *diagnostics = "World snapshot violates World validation rules.";
@@ -55,6 +57,7 @@ std::string serialize_source_manifest(
     std::ostringstream output;
     output << std::setprecision(std::numeric_limits<double>::max_digits10);
     output << "vice-world-source 1\n\n";
+    write_causal_history(output,value.causal_history);
 
     for (const auto& type : value.component_types) {
         output << "component " << type.id.value.to_string() << ' ' << type.version << ' '
