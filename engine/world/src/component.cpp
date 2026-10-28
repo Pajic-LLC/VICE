@@ -256,6 +256,7 @@ bool read_component_fields(std::istream &in, std::vector<ComponentFieldDesc> &fi
     return true;
 }
 void write_component_fields(std::ostream &out, const std::vector<ComponentFieldDesc> &fields) {
+    out.imbue(std::locale::classic());
     out << fields.size();
     for (const auto &f : fields)
         out << ' ' << f.id << ' ' << kind_name(f.kind) << ' ' << std::quoted(f.name);
@@ -325,6 +326,7 @@ bool read_component_payload(std::istream &in, ComponentPayload &p) {
     return true;
 }
 void write_component_payload(std::ostream &out, const ComponentPayload &p) {
+    out.imbue(std::locale::classic());
     out << std::setprecision(17) << p.type.value.to_string() << ' ' << p.version << ' '
         << p.fields.size();
     for (const auto &f : p.fields) {

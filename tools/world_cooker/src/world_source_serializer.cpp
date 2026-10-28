@@ -1,3 +1,4 @@
+#include <locale>
 #include <vice/tools/world_cooker.hpp>
 #include "rigid_box_source.hpp"
 #include "distance_link_source.hpp"
@@ -58,6 +59,7 @@ std::string serialize_source_manifest(
 
     const auto value = canonical.snapshot();
     std::ostringstream output;
+    output.imbue(std::locale::classic());
     output << std::setprecision(std::numeric_limits<double>::max_digits10);
     output << "vice-world-source 1\n\n";
     write_causal_history(output,value.causal_history);

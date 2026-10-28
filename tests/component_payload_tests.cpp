@@ -4,6 +4,7 @@
 #include <cstdlib>
 #include <iostream>
 #include <limits>
+#include <locale>
 #include <vice/tools/world_authoring.hpp>
 #include <vice/tools/world_cooker.hpp>
 #include <vice/tools/world_edit.hpp>
@@ -136,6 +137,19 @@ int main() {
     require(!w.restore(snapshot) && encoded(w) == initial,
             "missing schema rejected transactionally");
     const auto source = tools::world_cooker::serialize_source_manifest(w.snapshot());
+    struct Comma final : std::numpunct<char> {
+        char do_decimal_point() const override { return ','; }
+        char do_thousands_sep() const override { return '.'; }
+        std::string do_grouping() const override { return "\3"; }
+    };
+    const auto previous_locale =
+        std::locale::global(std::locale(std::locale::classic(), new Comma));
+    const auto localized_source = tools::world_cooker::serialize_source_manifest(w.snapshot());
+    const auto localized_parse = tools::world_cooker::parse_source_manifest(source);
+    std::locale::global(previous_locale);
+    require(localized_source == source && localized_parse.snapshot &&
+                tools::world_cooker::serialize_source_manifest(*localized_parse.snapshot) == source,
+            "source and component values ignore process locale");
     const auto parsed = tools::world_cooker::parse_source_manifest(source);
     require(parsed.snapshot &&
                 tools::world_cooker::serialize_source_manifest(*parsed.snapshot) == source,
@@ -150,7 +164,7 @@ int main() {
     world::World bounded;
     const auto owner = bounded.create_entity();
     for (unsigned i = 0; i < 17; ++i) {
-        world::ComponentTypeDesc t{{id(200 + i)}, "Marker" + std::to_string(i), 1};
+        world::ComponentTypeDesc t{{id(200 + i)}, "Marker" + std::to_string(i), 1, {}};
         require(bounded.register_component_type(t), "bounded schema");
         const bool attached = bounded.set_component(owner, {t.id, 1, {}});
         require(attached == (i < 16), "per-owner payload limit rejects without mutation");
@@ -171,7 +185,7 @@ int main() {
                 world::decode_world_snapshot(encoded(maximum)).snapshot.has_value(),
             "maximum escaped text payload roundtrips within bounded record");
     world::World tags;
-    require(tags.register_component_type({{id(101)}, "Tag", 1}) &&
+    require(tags.register_component_type({{id(101)}, "Tag", 1, {}}) &&
                 tags.set_component(tags.create_entity(), {{id(101)}, 1, {}}),
             "empty schema is a persistent marker component");
     world::World empty;
@@ -190,7 +204,7 @@ int main() {
     require(world::decode_world_snapshot(legacy).snapshot.has_value(),
             "v15 without component extensions remains readable");
     world::World legacy_types;
-    const world::ComponentTypeDesc legacy_type{{id(800)}, "Legacy", 1};
+    const world::ComponentTypeDesc legacy_type{{id(800)}, "Legacy", 1, {}};
     require(legacy_types.register_component_type(legacy_type), "legacy identity-only schema");
     auto legacy_schema = encoded(legacy_types);
     const auto extension = 40 + 16 + 4 + 4 + legacy_type.name.size();

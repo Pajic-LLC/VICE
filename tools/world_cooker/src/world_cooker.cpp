@@ -1,3 +1,4 @@
+#include <locale>
 #include <vice/tools/world_cooker.hpp>
 #include "rigid_box_source.hpp"
 #include "distance_link_source.hpp"
@@ -77,6 +78,7 @@ ParseResult parse_source_manifest(const std::string_view source) {
         if (line.empty()) continue;
 
         std::istringstream values{line};
+        values.imbue(std::locale::classic());
         std::string keyword;
         values >> keyword;
 

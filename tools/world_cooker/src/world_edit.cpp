@@ -1,3 +1,4 @@
+#include <locale>
 #include <vice/tools/world_edit.hpp>
 #include "rigid_box_source.hpp"
 #include "distance_link_source.hpp"
@@ -281,6 +282,7 @@ EditRequestResult parse_edit_request(const std::string_view source) {
     while (std::getline(lines, line)) {
         ++line_number;
         std::istringstream input{line};
+        input.imbue(std::locale::classic());
         input.imbue(std::locale::classic());
         std::string name;
         if (!(input >> name) || name.starts_with('#')) continue;
