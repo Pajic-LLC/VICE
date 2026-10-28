@@ -64,6 +64,7 @@ std::string serialize_source_manifest(
     output << "vice-world-source 1\n\n";
     output<<"world_clock ";world::write_world_clock(output,value.clock);output<<'\n';
     write_causal_history(output,value.causal_history);
+    for (const auto &rule : value.rules) { output << "world_rule "; world::write_world_rule(output, rule); output << '\n'; }
     for (const auto &type : value.quantity_types) {
         output << "quantity_type ";
         world::write_quantity_type(output, type);

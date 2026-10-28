@@ -92,6 +92,14 @@ std::optional<Operation> read_operation(const std::string& name, std::istream& i
     } else if (name == "clear_transform") {
         SetEntityTransform op;
         if (read_id(input, op.entity)) return op;
+    } else if (name == "add_rule") {
+        CreateRule op; if (!world::read_world_rule(input, op.rule)) return std::nullopt; return op;
+    } else if (name == "remove_rule") {
+        RemoveRule op; if (!read_id(input, op.id)) return std::nullopt; return op;
+    } else if (name == "set_rule_enabled") {
+        SetRuleEnabled op; unsigned enabled = 0;
+        if (!read_id(input, op.id) || !(input >> enabled) || enabled > 1) return std::nullopt;
+        op.enabled = enabled != 0; return op;
     } else if (name == "register_quantity_type") {
         RegisterQuantityType op;
         if (!world::read_quantity_type(input, op.type))
@@ -202,7 +210,18 @@ void affected(FileEditResult& result, const Transaction& transaction, const worl
     for (const auto& op : transaction.operations) {
         std::visit([&](const auto& value) {
             using T = std::decay_t<decltype(value)>;
-            if constexpr (std::is_same_v<T, RegisterQuantityType>) {
+            if constexpr (std::is_same_v<T, CreateRule> || std::is_same_v<T, RemoveRule> || std::is_same_v<T, SetRuleEnabled>) {
+                const auto add = [&](const world::WorldRule &rule) {
+                    for (const auto id : world::rule_entities(rule)) {
+                        result.affected_entities.push_back(id);
+                        for (const auto *snapshot : {&before, &after})
+                            for (const auto &e : snapshot->entities)
+                                if (e.persistent_id == id && e.spatial_state) result.affected_regions.push_back(e.spatial_state->region);
+                    }
+                };
+                if constexpr (std::is_same_v<T, CreateRule>) add(value.rule);
+                else for (const auto &rule : before.rules) if (rule.id == value.id) add(rule);
+            } else if constexpr (std::is_same_v<T, RegisterQuantityType>) {
             } else if constexpr (std::is_same_v<T, SetQuantityAccount> ||
                                  std::is_same_v<T, RemoveQuantityAccount>) {
                 const auto id = [&] {

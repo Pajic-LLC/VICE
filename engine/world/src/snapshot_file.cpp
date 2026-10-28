@@ -407,6 +407,8 @@ WorldSnapshotEncodeResult encode_world_snapshot(const WorldSnapshot& snapshot_da
         write_quantity_account(text, account);
         append_string(payload, text.str());
     }
+    append_u32(payload, static_cast<std::uint32_t>(snapshot.rules.size()));
+    for (const auto &rule : snapshot.rules) { std::ostringstream text; write_world_rule(text, rule); append_string(payload, text.str()); }
     const auto& clock=snapshot.clock;append_u64(payload,clock.ticks);append_u32(payload,clock.rate_milli);append_u32(payload,clock.rate_remainder);append_f64(payload,clock.input_fraction);append_u8(payload,clock.paused?1U:0U);append_u8(payload,clock.automatic?1U:0U);
     result.bytes.reserve(header_size + payload.size());
     result.bytes.insert(result.bytes.end(), world_magic.begin(), world_magic.end());
@@ -962,6 +964,17 @@ WorldSnapshotDecodeResult decode_world_snapshot(const std::span<const std::byte>
                 return result;
             }
             snapshot.quantity_accounts.push_back(a);
+        }
+    }
+    if (version >= 22U) {
+        std::uint32_t count = 0;
+        if (!reader.read_u32(count) || count > world_rule_capacity) { result.diagnostics = "Unsafe rule count."; return result; }
+        for (std::uint32_t i = 0; i < count; ++i) {
+            std::string text; WorldRule rule;
+            if (!reader.read_string(text, 16384)) { result.diagnostics = "Truncated rule."; return result; }
+            std::istringstream in(text);
+            if (!read_world_rule(in, rule) || (in >> std::ws, !in.eof())) { result.diagnostics = "Invalid rule record."; return result; }
+            snapshot.rules.push_back(std::move(rule));
         }
     }
     if(version>=18U){std::uint8_t paused=0,automatic=0;auto& c=snapshot.clock;if(!reader.read_u64(c.ticks)||!reader.read_u32(c.rate_milli)||!reader.read_u32(c.rate_remainder)||!reader.read_f64(c.input_fraction)||!reader.read_u8(paused)||paused>1||!reader.read_u8(automatic)||automatic>1){result.diagnostics="Invalid/truncated World clock.";return result;}c.paused=paused!=0;c.automatic=automatic!=0;if(!valid(c)){result.diagnostics="Invalid World clock state.";return result;}}

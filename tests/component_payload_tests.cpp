@@ -190,7 +190,7 @@ int main() {
             "empty schema is a persistent marker component");
     world::World empty;
     auto legacy = encoded(empty);
-    legacy.resize(legacy.size() - 46);
+    legacy.resize(legacy.size() - 50);
     legacy[8] = std::byte{15};
     const auto old = world::decode_world_snapshot(legacy);
     require(!old, "checksum protects truncated format conversion");
@@ -210,7 +210,7 @@ int main() {
     const auto extension = 40 + 16 + 4 + 4 + legacy_type.name.size();
     legacy_schema.erase(legacy_schema.begin() + static_cast<std::ptrdiff_t>(extension),
                         legacy_schema.begin() + static_cast<std::ptrdiff_t>(extension + 5));
-    legacy_schema.resize(legacy_schema.size() - 46);
+    legacy_schema.resize(legacy_schema.size() - 50);
     legacy_schema[8] = std::byte{15};
     hash = 14695981039346656037ULL;
     for (std::size_t i = 40; i < legacy_schema.size(); ++i) {

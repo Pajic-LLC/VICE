@@ -98,7 +98,11 @@ ParseResult parse_source_manifest(const std::string_view source) {
             continue;
         }
 
-        if (keyword == "quantity_type") {
+        if (keyword == "world_rule") {
+            world::WorldRule rule;
+            if (parsed.rules.size() >= world::world_rule_capacity || !world::read_world_rule(values, rule)) { fail("invalid World rule."); return result; }
+            parsed.rules.push_back(std::move(rule));
+        } else if (keyword == "quantity_type") {
             world::QuantityTypeDesc type;
             if (parsed.quantity_types.size() >= world::quantity_type_capacity ||
                 !world::read_quantity_type(values, type)) {

@@ -100,6 +100,8 @@ RuntimeDebugEntitySnapshot sample_runtime_debug_entity(
     result.clock=world.world_clock();
     result.signals = world.signal_context(persistent_id);
     result.schedules = world.schedule_context(persistent_id);
+    result.rules = world.rule_info();
+    result.rule_page = world.rule_page({}, 4);
     result.causal_history=world.causal_context(persistent_id);
     const auto add_schema = [&](world::ComponentTypeId type) {
         if (std::none_of(result.component_schemas.begin(), result.component_schemas.end(),
@@ -248,6 +250,7 @@ std::string serialize_runtime_debug_entity_snapshot(
     }
     output += ']';
     output += ",\"world_schedules\":" + world::serialize_schedule_context(snapshot.schedules);
+    output += ",\"world_rules\":{\"count\":" + std::to_string(snapshot.rules.count) + ",\"enabled\":" + std::to_string(snapshot.rules.enabled) + ",\"pending\":" + std::to_string(snapshot.rules.pending) + ",\"page\":" + world::serialize_rule_page(snapshot.rule_page) + "}";
     output += ",\"world_signals\":" + world::serialize_signal_context(snapshot.signals);
     output += ",\"world_clock\":"+world::serialize_world_clock(snapshot.clock);
     output += ",\"causal_history\":"+world::serialize_causal_context(snapshot.causal_history);

@@ -250,7 +250,7 @@ int main() {
             "inactive region resume");
     world::World legacy;
     auto old = bytes(legacy);
-    old.erase(old.end() - 34, old.end() - 26);
+    old.erase(old.end() - 38, old.end() - 26);
     old[8] = std::byte{20};
     rehash(old);
     const auto v20 = world::decode_world_snapshot(old);
@@ -259,12 +259,12 @@ int main() {
             "v20 defaults empty quantities");
     auto malformed = bytes(legacy);
     for (unsigned i = 0; i < 4; ++i)
-        malformed[malformed.size() - 34 + i] = std::byte{255};
+        malformed[malformed.size() - 38 + i] = std::byte{255};
     rehash(malformed);
     require(!world::decode_world_snapshot(malformed).snapshot, "unsafe quantity type count");
     auto bad_accounts = bytes(legacy);
     for (unsigned i = 0; i < 4; ++i)
-        bad_accounts[bad_accounts.size() - 30 + i] = std::byte{255};
+        bad_accounts[bad_accounts.size() - 34 + i] = std::byte{255};
     rehash(bad_accounts);
     require(!world::decode_world_snapshot(bad_accounts).snapshot, "unsafe account table count");
     world::World bounded;

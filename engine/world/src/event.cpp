@@ -201,6 +201,7 @@ WorldEventEmission World::emit_world_event_impl(WorldEventRequest r, CausalOrigi
         if (!capturing_causality_ && !begin_causal_recording())
             return fail(WorldEventResult::sequence_exhausted);
         const auto ref = append_causal(std::move(event), parent);
+        queue_rules(causal_events_.back().data->payload.type, causal_events_.back().subject, {causal_id_, ref.id, ref.sequence});
         return {WorldEventResult::success, {causal_id_, ref.id, ref.sequence}};
     }
     if (signal_stream_.is_nil())

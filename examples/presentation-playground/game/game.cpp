@@ -253,6 +253,35 @@ bool start_quantities(Context &c) {
     return moved == Result::success || moved == Result::insufficient_quantity ||
            moved == Result::quantity_capacity_exceeded;
 }
+constexpr EntityId rule_identity(unsigned n) {
+    auto id = lifecycle_type(); id.bytes[14] = 10; id.bytes[15] = static_cast<std::uint8_t>(n); return id;
+}
+bool start_rules(Context &c) {
+    ComponentSchema schema; schema.type = rule_identity(1); schema.field_count = 1;
+    std::strcpy(schema.name, "PulseObserved"); schema.fields[0].id = 1;
+    schema.fields[0].kind = ComponentKind::integer; std::strcpy(schema.fields[0].name, "value");
+    if (c.register_component_schema(schema) != Result::success) return false;
+    ComponentData payload; payload.type = schema.type; payload.field_count = 1;
+    payload.fields[0].id = 1; payload.fields[0].kind = ComponentKind::integer; payload.fields[0].integer = 1;
+    for (unsigned n = 2; n <= 3; ++n) {
+        RuleSnapshot existing;
+        const auto prior = c.read_rule(rule_identity(n), existing);
+        if (prior == Result::success) continue;
+        if (prior != Result::not_found) return false;
+        RuleDefinition rule; rule.id = rule_identity(n); rule.trigger_type = n == 2 ? pulse_type() : schema.type;
+        rule.trigger_subject = entity(2); rule.condition_count = 1;
+        rule.conditions[0].operation = RuleConditionOperation::relation_exists; rule.conditions[0].relation = connection();
+        if (n == 2) {
+            rule.effect.operation = RuleEffectOperation::emit_event; rule.effect.event.subject = entity(2);
+            rule.effect.event.target = entity(3); rule.effect.event.payload = payload;
+        } else {
+            rule.effect.operation = RuleEffectOperation::set_component; rule.effect.entity = entity(3);
+            rule.effect.component = payload;
+        }
+        if (c.add_rule(rule) != Result::success) return false;
+    }
+    return true;
+}
 class InteractionGame final : public Game {
     bool automatic_ = false, up_ = false, down_ = false, left_ = false, right_ = false,
          brake_ = false;
@@ -329,7 +358,7 @@ class InteractionGame final : public Game {
         std::strcpy(edge_schema.name, "ConnectionState");
         if (c.register_component_schema(edge_schema) != Result::success ||
             !relation_session(c, true) || !lifecycle_fact(c) || !start_pulse(c) ||
-            !start_quantities(c))
+            !start_quantities(c) || !start_rules(c))
             return false;
         CharacterSnapshot character;
         CharacterAttachmentSnapshot a;

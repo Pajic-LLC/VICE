@@ -171,7 +171,7 @@ int main() {
     const auto legacy_owner = old.create_entity();
     require(old.set_component(legacy_owner, payload()), "legacy component");
     auto legacy = bytes(old);
-    legacy.resize(legacy.size() - 42);
+    legacy.resize(legacy.size() - 46);
     legacy[8] = std::byte{16};
     rehash(legacy);
     const auto v16 = world::decode_world_snapshot(legacy);
@@ -186,7 +186,7 @@ int main() {
     auto malformed = bytes(wire);
     std::ostringstream record;
     world::write_component_payload(record, *wire.relation_component(edge, {id(100)}));
-    const auto table = malformed.size() - (26 + 4 + 48 + 4 + record.str().size());
+    const auto table = malformed.size() - (30 + 4 + 48 + 4 + record.str().size());
     malformed[table + 4] ^= std::byte{1};
     rehash(malformed);
     require(!world::decode_world_snapshot(malformed),

@@ -701,6 +701,9 @@ void append_relations(std::string& data, const world::WorldSnapshot& snapshot) {
     data += ",\"reduced\":" + std::to_string(reduced_regions);
     data += ",\"full\":" + std::to_string(full_regions) + "}},";
     data+="\"world_clock\":"+world::serialize_world_clock(snapshot.clock)+',';
+    data += "\"rules\":[";
+    for (std::size_t i = 0; i < snapshot.rules.size(); ++i) { if (i) data += ','; data += world::serialize_world_rule(snapshot.rules[i]); }
+    data += "],";
     data += "\"quantity_types\":[";
     for (std::size_t i = 0; i < snapshot.quantity_types.size(); ++i) {
         if (i)

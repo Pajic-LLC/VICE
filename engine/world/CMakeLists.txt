@@ -5,6 +5,7 @@ add_library(
     src/event.cpp
     src/schedule.cpp
     src/quantity.cpp
+    src/rule.cpp
     src/clock.cpp
     src/causal.cpp
     src/character.cpp

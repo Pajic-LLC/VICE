@@ -1,3 +1,4 @@
+#include <vice/world/world.hpp>
 #include <vice/tools/world_authoring.hpp>
 
 #include <vice/tools/world_cooker.hpp>
@@ -71,7 +72,17 @@ namespace {
         [&](const auto& value) -> bool {
             using Value = std::decay_t<decltype(value)>;
 
-            if constexpr (std::is_same_v<Value, RegisterQuantityType>) {
+            if constexpr (std::is_same_v<Value, CreateRule>) {
+                world::World check;
+                if (!check.restore(candidate) || check.add_rule(value.rule) != world::RuleResult::success) { diagnostics = "Invalid or duplicate fresh rule."; return false; }
+                candidate = check.snapshot(); return true;
+            } else if constexpr (std::is_same_v<Value, RemoveRule> || std::is_same_v<Value, SetRuleEnabled>) {
+                const auto found = std::find_if(candidate.rules.begin(), candidate.rules.end(), [&](const auto &rule) { return rule.id == value.id; });
+                if (found == candidate.rules.end()) { diagnostics = "Rule does not exist."; return false; }
+                if constexpr (std::is_same_v<Value, RemoveRule>) candidate.rules.erase(found);
+                else { found->enabled = value.enabled; if (!value.enabled) found->pending.reset(); }
+                return true;
+            } else if constexpr (std::is_same_v<Value, RegisterQuantityType>) {
                 if (!world::valid_quantity_type(value.type)) {
                     diagnostics = "Invalid quantity type.";
                     return false;

@@ -176,6 +176,7 @@ enum class Result : std::uint32_t {
     quantity_account_exists,
     quantity_type_in_use,
     quantity_event_rejected,
+    rule_exists,
 };
 enum class Motion : std::uint32_t { static_body, kinematic_body, dynamic_body };
 struct EntitySnapshot {
@@ -475,6 +476,61 @@ struct QuantityReceiptSnapshot {
     EventRef event;
     std::int64_t source_before = 0, source_after = 0, target_before = 0, target_after = 0;
 };
+enum class RuleCompare : std::uint32_t { equal, not_equal, less, less_equal, greater, greater_equal };
+enum class RuleConditionOperation : std::uint32_t { entity_exists, component_field, relation_exists, quantity, time_at_least };
+enum class RuleEffectOperation : std::uint32_t { set_component, emit_event, quantity, relation, schedule_event };
+enum class RuleOutcome : std::uint32_t { never_evaluated, applied, condition_false, missing_state, trigger_pruned, effect_rejected };
+struct RuleCondition {
+    RuleConditionOperation operation = RuleConditionOperation::entity_exists;
+    RuleCompare comparison = RuleCompare::equal;
+    EntityId entity{}, type{};
+    std::uint32_t version = 1;
+    ComponentValue field;
+    RelationKey relation;
+    QuantityKey quantity;
+    std::int64_t amount = 0;
+    std::uint64_t not_before_ticks = 0;
+};
+struct RuleEffect {
+    RuleEffectOperation operation = RuleEffectOperation::set_component;
+    EntityId entity{};
+    ComponentData component;
+    WorldEventRequest event;
+    QuantityTransactionRequest quantity;
+    RelationKey relation;
+    std::uint32_t relation_present = 1;
+    std::uint64_t delay_ticks = 0;
+};
+struct RuleDefinition {
+    std::uint32_t size = sizeof(RuleDefinition), version = 1, enabled = 1, condition_count = 0;
+    EntityId id{}, trigger_type{}, trigger_subject{};
+    RuleCondition conditions[8]{};
+    RuleEffect effect;
+};
+struct RuleSummary {
+    EntityId id{}, trigger_type{}, trigger_subject{};
+    std::uint32_t enabled = 0, condition_count = 0, effect_operation = 0, condition_index = 0, detail = 0;
+    RuleOutcome outcome = RuleOutcome::never_evaluated;
+    std::uint64_t evaluations = 0, coalesced = 0;
+    EventRef pending, trigger, output;
+    EntityId schedule{};
+};
+struct RuleSnapshot {
+    std::uint32_t size = sizeof(RuleSnapshot);
+    RuleDefinition definition;
+    RuleSummary summary;
+};
+struct RulePageSnapshot {
+    std::uint32_t size = sizeof(RulePageSnapshot), count = 0, has_more = 0;
+    EntityId after{};
+    RuleSummary entries[64]{};
+};
+struct RuleInfoSnapshot {
+    std::uint32_t size = sizeof(RuleInfoSnapshot), count = 0, enabled = 0, pending = 0, capacity = 512, dispatch_budget = 64;
+};
+struct RuleDispatchSnapshot {
+    std::uint32_t size = sizeof(RuleDispatchSnapshot), evaluated = 0, applied = 0, rejected = 0, pending = 0;
+};
 struct HostApi {
     std::uint32_t abi_version = module::abi_version;
     std::uint32_t size = sizeof(HostApi);
@@ -553,6 +609,13 @@ struct HostApi {
                                      QuantityAccountsSnapshot *) noexcept = nullptr;
     Result (*transact_quantity)(void *, const QuantityTransactionRequest *,
                                 QuantityReceiptSnapshot *) noexcept = nullptr;
+    Result (*add_rule)(void *, const RuleDefinition *) noexcept = nullptr;
+    Result (*remove_rule)(void *, EntityId) noexcept = nullptr;
+    Result (*set_rule_enabled)(void *, EntityId, std::uint32_t) noexcept = nullptr;
+    Result (*read_rule)(void *, EntityId, RuleSnapshot *) noexcept = nullptr;
+    Result (*read_rules)(void *, RulePageSnapshot *) noexcept = nullptr;
+    Result (*read_rule_info)(void *, RuleInfoSnapshot *) noexcept = nullptr;
+    Result (*dispatch_rules)(void *, std::uint32_t, RuleDispatchSnapshot *) noexcept = nullptr;
 };
 
 inline constexpr std::size_t host_api_v1_size = offsetof(HostApi, read_entity);
@@ -879,6 +942,34 @@ public:
             !host_->transact_quantity)
             return Result::unavailable;
         return host_->transact_quantity(host_->context, &request, &output);
+    }
+    [[nodiscard]] Result add_rule(const RuleDefinition &input) const noexcept {
+        if (!host_ || host_->size < offsetof(HostApi, add_rule) + sizeof(host_->add_rule) || !host_->add_rule) return Result::unavailable;
+        return host_->add_rule(host_->context, &input);
+    }
+    [[nodiscard]] Result remove_rule(EntityId id) const noexcept {
+        if (!host_ || host_->size < offsetof(HostApi, remove_rule) + sizeof(host_->remove_rule) || !host_->remove_rule) return Result::unavailable;
+        return host_->remove_rule(host_->context, id);
+    }
+    [[nodiscard]] Result set_rule_enabled(EntityId id, std::uint32_t enabled) const noexcept {
+        if (!host_ || host_->size < offsetof(HostApi, set_rule_enabled) + sizeof(host_->set_rule_enabled) || !host_->set_rule_enabled) return Result::unavailable;
+        return host_->set_rule_enabled(host_->context, id, enabled);
+    }
+    [[nodiscard]] Result read_rule(EntityId id, RuleSnapshot &output) const noexcept {
+        if (!host_ || host_->size < offsetof(HostApi, read_rule) + sizeof(host_->read_rule) || !host_->read_rule) return Result::unavailable;
+        return host_->read_rule(host_->context, id, &output);
+    }
+    [[nodiscard]] Result read_rules(RulePageSnapshot &output) const noexcept {
+        if (!host_ || host_->size < offsetof(HostApi, read_rules) + sizeof(host_->read_rules) || !host_->read_rules) return Result::unavailable;
+        return host_->read_rules(host_->context, &output);
+    }
+    [[nodiscard]] Result read_rule_info(RuleInfoSnapshot &output) const noexcept {
+        if (!host_ || host_->size < offsetof(HostApi, read_rule_info) + sizeof(host_->read_rule_info) || !host_->read_rule_info) return Result::unavailable;
+        return host_->read_rule_info(host_->context, &output);
+    }
+    [[nodiscard]] Result dispatch_rules(std::uint32_t budget, RuleDispatchSnapshot &output) const noexcept {
+        if (!host_ || host_->size < offsetof(HostApi, dispatch_rules) + sizeof(host_->dispatch_rules) || !host_->dispatch_rules) return Result::unavailable;
+        return host_->dispatch_rules(host_->context, budget, &output);
     }
     [[nodiscard]] Result schedule_event(const ScheduleRequest &request,
                                         EntityId &output) const noexcept {
