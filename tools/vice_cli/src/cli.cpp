@@ -701,6 +701,19 @@ void append_relations(std::string& data, const world::WorldSnapshot& snapshot) {
     data += ",\"reduced\":" + std::to_string(reduced_regions);
     data += ",\"full\":" + std::to_string(full_regions) + "}},";
     data+="\"world_clock\":"+world::serialize_world_clock(snapshot.clock)+',';
+    data += "\"quantity_types\":[";
+    for (std::size_t i = 0; i < snapshot.quantity_types.size(); ++i) {
+        if (i)
+            data += ',';
+        data += world::serialize_quantity_type(snapshot.quantity_types[i]);
+    }
+    data += "],\"quantity_accounts\":[";
+    for (std::size_t i = 0; i < snapshot.quantity_accounts.size(); ++i) {
+        if (i)
+            data += ',';
+        data += world::serialize_quantity_account(snapshot.quantity_accounts[i]);
+    }
+    data += "],";
     world::SchedulerInfo scheduler;
     scheduler.count = snapshot.schedules.size();
     for (const auto &s : snapshot.schedules)

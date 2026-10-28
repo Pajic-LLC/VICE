@@ -98,7 +98,23 @@ ParseResult parse_source_manifest(const std::string_view source) {
             continue;
         }
 
-        if (keyword == "world_schedule") {
+        if (keyword == "quantity_type") {
+            world::QuantityTypeDesc type;
+            if (parsed.quantity_types.size() >= world::quantity_type_capacity ||
+                !world::read_quantity_type(values, type)) {
+                fail("invalid quantity type.");
+                return result;
+            }
+            parsed.quantity_types.push_back(std::move(type));
+        } else if (keyword == "quantity_account") {
+            world::QuantityAccount account;
+            if (parsed.quantity_accounts.size() >= world::quantity_account_capacity ||
+                !world::read_quantity_account(values, account)) {
+                fail("invalid quantity account.");
+                return result;
+            }
+            parsed.quantity_accounts.push_back(account);
+        } else if (keyword == "world_schedule") {
             world::WorldSchedule schedule;
             if (parsed.schedules.size() >= world::world_schedule_capacity ||
                 !world::read_world_schedule(values, schedule)) {

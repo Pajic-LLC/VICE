@@ -229,14 +229,14 @@ int main() {
             "due event resolves current large-world region");
     world::World legacy;
     auto old = bytes(legacy);
-    old.erase(old.end() - 30, old.end() - 26);
+    old.erase(old.end() - 38, old.end() - 26);
     old[8] = std::byte{19};
     rehash(old);
     const auto v19 = world::decode_world_snapshot(old);
     require(v19.snapshot && v19.snapshot->schedules.empty(), "v19 loads empty scheduler");
     auto malformed = bytes(legacy);
     for (unsigned i = 0; i < 4; ++i)
-        malformed[malformed.size() - 30 + i] = std::byte{255};
+        malformed[malformed.size() - 38 + i] = std::byte{255};
     rehash(malformed);
     require(!world::decode_world_snapshot(malformed).snapshot,
             "unsafe scheduler table count rejected");

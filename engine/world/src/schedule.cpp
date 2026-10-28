@@ -85,7 +85,8 @@ ScheduleCreation World::install_schedule(WorldSchedule s, bool restoring) {
         static_cast<unsigned>(s.failure) > 3 ||
         static_cast<unsigned>(s.event_result) >
             static_cast<unsigned>(WorldEventResult::sequence_exhausted) ||
-        s.event.data.schedule || (!s.interval_ticks && s.occurrence))
+        s.event.data.schedule || s.event.data.payload.type == quantity_receipt_type() ||
+        (!s.interval_ticks && s.occurrence))
         return fail(ScheduleResult::invalid_argument);
     if (!restoring && (s.occurrence || s.failure != ScheduleFailure::none ||
                        s.event_result != WorldEventResult::success))

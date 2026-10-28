@@ -63,6 +63,14 @@ void write_world_event_data(std::ostream &out, const WorldEventData &data) {
 }
 void World::release_event_schema(const CausalEvent &e) {
     if (e.data) {
+        if (e.data->payload.type == quantity_receipt_type()) {
+            const auto &fs = e.data->payload.fields;
+            const auto found =
+                std::find_if(fs.begin(), fs.end(), [](const auto &f) { return f.id == 1; });
+            if (found != fs.end())
+                if (const auto *id = std::get_if<PersistentId>(&found->value))
+                    release_quantity_type({*id});
+        }
         const auto type = e.data->payload.type;
         const auto found = component_users_.find(type);
         if (found != component_users_.end() && --found->second == 0)
@@ -154,9 +162,10 @@ WorldEventEmission World::emit_world_event(WorldEventRequest r, CausalOrigin ori
     return emit_world_event_impl(std::move(r), origin, false);
 }
 WorldEventEmission World::emit_world_event_impl(WorldEventRequest r, CausalOrigin origin,
-                                                bool scheduled) {
+                                                bool scheduled, bool quantity_receipt) {
     const auto fail = [](WorldEventResult code) { return WorldEventEmission{code, {}}; };
-    if (static_cast<unsigned>(origin) > 4 || (!scheduled && r.data.schedule))
+    if (static_cast<unsigned>(origin) > 4 || (!scheduled && r.data.schedule) ||
+        (!quantity_receipt && r.data.payload.type == quantity_receipt_type()))
         return fail(WorldEventResult::invalid_argument);
     const auto validation = validate_event_request(r, true, scheduled);
     if (validation != WorldEventResult::success)

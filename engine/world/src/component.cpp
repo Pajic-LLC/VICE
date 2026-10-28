@@ -172,6 +172,8 @@ bool valid_component_payload(const ComponentPayload &p, const ComponentTypeDesc 
 }
 bool World::validate_payload_upsert(const std::vector<ComponentPayload> &data,
                                     const ComponentPayload &payload, std::size_t total) const {
+    if (payload.type == quantity_receipt_type())
+        return false;
     const auto type = component_types_.find(payload.type);
     if (type == component_types_.end() || !valid_component_payload(payload, type->second))
         return false;

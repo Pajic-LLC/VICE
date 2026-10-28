@@ -115,6 +115,21 @@ RuntimeDebugEntitySnapshot sample_runtime_debug_entity(
             add_schema(event.data->payload.type);
     for (const auto &s : result.schedules.entries)
         add_schema(s.event.data.payload.type);
+    result.quantity_accounts = world.quantity_accounts(persistent_id);
+    const auto add_quantity_type = [&](world::QuantityTypeId id) {
+        if (std::none_of(result.quantity_types.begin(), result.quantity_types.end(),
+                         [&](const auto &t) { return t.id == id; }))
+            if (const auto type = world.quantity_type(id))
+                result.quantity_types.push_back(*type);
+    };
+    for (const auto &a : result.quantity_accounts)
+        add_quantity_type(a.key.type);
+    for (const auto &e : result.causal_history.events)
+        if (e.data && e.data->payload.type == world::quantity_receipt_type())
+            for (const auto &f : e.data->payload.fields)
+                if (f.id == 1)
+                    if (const auto *id = std::get_if<world::PersistentId>(&f.value))
+                        add_quantity_type({*id});
     const auto handle=world.find(persistent_id);
     if(!handle){result.state=RuntimeDebugEntityState::not_found;return result;}
     world::SnapshotEntity selected;
@@ -219,6 +234,19 @@ std::string serialize_runtime_debug_entity_snapshot(
         append_json_string(output, snapshot.requested_id.to_string());
     }
 
+    output += ",\"quantity_accounts\":[";
+    for (std::size_t i = 0; i < snapshot.quantity_accounts.size(); ++i) {
+        if (i)
+            output += ',';
+        output += world::serialize_quantity_account(snapshot.quantity_accounts[i]);
+    }
+    output += "],\"quantity_types\":[";
+    for (std::size_t i = 0; i < snapshot.quantity_types.size(); ++i) {
+        if (i)
+            output += ',';
+        output += world::serialize_quantity_type(snapshot.quantity_types[i]);
+    }
+    output += ']';
     output += ",\"world_schedules\":" + world::serialize_schedule_context(snapshot.schedules);
     output += ",\"world_signals\":" + world::serialize_signal_context(snapshot.signals);
     output += ",\"world_clock\":"+world::serialize_world_clock(snapshot.clock);

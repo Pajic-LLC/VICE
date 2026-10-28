@@ -117,8 +117,8 @@ int main() {
     world::World legacy;
     require(legacy.create_entity(id(1)).has_value(), "legacy fixture");
     auto bytes = world::encode_world_snapshot(legacy.snapshot()).bytes;
-    require(bytes.size() == 128, "current minimal layout");
-    bytes.resize(bytes.size() - 58U);
+    require(bytes.size() == 136, "current minimal layout");
+    bytes.resize(bytes.size() - 66U);
     bytes.pop_back();
     bytes.erase(bytes.begin() + 64);
     bytes[8] = std::byte{9};

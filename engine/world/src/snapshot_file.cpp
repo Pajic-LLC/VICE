@@ -395,6 +395,18 @@ WorldSnapshotEncodeResult encode_world_snapshot(const WorldSnapshot& snapshot_da
         write_world_schedule(text, schedule);
         append_string(payload, text.str());
     }
+    append_u32(payload, static_cast<std::uint32_t>(snapshot.quantity_types.size()));
+    for (const auto &type : snapshot.quantity_types) {
+        std::ostringstream text;
+        write_quantity_type(text, type);
+        append_string(payload, text.str());
+    }
+    append_u32(payload, static_cast<std::uint32_t>(snapshot.quantity_accounts.size()));
+    for (const auto &account : snapshot.quantity_accounts) {
+        std::ostringstream text;
+        write_quantity_account(text, account);
+        append_string(payload, text.str());
+    }
     const auto& clock=snapshot.clock;append_u64(payload,clock.ticks);append_u32(payload,clock.rate_milli);append_u32(payload,clock.rate_remainder);append_f64(payload,clock.input_fraction);append_u8(payload,clock.paused?1U:0U);append_u8(payload,clock.automatic?1U:0U);
     result.bytes.reserve(header_size + payload.size());
     result.bytes.insert(result.bytes.end(), world_magic.begin(), world_magic.end());
@@ -911,6 +923,45 @@ WorldSnapshotDecodeResult decode_world_snapshot(const std::span<const std::byte>
                 return result;
             }
             snapshot.schedules.push_back(std::move(schedule));
+        }
+    }
+    if (version >= 21U) {
+        std::uint32_t types = 0, accounts = 0;
+        if (!reader.read_u32(types) || types > quantity_type_capacity) {
+            result.diagnostics = "Unsafe quantity type count.";
+            return result;
+        }
+        for (std::uint32_t i = 0; i < types; ++i) {
+            std::string text;
+            QuantityTypeDesc type;
+            if (!reader.read_string(text, 1024)) {
+                result.diagnostics = "Truncated quantity type.";
+                return result;
+            }
+            std::istringstream in{text};
+            if (!read_quantity_type(in, type) || (in >> std::ws, !in.eof())) {
+                result.diagnostics = "Invalid quantity type.";
+                return result;
+            }
+            snapshot.quantity_types.push_back(std::move(type));
+        }
+        if (!reader.read_u32(accounts) || accounts > quantity_account_capacity) {
+            result.diagnostics = "Unsafe quantity account count.";
+            return result;
+        }
+        for (std::uint32_t i = 0; i < accounts; ++i) {
+            std::string text;
+            QuantityAccount a;
+            if (!reader.read_string(text, 1024)) {
+                result.diagnostics = "Truncated quantity account.";
+                return result;
+            }
+            std::istringstream in{text};
+            if (!read_quantity_account(in, a) || (in >> std::ws, !in.eof())) {
+                result.diagnostics = "Invalid quantity account.";
+                return result;
+            }
+            snapshot.quantity_accounts.push_back(a);
         }
     }
     if(version>=18U){std::uint8_t paused=0,automatic=0;auto& c=snapshot.clock;if(!reader.read_u64(c.ticks)||!reader.read_u32(c.rate_milli)||!reader.read_u32(c.rate_remainder)||!reader.read_f64(c.input_fraction)||!reader.read_u8(paused)||paused>1||!reader.read_u8(automatic)||automatic>1){result.diagnostics="Invalid/truncated World clock.";return result;}c.paused=paused!=0;c.automatic=automatic!=0;if(!valid(c)){result.diagnostics="Invalid World clock state.";return result;}}

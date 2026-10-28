@@ -4,6 +4,7 @@ add_library(
     src/material.cpp
     src/event.cpp
     src/schedule.cpp
+    src/quantity.cpp
     src/clock.cpp
     src/causal.cpp
     src/character.cpp

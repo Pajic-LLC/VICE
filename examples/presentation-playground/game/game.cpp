@@ -171,6 +171,88 @@ bool start_pulse(Context &c) {
     EntityId id;
     return c.schedule_event(request, id) == Result::success;
 }
+constexpr EntityId units_type() {
+    auto id = lifecycle_type();
+    id.bytes[14] = 9;
+    return id;
+}
+constexpr EntityId transaction_type() {
+    EntityId id{};
+    id.bytes[0] = 0xc7;
+    id.bytes[6] = 0x40;
+    id.bytes[8] = 0x80;
+    id.bytes[15] = 1;
+    return id;
+}
+bool start_quantities(Context &c) {
+    QuantityTypeSnapshot type;
+    type.id = units_type();
+    type.quanta_per_unit = 100;
+    std::strcpy(type.name, "ExampleUnits");
+    if (c.register_quantity_type(type) != Result::success)
+        return false;
+    QuantityAccountSnapshot from, to;
+    const auto a = c.read_quantity_account({entity(2), type.id}, from),
+               b = c.read_quantity_account({entity(3), type.id}, to);
+    const bool fresh = a == Result::no_quantity_account && b == Result::no_quantity_account;
+    if (a == Result::no_quantity_account) {
+        if (c.create_quantity_account({entity(2), type.id}, 1000) != Result::success)
+            return false;
+    } else if (a != Result::success)
+        return false;
+    if (b == Result::no_quantity_account) {
+        if (c.create_quantity_account({entity(3), type.id}, 1000) != Result::success)
+            return false;
+    } else if (b != Result::success)
+        return false;
+    EventRef cause, prior;
+    CausalHistorySnapshot history;
+    if (c.read_causal_history(history) != Result::success)
+        return false;
+    for (auto seq = history.next_sequence; seq > history.first_sequence;) {
+        WorldEventSnapshot event;
+        --seq;
+        if (c.read_world_event(history.history_id, seq, event) != Result::success)
+            return false;
+        if (!event.has_payload)
+            continue;
+        if (!cause.sequence &&
+            std::memcmp(event.payload.type.bytes, lifecycle_type().bytes, 16) == 0)
+            cause = event.ref;
+        if (!prior.sequence &&
+            std::memcmp(event.payload.type.bytes, transaction_type().bytes, 16) == 0)
+            for (std::uint32_t i = 0; i < event.payload.field_count; ++i)
+                if (event.payload.fields[i].id == 1 &&
+                    std::memcmp(event.payload.fields[i].identifier.bytes, type.id.bytes, 16) == 0)
+                    prior = event.ref;
+        if (cause.sequence && prior.sequence)
+            break;
+    }
+    QuantityTransactionRequest request;
+    request.type = type.id;
+    request.amount = 100;
+    request.operation = QuantityOperation::produce;
+    request.target = entity(2);
+    if (cause.sequence) {
+        request.parent_count = 1;
+        request.parents[0] = cause;
+    }
+    QuantityReceiptSnapshot receipt;
+    if (fresh) {
+        if (c.transact_quantity(request, receipt) != Result::success)
+            return false;
+        prior = receipt.event;
+    }
+    request.operation = QuantityOperation::transfer;
+    request.source = entity(2);
+    request.target = entity(3);
+    request.amount = 25;
+    if (prior.sequence)
+        request.parents[request.parent_count++] = prior;
+    const auto moved = c.transact_quantity(request, receipt);
+    return moved == Result::success || moved == Result::insufficient_quantity ||
+           moved == Result::quantity_capacity_exceeded;
+}
 class InteractionGame final : public Game {
     bool automatic_ = false, up_ = false, down_ = false, left_ = false, right_ = false,
          brake_ = false;
@@ -246,7 +328,8 @@ class InteractionGame final : public Game {
         edge_schema.type = connection_type();
         std::strcpy(edge_schema.name, "ConnectionState");
         if (c.register_component_schema(edge_schema) != Result::success ||
-            !relation_session(c, true) || !lifecycle_fact(c) || !start_pulse(c))
+            !relation_session(c, true) || !lifecycle_fact(c) || !start_pulse(c) ||
+            !start_quantities(c))
             return false;
         CharacterSnapshot character;
         CharacterAttachmentSnapshot a;
