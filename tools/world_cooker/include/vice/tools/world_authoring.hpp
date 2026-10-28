@@ -13,6 +13,8 @@ namespace vice::tools::world_authoring {
 
 inline constexpr std::size_t max_transaction_operations = 256U;
 
+struct SetWorldClock {world::WorldClock clock;};
+
 struct SetEntitySpatial {
     world::PersistentId entity{};
     world::SpatialState spatial{};
@@ -87,6 +89,7 @@ struct RemoveResourceReference {
 };
 
 using Operation = std::variant<
+    SetWorldClock,
     SetEntitySpatial,
     SetEntityTransform,
     SetRegionFidelity,

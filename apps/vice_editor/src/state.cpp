@@ -544,6 +544,7 @@ std::optional<InspectorData> project_inspector(
     }
 
     InspectorData inspector;
+    inspector.clock=world.world_clock();
     inspector.persistent_id = persistent_id;
     inspector.entity = entity;
     inspector.spatial_state = world.spatial_state(*entity);

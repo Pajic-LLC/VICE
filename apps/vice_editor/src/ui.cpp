@@ -787,6 +787,7 @@ void EditorUi::draw(
                     ImGui::Text("Carrier %s",a.carrier.to_string().c_str());
                     ImGui::Text("Local foot %.2f %.2f %.2f",static_cast<double>(a.offset.x),static_cast<double>(a.offset.y),static_cast<double>(a.offset.z));
                 }
+                if(ImGui::CollapsingHeader("World time")){ImGui::Text("Ticks %llu / 1000000 per second",static_cast<unsigned long long>(inspector->clock.ticks));ImGui::Text("Rate %.3f  %s",static_cast<double>(inspector->clock.rate_milli)/1000.0,inspector->clock.paused?"paused":"running");}
                 if(!inspector->relations.empty()&&ImGui::CollapsingHeader("Relationships")){
                     for(const auto& edge:inspector->relations){ImGui::TextWrapped("%s --%s--> %s",edge.subject.to_string().c_str(),edge.kind.to_string().c_str(),edge.object.to_string().c_str());for(const auto& p:edge.components)if(const auto type=world.component_type(p.type))ImGui::Text("%s v%u",type->name.c_str(),p.version);ImGui::TextWrapped("%s",world::serialize_component_payloads(edge.components).c_str());}
                 }

@@ -2,6 +2,7 @@ add_library(
   vice_world
   STATIC
     src/material.cpp
+    src/clock.cpp
     src/causal.cpp
     src/character.cpp
     src/vehicle.cpp

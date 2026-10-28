@@ -64,6 +64,7 @@ ParseResult parse_source_manifest(const std::string_view source) {
     std::string line;
     std::size_t line_number = 0;
     bool header_seen = false;
+    bool clock_seen=false;
 
     const auto fail = [&](const std::string& message) {
         result.diagnostics = "World source line " + std::to_string(line_number) + ": " + message;
@@ -97,7 +98,8 @@ ParseResult parse_source_manifest(const std::string_view source) {
             continue;
         }
 
-        if(keyword=="material") {
+        if(keyword=="world_clock") {if(clock_seen||!world::read_world_clock(values,parsed.clock)){fail("invalid/duplicate World clock.");return result;}clock_seen=true;
+        } else if(keyword=="material") {
             world::MaterialDefinition m;
             if(parsed.materials.size()>=world::max_world_materials || !read_material(values,m)) {fail("invalid or oversized material catalog.");return result;}
             parsed.materials.push_back(std::move(m));

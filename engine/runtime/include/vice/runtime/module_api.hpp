@@ -313,6 +313,7 @@ struct RelationPage {
     RelationKey entries[relation_page_capacity]{};
 };
 enum class RelationDirection : std::uint32_t { outgoing = 1, incoming = 2, both = 3 };
+struct WorldClockSnapshot {std::uint32_t size=sizeof(WorldClockSnapshot),rate_milli=1000,rate_remainder=0,paused=0,automatic=1;std::uint64_t ticks=0,ticks_per_second=1'000'000;double input_fraction=0;};
 struct HostApi {
     std::uint32_t abi_version = module::abi_version;
     std::uint32_t size = sizeof(HostApi);
@@ -358,6 +359,10 @@ struct HostApi {
     Result (*read_relation_component)(void*,RelationKey,EntityId type,ComponentData*) noexcept=nullptr;
     Result (*set_relation_component)(void*,RelationKey,const ComponentData*) noexcept=nullptr;
     Result (*remove_relation_component)(void*,RelationKey,EntityId type) noexcept=nullptr;
+
+    Result (*read_world_clock)(void*,WorldClockSnapshot*) noexcept=nullptr;
+    Result (*configure_world_clock)(void*,std::uint32_t paused,std::uint32_t rate,std::uint32_t automatic) noexcept=nullptr;
+    Result (*step_world_clock)(void*,std::uint64_t ticks) noexcept=nullptr;
 
 };
 
@@ -598,6 +603,9 @@ public:
             return Result::unavailable;
         return host_->remove_relation_component(host_->context, key, type);
     }
+    [[nodiscard]] Result read_world_clock(WorldClockSnapshot& output)const noexcept {if(!host_||host_->size<offsetof(HostApi,read_world_clock)+sizeof(host_->read_world_clock)||!host_->read_world_clock)return Result::unavailable;return host_->read_world_clock(host_->context,&output);}
+    [[nodiscard]] Result configure_world_clock(bool paused,std::uint32_t rate_milli=1000,bool automatic=true)const noexcept {if(!host_||host_->size<offsetof(HostApi,configure_world_clock)+sizeof(host_->configure_world_clock)||!host_->configure_world_clock)return Result::unavailable;return host_->configure_world_clock(host_->context,paused?1U:0U,rate_milli,automatic?1U:0U);}
+    [[nodiscard]] Result step_world_clock(std::uint64_t ticks)const noexcept {if(!host_||host_->size<offsetof(HostApi,step_world_clock)+sizeof(host_->step_world_clock)||!host_->step_world_clock)return Result::unavailable;return host_->step_world_clock(host_->context,ticks);}
     void log(const LogLevel level, const char* const message) const noexcept {
         if (host_ != nullptr && host_->log != nullptr) {
             host_->log(host_->context, level, message != nullptr ? message : "");

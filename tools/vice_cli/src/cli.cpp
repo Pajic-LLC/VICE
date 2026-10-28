@@ -700,6 +700,7 @@ void append_relations(std::string& data, const world::WorldSnapshot& snapshot) {
     data += ",\"region_fidelity\":{\"inactive\":" + std::to_string(inactive_regions);
     data += ",\"reduced\":" + std::to_string(reduced_regions);
     data += ",\"full\":" + std::to_string(full_regions) + "}},";
+    data+="\"world_clock\":"+world::serialize_world_clock(snapshot.clock)+',';
     append_component_types(data, snapshot);
     append_resources(data, snapshot);
     append_regions(data, snapshot);

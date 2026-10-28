@@ -62,6 +62,7 @@ std::string serialize_source_manifest(
     output.imbue(std::locale::classic());
     output << std::setprecision(std::numeric_limits<double>::max_digits10);
     output << "vice-world-source 1\n\n";
+    output<<"world_clock ";world::write_world_clock(output,value.clock);output<<'\n';
     write_causal_history(output,value.causal_history);
     for(const auto& m:value.materials) {output<<"material ";write_material(output,m);output<<'\n';}
 
