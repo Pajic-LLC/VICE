@@ -1,6 +1,8 @@
 #include <vice/runtime/debug_session.hpp>
 
 #include <cstdlib>
+#include <atomic>
+#include <thread>
 #include <filesystem>
 #include <iostream>
 #include <string>
@@ -113,6 +115,30 @@ int main() {
         "oversized debug response rejected"
     );
 
+    const std::string short_payload = "{\"value\":1}";
+    const std::string long_payload = "{\"text\":\"" + std::string(48000, 'x') + "\"}";
+    require(publish_runtime_debug_response(session, "replacement", short_payload),
+            "seed replacement response");
+    std::atomic<bool> started = false;
+    std::thread publisher{[&] {
+        started.store(true);
+        for (unsigned i = 0; i < 1000; ++i) {
+            std::string message;
+            (void)publish_runtime_debug_response(session, "replacement",
+                                                 i % 2 ? short_payload : long_payload, &message);
+        }
+    }};
+    while (!started.load())
+        std::this_thread::yield();
+    std::size_t available = 0;
+    for (unsigned i = 0; i < 3000; ++i) {
+        const auto observed = read_runtime_debug_response(session, "replacement");
+        require(static_cast<bool>(observed),"atomic replacement keeps a complete response available");
+        ++available;
+        require(observed.payload==short_payload||observed.payload==long_payload,"replacement read preserves one complete response");
+    }
+    publisher.join();
+    require(available > 0, "replacement stress read available responses");
     require(clear_runtime_dev_session(session, &diagnostics), "clear Runtime session");
     const auto disconnected = read_runtime_debug_response(session, "request-001");
     require(

@@ -40,26 +40,29 @@ constexpr std::string_view response_filename = "debug-response.json";
     return false;
 }
 
-[[nodiscard]] bool read_bounded_text(
-    const std::filesystem::path& path,
-    std::string& value,
-    std::string& diagnostics
-) {
-    std::error_code error;
-    const auto size = std::filesystem::file_size(path, error);
-    if (error) {
-        diagnostics = "Could not inspect Runtime debug transport file `" +
-            path.generic_string() + "`: " + error.message();
+[[nodiscard]] bool read_bounded_text(const std::filesystem::path &path, std::string &value,
+                                     std::string &diagnostics) {
+    // Hold one opened file while measuring and reading. The publisher replaces
+    // the path, so a path-based size can describe a different response revision.
+    std::ifstream input{path, std::ios::binary | std::ios::ate};
+    if (!input) {
+        diagnostics =
+            "Could not open Runtime debug transport file `" + path.generic_string() + "`.";
         return false;
     }
+    const auto end = input.tellg();
+    if (end < 0) {
+        diagnostics = "Could not measure Runtime debug transport file.";
+        return false;
+    }
+    const auto size = static_cast<std::uintmax_t>(end);
     if (size > runtime_debug_transport_max_bytes) {
         diagnostics = "Runtime debug transport file exceeds the bounded message size.";
         return false;
     }
-    std::ifstream input{path, std::ios::binary};
+    input.seekg(0, std::ios::beg);
     if (!input) {
-        diagnostics = "Could not open Runtime debug transport file `" +
-            path.generic_string() + "`.";
+        diagnostics = "Could not seek Runtime debug transport file.";
         return false;
     }
     value.resize(static_cast<std::size_t>(size));
@@ -104,8 +107,7 @@ constexpr std::string_view response_filename = "debug-response.json";
         return false;
     }
 
-    std::filesystem::remove(path, error);
-    error.clear();
+    // Replace the prior complete message without publishing a missing-file gap.
     std::filesystem::rename(temporary, path, error);
     if (error) {
         std::filesystem::remove(temporary, error);
