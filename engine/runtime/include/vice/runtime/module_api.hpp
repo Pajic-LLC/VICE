@@ -137,7 +137,7 @@ struct EntityId { std::uint8_t bytes[16]{}; };
 struct Vector3 { float x = 0, y = 0, z = 0; };
 enum class Result : std::uint32_t {
     success, unavailable, invalid_argument, not_found, no_body,
-    static_body, inactive_region, reset_required, wrong_phase, no_link, no_dependency, no_character, not_grounded, history_mismatch, event_pruned, sequence_exhausted, no_vehicle, attached, blocked, out_of_range, no_attachment, no_camera, no_animation, no_audio, no_component, schema_conflict,
+    static_body, inactive_region, reset_required, wrong_phase, no_link, no_dependency, no_character, not_grounded, history_mismatch, event_pruned, sequence_exhausted, no_vehicle, attached, blocked, out_of_range, no_attachment, no_camera, no_animation, no_audio, no_component, schema_conflict, no_relation,
 };
 enum class Motion : std::uint32_t { static_body, kinematic_body, dynamic_body };
 struct EntitySnapshot {
@@ -296,6 +296,23 @@ struct ComponentData {
     EntityId type{};
     ComponentValue fields[component_field_capacity]{};
 };
+struct RelationKey {
+    EntityId subject{}, kind{}, object{};
+};
+struct RelationInfo {
+    std::uint32_t size = sizeof(RelationInfo), component_count = 0;
+    std::uint64_t revision = 0;
+    RelationKey key;
+};
+inline constexpr std::uint32_t relation_page_capacity = 64;
+struct RelationPage {
+    std::uint32_t size = sizeof(RelationPage), count = 0, has_more = 0, cursor_valid = 0;
+    // Zero requests a new view; retained tokens are invalidated by relation edits/restore.
+    std::uint64_t revision = 0;
+    RelationKey after{};
+    RelationKey entries[relation_page_capacity]{};
+};
+enum class RelationDirection : std::uint32_t { outgoing = 1, incoming = 2, both = 3 };
 struct HostApi {
     std::uint32_t abi_version = module::abi_version;
     std::uint32_t size = sizeof(HostApi);
@@ -333,6 +350,14 @@ struct HostApi {
     Result (*read_component)(void*,EntityId owner,EntityId type,ComponentData*) noexcept=nullptr;
     Result (*set_component)(void*,EntityId owner,const ComponentData*) noexcept=nullptr;
     Result (*remove_component)(void*,EntityId owner,EntityId type) noexcept=nullptr;
+
+    Result (*read_relation)(void*,RelationKey,RelationInfo*) noexcept=nullptr;
+    Result (*read_relations)(void*,EntityId endpoint,RelationDirection,EntityId kind,RelationPage*) noexcept=nullptr;
+    Result (*add_relation)(void*,RelationKey) noexcept=nullptr;
+    Result (*remove_relation)(void*,RelationKey) noexcept=nullptr;
+    Result (*read_relation_component)(void*,RelationKey,EntityId type,ComponentData*) noexcept=nullptr;
+    Result (*set_relation_component)(void*,RelationKey,const ComponentData*) noexcept=nullptr;
+    Result (*remove_relation_component)(void*,RelationKey,EntityId type) noexcept=nullptr;
 
 };
 
@@ -518,6 +543,60 @@ public:
             !host_->remove_component)
             return Result::unavailable;
         return host_->remove_component(host_->context, owner, type);
+    }
+    [[nodiscard]] Result read_relation(RelationKey key, RelationInfo &output) const noexcept {
+        if (!host_ ||
+            host_->size < offsetof(HostApi, read_relation) + sizeof(host_->read_relation) ||
+            !host_->read_relation)
+            return Result::unavailable;
+        return host_->read_relation(host_->context, key, &output);
+    }
+    [[nodiscard]] Result read_relations(EntityId endpoint, RelationDirection direction,
+                                        EntityId kind, RelationPage &output) const noexcept {
+        if (!host_ ||
+            host_->size < offsetof(HostApi, read_relations) + sizeof(host_->read_relations) ||
+            !host_->read_relations)
+            return Result::unavailable;
+        return host_->read_relations(host_->context, endpoint, direction, kind, &output);
+    }
+    [[nodiscard]] Result add_relation(RelationKey key) const noexcept {
+        if (!host_ || host_->size < offsetof(HostApi, add_relation) + sizeof(host_->add_relation) ||
+            !host_->add_relation)
+            return Result::unavailable;
+        return host_->add_relation(host_->context, key);
+    }
+    [[nodiscard]] Result remove_relation(RelationKey key) const noexcept {
+        if (!host_ ||
+            host_->size < offsetof(HostApi, remove_relation) + sizeof(host_->remove_relation) ||
+            !host_->remove_relation)
+            return Result::unavailable;
+        return host_->remove_relation(host_->context, key);
+    }
+    [[nodiscard]] Result read_relation_component(RelationKey key, EntityId type,
+                                                 ComponentData &output) const noexcept {
+        if (!host_ ||
+            host_->size < offsetof(HostApi, read_relation_component) +
+                              sizeof(host_->read_relation_component) ||
+            !host_->read_relation_component)
+            return Result::unavailable;
+        return host_->read_relation_component(host_->context, key, type, &output);
+    }
+    [[nodiscard]] Result set_relation_component(RelationKey key,
+                                                const ComponentData &data) const noexcept {
+        if (!host_ ||
+            host_->size <
+                offsetof(HostApi, set_relation_component) + sizeof(host_->set_relation_component) ||
+            !host_->set_relation_component)
+            return Result::unavailable;
+        return host_->set_relation_component(host_->context, key, &data);
+    }
+    [[nodiscard]] Result remove_relation_component(RelationKey key, EntityId type) const noexcept {
+        if (!host_ ||
+            host_->size < offsetof(HostApi, remove_relation_component) +
+                              sizeof(host_->remove_relation_component) ||
+            !host_->remove_relation_component)
+            return Result::unavailable;
+        return host_->remove_relation_component(host_->context, key, type);
     }
     void log(const LogLevel level, const char* const message) const noexcept {
         if (host_ != nullptr && host_->log != nullptr) {

@@ -638,6 +638,7 @@ void append_relations(std::string& data, const world::WorldSnapshot& snapshot) {
         append_json_string(data, value.kind.to_string());
         data += ",\"object\":";
         append_json_string(data, value.object.to_string());
+        data += ",\"component_payloads\":"+world::serialize_component_payloads(value.components);
         data.push_back('}');
     }
     data.push_back(']');

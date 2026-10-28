@@ -98,19 +98,16 @@ RuntimeDebugEntitySnapshot sample_runtime_debug_entity(
     }
 
     result.causal_history=world.causal_context(persistent_id);
-    const auto snapshot = world.snapshot();
-    const auto entity = std::find_if(
-        snapshot.entities.begin(),
-        snapshot.entities.end(),
-        [&](const world::SnapshotEntity& candidate) {
-            return candidate.persistent_id == persistent_id;
-        }
-    );
-    if (entity == snapshot.entities.end()) {
-        result.state = RuntimeDebugEntityState::not_found;
-        return result;
-    }
-
+    const auto handle=world.find(persistent_id);
+    if(!handle){result.state=RuntimeDebugEntityState::not_found;return result;}
+    world::SnapshotEntity selected;
+    selected.persistent_id=persistent_id;
+    selected.spatial_state=world.spatial_state(*handle);selected.authored_transform=world.authored_transform(*handle);
+    selected.animation=world.animation(*handle);selected.rig_part=world.rig_part(*handle);selected.audio_emitter=world.audio_emitter(*handle);
+    selected.character=world.character(*handle);selected.character_attachment=world.character_attachment(*handle);selected.vehicle=world.vehicle(*handle);
+    selected.rigid_box=world.rigid_box(*handle);selected.distance_link=world.distance_link(*handle);selected.camera=world.camera(*handle);selected.light=world.light(*handle);selected.reflection_probe=world.reflection_probe(*handle);
+    selected.components=world.components(*handle);const auto refs=world.resource_references(*handle);selected.resource_references.assign(refs.begin(),refs.end());
+    const auto* entity=&selected;
     result.state = RuntimeDebugEntityState::available;
     result.components=entity->components;for(const auto& p:result.components)if(const auto schema=world.component_type(p.type))result.component_schemas.push_back(*schema);
     result.spatial = entity->spatial_state;
@@ -166,14 +163,8 @@ RuntimeDebugEntitySnapshot sample_runtime_debug_entity(
     result.resource_reference_count = entity->resource_references.size();
 
     if (entity->spatial_state.has_value() && entity->spatial_state->region.valid()) {
-        const auto region = std::find_if(
-            snapshot.regions.begin(),
-            snapshot.regions.end(),
-            [&](const world::RegionDesc& candidate) {
-                return candidate.id == entity->spatial_state->region;
-            }
-        );
-        if (region != snapshot.regions.end()) {
+        const auto region=world.region(entity->spatial_state->region);
+        if(region){
             result.region = RuntimeDebugRegionSnapshot{
                 .id = region->id,
                 .simulation_island = region->simulation_island,
@@ -184,9 +175,10 @@ RuntimeDebugEntitySnapshot sample_runtime_debug_entity(
         }
     }
 
-    for (const auto& relation : snapshot.relations) {
-        if (relation.subject == persistent_id) ++result.outgoing_relation_count;
-        if (relation.object == persistent_id) ++result.incoming_relation_count;
+    for(const auto key:world.relations_for(persistent_id)) {
+        if(key.subject==persistent_id)++result.outgoing_relation_count;if(key.object==persistent_id)++result.incoming_relation_count;
+        auto payloads=world.relation_components(key);for(const auto& p:payloads)if(std::none_of(result.component_schemas.begin(),result.component_schemas.end(),[&](const auto& s){return s.id==p.type;}))if(const auto schema=world.component_type(p.type))result.component_schemas.push_back(*schema);
+        result.relation_states.push_back({key,std::move(payloads)});
     }
     return result;
 }
@@ -254,6 +246,7 @@ std::string serialize_runtime_debug_entity_snapshot(
     }
 
     output += ",\"character_attachment\":" + world::serialize_character_attachment(snapshot.character_attachment);
+    output += ",\"relation_states\":"+world::serialize_relation_states(snapshot.relation_states);
     output += ",\"component_payloads\":"+world::serialize_component_payloads(snapshot.components)+",\"component_schemas\":[";for(std::size_t i=0;i<snapshot.component_schemas.size();++i){if(i)output+=',';output+=world::serialize_component_type(snapshot.component_schemas[i]);}output+=']';
     output += ",\"animation\":"+world::serialize_animation(snapshot.animation)+",\"rig_part\":"+world::serialize_rig_part(snapshot.rig_part)+",\"audio_emitter\":"+world::serialize_audio_emitter(snapshot.audio_emitter)+",\"animation_state\":"+snapshot.animation_state+",\"audio_state\":"+snapshot.audio_state;
     output += ",\"vehicle\":" + world::serialize_vehicle(snapshot.vehicle);

@@ -716,7 +716,7 @@ world::GlobalPosition ResourceMeshRenderer::suggested_spawn_position(const world
     const world::GlobalPosition target{state_->target.x, state_->target.y, state_->target.z};
     if (world.region_containing(target).has_value()) return target;
 
-    const auto snapshot = world.snapshot(world::ComponentPayloadSnapshot::omit);
+    const auto snapshot = world.snapshot(world::ComponentPayloadSnapshot::render);
     if (!snapshot.regions.empty()) {
         const auto& region = snapshot.regions.front();
         if (region.bounds.has_value()) {
@@ -818,7 +818,7 @@ bool ResourceMeshRenderer::render(
         return &state_->meshes.find(resource_id)->second;
     };
 
-    for (const auto& entity : world.snapshot(world::ComponentPayloadSnapshot::omit).entities) {
+    for (const auto& entity : world.snapshot(world::ComponentPayloadSnapshot::render).entities) {
         if (!entity.spatial_state.has_value()) continue;
 
         std::optional<world::ResourceId> mesh_resource;

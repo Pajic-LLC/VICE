@@ -17,6 +17,8 @@
 #include <optional>
 #include <span>
 #include <unordered_map>
+#include <unordered_set>
+#include <set>
 #include <vector>
 
 namespace vice::world {
@@ -68,6 +70,18 @@ public:
     [[nodiscard]] std::span<const ResourceReference> resource_references(EntityId entity) const noexcept;
 
     bool add_relation(Relation relation);
+    bool add_relation(RelationKey key);
+    bool remove_relation(RelationKey key);
+    [[nodiscard]] std::optional<RelationKey> relation_key(Relation relation) const noexcept;
+    [[nodiscard]] bool has_relation(RelationKey key) const noexcept;
+    [[nodiscard]] std::vector<RelationKey> relations_for(PersistentId endpoint,RelationDirection direction=RelationDirection::both,PersistentId kind={}) const;
+    [[nodiscard]] std::optional<RelationPageSlice> relation_page(PersistentId endpoint,RelationDirection direction,PersistentId kind={},std::optional<RelationKey> after={},std::size_t limit=64) const;
+    bool set_relation_component(RelationKey key,ComponentPayload payload);
+    bool remove_relation_component(RelationKey key,ComponentTypeId type);
+    [[nodiscard]] std::optional<ComponentPayload> relation_component(RelationKey key,ComponentTypeId type) const;
+    [[nodiscard]] std::vector<ComponentPayload> relation_components(RelationKey key) const;
+    [[nodiscard]] std::uint64_t relation_revision() const noexcept {return relation_revision_;}
+    [[nodiscard]] std::size_t relation_payload_count() const noexcept {return relation_payload_count_;}
     bool remove_relation(const Relation& relation);
     [[nodiscard]] std::span<const Relation> relations() const noexcept;
 
@@ -227,6 +241,18 @@ private:
     std::vector<std::uint32_t> free_resource_indices_;
     std::unordered_map<ResourceId, ResourceHandle, ResourceIdHash> resource_lookup_;
     std::vector<Relation> relations_;
+    std::unordered_map<RelationKey,std::size_t,RelationKeyHash> relation_index_;
+    std::unordered_map<PersistentId,std::set<RelationKey>,PersistentIdHash> relation_endpoints_;
+    std::unordered_map<RelationKey,std::vector<ComponentPayload>,RelationKeyHash> relation_states_;
+    std::size_t relation_payload_count_=0;
+    std::uint64_t relation_revision_=0;
+    bool advance_relation_revision() noexcept;
+    bool remove_entity_relations(PersistentId endpoint);
+    void remove_relation_record(RelationKey key);
+    bool validate_payload_upsert(const std::vector<ComponentPayload>& data,const ComponentPayload& payload,std::size_t total) const;
+    bool upsert_payload(std::vector<ComponentPayload>& data,ComponentPayload payload,std::size_t& total);
+    bool erase_payload(std::vector<ComponentPayload>& data,ComponentTypeId type,std::size_t& total);
+    void clear_payloads(std::vector<ComponentPayload>& data,std::size_t& total);
     std::unordered_map<RegionId, RegionDesc, RegionIdHash> regions_;
     std::size_t entity_count_ = 0;
     std::size_t resource_count_ = 0;

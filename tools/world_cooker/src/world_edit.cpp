@@ -147,6 +147,10 @@ std::optional<Operation> read_operation(const std::string& name, std::istream& i
     } else if (name == "set_fidelity") {
         SetRegionFidelity op;
         if (read_unsigned(input, op.region.value) && read_fidelity(input, op.fidelity)) return op;
+    } else if(name=="set_relation_component"||name=="remove_relation_component"){
+        world::RelationKey key;if(!read_id(input,key.subject)||!read_id(input,key.kind)||!read_id(input,key.object))return std::nullopt;
+        if(name=="set_relation_component"){world::ComponentPayload p;if(!world::read_component_payload(input,p))return std::nullopt;return SetRelationComponent{key,p};}
+        world::PersistentId type;if(!read_id(input,type))return std::nullopt;return RemoveRelationComponent{key,{type}};
     } else if (name == "add_relation" || name == "remove_relation") {
         world::SnapshotRelation relation;
         if (read_id(input, relation.subject) && read_id(input, relation.kind) && read_id(input, relation.object)) {
@@ -179,9 +183,10 @@ void affected(FileEditResult& result, const Transaction& transaction, const worl
                 };add(before);add(after);
             } else if constexpr (std::is_same_v<T, SetRegionFidelity>) {
                 result.affected_regions.push_back(value.region);
-            } else if constexpr (std::is_same_v<T, AddRelation> || std::is_same_v<T, RemoveRelation>) {
+            } else if constexpr (std::is_same_v<T,SetRelationComponent> || std::is_same_v<T,RemoveRelationComponent> || std::is_same_v<T, AddRelation> || std::is_same_v<T, RemoveRelation>) {
                 result.affected_entities.push_back(value.relation.subject);
                 result.affected_entities.push_back(value.relation.object);
+                for(const auto endpoint:{value.relation.subject,value.relation.object})for(const auto* snapshot:{&before,&after}){const auto e=std::find_if(snapshot->entities.begin(),snapshot->entities.end(),[&](const auto& item){return item.persistent_id==endpoint;});if(e!=snapshot->entities.end()&&e->spatial_state)result.affected_regions.push_back(e->spatial_state->region);}
             } else if constexpr (std::is_same_v<T, SetDependency>) {
                 result.affected_entities.push_back(value.entity);
                 const auto add = [&](const world::Dependency& d) {

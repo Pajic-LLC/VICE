@@ -188,6 +188,13 @@ namespace {
                 }
                 region->fidelity = value.fidelity;
                 return true;
+            } else if constexpr(std::is_same_v<Value,SetRelationComponent>||std::is_same_v<Value,RemoveRelationComponent>){
+                const auto edge=std::find_if(candidate.relations.begin(),candidate.relations.end(),[&](const auto& r){return r.subject==value.relation.subject&&r.kind==value.relation.kind&&r.object==value.relation.object;});
+                if(edge==candidate.relations.end()){diagnostics="Relation does not exist.";return false;}
+                const auto type=[&]{if constexpr(std::is_same_v<Value,SetRelationComponent>)return value.payload.type;else return value.type;}();
+                const auto found=std::find_if(edge->components.begin(),edge->components.end(),[&](const auto& p){return p.type==type;});
+                if constexpr(std::is_same_v<Value,SetRelationComponent>){if(found==edge->components.end())edge->components.push_back(value.payload);else *found=value.payload;}
+                else {if(found==edge->components.end()){diagnostics="Relation payload does not exist.";return false;}edge->components.erase(found);}return true;
             } else if constexpr (std::is_same_v<Value, AddRelation>) {
                 if (!valid_relation_identity(value.relation)) {
                     diagnostics = "Relation identity contains a nil persistent ID.";
@@ -201,10 +208,9 @@ namespace {
                     diagnostics = "Relation object does not exist: " + value.relation.object.to_string();
                     return false;
                 }
-                if (std::find(candidate.relations.begin(), candidate.relations.end(), value.relation) ==
-                    candidate.relations.end()) {
-                    candidate.relations.push_back(value.relation);
-                }
+                const auto found=std::find_if(candidate.relations.begin(),candidate.relations.end(),[&](const auto& edge){return edge.subject==value.relation.subject&&edge.kind==value.relation.kind&&edge.object==value.relation.object;});
+                if(found==candidate.relations.end())candidate.relations.push_back(value.relation);
+                else if(!value.relation.components.empty()&&found->components!=value.relation.components){diagnostics="Relation already has different state.";return false;}
                 return true;
             } else if constexpr (std::is_same_v<Value, RemoveRelation>) {
                 if (!valid_relation_identity(value.relation)) {
@@ -219,7 +225,7 @@ namespace {
                     diagnostics = "Relation object does not exist: " + value.relation.object.to_string();
                     return false;
                 }
-                std::erase(candidate.relations, value.relation);
+                std::erase_if(candidate.relations,[&](const auto& edge){return edge.subject==value.relation.subject&&edge.kind==value.relation.kind&&edge.object==value.relation.object;});
                 return true;
             } else if constexpr (std::is_same_v<Value, AddResourceReference>) {
                 if (value.entity.is_nil()) {

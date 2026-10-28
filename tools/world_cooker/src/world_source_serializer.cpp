@@ -161,7 +161,8 @@ std::string serialize_source_manifest(
 
     for (const auto& relation : value.relations) {
         output << "relation " << relation.subject.to_string() << ' '
-            << relation.kind.to_string() << ' ' << relation.object.to_string() << '\n';
+            << relation.kind.to_string() << ' ' << relation.object.to_string();
+        for(const auto& p:relation.components){output<<" state ";world::write_component_payload(output,p);}output<<'\n';
     }
 
     if (diagnostics != nullptr) diagnostics->clear();

@@ -71,6 +71,7 @@ bool World::destroy_entity(const EntityId entity) {
     (void)clear_character(entity);
     (void)clear_dependency(entity);
     (void)clear_distance_link(entity);
+    if(!remove_entity_relations(slot.persistent_id))return false;
     clear_components(entity);
     persistent_lookup_.erase(slot.persistent_id);
     slot.persistent_id = PersistentId{};
@@ -99,9 +100,6 @@ bool World::destroy_entity(const EntityId entity) {
     free_indices_.push_back(entity.index);
     --entity_count_;
 
-    std::erase_if(relations_, [entity](const Relation& relation) {
-        return relation.subject == entity || relation.object == entity;
-    });
 
     return true;
 }
@@ -207,33 +205,6 @@ std::span<const ResourceReference> World::resource_references(const EntityId ent
         return {};
     }
     return slots_[entity.index].resource_references;
-}
-
-bool World::add_relation(const Relation relation) {
-    if (!alive(relation.subject) || !alive(relation.object) || relation.kind.is_nil()) {
-        return false;
-    }
-
-    if (std::find(relations_.begin(), relations_.end(), relation) != relations_.end()) {
-        return false;
-    }
-
-    relations_.push_back(relation);
-    return true;
-}
-
-bool World::remove_relation(const Relation& relation) {
-    const auto found = std::find(relations_.begin(), relations_.end(), relation);
-    if (found == relations_.end()) {
-        return false;
-    }
-
-    relations_.erase(found);
-    return true;
-}
-
-std::span<const Relation> World::relations() const noexcept {
-    return relations_;
 }
 
 bool World::register_region(const RegionDesc region) {

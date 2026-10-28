@@ -170,20 +170,29 @@ bool valid_component_payload(const ComponentPayload &p, const ComponentTypeDesc 
     }
     return true;
 }
-bool World::set_component(EntityId entity, ComponentPayload payload) {
-    if (!alive(entity))
-        return false;
+bool World::validate_payload_upsert(const std::vector<ComponentPayload> &data,
+                                    const ComponentPayload &payload, std::size_t total) const {
     const auto type = component_types_.find(payload.type);
     if (type == component_types_.end() || !valid_component_payload(payload, type->second))
         return false;
-    auto &data = slots_[entity.index].components;
+    const auto found = std::lower_bound(
+        data.begin(), data.end(), payload.type,
+        [](const auto &a, ComponentTypeId b) { return a.type.value.bytes() < b.value.bytes(); });
+    return (found != data.end() && found->type == payload.type) ||
+           (data.size() < max_entity_components && total < max_world_component_payloads);
+}
+bool World::set_component(EntityId entity, ComponentPayload payload) {
+    return alive(entity) && upsert_payload(slots_[entity.index].components, std::move(payload),
+                                           component_payload_count_);
+}
+bool World::upsert_payload(std::vector<ComponentPayload> &data, ComponentPayload payload,
+                           std::size_t &total) {
+    if (!validate_payload_upsert(data, payload, total))
+        return false;
     const auto found = std::lower_bound(
         data.begin(), data.end(), payload.type,
         [](const auto &a, ComponentTypeId b) { return a.type.value.bytes() < b.value.bytes(); });
     const bool replacing = found != data.end() && found->type == payload.type;
-    if (!replacing && (data.size() >= max_entity_components ||
-                       component_payload_count_ >= max_world_component_payloads))
-        return false;
     std::sort(payload.fields.begin(), payload.fields.end(),
               [](const auto &a, const auto &b) { return a.id < b.id; });
     for (auto &f : payload.fields)
@@ -193,15 +202,17 @@ bool World::set_component(EntityId entity, ComponentPayload payload) {
         *found = std::move(payload);
     else {
         ++component_users_[payload.type];
-        ++component_payload_count_;
+        ++total;
         data.insert(found, std::move(payload));
     }
     return true;
 }
 bool World::remove_component(EntityId entity, ComponentTypeId type) {
-    if (!alive(entity))
-        return false;
-    auto &data = slots_[entity.index].components;
+    return alive(entity) &&
+           erase_payload(slots_[entity.index].components, type, component_payload_count_);
+}
+bool World::erase_payload(std::vector<ComponentPayload> &data, ComponentTypeId type,
+                          std::size_t &total) {
     const auto found =
         std::lower_bound(data.begin(), data.end(), type, [](const auto &a, ComponentTypeId b) {
             return a.type.value.bytes() < b.value.bytes();
@@ -210,7 +221,7 @@ bool World::remove_component(EntityId entity, ComponentTypeId type) {
         return false;
     if (--component_users_.at(type) == 0)
         component_users_.erase(type);
-    --component_payload_count_;
+    --total;
     data.erase(found);
     return true;
 }
@@ -228,12 +239,15 @@ std::vector<ComponentPayload> World::components(EntityId entity) const {
     return alive(entity) ? slots_[entity.index].components : std::vector<ComponentPayload>{};
 }
 void World::clear_components(EntityId entity) {
-    for (const auto &p : slots_[entity.index].components) {
+    clear_payloads(slots_[entity.index].components, component_payload_count_);
+}
+void World::clear_payloads(std::vector<ComponentPayload> &data, std::size_t &total) {
+    for (const auto &p : data) {
         if (--component_users_.at(p.type) == 0)
             component_users_.erase(p.type);
-        --component_payload_count_;
+        --total;
     }
-    slots_[entity.index].components.clear();
+    data.clear();
 }
 bool read_component_fields(std::istream &in, std::vector<ComponentFieldDesc> &fields) {
     in.imbue(std::locale::classic());

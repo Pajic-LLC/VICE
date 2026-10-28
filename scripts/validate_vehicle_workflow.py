@@ -109,8 +109,8 @@ def validate(vice, native):
                 # Format 14 follows the vehicle table with an empty attachment count. Decode only that
                 # documented tail here; the engine validates the full file on restart.
                 raw = saved.read_bytes()
-                tail = len(raw) - 4 - 3 * 84 - 12
-                if struct.unpack_from("<I", raw, 8)[0] != 16 or struct.unpack_from("<I", raw, tail)[0] != 3:
+                tail = len(raw) - 4 - 3 * 84 - 16
+                if struct.unpack_from("<I", raw, 8)[0] != 17 or struct.unpack_from("<I", raw, tail)[0] != 3:
                     raise RuntimeError("Checkpoint vehicle table missing")
                 saved_vehicles = {}
                 for i in range(3):

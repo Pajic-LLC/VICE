@@ -36,6 +36,41 @@ bool session(Context &c, bool launch) {
         ++counter;
     return c.set_component(entity(2), data) == Result::success;
 }
+constexpr EntityId connection_kind() {
+    auto id = session_type();
+    id.bytes[14] = 5;
+    return id;
+}
+constexpr EntityId connection_type() {
+    auto id = connection_kind();
+    id.bytes[15] = 1;
+    return id;
+}
+constexpr RelationKey connection() { return {entity(3), connection_kind(), entity(2)}; }
+bool relation_session(Context &c, bool launch) {
+    RelationInfo info;
+    const auto edge = c.read_relation(connection(), info);
+    if (edge == Result::no_relation) {
+        if (c.add_relation(connection()) != Result::success)
+            return false;
+    } else if (edge != Result::success)
+        return false;
+    ComponentData data;
+    const auto result = c.read_relation_component(connection(), connection_type(), data);
+    if (result == Result::no_component) {
+        data.type = connection_type();
+        data.field_count = 2;
+        for (unsigned i = 0; i < 2; ++i) {
+            data.fields[i].id = i + 1;
+            data.fields[i].kind = ComponentKind::integer;
+        }
+    } else if (result != Result::success)
+        return false;
+    auto &counter = data.fields[launch ? 0 : 1].integer;
+    if (counter < std::numeric_limits<std::int64_t>::max())
+        ++counter;
+    return c.set_relation_component(connection(), data) == Result::success;
+}
 class InteractionGame final : public Game {
     bool automatic_ = false, up_ = false, down_ = false, left_ = false, right_ = false,
          brake_ = false;
@@ -107,6 +142,12 @@ class InteractionGame final : public Game {
         std::strcpy(schema.fields[1].name, "interaction_count");
         if (c.register_component_schema(schema) != Result::success || !session(c, true))
             return false;
+        auto edge_schema = schema;
+        edge_schema.type = connection_type();
+        std::strcpy(edge_schema.name, "ConnectionState");
+        if (c.register_component_schema(edge_schema) != Result::success ||
+            !relation_session(c, true))
+            return false;
         CharacterSnapshot character;
         CharacterAttachmentSnapshot a;
         if (c.read_character_attachment(entity(3), a) != Result::success)
@@ -131,6 +172,7 @@ class InteractionGame final : public Game {
         const bool pressed = (e.flags & 1U) != 0;
         if (key == Key::e && pressed) {
             (void)session(c, false);
+            (void)relation_session(c, false);
             automatic_ = false;
             CharacterAttachmentSnapshot a;
             (void)c.read_character_attachment(entity(3), a);

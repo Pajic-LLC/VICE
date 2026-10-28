@@ -114,27 +114,13 @@ module::Result host_read_component_schema(void *value, module::EntityId type,
     *output = result;
     return module::Result::success;
 }
-module::Result host_read_component(void *value, module::EntityId owner, module::EntityId type,
-                                   module::ComponentData *output) noexcept {
-    const auto *b = current_bridge(value);
-    if (!b || !b->context)
-        return module::Result::wrong_phase;
-    if (!output || output->size < sizeof(*output) || persistent_id(owner).is_nil() ||
-        persistent_id(type).is_nil())
-        return module::Result::invalid_argument;
-    const auto &w = b->context->world;
-    const auto e = w.find(persistent_id(owner));
-    if (!e)
-        return module::Result::not_found;
-    const auto data = w.component(*e, {persistent_id(type)});
-    if (!data)
-        return module::Result::no_component;
+module::ComponentData encode_component_data(const world::ComponentPayload &data) {
     module::ComponentData result;
-    result.type = type;
-    result.version = data->version;
-    result.field_count = static_cast<std::uint32_t>(data->fields.size());
-    for (std::size_t i = 0; i < data->fields.size(); ++i) {
-        const auto &v = data->fields[i];
+    result.type = component_id(data.type.value);
+    result.version = data.version;
+    result.field_count = static_cast<std::uint32_t>(data.fields.size());
+    for (std::size_t i = 0; i < data.fields.size(); ++i) {
+        const auto &v = data.fields[i];
         auto &out = result.fields[i];
         out.id = v.id;
         out.kind = static_cast<module::ComponentKind>(world::component_value_kind(v.value));
@@ -158,7 +144,62 @@ module::Result host_read_component(void *value, module::EntityId owner, module::
             break;
         }
     }
-    *output = result;
+    return result;
+}
+std::optional<world::ComponentPayload> decode_component_data(const module::ComponentData *input) {
+    if (!input || input->size < sizeof(*input) ||
+        input->field_count > module::component_field_capacity)
+        return {};
+    world::ComponentPayload data{{persistent_id(input->type)}, input->version, {}};
+    for (std::uint32_t i = 0; i < input->field_count; ++i) {
+        const auto &in = input->fields[i];
+        world::ComponentFieldValue v;
+        v.id = in.id;
+        switch (in.kind) {
+        case module::ComponentKind::boolean:
+            if (in.boolean > 1)
+                return std::nullopt;
+            v.value = in.boolean != 0;
+            break;
+        case module::ComponentKind::integer:
+            v.value = in.integer;
+            break;
+        case module::ComponentKind::real:
+            v.value = in.real;
+            break;
+        case module::ComponentKind::text: {
+            const auto s = component_string(in.text);
+            if (!s)
+                return std::nullopt;
+            v.value = *s;
+            break;
+        }
+        case module::ComponentKind::identifier:
+            v.value = persistent_id(in.identifier);
+            break;
+        default:
+            return std::nullopt;
+        }
+        data.fields.push_back(std::move(v));
+    }
+    return data;
+}
+module::Result host_read_component(void *value, module::EntityId owner, module::EntityId type,
+                                   module::ComponentData *output) noexcept {
+    const auto *b = current_bridge(value);
+    if (!b || !b->context)
+        return module::Result::wrong_phase;
+    if (!output || output->size < sizeof(*output) || persistent_id(owner).is_nil() ||
+        persistent_id(type).is_nil())
+        return module::Result::invalid_argument;
+    const auto &w = b->context->world;
+    const auto e = w.find(persistent_id(owner));
+    if (!e)
+        return module::Result::not_found;
+    const auto data = w.component(*e, {persistent_id(type)});
+    if (!data)
+        return module::Result::no_component;
+    *output = encode_component_data(*data);
     return module::Result::success;
 }
 module::Result host_set_component(void *value, module::EntityId owner,
@@ -173,45 +214,15 @@ module::Result host_set_component(void *value, module::EntityId owner,
     const auto e = w.find(persistent_id(owner));
     if (!e)
         return module::Result::not_found;
-    world::ComponentPayload data{{persistent_id(input->type)}, input->version, {}};
-    const auto schema = w.component_type(data.type);
+    const auto data = decode_component_data(input);
+    if (!data)
+        return module::Result::invalid_argument;
+    const auto schema = w.component_type(data->type);
     if (!schema)
         return module::Result::not_found;
-    if (schema->version != data.version)
+    if (schema->version != data->version)
         return module::Result::schema_conflict;
-    for (std::uint32_t i = 0; i < input->field_count; ++i) {
-        const auto &in = input->fields[i];
-        world::ComponentFieldValue v;
-        v.id = in.id;
-        switch (in.kind) {
-        case module::ComponentKind::boolean:
-            if (in.boolean > 1)
-                return module::Result::invalid_argument;
-            v.value = in.boolean != 0;
-            break;
-        case module::ComponentKind::integer:
-            v.value = in.integer;
-            break;
-        case module::ComponentKind::real:
-            v.value = in.real;
-            break;
-        case module::ComponentKind::text: {
-            const auto s = component_string(in.text);
-            if (!s)
-                return module::Result::invalid_argument;
-            v.value = *s;
-            break;
-        }
-        case module::ComponentKind::identifier:
-            v.value = persistent_id(in.identifier);
-            break;
-        default:
-            return module::Result::invalid_argument;
-        }
-        data.fields.push_back(std::move(v));
-    }
-    return w.set_component(*e, std::move(data)) ? module::Result::success
-                                                : module::Result::invalid_argument;
+    return w.set_component(*e, *data) ? module::Result::success : module::Result::invalid_argument;
 }
 module::Result host_remove_component(void *value, module::EntityId owner,
                                      module::EntityId type) noexcept {
@@ -226,6 +237,142 @@ module::Result host_remove_component(void *value, module::EntityId owner,
         return module::Result::not_found;
     return w.remove_component(*e, {persistent_id(type)}) ? module::Result::success
                                                          : module::Result::no_component;
+}
+world::RelationKey relation_key(module::RelationKey key) {
+    return {persistent_id(key.subject), persistent_id(key.kind), persistent_id(key.object)};
+}
+module::RelationKey relation_key(world::RelationKey key) {
+    return {component_id(key.subject), component_id(key.kind), component_id(key.object)};
+}
+module::Result host_read_relation(void *value, module::RelationKey key,
+                                  module::RelationInfo *output) noexcept {
+    const auto *b = current_bridge(value);
+    if (!b || !b->context)
+        return module::Result::wrong_phase;
+    const auto k = relation_key(key);
+    if (!output || output->size < sizeof(*output) || !k.valid())
+        return module::Result::invalid_argument;
+    const auto &w = b->context->world;
+    if (!w.has_relation(k))
+        return module::Result::no_relation;
+    module::RelationInfo result;
+    result.key = key;
+    result.revision = w.relation_revision();
+    result.component_count = static_cast<std::uint32_t>(w.relation_components(k).size());
+    *output = result;
+    return module::Result::success;
+}
+module::Result host_read_relations(void *value, module::EntityId endpoint,
+                                   module::RelationDirection direction, module::EntityId kind,
+                                   module::RelationPage *output) noexcept {
+    const auto *b = current_bridge(value);
+    if (!b || !b->context)
+        return module::Result::wrong_phase;
+    const auto id = persistent_id(endpoint);
+    const auto d = static_cast<std::uint32_t>(direction);
+    if (!output || output->size < sizeof(*output) || id.is_nil() || d < 1 || d > 3)
+        return module::Result::invalid_argument;
+    const auto &w = b->context->world;
+    if (!w.find(id))
+        return module::Result::not_found;
+    if (output->revision && output->revision != w.relation_revision())
+        return module::Result::reset_required;
+    if (output->cursor_valid > 1)
+        return module::Result::invalid_argument;
+    const auto page = w.relation_page(
+        id, static_cast<world::RelationDirection>(direction), persistent_id(kind),
+        output->cursor_valid ? std::optional{relation_key(output->after)} : std::nullopt,
+        module::relation_page_capacity);
+    if (!page)
+        return module::Result::invalid_argument;
+    module::RelationPage result;
+    result.revision = w.relation_revision();
+    result.count = static_cast<std::uint32_t>(page->keys.size());
+    result.has_more = page->has_more ? 1U : 0U;
+    result.cursor_valid = page->after ? 1U : 0U;
+    if (page->after)
+        result.after = relation_key(*page->after);
+    for (std::uint32_t i = 0; i < result.count; ++i)
+        result.entries[i] = relation_key(page->keys[i]);
+    *output = result;
+    return module::Result::success;
+}
+module::Result host_add_relation(void *value, module::RelationKey key) noexcept {
+    const auto *b = current_bridge(value);
+    if (!b || !b->context || !b->writable)
+        return module::Result::wrong_phase;
+    const auto k = relation_key(key);
+    if (!k.valid())
+        return module::Result::invalid_argument;
+    auto &w = b->context->world;
+    if (!w.find(k.subject) || !w.find(k.object))
+        return module::Result::not_found;
+    return w.has_relation(k) || w.add_relation(k) ? module::Result::success
+                                                  : module::Result::invalid_argument;
+}
+module::Result host_remove_relation(void *value, module::RelationKey key) noexcept {
+    const auto *b = current_bridge(value);
+    if (!b || !b->context || !b->writable)
+        return module::Result::wrong_phase;
+    const auto k = relation_key(key);
+    if (!k.valid())
+        return module::Result::invalid_argument;
+    return b->context->world.remove_relation(k) ? module::Result::success
+                                                : module::Result::no_relation;
+}
+module::Result host_read_relation_component(void *value, module::RelationKey key,
+                                            module::EntityId type,
+                                            module::ComponentData *output) noexcept {
+    const auto *b = current_bridge(value);
+    if (!b || !b->context)
+        return module::Result::wrong_phase;
+    const auto k = relation_key(key);
+    if (!output || output->size < sizeof(*output) || !k.valid() || persistent_id(type).is_nil())
+        return module::Result::invalid_argument;
+    const auto &w = b->context->world;
+    if (!w.has_relation(k))
+        return module::Result::no_relation;
+    const auto data = w.relation_component(k, {persistent_id(type)});
+    if (!data)
+        return module::Result::no_component;
+    *output = encode_component_data(*data);
+    return module::Result::success;
+}
+module::Result host_set_relation_component(void *value, module::RelationKey key,
+                                           const module::ComponentData *input) noexcept {
+    const auto *b = current_bridge(value);
+    if (!b || !b->context || !b->writable)
+        return module::Result::wrong_phase;
+    const auto k = relation_key(key);
+    if (!k.valid())
+        return module::Result::invalid_argument;
+    const auto data = decode_component_data(input);
+    if (!data)
+        return module::Result::invalid_argument;
+    auto &w = b->context->world;
+    if (!w.has_relation(k))
+        return module::Result::no_relation;
+    const auto schema = w.component_type(data->type);
+    if (!schema)
+        return module::Result::not_found;
+    if (schema->version != data->version)
+        return module::Result::schema_conflict;
+    return w.set_relation_component(k, *data) ? module::Result::success
+                                              : module::Result::invalid_argument;
+}
+module::Result host_remove_relation_component(void *value, module::RelationKey key,
+                                              module::EntityId type) noexcept {
+    const auto *b = current_bridge(value);
+    if (!b || !b->context || !b->writable)
+        return module::Result::wrong_phase;
+    const auto k = relation_key(key);
+    if (!k.valid() || persistent_id(type).is_nil())
+        return module::Result::invalid_argument;
+    auto &w = b->context->world;
+    if (!w.has_relation(k))
+        return module::Result::no_relation;
+    return w.remove_relation_component(k, {persistent_id(type)}) ? module::Result::success
+                                                                 : module::Result::no_component;
 }
 module::Result host_read_entity(void* value, module::EntityId id, module::EntitySnapshot* output) noexcept {
     const auto* bridge = current_bridge(value);
@@ -785,6 +932,7 @@ public:
         host_.read_character_attachment=&host_read_character_attachment;
         host_.attach_character=&host_attach_character;host_.detach_character=&host_detach_character;
         host_.read_camera_pose=&host_read_camera_pose;host_.set_camera_pose=&host_set_camera_pose;
+        host_.read_relation=&host_read_relation;host_.read_relations=&host_read_relations;host_.add_relation=&host_add_relation;host_.remove_relation=&host_remove_relation;host_.read_relation_component=&host_read_relation_component;host_.set_relation_component=&host_set_relation_component;host_.remove_relation_component=&host_remove_relation_component;
         host_.register_component_schema=&host_register_component_schema;host_.read_component_schema=&host_read_component_schema;host_.read_component=&host_read_component;host_.set_component=&host_set_component;host_.remove_component=&host_remove_component;
         host_.read_animation=&host_read_animation;host_.control_animation=&host_control_animation;
         host_.read_audio=&host_read_audio;host_.control_audio=&host_control_audio;host_.set_character_facing=&host_set_character_facing;
