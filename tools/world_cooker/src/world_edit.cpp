@@ -4,6 +4,7 @@
 #include "dependency_source.hpp"
 #include "character_source.hpp"
 #include "vehicle_source.hpp"
+#include <vice/world/presentation_io.hpp>
 #include "material_source.hpp"
 
 #include <vice/platform/file.hpp>
@@ -90,6 +91,12 @@ std::optional<Operation> read_operation(const std::string& name, std::istream& i
     } else if (name == "clear_transform") {
         SetEntityTransform op;
         if (read_id(input, op.entity)) return op;
+    } else if(name=="set_animation"||name=="clear_animation"){
+        SetAnimation op;if(!read_id(input,op.entity))return std::nullopt;if(name=="set_animation"){world::AnimationPlayer p;if(!world::read_animation(input,p))return std::nullopt;op.value=p;}return op;
+    } else if(name=="set_rig_part"||name=="clear_rig_part"){
+        SetRigPart op;if(!read_id(input,op.entity))return std::nullopt;if(name=="set_rig_part"){world::RigPart p;if(!world::read_rig_part(input,p))return std::nullopt;op.value=p;}return op;
+    } else if(name=="set_audio_emitter"||name=="clear_audio_emitter"){
+        SetAudioEmitter op;if(!read_id(input,op.entity))return std::nullopt;if(name=="set_audio_emitter"){world::AudioEmitter p;if(!world::read_audio_emitter(input,p))return std::nullopt;op.value=p;}return op;
     } else if(name=="set_character_attachment" || name=="clear_character_attachment") {
         SetCharacterAttachment op;if(!read_id(input,op.entity))return std::nullopt;
         if(name=="set_character_attachment"){world::CharacterAttachment a;if(!read_id(input,a.carrier) || !(input>>a.offset.x>>a.offset.y>>a.offset.z) || !world::valid(a))return std::nullopt;op.attachment=a;}return op;
@@ -199,7 +206,7 @@ void affected(FileEditResult& result, const Transaction& transaction, const worl
                         }
                     };add(before);add(after);
                 }
-                if constexpr (std::is_same_v<T, SetCharacterAttachment> || std::is_same_v<T, SetVehicle> || std::is_same_v<T, SetCharacter> || std::is_same_v<T, SetEntityMaterial>) {
+                if constexpr (std::is_same_v<T,SetAnimation> || std::is_same_v<T,SetRigPart> || std::is_same_v<T,SetAudioEmitter> || std::is_same_v<T, SetCharacterAttachment> || std::is_same_v<T, SetVehicle> || std::is_same_v<T, SetCharacter> || std::is_same_v<T, SetEntityMaterial>) {
                     const auto previous = std::find_if(before.entities.begin(),before.entities.end(),[&](const auto& e) { return e.persistent_id == value.entity; });
                     if (previous != before.entities.end() && previous->spatial_state) result.affected_regions.push_back(previous->spatial_state->region);
                 }

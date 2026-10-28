@@ -8,6 +8,7 @@
 #include <vice/tools/world_cooker.hpp>
 #include <vice/world/snapshot.hpp>
 #include <vice/world/world.hpp>
+#include <vice/tools/presentation_cooker.hpp>
 
 #include <algorithm>
 #include <array>
@@ -597,6 +598,7 @@ void append_entities(std::string& data, const world::WorldSnapshot& snapshot) {
         const auto owner = observed.find(value.persistent_id);
         data += ",\"dependency\":" + world::serialize_dependency_state(owner ? observed.dependency_state(*owner) : std::nullopt);
         data += ",\"character_attachment\":" + world::serialize_character_attachment(value.character_attachment);
+        data += ",\"animation\":"+world::serialize_animation(value.animation)+",\"rig_part\":"+world::serialize_rig_part(value.rig_part)+",\"audio_emitter\":"+world::serialize_audio_emitter(value.audio_emitter);
         data += ",\"vehicle\":" + world::serialize_vehicle(value.vehicle);
         data += ",\"character\":" + world::serialize_character(value.character);
         auto references = value.resource_references;
@@ -785,6 +787,12 @@ CommandResult execute(
     const std::span<const std::string_view> arguments,
     const CommandEnvironment& environment
 ) {
+    if(arguments.size()>=2U&&arguments[0]=="rig"&&arguments[1]=="import"){
+        if(arguments.size()!=6)return failure(exit_usage,"rig.import","Usage: vice rig import <embedded.gltf|glb> <new-directory> <rig-uuid> <root-uuid>");
+        const auto id=world::PersistentId::parse(arguments[4]),root=world::PersistentId::parse(arguments[5]);if(!id||!root)return failure(exit_validation,"rig.import","Invalid rig/root UUID.");std::string d;
+        if(!tools::import_rig(std::filesystem::path{arguments[2]},std::filesystem::path{arguments[3]},{*id},*root,&d))return failure(exit_validation,"rig.import",d);
+        return CommandResult{.exit_code=exit_success,.json=response_json("rig.import",true,{},"{\"state\":\"imported\"}")};
+    }
     if (arguments.size() >= 2U && arguments[0] == "world" && arguments[1] == "edit") {
         if (arguments.size() != 5U || (arguments[4] != "--dry-run" && arguments[4] != "--apply")) {
             return failure(exit_usage, "world.edit",

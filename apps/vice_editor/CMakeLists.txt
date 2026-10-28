@@ -66,6 +66,7 @@ if(TARGET vice_world_cooker_lib AND
     PUBLIC
       VICE::EditorState
       VICE::EditorPreview
+      VICE::PresentationCooker
       VICE::EnvironmentCooker
       VICE::MeshCooker
       VICE::Platform
@@ -103,6 +104,7 @@ target_link_libraries(
     VICE::Render
     VICE::RigidBody
     VICE::World
+    VICE::Presentation
 )
 target_compile_features(vice_editor_asset_index PUBLIC cxx_std_23)
 vice_enable_warnings(vice_editor_asset_index)

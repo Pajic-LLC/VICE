@@ -14,6 +14,7 @@
 #include <string>
 
 namespace vice::rigid_body { class AuthoredSimulation; }
+namespace vice::presentation { class System; }
 
 namespace vice::runtime {
 
@@ -52,6 +53,7 @@ struct GameContext {
     const project::Manifest& project;
     world::World& world;
     rigid_body::AuthoredSimulation* physics = nullptr;
+    presentation::System* presentation = nullptr;
 };
 
 class GameModule {

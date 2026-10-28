@@ -27,11 +27,13 @@ target_link_libraries(
     VICE::TextureCooker
     VICE::EnvironmentCooker
     VICE::RenderMaterialCooker
+    VICE::PresentationCooker
 )
 target_compile_features(vice_project_workflow PUBLIC cxx_std_23)
 target_compile_definitions(
   vice_project_workflow
   PRIVATE
+    VICE_PRESENTATION_NOTICES="${PROJECT_SOURCE_DIR}/docs/licenses/presentation.txt"
     VICE_PROJECT_WORKFLOW_CMAKE_EXECUTABLE="${CMAKE_COMMAND}"
     VICE_PROJECT_WORKFLOW_GAME_MODULE_CMAKE_SOURCE="${PROJECT_SOURCE_DIR}/cmake/game_module"
     VICE_PROJECT_WORKFLOW_GAME_MODULE_INCLUDE="${PROJECT_SOURCE_DIR}/engine/runtime/include"

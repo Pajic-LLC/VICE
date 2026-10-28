@@ -1,4 +1,5 @@
 #include <vice/runtime/debug.hpp>
+#include <vice/presentation/system.hpp>
 #if defined(VICE_RUNTIME_AUTHORED_PHYSICS)
 #include <vice/rigid_body/authored_simulation.hpp>
 #endif
@@ -86,7 +87,8 @@ void append_float(std::string& output, const float value) {
 RuntimeDebugEntitySnapshot sample_runtime_debug_entity(
     const world::World& world,
     const world::PersistentId persistent_id,
-    const rigid_body::AuthoredSimulation* physics
+    const rigid_body::AuthoredSimulation* physics,
+    const presentation::System* presentation
 ) {
     RuntimeDebugEntitySnapshot result;
     result.requested_id = persistent_id;
@@ -112,6 +114,15 @@ RuntimeDebugEntitySnapshot sample_runtime_debug_entity(
     result.state = RuntimeDebugEntityState::available;
     result.spatial = entity->spatial_state;
     result.authored_transform = entity->authored_transform;
+    result.animation=entity->animation;result.rig_part=entity->rig_part;result.audio_emitter=entity->audio_emitter;
+    if(presentation) {
+        if(const auto a=presentation->animation(persistent_id)) {
+            result.animation_state="{\"clip_name\":";append_json_string(result.animation_state,a->clip_name);result.animation_state+=",\"duration\":";append_float(result.animation_state,a->duration);result.animation_state+=",\"node_count\":"+std::to_string(a->node_count)+",\"part_count\":"+std::to_string(a->part_count)+'}';
+        }
+        if(const auto a=presentation->audio(persistent_id)) {
+            auto& o=result.audio_state;o="{\"duration\":";append_float(o,a->duration);o+=",\"left_gain\":";append_float(o,a->left_gain);o+=",\"right_gain\":";append_float(o,a->right_gain);o+=",\"distance\":";append_float(o,a->distance);o+=",\"output_active\":";o+=a->output_active?"true":"false";o+=",\"delivered_frames\":"+std::to_string(a->delivered_frames)+",\"underrun_frames\":"+std::to_string(a->underrun_frames)+'}';
+        }
+    }
     result.character = entity->character;
     result.character_attachment=entity->character_attachment;
     result.vehicle = entity->vehicle;
@@ -242,6 +253,7 @@ std::string serialize_runtime_debug_entity_snapshot(
     }
 
     output += ",\"character_attachment\":" + world::serialize_character_attachment(snapshot.character_attachment);
+    output += ",\"animation\":"+world::serialize_animation(snapshot.animation)+",\"rig_part\":"+world::serialize_rig_part(snapshot.rig_part)+",\"audio_emitter\":"+world::serialize_audio_emitter(snapshot.audio_emitter)+",\"animation_state\":"+snapshot.animation_state+",\"audio_state\":"+snapshot.audio_state;
     output += ",\"vehicle\":" + world::serialize_vehicle(snapshot.vehicle);
     output += ",\"vehicle_state\":";
     if(!snapshot.vehicle_state)output+="null";

@@ -126,6 +126,12 @@ namespace {
                 auto* entity=find_entity(candidate,value.entity);
                 if(!entity || (value.attachment && !world::valid(*value.attachment))){diagnostics="Invalid character attachment.";return false;}
                 entity->character_attachment=value.attachment;return true;
+            } else if constexpr (std::is_same_v<Value,SetAnimation>||std::is_same_v<Value,SetRigPart>||std::is_same_v<Value,SetAudioEmitter>){
+                auto* e=find_entity(candidate,value.entity);if(!e || (value.value&&!world::valid(*value.value))){diagnostics="Invalid presentation edit.";return false;}
+                if constexpr(std::is_same_v<Value,SetAnimation>)e->animation=value.value;
+                else if constexpr(std::is_same_v<Value,SetRigPart>)e->rig_part=value.value;
+                else e->audio_emitter=value.value;
+                return true;
             } else if constexpr (std::is_same_v<Value, SetVehicle>) {
                 auto* entity=find_entity(candidate,value.entity);
                 if(!entity || (value.vehicle && !world::valid(*value.vehicle))){diagnostics="Invalid vehicle entity/profile.";return false;}

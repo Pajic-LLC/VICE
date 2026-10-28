@@ -1,6 +1,10 @@
 #include <vice/world/snapshot_file.hpp>
 
 #include <vice/world/world.hpp>
+#include <vice/world/presentation_io.hpp>
+#include <sstream>
+#include <iomanip>
+#include <locale>
 
 #include <algorithm>
 #include <array>
@@ -366,6 +370,12 @@ WorldSnapshotEncodeResult encode_world_snapshot(const WorldSnapshot& snapshot_da
     append_u32(payload,static_cast<std::uint32_t>(attachments));
     for(const auto& e:snapshot.entities)if(e.character_attachment){append_id(payload,e.persistent_id);const auto& a=*e.character_attachment;
         append_id(payload,a.carrier);append_f32(payload,a.offset.x);append_f32(payload,a.offset.y);append_f32(payload,a.offset.z);}
+    const auto presentations=std::count_if(snapshot.entities.begin(),snapshot.entities.end(),[](const auto& e){return e.animation||e.rig_part||e.audio_emitter;});
+    append_u32(payload,static_cast<std::uint32_t>(presentations));
+    for(const auto& e:snapshot.entities)if(e.animation||e.rig_part||e.audio_emitter){
+        append_id(payload,e.persistent_id);std::ostringstream o;o.imbue(std::locale::classic());o<<std::setprecision(17);
+        if(e.animation){o<<"animation ";write_animation(o,*e.animation);o<<' ';}if(e.rig_part){o<<"rig_part ";write_rig_part(o,*e.rig_part);o<<' ';}if(e.audio_emitter){o<<"audio_emitter ";write_audio_emitter(o,*e.audio_emitter);o<<' ';}append_string(payload,o.str());
+    }
     result.bytes.reserve(header_size + payload.size());
     result.bytes.insert(result.bytes.end(), world_magic.begin(), world_magic.end());
     append_u32(result.bytes, world_snapshot_file_format_version);
@@ -811,6 +821,15 @@ WorldSnapshotDecodeResult decode_world_snapshot(const std::span<const std::byte>
             if(!reader.read_id(id) || !reader.read_id(a.carrier) || !reader.read_f32(a.offset.x) || !reader.read_f32(a.offset.y) || !reader.read_f32(a.offset.z) || !valid(a) || !attachments.emplace(id,a).second){result.diagnostics="Invalid or duplicate character attachment.";return result;}}
         if(count)for(auto& e:snapshot.entities){const auto found=attachments.find(e.persistent_id);if(found!=attachments.end()){e.character_attachment=found->second;attachments.erase(found);}}
         if(!attachments.empty() || !validate_character_attachments(snapshot,&result.diagnostics)){result.diagnostics="Invalid character attachment references.";return result;}
+    }
+    if(version>=15U){
+        std::uint32_t count=0;if(!reader.read_u32(count)||count>snapshot.entities.size()){result.diagnostics="Invalid presentation count.";return result;}
+        std::unordered_map<PersistentId,std::string,PersistentIdHash> records;
+        for(std::uint32_t i=0;i<count;++i){PersistentId id;std::string data;if(!reader.read_id(id)||!reader.read_string(data)||data.empty()||!records.emplace(id,std::move(data)).second){result.diagnostics="Invalid presentation record.";return result;}}
+        for(auto& e:snapshot.entities){const auto found=records.find(e.persistent_id);if(found==records.end())continue;std::istringstream in{found->second};in.imbue(std::locale::classic());std::string field;
+            while(in>>field){bool ok=false;if(field=="animation"&&!e.animation){AnimationPlayer p;ok=read_animation(in,p);if(ok)e.animation=p;}else if(field=="rig_part"&&!e.rig_part){RigPart p;ok=read_rig_part(in,p);if(ok)e.rig_part=p;}else if(field=="audio_emitter"&&!e.audio_emitter){AudioEmitter p;ok=read_audio_emitter(in,p);if(ok)e.audio_emitter=p;}if(!ok){result.diagnostics="Invalid presentation fields.";return result;}}
+            records.erase(found);
+        }if(!records.empty()||!validate_presentation(snapshot,&result.diagnostics)){result.diagnostics="Invalid presentation references.";return result;}
     }
     if (!reader.finished()) {
         result.diagnostics = "World snapshot contains trailing data.";

@@ -787,6 +787,9 @@ void EditorUi::draw(
                     ImGui::Text("Carrier %s",a.carrier.to_string().c_str());
                     ImGui::Text("Local foot %.2f %.2f %.2f",static_cast<double>(a.offset.x),static_cast<double>(a.offset.y),static_cast<double>(a.offset.z));
                 }
+                if(inspector->animation&&ImGui::CollapsingHeader("Animation")){const auto& a=*inspector->animation;ImGui::Text("Rig %s",a.rig.value.to_string().c_str());ImGui::Text("Clip %u  Time %.3f  Rate %.2f",a.clip,a.time,static_cast<double>(a.rate));}
+                if(inspector->rig_part&&ImGui::CollapsingHeader("Rig part")){ImGui::Text("Root %s",inspector->rig_part->root.to_string().c_str());ImGui::Text("Node %u",inspector->rig_part->node);}
+                if(inspector->audio_emitter&&ImGui::CollapsingHeader("Spatial audio")){const auto& a=*inspector->audio_emitter;ImGui::Text("Sound %s",a.sound.value.to_string().c_str());ImGui::Text("Time %.3f  Gain %.2f  Pitch %.2f",a.time,static_cast<double>(a.gain),static_cast<double>(a.pitch));}
                 if(inspector->vehicle && ImGui::CollapsingHeader("Vehicle")) {
                     const auto& v=*inspector->vehicle;
                     ImGui::Text("Wheelbase %.2f m   Track %.2f m",static_cast<double>(v.wheelbase),static_cast<double>(v.track));

@@ -102,6 +102,16 @@ public:
     bool clear_vehicle(EntityId entity);
     [[nodiscard]] std::optional<Vehicle> vehicle(EntityId entity) const noexcept;
     [[nodiscard]] std::uint64_t vehicle_revision() const noexcept { return vehicle_revision_; }
+    bool set_animation(EntityId entity,const AnimationPlayer& player);
+    bool clear_animation(EntityId entity);
+    [[nodiscard]] std::optional<AnimationPlayer> animation(EntityId entity) const noexcept;
+    bool set_rig_part(EntityId entity,const RigPart& part);
+    bool clear_rig_part(EntityId entity);
+    [[nodiscard]] std::optional<RigPart> rig_part(EntityId entity) const noexcept;
+    bool set_audio_emitter(EntityId entity,const AudioEmitter& emitter);
+    bool clear_audio_emitter(EntityId entity);
+    [[nodiscard]] std::optional<AudioEmitter> audio_emitter(EntityId entity) const noexcept;
+    [[nodiscard]] std::uint64_t presentation_revision() const noexcept {return presentation_revision_;}
     bool set_character_attachment(EntityId entity, const CharacterAttachment& attachment);
     bool clear_character_attachment(EntityId entity);
     bool sync_character_attachment(EntityId entity);
@@ -149,6 +159,9 @@ private:
         std::optional<Character> character;
         std::optional<Vehicle> vehicle;
         std::optional<CharacterAttachment> character_attachment;
+        std::optional<AnimationPlayer> animation;
+        std::optional<RigPart> rig_part;
+        std::optional<AudioEmitter> audio_emitter;
         PersistentId material{};
         std::vector<ResourceReference> resource_references;
         std::uint32_t generation = 1;
@@ -186,6 +199,9 @@ private:
     std::unordered_map<PersistentId, std::vector<EntityId>, PersistentIdHash> dependency_provider_users_;
     std::unordered_map<PersistentId, std::vector<EntityId>, PersistentIdHash> dependency_gate_users_;
     std::uint64_t character_revision_ = 0;
+    std::uint64_t presentation_revision_=0;
+    bool advance_presentation_revision() noexcept;
+    bool has_rig_parts(EntityId entity) const noexcept;
     std::uint64_t attachment_revision_ = 0;
     bool advance_attachment_revision() noexcept;
     bool has_attached_characters(EntityId carrier) const noexcept;

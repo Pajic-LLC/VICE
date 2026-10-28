@@ -4,6 +4,7 @@
 #include "dependency_source.hpp"
 #include "character_source.hpp"
 #include "vehicle_source.hpp"
+#include <vice/world/presentation_io.hpp>
 #include "causal_source.hpp"
 #include "material_source.hpp"
 #include <algorithm>
@@ -189,6 +190,9 @@ ParseResult parse_source_manifest(const std::string_view source) {
 
             std::string metadata;
             while (values >> metadata) {
+                if(metadata=="animation"){world::AnimationPlayer p;if(entity.animation||!world::read_animation(values,p)){fail("invalid animation.");return result;}entity.animation=p;continue;}
+                if(metadata=="rig_part"){world::RigPart p;if(entity.rig_part||!world::read_rig_part(values,p)){fail("invalid rig part.");return result;}entity.rig_part=p;continue;}
+                if(metadata=="audio_emitter"){world::AudioEmitter p;if(entity.audio_emitter||!world::read_audio_emitter(values,p)){fail("invalid audio emitter.");return result;}entity.audio_emitter=p;continue;}
                 if(metadata=="character_attachment") {
                     world::CharacterAttachment a;std::string parent;
                     if(entity.character_attachment || !(values>>parent>>a.offset.x>>a.offset.y>>a.offset.z)) {fail("invalid character attachment.");return result;}
@@ -430,7 +434,7 @@ ParseResult parse_source_manifest(const std::string_view source) {
     if(!world::validate_materials(parsed,&result.diagnostics))return result;
     std::sort(parsed.causal_history.events.begin(),parsed.causal_history.events.end(),[](const auto& a,const auto& b){return a.sequence<b.sequence;});
     if(!world::validate_causal_history(parsed.causal_history,&result.diagnostics))return result;
-    if (!world::validate_distance_links(parsed, &result.diagnostics) || !world::validate_dependencies(parsed, &result.diagnostics) || !world::validate_character_attachments(parsed, &result.diagnostics) || !world::validate_vehicles(parsed, &result.diagnostics) || !world::validate_characters(parsed, &result.diagnostics)) return result;
+    if (!world::validate_distance_links(parsed, &result.diagnostics) || !world::validate_dependencies(parsed, &result.diagnostics) || !world::validate_character_attachments(parsed, &result.diagnostics) || !world::validate_presentation(parsed, &result.diagnostics) || !world::validate_vehicles(parsed, &result.diagnostics) || !world::validate_characters(parsed, &result.diagnostics)) return result;
     world::World canonical;
     if (!canonical.restore(parsed)) {
         result.diagnostics = "World source violates World validation rules.";

@@ -137,7 +137,7 @@ struct EntityId { std::uint8_t bytes[16]{}; };
 struct Vector3 { float x = 0, y = 0, z = 0; };
 enum class Result : std::uint32_t {
     success, unavailable, invalid_argument, not_found, no_body,
-    static_body, inactive_region, reset_required, wrong_phase, no_link, no_dependency, no_character, not_grounded, history_mismatch, event_pruned, sequence_exhausted, no_vehicle, attached, blocked, out_of_range, no_attachment, no_camera,
+    static_body, inactive_region, reset_required, wrong_phase, no_link, no_dependency, no_character, not_grounded, history_mismatch, event_pruned, sequence_exhausted, no_vehicle, attached, blocked, out_of_range, no_attachment, no_camera, no_animation, no_audio,
 };
 enum class Motion : std::uint32_t { static_body, kinematic_body, dynamic_body };
 struct EntitySnapshot {
@@ -252,6 +252,16 @@ struct CameraPose {
     double position[3]{};
     float rotation[4]{0,0,0,1};
 };
+struct AnimationSnapshot {
+    std::uint32_t size=sizeof(AnimationSnapshot),clip=0,playing=0,looping=0,node_count=0,part_count=0;
+    float rate=1;double time=0,duration=0;char clip_name[129]{};
+};
+struct AudioSnapshot {
+    std::uint32_t size=sizeof(AudioSnapshot),playing=0,looping=0,output_active=0;
+    float gain=0,pitch=1,reference_distance=1,max_distance=50,left_gain=0,right_gain=0,distance=0;
+    double time=0,duration=0;std::uint64_t delivered_frames=0,underrun_frames=0;
+};
+struct Quaternion {float x=0,y=0,z=0,w=1;};
 struct HostApi {
     std::uint32_t abi_version = module::abi_version;
     std::uint32_t size = sizeof(HostApi);
@@ -279,6 +289,11 @@ struct HostApi {
     Result (*detach_character)(void* context,EntityId character,Vector3 offset,float max_speed,float max_drop) noexcept = nullptr;
     Result (*read_camera_pose)(void* context,EntityId camera,CameraPose* output) noexcept = nullptr;
     Result (*set_camera_pose)(void* context,EntityId camera,const CameraPose* pose) noexcept = nullptr;
+    Result (*read_animation)(void* context,EntityId id,AnimationSnapshot* output) noexcept = nullptr;
+    Result (*control_animation)(void* context,EntityId id,std::uint32_t clip,float rate,std::uint32_t playing,std::uint32_t looping,std::uint32_t restart) noexcept = nullptr;
+    Result (*read_audio)(void* context,EntityId id,AudioSnapshot* output) noexcept = nullptr;
+    Result (*control_audio)(void* context,EntityId id,float gain,float pitch,std::uint32_t playing,std::uint32_t restart) noexcept = nullptr;
+    Result (*set_character_facing)(void* context,EntityId id,Quaternion facing) noexcept = nullptr;
 };
 
 inline constexpr std::size_t host_api_v1_size = offsetof(HostApi, read_entity);
@@ -404,6 +419,26 @@ public:
     [[nodiscard]] Result set_camera_pose(EntityId id,const CameraPose& pose) const noexcept {
         if(!host_ || host_->size<offsetof(HostApi,set_camera_pose)+sizeof(host_->set_camera_pose)||!host_->set_camera_pose)return Result::unavailable;
         return host_->set_camera_pose(host_->context,id,&pose);
+    }
+    [[nodiscard]] Result read_animation(EntityId id,AnimationSnapshot& output)const noexcept {
+        if(!host_||host_->size<offsetof(HostApi,read_animation)+sizeof(host_->read_animation)||!host_->read_animation)return Result::unavailable;
+        return host_->read_animation(host_->context,id,&output);
+    }
+    [[nodiscard]] Result control_animation(EntityId id,std::uint32_t clip,float rate=1,bool playing=true,bool looping=true,bool restart=false)const noexcept {
+        if(!host_||host_->size<offsetof(HostApi,control_animation)+sizeof(host_->control_animation)||!host_->control_animation)return Result::unavailable;
+        return host_->control_animation(host_->context,id,clip,rate,playing?1U:0U,looping?1U:0U,restart?1U:0U);
+    }
+    [[nodiscard]] Result read_audio(EntityId id,AudioSnapshot& output)const noexcept {
+        if(!host_||host_->size<offsetof(HostApi,read_audio)+sizeof(host_->read_audio)||!host_->read_audio)return Result::unavailable;
+        return host_->read_audio(host_->context,id,&output);
+    }
+    [[nodiscard]] Result control_audio(EntityId id,float gain,float pitch,bool playing,bool restart=false)const noexcept {
+        if(!host_||host_->size<offsetof(HostApi,control_audio)+sizeof(host_->control_audio)||!host_->control_audio)return Result::unavailable;
+        return host_->control_audio(host_->context,id,gain,pitch,playing?1U:0U,restart?1U:0U);
+    }
+    [[nodiscard]] Result set_character_facing(EntityId id,Quaternion facing)const noexcept {
+        if(!host_||host_->size<offsetof(HostApi,set_character_facing)+sizeof(host_->set_character_facing)||!host_->set_character_facing)return Result::unavailable;
+        return host_->set_character_facing(host_->context,id,facing);
     }
     void log(const LogLevel level, const char* const message) const noexcept {
         if (host_ != nullptr && host_->log != nullptr) {

@@ -77,6 +77,8 @@ struct PreviewSnapshot {
 struct PreviewGameConfig {
     project::Manifest manifest;
     std::filesystem::path module_path;
+    std::filesystem::path cooked_content_root;
+    bool enable_audio_output=false;
 };
 
 class PreviewRuntime {

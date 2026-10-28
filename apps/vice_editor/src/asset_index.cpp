@@ -1,3 +1,4 @@
+#include <vice/presentation/assets.hpp>
 #include <vice/editor/asset_index.hpp>
 
 #include <vice/render/material_asset.hpp>
@@ -20,6 +21,8 @@ namespace {
 
 [[nodiscard]] AssetKind classify_source(const std::filesystem::path& path) noexcept {
     const auto extension = path.extension().string();
+    if (extension == ".vrig") return AssetKind::rig;
+    if (extension == ".vsound") return AssetKind::sound;
     if (extension == ".vworld") return AssetKind::world;
     if (extension == ".vmesh") return AssetKind::mesh;
     if (extension == ".vmat") return AssetKind::render_material;
@@ -32,6 +35,8 @@ namespace {
 
 [[nodiscard]] AssetKind classify_cooked(const std::filesystem::path& path) noexcept {
     const auto extension = path.extension().string();
+    if (extension == ".vrigc") return AssetKind::rig;
+    if (extension == ".vpcmc") return AssetKind::sound;
     if (extension == ".vworldc") return AssetKind::world;
     if (extension == ".vmeshc") return AssetKind::mesh;
     if (extension == ".vmatc") return AssetKind::render_material;
@@ -47,6 +52,8 @@ namespace {
     const AssetKind kind
 ) {
     switch (kind) {
+    case AssetKind::rig: relative.replace_extension(".vrigc"); break;
+    case AssetKind::sound: relative.replace_extension(".vpcmc"); break;
     case AssetKind::world: relative.replace_extension(".vworldc"); break;
     case AssetKind::mesh: relative.replace_extension(".vmeshc"); break;
     case AssetKind::render_material: relative.replace_extension(".vmatc"); break;
@@ -96,6 +103,14 @@ void inspect_cooked_asset(AssetRecord& record) {
     }
 
     switch (record.kind) {
+    case AssetKind::rig: {
+        const auto rig=presentation::read_rig(record.cooked_path,&record.diagnostics);
+        record.cooked_valid=rig.has_value();if(rig){record.resource_id=rig->id;record.format_version=1;record.summary=std::to_string(rig->nodes.size())+" nodes, "+std::to_string(rig->clips.size())+" clips";}break;
+    }
+    case AssetKind::sound: {
+        const auto sound=presentation::read_pcm(record.cooked_path,&record.diagnostics);
+        record.cooked_valid=sound.has_value();if(sound){record.resource_id=sound->id;record.format_version=1;record.summary="Mono 48000 Hz, "+std::to_string(sound->samples.size())+" samples";}break;
+    }
     case AssetKind::world: {
         const auto loaded = world::load_world_snapshot(record.cooked_path);
         record.cooked_valid = loaded.snapshot.has_value();
@@ -213,6 +228,8 @@ void inspect_cooked_asset(AssetRecord& record) {
 
 const char* asset_kind_name(const AssetKind kind) noexcept {
     switch (kind) {
+    case AssetKind::rig: return "Animated Rig";
+    case AssetKind::sound: return "Sound";
     case AssetKind::world: return "World";
     case AssetKind::mesh: return "Mesh";
     case AssetKind::render_material: return "Render Material";

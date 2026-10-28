@@ -6,6 +6,7 @@ add_library(
     src/character.cpp
     src/vehicle.cpp
     src/character_attachment.cpp
+    src/presentation.cpp
     src/dependency.cpp
     src/persistent_id.cpp
     src/primitives.cpp

@@ -112,6 +112,9 @@ namespace {
     }
     if (command.entity.vehicle && !world.set_vehicle(*entity,*command.entity.vehicle)) { rollback_entity(); return false; }
     if(command.entity.character_attachment && !world.set_character_attachment(*entity,*command.entity.character_attachment)){rollback_entity();return false;}
+    if(command.entity.animation&&!world.set_animation(*entity,*command.entity.animation)){rollback_entity();return false;}
+    if(command.entity.rig_part&&!world.set_rig_part(*entity,*command.entity.rig_part)){rollback_entity();return false;}
+    if(command.entity.audio_emitter&&!world.set_audio_emitter(*entity,*command.entity.audio_emitter)){rollback_entity();return false;}
     if(!world.set_entity_material(*entity,command.entity.material)) {rollback_entity();return false;}
     for (const auto reference : command.entity.resource_references) {
         if (!world.set_resource_reference(*entity, reference)) {
@@ -564,6 +567,7 @@ std::optional<InspectorData> project_inspector(
     inspector.dependency = world.dependency(*entity);
     inspector.character = world.character(*entity);
     inspector.vehicle = world.vehicle(*entity);
+    inspector.animation=world.animation(*entity);inspector.rig_part=world.rig_part(*entity);inspector.audio_emitter=world.audio_emitter(*entity);
     inspector.character_attachment=world.character_attachment(*entity);
     const auto references = world.resource_references(*entity);
     inspector.resource_references.assign(references.begin(), references.end());

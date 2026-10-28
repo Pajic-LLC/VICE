@@ -12,6 +12,7 @@
 #include <string_view>
 
 namespace vice::rigid_body { class AuthoredSimulation; }
+namespace vice::presentation { class System; }
 
 namespace vice::runtime {
 
@@ -54,6 +55,10 @@ struct RuntimeDebugEntitySnapshot {
     world::CausalContext causal_history;
     std::optional<world::MaterialSurface> material;
     std::optional<float> native_mass;
+    std::optional<world::AnimationPlayer> animation;
+    std::optional<world::RigPart> rig_part;
+    std::optional<world::AudioEmitter> audio_emitter;
+    std::string animation_state="null",audio_state="null";
     std::optional<world::Vehicle> vehicle;
     std::optional<world::CharacterAttachment> character_attachment;
     std::optional<VehicleRuntimeDebug> vehicle_state;
@@ -76,7 +81,8 @@ struct RuntimeDebugEntitySnapshot {
 [[nodiscard]] RuntimeDebugEntitySnapshot sample_runtime_debug_entity(
     const world::World& world,
     world::PersistentId persistent_id,
-    const rigid_body::AuthoredSimulation* physics = nullptr
+    const rigid_body::AuthoredSimulation* physics = nullptr,
+    const presentation::System* presentation = nullptr
 );
 
 [[nodiscard]] std::string serialize_runtime_debug_entity_snapshot(
