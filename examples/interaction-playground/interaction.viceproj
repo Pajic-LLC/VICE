@@ -1,0 +1,7 @@
+vice-project 1
+id a2000000-0000-4000-8000-000000000001
+name "Walk and Drive"
+game_name "Walk and Drive"
+game_target "walk-and-drive"
+assets "assets"
+startup_world "worlds/interaction.vworld"

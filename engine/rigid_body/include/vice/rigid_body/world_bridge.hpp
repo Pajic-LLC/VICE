@@ -113,6 +113,8 @@ public:
         CharacterDesc desc
     );
 
+    bool remove_character(world::World& world,const simulation::Coordinator& coordinator,world::EntityId entity);
+
     [[nodiscard]] std::optional<CharacterId> character_id(
         const world::World& world,
         const simulation::Coordinator& coordinator,

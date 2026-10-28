@@ -33,6 +33,8 @@ struct VehicleObservation {
     float forward_speed = 0;
     std::array<WheelObservation,4> wheels{}; // front left/right, rear left/right
 };
+enum class AttachmentControlResult { applied, not_found, invalid_argument, inactive_region, reset_required, out_of_range, already_attached, not_attached, blocked };
+
 enum class VehicleControlResult { applied, not_found, invalid_argument, inactive_region, reset_required };
 
 struct CharacterObservation {
@@ -40,7 +42,7 @@ struct CharacterObservation {
     world::PersistentId supporting_entity{};
     CharacterId id{};
 };
-enum class CharacterControlResult { applied, not_found, invalid_argument, inactive_region, reset_required, not_grounded };
+enum class CharacterControlResult { applied, not_found, invalid_argument, inactive_region, reset_required, not_grounded, attached };
 
 enum class BodyControlResult { applied, not_found, invalid_argument, static_body, inactive_region, reset_required };
 
@@ -57,6 +59,8 @@ public:
     bool step(std::string* diagnostics = nullptr);
     bool advance(double delta_seconds, std::string* diagnostics = nullptr);
     [[nodiscard]] BodyControlResult set_body_velocity(world::PersistentId owner, math::Vec3 linear, math::Vec3 angular);
+    [[nodiscard]] AttachmentControlResult attach_character(world::PersistentId character,world::PersistentId carrier,math::Vec3 offset,float max_distance);
+    [[nodiscard]] AttachmentControlResult detach_character(world::PersistentId character,math::Vec3 exit_offset,float max_speed,float max_drop);
     [[nodiscard]] VehicleControlResult control_vehicle(world::PersistentId owner, float throttle, float steering, float brake);
     [[nodiscard]] std::optional<VehicleObservation> vehicle(world::PersistentId owner) const noexcept;
     [[nodiscard]] std::size_t vehicle_count() const noexcept;

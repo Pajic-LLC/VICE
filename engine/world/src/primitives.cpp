@@ -243,6 +243,7 @@ WorldSnapshot World::snapshot() const {
             .dependency = slot.dependency,
             .character = slot.character,
             .vehicle = slot.vehicle,
+            .character_attachment = slot.character_attachment,
             .material = slot.material,
             .resource_references = slot.resource_references,
         };
@@ -300,6 +301,7 @@ WorldSnapshot World::snapshot() const {
 }
 
 bool World::restore(const WorldSnapshot& snapshot_data) {
+    if (!validate_character_attachments(snapshot_data)) return false;
     if (!validate_vehicles(snapshot_data)) return false;
     if (!validate_distance_links(snapshot_data) || !validate_dependencies(snapshot_data) || !validate_characters(snapshot_data) || !validate_causal_history(snapshot_data.causal_history)) return false;
     if(!validate_materials(snapshot_data)) return false;
@@ -361,6 +363,8 @@ bool World::restore(const WorldSnapshot& snapshot_data) {
         }
     }
 
+    for (const auto& e:snapshot_data.entities) if(e.character_attachment && !restored.set_character_attachment(*restored.find(e.persistent_id),*e.character_attachment))return false;
+
     for (const auto& entity_record : snapshot_data.entities) {
         if (entity_record.distance_link &&
             !restored.set_distance_link(*restored.find(entity_record.persistent_id), *entity_record.distance_link)) return false;
@@ -379,7 +383,7 @@ bool World::restore(const WorldSnapshot& snapshot_data) {
         }
     }
 
-    if(!restored.advance_material_revision() || !restored.advance_vehicle_revision())return false;
+    if(!restored.advance_material_revision() || !restored.advance_vehicle_revision() || !restored.advance_attachment_revision())return false;
     restored.causal_id_=snapshot_data.causal_history.id;
     restored.next_causal_sequence_=snapshot_data.causal_history.next_sequence;
     restored.causal_events_.assign(snapshot_data.causal_history.events.begin(),snapshot_data.causal_history.events.end());

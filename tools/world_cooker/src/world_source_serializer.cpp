@@ -47,7 +47,7 @@ std::string serialize_source_manifest(
     const world::WorldSnapshot& snapshot,
     std::string* const diagnostics
 ) {
-    if (!world::validate_distance_links(snapshot, diagnostics) || !world::validate_dependencies(snapshot, diagnostics) || !world::validate_vehicles(snapshot, diagnostics) || !world::validate_characters(snapshot, diagnostics)) return {};
+    if (!world::validate_distance_links(snapshot, diagnostics) || !world::validate_dependencies(snapshot, diagnostics) || !world::validate_character_attachments(snapshot, diagnostics) || !world::validate_vehicles(snapshot, diagnostics) || !world::validate_characters(snapshot, diagnostics)) return {};
     if(!world::validate_causal_history(snapshot.causal_history,diagnostics))return {};
     world::World canonical;
     if (!canonical.restore(snapshot)) {
@@ -134,6 +134,7 @@ std::string serialize_source_manifest(
             output << " rigid_box ";
             write_rigid_box(output, *entity.rigid_box);
         }
+        if(entity.character_attachment){const auto& a=*entity.character_attachment;output<<" character_attachment "<<a.carrier.to_string()<<' '<<a.offset.x<<' '<<a.offset.y<<' '<<a.offset.z;}
         if (entity.vehicle) { output << " vehicle "; write_vehicle(output,*entity.vehicle); }
         if (entity.character) { output << " character "; write_character(output,*entity.character); }
         if (entity.dependency) {

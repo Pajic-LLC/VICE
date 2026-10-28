@@ -17,6 +17,8 @@ The first executable is `vice_lab`. It is an integration target for engine syste
 The [vehicle playground](examples/vehicle-playground/README.md) demonstrates authored
 ray-suspension chassis, shared-material traction, SDK controls and checkpoint resume.
 See [authored vehicles](docs/architecture/authored-vehicles.md) for the engine contract.
+The [interaction playground](examples/interaction-playground/README.md) adds walking,
+carrier attachment, safe exit, gameplay camera controls and mounted restart.
 
 ## Build
 

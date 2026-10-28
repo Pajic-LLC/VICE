@@ -429,6 +429,13 @@ bool WorldBridge::create_character(
     return true;
 }
 
+bool WorldBridge::remove_character(world::World& world,const simulation::Coordinator& coordinator,world::EntityId entity) {
+    const auto id=character_id(world,coordinator,entity);const auto spatial=world.spatial_state(entity);const auto owner=world.persistent_id(entity);
+    auto* region=spatial?find_region(spatial->region):nullptr;
+    if(!id || !region || !owner || !region->domain->destroy_character(*id))return false;
+    std::erase_if(characters_,[&](const auto& record){return record.owner==*owner;});remove_activation_requests(*owner);return true;
+}
+
 std::optional<CharacterId> WorldBridge::character_id(
     const world::World& world,
     const simulation::Coordinator& coordinator,

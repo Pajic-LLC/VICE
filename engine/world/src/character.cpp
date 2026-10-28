@@ -20,6 +20,7 @@ bool World::set_character(EntityId entity, const Character& c) {
     slots_[entity.index].character = c; ++character_revision_; return true;
 }
 bool World::clear_character(EntityId entity) {
+    if (!clear_character_attachment(entity)) return false;
     if (!alive(entity)) return false;
     auto& c = slots_[entity.index].character;
     if (c) { c.reset(); ++character_revision_; }

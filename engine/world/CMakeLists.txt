@@ -5,6 +5,7 @@ add_library(
     src/causal.cpp
     src/character.cpp
     src/vehicle.cpp
+    src/character_attachment.cpp
     src/dependency.cpp
     src/persistent_id.cpp
     src/primitives.cpp
