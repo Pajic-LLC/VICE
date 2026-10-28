@@ -445,11 +445,7 @@ void append_component_types(std::string& data, const world::WorldSnapshot& snaps
     for (std::size_t index = 0; index < values.size(); ++index) {
         if (index != 0U) data.push_back(',');
         const auto& value = *values[index];
-        data += "{\"id\":";
-        append_json_string(data, value.id.value.to_string());
-        data += ",\"name\":";
-        append_json_string(data, value.name);
-        data += ",\"version\":" + std::to_string(value.version) + "}";
+        data += world::serialize_component_type(value);
     }
     data.push_back(']');
 }
@@ -598,6 +594,7 @@ void append_entities(std::string& data, const world::WorldSnapshot& snapshot) {
         const auto owner = observed.find(value.persistent_id);
         data += ",\"dependency\":" + world::serialize_dependency_state(owner ? observed.dependency_state(*owner) : std::nullopt);
         data += ",\"character_attachment\":" + world::serialize_character_attachment(value.character_attachment);
+        data += ",\"component_payloads\":"+world::serialize_component_payloads(value.components);
         data += ",\"animation\":"+world::serialize_animation(value.animation)+",\"rig_part\":"+world::serialize_rig_part(value.rig_part)+",\"audio_emitter\":"+world::serialize_audio_emitter(value.audio_emitter);
         data += ",\"vehicle\":" + world::serialize_vehicle(value.vehicle);
         data += ",\"character\":" + world::serialize_character(value.character);

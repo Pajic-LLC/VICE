@@ -38,7 +38,7 @@ RuntimeRenderResidentSceneBuildResult build_runtime_render_resident_scene(
     const world::World& world
 ) {
     RuntimeRenderResidentSceneBuildResult result;
-    result.scene.snapshot = world.snapshot();
+    result.scene.snapshot = world.snapshot(world::ComponentPayloadSnapshot::omit);
     auto residency_build = build_runtime_render_residency(result.scene.snapshot);
     if (!residency_build) {
         result.diagnostics = std::move(residency_build.diagnostics);

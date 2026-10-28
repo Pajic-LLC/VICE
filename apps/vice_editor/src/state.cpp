@@ -112,6 +112,7 @@ namespace {
     }
     if (command.entity.vehicle && !world.set_vehicle(*entity,*command.entity.vehicle)) { rollback_entity(); return false; }
     if(command.entity.character_attachment && !world.set_character_attachment(*entity,*command.entity.character_attachment)){rollback_entity();return false;}
+    for(const auto& p:command.entity.components)if(!world.set_component(*entity,p)){rollback_entity();return false;}
     if(command.entity.animation&&!world.set_animation(*entity,*command.entity.animation)){rollback_entity();return false;}
     if(command.entity.rig_part&&!world.set_rig_part(*entity,*command.entity.rig_part)){rollback_entity();return false;}
     if(command.entity.audio_emitter&&!world.set_audio_emitter(*entity,*command.entity.audio_emitter)){rollback_entity();return false;}
@@ -528,7 +529,7 @@ std::optional<world::PersistentId> create_mesh_instance(
 }
 
 std::vector<HierarchyEntry> build_hierarchy(const world::World& world) {
-    const auto snapshot = world.snapshot();
+    const auto snapshot = world.snapshot(world::ComponentPayloadSnapshot::omit);
     std::vector<HierarchyEntry> entries;
     entries.reserve(snapshot.entities.size());
     for (const auto& entity : snapshot.entities) {
@@ -567,6 +568,7 @@ std::optional<InspectorData> project_inspector(
     inspector.dependency = world.dependency(*entity);
     inspector.character = world.character(*entity);
     inspector.vehicle = world.vehicle(*entity);
+    inspector.components=world.components(*entity);for(const auto& p:inspector.components)if(const auto schema=world.component_type(p.type))inspector.component_schemas.push_back(*schema);
     inspector.animation=world.animation(*entity);inspector.rig_part=world.rig_part(*entity);inspector.audio_emitter=world.audio_emitter(*entity);
     inspector.character_attachment=world.character_attachment(*entity);
     const auto references = world.resource_references(*entity);

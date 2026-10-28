@@ -91,6 +91,12 @@ std::optional<Operation> read_operation(const std::string& name, std::istream& i
     } else if (name == "clear_transform") {
         SetEntityTransform op;
         if (read_id(input, op.entity)) return op;
+    } else if(name=="register_component"){
+        RegisterComponentType op;world::PersistentId id;if(!read_id(input,id)||!(input>>op.schema.version>>std::quoted(op.schema.name))||!world::read_component_fields(input,op.schema.fields))return std::nullopt;op.schema.id={id};return op;
+    } else if(name=="set_component"){
+        SetComponent op;if(!read_id(input,op.entity)||!world::read_component_payload(input,op.payload))return std::nullopt;return op;
+    } else if(name=="remove_component"){
+        RemoveComponent op;world::PersistentId id;if(!read_id(input,op.entity)||!read_id(input,id))return std::nullopt;op.type={id};return op;
     } else if(name=="set_animation"||name=="clear_animation"){
         SetAnimation op;if(!read_id(input,op.entity))return std::nullopt;if(name=="set_animation"){world::AnimationPlayer p;if(!world::read_animation(input,p))return std::nullopt;op.value=p;}return op;
     } else if(name=="set_rig_part"||name=="clear_rig_part"){
@@ -161,7 +167,9 @@ void affected(FileEditResult& result, const Transaction& transaction, const worl
     for (const auto& op : transaction.operations) {
         std::visit([&](const auto& value) {
             using T = std::decay_t<decltype(value)>;
-            if constexpr (std::is_same_v<T, SetWorldMaterial>) {
+            if constexpr (std::is_same_v<T, RegisterComponentType>) {
+                // Schema registration has no entity/region owner.
+            } else if constexpr (std::is_same_v<T, SetWorldMaterial>) {
                 const auto add=[&](const world::WorldSnapshot& s) {
                     for(const auto& e:s.entities) if(e.material==value.id) {
                         result.affected_entities.push_back(e.persistent_id);
@@ -206,7 +214,7 @@ void affected(FileEditResult& result, const Transaction& transaction, const worl
                         }
                     };add(before);add(after);
                 }
-                if constexpr (std::is_same_v<T,SetAnimation> || std::is_same_v<T,SetRigPart> || std::is_same_v<T,SetAudioEmitter> || std::is_same_v<T, SetCharacterAttachment> || std::is_same_v<T, SetVehicle> || std::is_same_v<T, SetCharacter> || std::is_same_v<T, SetEntityMaterial>) {
+                if constexpr (std::is_same_v<T,SetComponent> || std::is_same_v<T,RemoveComponent> || std::is_same_v<T,SetAnimation> || std::is_same_v<T,SetRigPart> || std::is_same_v<T,SetAudioEmitter> || std::is_same_v<T, SetCharacterAttachment> || std::is_same_v<T, SetVehicle> || std::is_same_v<T, SetCharacter> || std::is_same_v<T, SetEntityMaterial>) {
                     const auto previous = std::find_if(before.entities.begin(),before.entities.end(),[&](const auto& e) { return e.persistent_id == value.entity; });
                     if (previous != before.entities.end() && previous->spatial_state) result.affected_regions.push_back(previous->spatial_state->region);
                 }

@@ -65,7 +65,8 @@ std::string serialize_source_manifest(
 
     for (const auto& type : value.component_types) {
         output << "component " << type.id.value.to_string() << ' ' << type.version << ' '
-            << std::quoted(type.name) << '\n';
+            << std::quoted(type.name);
+        if(!type.fields.empty()){output<<" fields ";world::write_component_fields(output,type.fields);}output<<'\n';
     }
     for (const auto& resource : value.resources) {
         output << "resource " << resource.value.to_string() << '\n';
@@ -135,6 +136,7 @@ std::string serialize_source_manifest(
             output << " rigid_box ";
             write_rigid_box(output, *entity.rigid_box);
         }
+        for(const auto& p:entity.components){output<<" state ";world::write_component_payload(output,p);}
         if(entity.animation){output<<" animation ";world::write_animation(output,*entity.animation);}
         if(entity.rig_part){output<<" rig_part ";world::write_rig_part(output,*entity.rig_part);}
         if(entity.audio_emitter){output<<" audio_emitter ";world::write_audio_emitter(output,*entity.audio_emitter);}

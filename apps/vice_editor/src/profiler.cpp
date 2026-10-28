@@ -35,7 +35,7 @@ std::size_t ProfilerHistory::capacity() const noexcept {
 }
 
 WorldProfilerStats summarize_world(const world::World& world) {
-    const auto snapshot = world.snapshot();
+    const auto snapshot = world.snapshot(world::ComponentPayloadSnapshot::omit);
     WorldProfilerStats result;
     result.entities = snapshot.entities.size();
     result.resources = snapshot.resources.size();

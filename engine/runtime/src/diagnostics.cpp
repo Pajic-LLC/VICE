@@ -7,7 +7,7 @@
 namespace vice::runtime {
 
 RuntimeWorldDiagnostics summarize_runtime_world(const world::World& world) {
-    const auto snapshot = world.snapshot();
+    const auto snapshot = world.snapshot(world::ComponentPayloadSnapshot::omit);
     RuntimeWorldDiagnostics result;
     result.entities = snapshot.entities.size();
     result.resources = snapshot.resources.size();

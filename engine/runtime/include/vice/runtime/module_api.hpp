@@ -137,7 +137,7 @@ struct EntityId { std::uint8_t bytes[16]{}; };
 struct Vector3 { float x = 0, y = 0, z = 0; };
 enum class Result : std::uint32_t {
     success, unavailable, invalid_argument, not_found, no_body,
-    static_body, inactive_region, reset_required, wrong_phase, no_link, no_dependency, no_character, not_grounded, history_mismatch, event_pruned, sequence_exhausted, no_vehicle, attached, blocked, out_of_range, no_attachment, no_camera, no_animation, no_audio,
+    static_body, inactive_region, reset_required, wrong_phase, no_link, no_dependency, no_character, not_grounded, history_mismatch, event_pruned, sequence_exhausted, no_vehicle, attached, blocked, out_of_range, no_attachment, no_camera, no_animation, no_audio, no_component, schema_conflict,
 };
 enum class Motion : std::uint32_t { static_body, kinematic_body, dynamic_body };
 struct EntitySnapshot {
@@ -262,6 +262,40 @@ struct AudioSnapshot {
     double time=0,duration=0;std::uint64_t delivered_frames=0,underrun_frames=0;
 };
 struct Quaternion {float x=0,y=0,z=0,w=1;};
+// Fixed-layout wire values. No STL or game-native object memory crosses the module boundary.
+enum class ComponentKind : std::uint32_t {
+    boolean = 1,
+    integer = 2,
+    real = 3,
+    text = 4,
+    identifier = 5
+};
+inline constexpr std::uint32_t component_field_capacity = 16;
+struct ComponentFieldSchema {
+    std::uint32_t id = 0;
+    ComponentKind kind = ComponentKind::boolean;
+    char name[65]{};
+};
+struct ComponentSchema {
+    std::uint32_t size = sizeof(ComponentSchema), version = 1, field_count = 0;
+    EntityId type{};
+    char name[129]{};
+    ComponentFieldSchema fields[component_field_capacity]{};
+};
+struct ComponentValue {
+    std::uint32_t id = 0;
+    ComponentKind kind = ComponentKind::boolean;
+    std::uint32_t boolean = 0;
+    std::int64_t integer = 0;
+    double real = 0;
+    EntityId identifier{};
+    char text[129]{};
+};
+struct ComponentData {
+    std::uint32_t size = sizeof(ComponentData), version = 1, field_count = 0;
+    EntityId type{};
+    ComponentValue fields[component_field_capacity]{};
+};
 struct HostApi {
     std::uint32_t abi_version = module::abi_version;
     std::uint32_t size = sizeof(HostApi);
@@ -294,6 +328,12 @@ struct HostApi {
     Result (*read_audio)(void* context,EntityId id,AudioSnapshot* output) noexcept = nullptr;
     Result (*control_audio)(void* context,EntityId id,float gain,float pitch,std::uint32_t playing,std::uint32_t restart) noexcept = nullptr;
     Result (*set_character_facing)(void* context,EntityId id,Quaternion facing) noexcept = nullptr;
+    Result (*register_component_schema)(void*,const ComponentSchema*) noexcept=nullptr;
+    Result (*read_component_schema)(void*,EntityId type,ComponentSchema*) noexcept=nullptr;
+    Result (*read_component)(void*,EntityId owner,EntityId type,ComponentData*) noexcept=nullptr;
+    Result (*set_component)(void*,EntityId owner,const ComponentData*) noexcept=nullptr;
+    Result (*remove_component)(void*,EntityId owner,EntityId type) noexcept=nullptr;
+
 };
 
 inline constexpr std::size_t host_api_v1_size = offsetof(HostApi, read_entity);
@@ -439,6 +479,45 @@ public:
     [[nodiscard]] Result set_character_facing(EntityId id,Quaternion facing)const noexcept {
         if(!host_||host_->size<offsetof(HostApi,set_character_facing)+sizeof(host_->set_character_facing)||!host_->set_character_facing)return Result::unavailable;
         return host_->set_character_facing(host_->context,id,facing);
+    }
+    [[nodiscard]] Result register_component_schema(const ComponentSchema &schema) const noexcept {
+        if (!host_ ||
+            host_->size < offsetof(HostApi, register_component_schema) +
+                              sizeof(host_->register_component_schema) ||
+            !host_->register_component_schema)
+            return Result::unavailable;
+        return host_->register_component_schema(host_->context, &schema);
+    }
+    [[nodiscard]] Result read_component_schema(EntityId type,
+                                               ComponentSchema &output) const noexcept {
+        if (!host_ ||
+            host_->size <
+                offsetof(HostApi, read_component_schema) + sizeof(host_->read_component_schema) ||
+            !host_->read_component_schema)
+            return Result::unavailable;
+        return host_->read_component_schema(host_->context, type, &output);
+    }
+    [[nodiscard]] Result read_component(EntityId owner, EntityId type,
+                                        ComponentData &output) const noexcept {
+        if (!host_ ||
+            host_->size < offsetof(HostApi, read_component) + sizeof(host_->read_component) ||
+            !host_->read_component)
+            return Result::unavailable;
+        return host_->read_component(host_->context, owner, type, &output);
+    }
+    [[nodiscard]] Result set_component(EntityId owner, const ComponentData &data) const noexcept {
+        if (!host_ ||
+            host_->size < offsetof(HostApi, set_component) + sizeof(host_->set_component) ||
+            !host_->set_component)
+            return Result::unavailable;
+        return host_->set_component(host_->context, owner, &data);
+    }
+    [[nodiscard]] Result remove_component(EntityId owner, EntityId type) const noexcept {
+        if (!host_ ||
+            host_->size < offsetof(HostApi, remove_component) + sizeof(host_->remove_component) ||
+            !host_->remove_component)
+            return Result::unavailable;
+        return host_->remove_component(host_->context, owner, type);
     }
     void log(const LogLevel level, const char* const message) const noexcept {
         if (host_ != nullptr && host_->log != nullptr) {

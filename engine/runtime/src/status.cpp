@@ -227,7 +227,7 @@ RuntimeCameraDiagnostics runtime_camera_diagnostics(
     if (!camera.has_value() || camera->entity.is_nil()) return result;
 
     result.entity = camera->entity;
-    const auto snapshot = world.snapshot();
+    const auto snapshot = world.snapshot(world::ComponentPayloadSnapshot::omit);
     const auto entity = std::find_if(
         snapshot.entities.begin(),
         snapshot.entities.end(),

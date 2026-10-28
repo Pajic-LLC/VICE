@@ -48,3 +48,13 @@ velocity. The query includes sleeping bodies, excludes triggers and uses a 2 cm
 near-contact margin. No support state is serialized or inferred from an entity's
 absolute height. The playground uses this query to gate jumping and inherit
 platform velocity. See ADR 0016 for semantics and limits.
+
+## Persistent game-defined components (Phase 7, Slice A)
+
+`Context::register_component_schema` registers or verifies an immutable `ComponentSchema` by UUID/version. Field IDs are stable numeric IDs; names are descriptive game content. Supported `ComponentKind` values are boolean, integer, real, text and opaque identifier. `read_component_schema` queries the definition. `ComponentData` has the schema type/version and up to 16 fixed-layout `ComponentValue` fields. Use `read_component`, `set_component` and `remove_component` with an owner's persistent ID.
+
+Each schema field must appear once with the correct kind. Integers are signed 64-bit, doubles finite, text printable UTF-8 up to 128 bytes with a NUL terminator in the 129-byte SDK buffer, and identifiers non-nil UUIDs. Every DTO's `size` must describe its complete known prefix. Registration is idempotent for an identical definition after reload; conflicting definitions/versions return `schema_conflict`. Reads distinguish missing owners (`not_found`) from missing instances (`no_component`). Malformed writes leave existing payloads unchanged.
+
+Writes are allowed in start/event/update callbacks under the existing owner-thread guard; frame and stop are read-only. Generic component writes do not implicitly wake a region or override a physics solver. Values are World truth, stored even for inactive or nonspatial owners. They survive checkpoints/restart; Play writes affect the clone and reset with Play. Query outputs are copied DTOs. The SDK never exports `std::variant`, strings, vectors or World internals.
+
+See [Rules of Reality](rules-of-reality.md), [ADR 0025](../adr/0025-persistent-component-payloads.md), and the game-defined SessionState in `examples/presentation-playground/game/game.cpp`. The example preserves launch/interaction counters on a physical vehicle while normal character animation/audio continue. No SessionState interpretation exists in engine core.

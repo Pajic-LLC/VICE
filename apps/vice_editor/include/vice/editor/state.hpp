@@ -167,6 +167,8 @@ struct HierarchyEntry {
 [[nodiscard]] std::vector<HierarchyEntry> build_hierarchy(const world::World& world);
 
 struct InspectorData {
+    std::vector<world::ComponentPayload> components;
+    std::vector<world::ComponentTypeDesc> component_schemas;
     world::PersistentId persistent_id{};
     std::optional<world::EntityId> entity;
     std::optional<world::SpatialState> spatial_state;
