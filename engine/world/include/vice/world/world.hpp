@@ -15,11 +15,12 @@
 #include <cstddef>
 #include <cstdint>
 #include <deque>
+#include <map>
 #include <optional>
+#include <set>
 #include <span>
 #include <unordered_map>
 #include <unordered_set>
-#include <set>
 #include <vector>
 
 namespace vice::world {
@@ -154,6 +155,19 @@ public:
     [[nodiscard]] SignalContext signal_context(PersistentId subject = {},
                                                std::size_t budget = causal_query_max_events) const;
     void clear_world_signals();
+    [[nodiscard]] ScheduleCreation
+    schedule_event(WorldEventRequest event, std::uint64_t due_ticks,
+                   std::uint64_t interval_ticks = 0,
+                   ScheduleCatchUp catch_up = ScheduleCatchUp::coalesce, PersistentId id = {});
+    bool cancel_schedule(PersistentId id);
+    [[nodiscard]] std::optional<WorldSchedule> schedule(PersistentId id) const;
+    [[nodiscard]] SchedulerInfo scheduler_info() const noexcept;
+    [[nodiscard]] SchedulePage schedule_page(PersistentId after = {},
+                                             std::size_t limit = world_schedule_query_limit) const;
+    [[nodiscard]] ScheduleContext
+    schedule_context(PersistentId endpoint = {},
+                     std::size_t budget = world_schedule_query_limit) const;
+    ScheduleDispatch dispatch_schedules(std::size_t budget = world_schedule_dispatch_budget);
     bool begin_causal_recording(bool new_segment = false);
     [[nodiscard]] CausalInfo causal_info() const noexcept;
     [[nodiscard]] CausalHistory causal_snapshot() const;
@@ -224,6 +238,24 @@ private:
     std::unordered_map<PersistentId,MaterialDefinition,PersistentIdHash> materials_;
     std::uint64_t material_revision_=0;
     bool advance_material_revision() noexcept;
+    struct ScheduleIdLess {
+        bool operator()(PersistentId a, PersistentId b) const noexcept {
+            return a.bytes() < b.bytes();
+        }
+    };
+    struct ScheduleDueLess {
+        bool operator()(const std::pair<std::uint64_t, PersistentId> &a,
+                        const std::pair<std::uint64_t, PersistentId> &b) const noexcept {
+            return a.first != b.first ? a.first < b.first : a.second.bytes() < b.second.bytes();
+        }
+    };
+    std::map<PersistentId, WorldSchedule, ScheduleIdLess> schedules_;
+    std::set<std::pair<std::uint64_t, PersistentId>, ScheduleDueLess> schedule_due_;
+    ScheduleCreation install_schedule(WorldSchedule schedule, bool restoring);
+    WorldEventResult validate_event_request(const WorldEventRequest &request, bool live,
+                                            bool allow_pruned) const;
+    WorldEventEmission emit_world_event_impl(WorldEventRequest request, CausalOrigin origin,
+                                             bool scheduled);
     WorldClock clock_;
     PersistentId causal_id_{}, capture_id_{};
     std::uint64_t next_causal_sequence_ = 1;

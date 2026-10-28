@@ -55,6 +55,7 @@ struct RuntimeDebugEntitySnapshot {
     world::CausalContext causal_history;
     world::WorldClock clock;
     world::SignalContext signals;
+    world::ScheduleContext schedules;
     std::optional<world::MaterialSurface> material;
     std::optional<float> native_mass;
     std::optional<world::AnimationPlayer> animation;

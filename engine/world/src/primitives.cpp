@@ -309,6 +309,11 @@ WorldSnapshot World::snapshot(ComponentPayloadSnapshot payloads) const {
     if (payloads != ComponentPayloadSnapshot::render)
         output.causal_history = causal_snapshot();
     output.clock=clock_;
+    if (payloads == ComponentPayloadSnapshot::include)
+        for (const auto &[id, s] : schedules_) {
+            (void)id;
+            output.schedules.push_back(s);
+        }
     return output;
 }
 
@@ -434,6 +439,9 @@ bool World::restore(const WorldSnapshot& snapshot_data) {
         }
         restored.causal_events_.push_back(std::move(event));
     }
+    for (const auto &schedule : snapshot_data.schedules)
+        if (!restored.install_schedule(schedule, true))
+            return false;
     *this = std::move(restored);
     return true;
 }

@@ -1,5 +1,6 @@
 #pragma once
 #include <cstdint>
+#include <optional>
 #include <vector>
 #include <vice/world/component.hpp>
 #include <vice/world/spatial.hpp>
@@ -12,9 +13,15 @@ struct EventRef {
     std::uint64_t sequence = 0;
     friend bool operator==(const EventRef &, const EventRef &) = default;
 };
+struct ScheduleProvenance {
+    PersistentId id{};
+    std::uint64_t due_ticks = 0, occurrence = 0, count = 0;
+    friend bool operator==(const ScheduleProvenance &, const ScheduleProvenance &) = default;
+};
 struct WorldEventData {
     ComponentPayload payload;
     std::vector<EventRef> parents;
+    std::optional<ScheduleProvenance> schedule;
     friend bool operator==(const WorldEventData &, const WorldEventData &) = default;
 };
 struct WorldEventRequest {

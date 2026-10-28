@@ -99,6 +99,7 @@ RuntimeDebugEntitySnapshot sample_runtime_debug_entity(
 
     result.clock=world.world_clock();
     result.signals = world.signal_context(persistent_id);
+    result.schedules = world.schedule_context(persistent_id);
     result.causal_history=world.causal_context(persistent_id);
     const auto add_schema = [&](world::ComponentTypeId type) {
         if (std::none_of(result.component_schemas.begin(), result.component_schemas.end(),
@@ -112,6 +113,8 @@ RuntimeDebugEntitySnapshot sample_runtime_debug_entity(
     for (const auto &event : result.signals.events)
         if (event.data)
             add_schema(event.data->payload.type);
+    for (const auto &s : result.schedules.entries)
+        add_schema(s.event.data.payload.type);
     const auto handle=world.find(persistent_id);
     if(!handle){result.state=RuntimeDebugEntityState::not_found;return result;}
     world::SnapshotEntity selected;
@@ -216,6 +219,7 @@ std::string serialize_runtime_debug_entity_snapshot(
         append_json_string(output, snapshot.requested_id.to_string());
     }
 
+    output += ",\"world_schedules\":" + world::serialize_schedule_context(snapshot.schedules);
     output += ",\"world_signals\":" + world::serialize_signal_context(snapshot.signals);
     output += ",\"world_clock\":"+world::serialize_world_clock(snapshot.clock);
     output += ",\"causal_history\":"+world::serialize_causal_context(snapshot.causal_history);
