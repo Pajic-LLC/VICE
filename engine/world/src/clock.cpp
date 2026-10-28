@@ -23,6 +23,7 @@ bool World::step_world_clock(std::uint64_t ticks) {
     if (ticks > std::numeric_limits<std::uint64_t>::max() - clock_.ticks)
         return false;
     clock_.ticks += ticks;
+    prune_world_signals();
     return true;
 }
 bool World::advance_world_clock_ticks(std::uint64_t input) {
@@ -38,6 +39,7 @@ bool World::advance_world_clock_ticks(std::uint64_t input) {
     if (whole > maximum - extra || whole + extra > maximum - clock_.ticks)
         return false;
     clock_.ticks += whole + extra;
+    prune_world_signals();
     clock_.rate_remainder = static_cast<std::uint32_t>(fraction % 1000);
     return true;
 }

@@ -121,7 +121,12 @@ int main(){using namespace vice;
 #endif
  // Version 11 marker fixture predates material IDs and catalog tails.
  world::World old;require(old.begin_causal_recording(),"old capture fixture");auto legacy=world::encode_world_snapshot(old.snapshot()).bytes;
- require(legacy.size()==309,"known v12 empty capture layout");legacy.resize(legacy.size()-54);legacy.erase(legacy.begin()+223,legacy.begin()+255);legacy[8]=std::byte{11};rehash(legacy);
+ require(legacy.size() == 318, "known v12 empty capture layout");
+ legacy.resize(legacy.size() - 54);
+ legacy.erase(legacy.begin() + 255, legacy.begin() + 264);
+ legacy.erase(legacy.begin() + 223, legacy.begin() + 255);
+ legacy[8] = std::byte{11};
+ rehash(legacy);
  const auto v11=world::decode_world_snapshot(legacy);require(v11.snapshot && v11.snapshot->materials.empty() && v11.snapshot->causal_history.events.size()==1 && v11.snapshot->causal_history.events[0].first_material.is_nil(),"v11 history loads without invented material provenance");
 #if defined(VICE_MATERIAL_EDITOR)
  world::World undo_world;const auto owned=world::ResourceId{id(0x350)};require(undo_world.create_resource(owned).has_value(),"owned render resource");

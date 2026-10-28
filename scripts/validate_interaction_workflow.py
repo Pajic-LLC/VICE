@@ -114,7 +114,7 @@ def validate(vice, native):
                 saved = root / "mounted.vworldc"
                 command("runtime", "checkpoint", session, saved)
                 raw = saved.read_bytes()
-                if struct.unpack_from("<I", raw, 8)[0] != 18 or struct.unpack_from("<I", raw, len(raw) - 86)[0] != 1:
+                if struct.unpack_from("<I", raw, 8)[0] != 19 or struct.unpack_from("<I", raw, len(raw) - 86)[0] != 1:
                     raise RuntimeError("Mounted checkpoint attachment table missing")
                 owner, parent, x, y, z = struct.unpack_from("<16s16s3f", raw, len(raw) - 82)
                 if str(uuid.UUID(bytes=owner)) != entity(3) or str(uuid.UUID(bytes=parent)) != entity(2):
