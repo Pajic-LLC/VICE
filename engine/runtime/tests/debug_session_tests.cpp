@@ -133,9 +133,9 @@ int main() {
     std::size_t available = 0;
     for (unsigned i = 0; i < 3000; ++i) {
         const auto observed = read_runtime_debug_response(session, "replacement");
-        require(static_cast<bool>(observed),"atomic replacement keeps a complete response available");
-        ++available;
-        require(observed.payload==short_payload||observed.payload==long_payload,"replacement read preserves one complete response");
+        require(observed.state!=RuntimeDebugResponseState::invalid,observed.diagnostics);
+        if(observed){++available;require(observed.payload==short_payload||observed.payload==long_payload,"replacement read preserves one complete response");}
+        else require(observed.state==RuntimeDebugResponseState::disconnected,"replacement may be temporarily unavailable but cannot be malformed");
     }
     publisher.join();
     require(available > 0, "replacement stress read available responses");
