@@ -597,6 +597,11 @@ AuthoredSimulation::powered_hinge(world::PersistentId owner) const noexcept {
     config.enabled = j.expected.enabled;
     if (config != j.expected)
         return {};
+    const auto a = state_->body_lookup.find(j.expected.first),
+               b = state_->body_lookup.find(j.expected.second);
+    if (a == state_->body_lookup.end() || b == state_->body_lookup.end() ||
+        !state_->matches(state_->bodies[a->second]) || !state_->matches(state_->bodies[b->second]))
+        return {};
     const auto s = state_->domain(j.region)->constraint_state(j.native_id);
     if (!s || !s->coordinate)
         return {};

@@ -136,6 +136,16 @@ int main() {
     require(std::abs(chain_resumed.powered_hinge(joint_id(3))->angle - a1.angle) < .002F &&
                 std::abs(chain_resumed.powered_hinge(joint_id(5))->angle - a2.angle) < .002F,
             "all joint references survive checkpoint");
+    auto edited_body = *chain_load.rigid_box(*chain_load.find(joint_id(2)));
+    edited_body.angular_velocity.x = 1;
+    require(chain_load.set_rigid_box(*chain_load.find(joint_id(2)), edited_body),
+            "external endpoint edit");
+    require(!chain_resumed.powered_hinge(joint_id(3)),
+            "stale endpoint invalidates joint observations");
+    const auto pending = chain_load.powered_hinge(*chain_load.find(joint_id(3)))->drive;
+    require(chain_resumed.control_powered_hinge(joint_id(3), pending) ==
+                rigid_body::BodyControlResult::reset_required,
+            "stale endpoint rejects drive command before World mutation");
     world::World weak;
     require(weak.restore(joint_fixture()), "weak fixture");
     auto weak_h = *weak.powered_hinge(*weak.find(joint_id(3)));

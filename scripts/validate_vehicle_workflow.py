@@ -109,8 +109,12 @@ def validate(vice, native):
                 # Format 14 follows the vehicle table with an empty attachment count. Decode only that
                 # documented tail here; the engine validates the full file on restart.
                 raw = saved.read_bytes()
-                tail = len(raw) - 4 - 3 * 84 - 58
-                if struct.unpack_from("<I", raw, 8)[0] != 22 or struct.unpack_from("<I", raw, tail)[0] != 3:
+                version = struct.unpack_from("<I", raw, 8)[0]
+                if version not in (22, 23):
+                    raise RuntimeError(f"Unsupported checkpoint fixture version: {version}")
+                # v23 adds an empty powered-joint table before the World clock.
+                tail = len(raw) - 4 - 3 * 84 - (62 if version == 23 else 58)
+                if struct.unpack_from("<I", raw, tail)[0] != 3:
                     raise RuntimeError("Checkpoint vehicle table missing")
                 saved_vehicles = {}
                 for i in range(3):
