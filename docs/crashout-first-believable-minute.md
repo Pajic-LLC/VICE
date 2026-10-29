@@ -9,7 +9,7 @@ generic capabilities that make it possible.
 
 ## Target experience
 
-The first major presentation milestone is a short, self-contained moment:
+The first major showcase milestone is intentionally small but visually demanding:
 
 - Tyler is seated naturally in his car during a school break.
 - The car interior is convincing at close range.
@@ -17,14 +17,37 @@ The first major presentation milestone is a short, self-contained moment:
 - Exterior school/parking-lot ambience is present beyond the glass.
 - Tyler can look around, interact with the immediate presentation, put the car in
   motion, pull out, drive around one compact South Florida-inspired block and park.
+- The same authored area is convincing in bright daytime and at night.
 - The scene must look and feel impressive enough that the reaction is not merely
-  "the engine works," but "this already looks like a real game."
+  "the engine works," but "this already looks like a real premium game."
 
 No mission system, police loop, economy, large map or full social simulation is
 required for this milestone.
 
-The purpose is to prove the physical and sensory core of CRASHOUT before scaling
-content.
+The purpose is to prove the physical, visual and sensory ceiling of CRASHOUT before
+scaling the game around it.
+
+## Showcase quality gate
+
+This milestone is a gate, not just another prototype step.
+
+Do not expand CRASHOUT into the full envisioned city and feature set before the
+showcase scene proves that VICE can hit the desired quality bar in a real playable
+build.
+
+The development order is:
+
+1. Make one tiny area look and feel exceptional.
+2. Prove Tyler, the car, camera, lighting, materials, audio and driving in that area.
+3. Prove the same area in both daytime and night lighting conditions.
+4. Make the sequence stable and repeatable in the normal native Runtime path.
+5. Only then expand the game outward toward the broader CRASHOUT product scope.
+
+The reason is deliberate risk control: it is cheaper to discover renderer,
+animation, audio, vehicle or asset-pipeline limits on one block than after a large
+amount of game content has already been built around them.
+
+A larger but visually mediocre build does not satisfy this gate.
 
 ## Current verdict
 
@@ -165,11 +188,11 @@ Required outcome:
 The engine should prioritize correctness and stability over adding another exotic
 renderer feature that this scene does not use.
 
-### 4. South Florida daylight target
+### 4. Daylight and night target
 
-The environment must not look like a generic gray-box demo.
+The environment must not look like a generic gray-box demo in either condition.
 
-The first block should support an authored bright South Florida daylight look:
+The first block should support a bright South Florida daylight look:
 
 - hard warm sun;
 - bright sky contribution;
@@ -178,6 +201,17 @@ The first block should support an authored bright South Florida daylight look:
 - convincing car paint/glass/interior response;
 - readable deep shade under structures and inside the vehicle;
 - atmosphere/exposure that survives looking from cabin to exterior.
+
+The same block must also support a convincing night look:
+
+- believable street, parking-lot, building and vehicle lighting;
+- readable dark values without flattening everything with fill light;
+- stable emissive/light-source relationships;
+- convincing reflections on glass, paint and road surfaces;
+- interior/dashboard illumination that does not destroy outside visibility;
+- exposure transitions that remain controlled when looking between bright lamps,
+  dashboard displays and dark surroundings;
+- no obvious shadow, temporal or reflection instability while driving.
 
 CRASHOUT owns the art direction. VICE must expose stable generic lighting,
 material, sky/environment and post-processing controls.
@@ -221,9 +255,10 @@ playback paths. It should not rely on editor-only or screenshot-only tricks.
 
 ## Acceptance test
 
-The milestone is complete when a native CRASHOUT build can perform this sequence:
+The milestone is complete when a native CRASHOUT build can perform this sequence in
+both an authored daytime state and an authored night state:
 
-1. Start with Tyler already seated in the authored car during daytime.
+1. Start with Tyler already seated in the authored car.
 2. Observe a production-quality character pose and vehicle interior.
 3. Play a radio/music stream through the in-car mix.
 4. Hear exterior ambience as a distinct outside environment.
@@ -235,7 +270,9 @@ The milestone is complete when a native CRASHOUT build can perform this sequence
 9. See wheel/suspension presentation agree with physical state.
 10. Park and stop without any special scripted teleport or hidden state reset.
 11. Maintain stable presentation, audio and simulation throughout the sequence.
-12. Run the same game build through the normal VICE project/Runtime path on Tier 1
+12. Repeat the same route at night without the scene losing visual quality or
+    exposing lighting/reflection/exposure weaknesses.
+13. Run the same game build through the normal VICE project/Runtime path on Tier 1
     platforms as support reaches them.
 
 The scene should withstand close observation. A technically correct sequence that
@@ -251,8 +288,8 @@ That means, for example:
 - animation blending/IK before unrelated animation generalization;
 - wheel/suspension presentation before exotic vehicle subclasses;
 - cabin audio/mixing before broad audio features with no CRASHOUT consumer;
-- stable interior lighting/materials before another high-end renderer feature that
-  the target scene does not exercise;
+- stable interior/day/night lighting and materials before another high-end renderer
+  feature that the target scene does not exercise;
 - camera collision and feel before unrelated camera modes;
 - production asset ergonomics before map expansion.
 
@@ -270,11 +307,12 @@ Do not block completion on:
 - economy;
 - phone/social systems;
 - full NPC cognition;
-- weather simulation beyond what the authored scene needs;
+- weather simulation beyond what the authored showcase needs;
 - a large map;
 - multiplayer;
 - final licensed vehicle content;
 - the full CRASHOUT opening/story.
 
 Those systems matter later. This milestone exists to prove that VICE can make one
-ordinary CRASHOUT minute feel physically and visually premium.
+ordinary CRASHOUT minute feel physically, visually and sonically premium before the
+team expands the game around that proven standard.
