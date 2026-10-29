@@ -393,17 +393,22 @@ WorldSnapshot World::snapshot(ComponentPayloadSnapshot payloads) const {
     std::sort(output.materials.begin(),output.materials.end(),[](const auto& a,const auto& b){return a.id.bytes()<b.id.bytes();});
     if (payloads != ComponentPayloadSnapshot::render)
         output.causal_history = causal_snapshot();
-    for (const auto &[owner, joint] : swing_twist_joints_)
-        output.swing_twist_joints.push_back({owner, joint});
-    std::sort(output.swing_twist_joints.begin(), output.swing_twist_joints.end(),
-              [](const auto &a, const auto &b) { return a.owner.bytes() < b.owner.bytes(); });
-    for (const auto &[body, binding] : physical_rigs_)
-        output.physical_rig_bindings.push_back({body, binding});
-    std::sort(output.physical_rig_bindings.begin(), output.physical_rig_bindings.end(),
-              [](const auto &a, const auto &b) { return a.body.bytes() < b.body.bytes(); });
-    output.clock=clock_;
+    if (payloads != ComponentPayloadSnapshot::render) {
+        for (const auto &[owner, joint] : swing_twist_joints_)
+            output.swing_twist_joints.push_back({owner, joint});
+        std::sort(output.swing_twist_joints.begin(), output.swing_twist_joints.end(),
+                  [](const auto &a, const auto &b) { return a.owner.bytes() < b.owner.bytes(); });
+        for (const auto &[body, binding] : physical_rigs_)
+            output.physical_rig_bindings.push_back({body, binding});
+        std::sort(output.physical_rig_bindings.begin(), output.physical_rig_bindings.end(),
+                  [](const auto &a, const auto &b) { return a.body.bytes() < b.body.bytes(); });
+    }
+    output.clock = clock_;
     if (payloads == ComponentPayloadSnapshot::include) {
-        for (const auto &[id, r] : rules_) { (void)id; output.rules.push_back(r); }
+        for (const auto &[id, r] : rules_) {
+            (void)id;
+            output.rules.push_back(r);
+        }
         for (const auto &[id, t] : quantity_types_) {
             (void)id;
             output.quantity_types.push_back(t);
