@@ -1,5 +1,10 @@
 # Foundation plan
 
+Historical foundation plan. As of 2026-10-29, the current priority is
+[game-driven development](project-playback.md): CRASHOUT is a separate production
+consumer, and its first playable loop drives reusable engine work. The original
+phases below record the foundation sequence rather than the current work queue.
+
 The first goal is not to build a game. It is to prove that the engine boundaries work on macOS and Windows before feature count grows.
 
 ## Phase 0: repository and build spine

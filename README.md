@@ -10,7 +10,7 @@ VICE starts with macOS ARM64 and Windows x64 as first-class platforms.
 
 ## Current status
 
-Foundation development has started. The current work establishes the build, platform boundaries, world model, simulation contracts, rendering architecture, tests, and developer tooling before larger features are added.
+VICE is an early-alpha engine with a standalone project/module workflow. CRASHOUT now drives production requirements from a separate game repository: game requirement, reusable VICE capability, game integration, then regression coverage. Prioritize demonstrated playable blockers over speculative engine expansion. See [project playback and game-driven development](docs/architecture/project-playback.md).
 
 The first executable is `vice_lab`. It is an integration target for engine systems, not a game template.
 
