@@ -71,13 +71,19 @@ def validate(vice, native):
                 log.close()
             def settle(p, session):
                 deadline = time.monotonic()+35
+                stable = []
                 while time.monotonic() < deadline:
                     r = subprocess.run([str(vice), "runtime", "debug", str(session), joint], capture_output=True, text=True, timeout=5)
                     if r.returncode == 0:
                         data = json.loads(json.loads(r.stdout)["data"]["payload"])
                         o = data.get("powered_hinge_state")
                         if o and o["active"] and .65 < o["angle"] < .75 and abs(o["error"]) < .04 and o["motor_impulse"] > 0:
-                            return data
+                            stable.append(o["angle"])
+                            stable = stable[-12:]
+                            if len(stable) == 12 and max(stable)-min(stable) < .008:
+                                return data
+                        else:
+                            stable = []
                     if p.poll() is not None:
                         break
                     time.sleep(.08)
