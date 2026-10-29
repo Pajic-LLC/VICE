@@ -48,6 +48,7 @@ add_library(
     src/resource_residency.cpp
     src/runtime.cpp
     src/scene.cpp
+    src/skinning.cpp
     src/texture_pipeline.cpp
     src/virtual_geometry.cpp
     src/virtual_geometry_gpu_arena.cpp

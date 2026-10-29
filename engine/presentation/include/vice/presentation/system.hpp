@@ -12,7 +12,8 @@ struct AudioObservation {
 struct AnimationObservation {
     std::string clip_name;
     double duration = 0;
-    std::size_t node_count = 0, part_count = 0;
+    std::size_t node_count = 0, part_count = 0, skin_count = 0, joint_count = 0,
+                weighted_vertices = 0;
 };
 class System {
   public:

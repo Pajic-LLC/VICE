@@ -15,6 +15,7 @@ namespace vice::rigid_body { class AuthoredSimulation; }
 namespace vice::presentation { class System; }
 
 namespace vice::runtime {
+class RuntimeSceneRenderer;
 
 enum class RuntimeDebugEntityState : std::uint8_t {
     available,
@@ -68,7 +69,7 @@ struct RuntimeDebugEntitySnapshot {
     std::vector<world::ComponentPayload> components;
     std::vector<world::RelationState> relation_states;
     std::vector<world::ComponentTypeDesc> component_schemas;
-    std::string animation_state="null",audio_state="null";
+    std::string animation_state = "null", audio_state = "null", skin_render = "null";
     std::optional<world::Vehicle> vehicle;
     std::optional<world::CharacterAttachment> character_attachment;
     std::optional<VehicleRuntimeDebug> vehicle_state;
@@ -88,12 +89,11 @@ struct RuntimeDebugEntitySnapshot {
     std::size_t incoming_relation_count = 0U;
 };
 
-[[nodiscard]] RuntimeDebugEntitySnapshot sample_runtime_debug_entity(
-    const world::World& world,
-    world::PersistentId persistent_id,
-    const rigid_body::AuthoredSimulation* physics = nullptr,
-    const presentation::System* presentation = nullptr
-);
+[[nodiscard]] RuntimeDebugEntitySnapshot
+sample_runtime_debug_entity(const world::World &world, world::PersistentId persistent_id,
+                            const rigid_body::AuthoredSimulation *physics = nullptr,
+                            const presentation::System *presentation = nullptr,
+                            const RuntimeSceneRenderer *renderer = nullptr);
 
 [[nodiscard]] std::string serialize_runtime_debug_entity_snapshot(
     const RuntimeDebugEntitySnapshot& snapshot,

@@ -2,6 +2,8 @@
 
 Status: Implemented as a bounded first-character gate, October 28, 2026.
 
+Historical scope: [ADR 0032](0032-weighted-skeletal-presentation.md) subsequently adds weighted skins and cubic curves. The restrictions below describe this original slice.
+
 CRASHOUT's playable walk/drive/save loop needs a visible animated character and spatial sound before broader game content can be authored. A complete skinning renderer and production audio engine exceed this gate. We import glTF 2.0 rigid nodes and mono WAV through narrow adapters and keep authoritative presentation intent in World.
 
 ## Ownership and data

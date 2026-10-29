@@ -94,7 +94,7 @@ int main() {
     require(
         !tools::import_rig(f.path / "unsupported.gltf", f.path / "bad-import", {rig}, actor, &d) &&
             !std::filesystem::exists(f.path / "bad-import"),
-        "unsupported skins fail without partial publication");
+        "malformed unused skins fail without partial publication");
     input = text(std::filesystem::path{VICE_PRESENTATION_EXAMPLE} / "sources/humanoid.gltf");
     const auto uri = input.find("data:application/octet-stream;base64,");
     require(uri != std::string::npos, "embedded fixture buffer");

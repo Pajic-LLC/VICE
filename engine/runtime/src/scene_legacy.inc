@@ -615,6 +615,7 @@ StructuredBuffer<float4x4> previous_models : register(t2);
 StructuredBuffer<uint> compacted_instance_indices : register(t3);
 struct VertexIn {
     float3 position : POSITION0;
+    float3 previous_position : POSITION1;
 };
 struct MotionVertexOut {
     float4 position : SV_Position;
@@ -628,7 +629,7 @@ MotionVertexOut vice_runtime_motion_vs(VertexIn input, uint instance_id : SV_Ins
         current_models[scene_instance], float4(input.position, 1.0)
     );
     const float4 previous_world = mul(
-        previous_models[scene_instance], float4(input.position, 1.0)
+        previous_models[scene_instance], float4(input.previous_position, 1.0)
     );
     output.current_clip = mul(current_view_projection, current_world);
     output.previous_clip = mul(previous_view_projection, previous_world);
@@ -658,6 +659,7 @@ struct MotionFrame {
 };
 struct VertexIn {
     float3 position [[attribute(11)]];
+    float3 previous_position [[attribute(15)]];
 };
 struct MotionVertexOut {
     float4 position [[position]];
@@ -674,7 +676,7 @@ vertex MotionVertexOut vice_runtime_motion_vs(
     MotionVertexOut output;
     const uint scene_instance = compacted_instance_indices[instance_id];
     const float4 current_world = current_models[scene_instance] * float4(input.position, 1.0);
-    const float4 previous_world = previous_models[scene_instance] * float4(input.position, 1.0);
+    const float4 previous_world = previous_models[scene_instance] * float4(input.previous_position, 1.0);
     output.current_clip = frame.current_view_projection * current_world;
     output.previous_clip = frame.previous_view_projection * previous_world;
     output.position = output.current_clip;
@@ -2046,12 +2048,15 @@ struct RuntimeSceneRenderer::State {
     struct MeshGpu {
         std::unique_ptr<render::Buffer> vertices;
         std::unique_ptr<render::Buffer> indices;
+        std::unique_ptr<render::Buffer> previous_vertices;
         std::uint32_t index_count = 0;
         RuntimeBoundingSphere bounds{};
+        std::uint64_t source_fingerprint = 0;
     };
 
     render::Device* device = nullptr;
     CookedMeshCatalog catalog;
+    RuntimeSkinningCache skinning;
     detail::RuntimeMaterialLibrary materials;
     detail::RuntimeEnvironment environment;
     RuntimeVisibilityCuller visibility;
@@ -2173,6 +2178,7 @@ bool RuntimeSceneRenderer::initialize(
         set_diagnostics(diagnostics, state_->catalog.diagnostics());
         return false;
     }
+    if (!state_->skinning.reset(content_root, diagnostics)) return false;
     auto gpu_meshlet_build = build_runtime_gpu_meshlet_table_plan(state_->catalog.records());
     if (!gpu_meshlet_build) {
         set_diagnostics(diagnostics, gpu_meshlet_build.diagnostics);
@@ -2422,7 +2428,9 @@ bool RuntimeSceneRenderer::initialize(
     motion_pipeline_desc.depth.test_enabled = true;
     motion_pipeline_desc.depth.write_enabled = false;
     motion_pipeline_desc.depth.compare = render::CompareOp::less_equal;
-    motion_pipeline_desc.vertex_buffers = mesh_layouts;
+    static constexpr std::array previous_position_attributes{render::VertexAttributeDesc{.semantic="POSITION", .semantic_index=1, .shader_location=4, .format=render::VertexFormat::float32x3, .offset=0}};
+    const std::array motion_layouts{mesh_layouts[0], render::VertexBufferLayoutDesc{.stride=sizeof(render::MeshVertex), .step_mode=render::VertexStepMode::per_vertex, .step_rate=1, .attributes=previous_position_attributes}};
+    motion_pipeline_desc.vertex_buffers = motion_layouts;
     motion_pipeline_desc.debug_name = "VICE Runtime motion-vector pipeline";
     state_->motion_pipeline = device.create_graphics_pipeline(motion_pipeline_desc);
     state_->gpu_motion_frame = create_motion_constant_buffer(device);
@@ -3036,7 +3044,26 @@ bool RuntimeSceneRenderer::render(
         return !resource_residency.geometry.resident(entry.first);
     });
     for (const world::ResourceId resource : resource_residency.geometry.resources) {
-        if (state_->meshes.contains(resource)) continue;
+        if (state_->meshes.contains(resource)) {
+            if (const auto view = state_->skinning.find(resource)) {
+                auto &gpu = state_->meshes.at(resource);
+                if (gpu.vertices->size() != view->asset->vertices.size()*sizeof(render::MeshVertex) || gpu.indices->size() != view->asset->indices.size()*sizeof(std::uint32_t)) {
+                    gpu.vertices = create_buffer_with_data(*state_->device, render::BufferUsage::vertex, std::as_bytes(std::span{view->asset->vertices}), "VICE Runtime resized skin vertices");
+                    gpu.indices = create_buffer_with_data(*state_->device, render::BufferUsage::index, std::as_bytes(std::span{view->asset->indices}), "VICE Runtime resized skin indices");
+                    gpu.previous_vertices = create_buffer_with_data(*state_->device, render::BufferUsage::vertex, std::as_bytes(view->previous), "VICE Runtime resized previous skin vertices");
+                    gpu.index_count = static_cast<std::uint32_t>(view->asset->indices.size());
+                    if (!gpu.vertices || !gpu.indices || !gpu.previous_vertices) { set_diagnostics(diagnostics, "Could not resize skinned geometry streams."); return false; }
+                }
+                if (gpu.source_fingerprint != view->asset->source_fingerprint) {
+                    if (!gpu.indices->write(0, std::as_bytes(std::span{view->asset->indices}))) { set_diagnostics(diagnostics, "Could not update skin topology."); return false; }
+                    if (!gpu.vertices->write(0, std::as_bytes(std::span{view->asset->vertices}))) { set_diagnostics(diagnostics, "Could not update skinned vertex stream."); return false; }
+                    gpu.source_fingerprint = view->asset->source_fingerprint;
+                    gpu.bounds = runtime_mesh_bounding_sphere(view->asset->vertices);
+                }
+                if (!gpu.previous_vertices || !gpu.previous_vertices->write(0, std::as_bytes(view->previous))) { set_diagnostics(diagnostics, "Could not update previous skinned vertex stream."); return false; }
+            }
+            continue;
+        }
         const auto* const record = state_->catalog.find(resource);
         if (record == nullptr) {
             set_diagnostics(
@@ -3073,8 +3100,14 @@ bool RuntimeSceneRenderer::render(
                 .indices = std::move(indices),
                 .index_count = static_cast<std::uint32_t>(record->asset.indices.size()),
                 .bounds = runtime_mesh_bounding_sphere(record->asset.vertices),
+                .source_fingerprint = record->asset.source_fingerprint,
             }
         );
+        if (const auto view = state_->skinning.find(resource)) {
+            auto &gpu = state_->meshes.at(resource);
+            gpu.previous_vertices = create_buffer_with_data(*state_->device, render::BufferUsage::vertex, std::as_bytes(view->previous), "VICE Runtime previous skin vertices");
+            if (!gpu.previous_vertices) { set_diagnostics(diagnostics, "Could not create previous skin vertex stream."); return false; }
+        }
     }
 
     const auto instances = filter_runtime_resident_geometry(
@@ -3877,6 +3910,7 @@ bool RuntimeSceneRenderer::render(
                 const std::uint64_t argument_offset = static_cast<std::uint64_t>(batch_index) *
                     sizeof(render::IndexedIndirectDrawArguments);
                 if (!commands->set_vertex_buffer(0U, *mesh.vertices) ||
+                    !commands->set_vertex_buffer(1U, mesh.previous_vertices ? *mesh.previous_vertices : *mesh.vertices) ||
                     !commands->set_index_buffer(*mesh.indices, render::IndexFormat::uint32) ||
                     !commands->draw_indexed_indirect(
                         *gpu_motion_batch_result.indirect_arguments,

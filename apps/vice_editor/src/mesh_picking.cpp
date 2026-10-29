@@ -133,12 +133,10 @@ namespace {
 
 } // namespace
 
-std::optional<MeshPickResult> pick_render_mesh(
-    const world::World& world,
-    const AssetIndex& assets,
-    const math::Vec3 ray_origin,
-    const math::Vec3 ray_direction
-) noexcept {
+std::optional<MeshPickResult>
+pick_render_mesh(const world::World &world, const AssetIndex &assets, const math::Vec3 ray_origin,
+                 const math::Vec3 ray_direction,
+                 const std::span<const MeshPickGeometry> geometry) noexcept {
     if (!finite(ray_origin) || !finite(ray_direction) || math::dot(ray_direction, ray_direction) <= 1.0e-12F) {
         return std::nullopt;
     }
@@ -155,19 +153,18 @@ std::optional<MeshPickResult> pick_render_mesh(
         const AssetRecord* asset = assets.find_resource(*resource);
         if (asset == nullptr || !asset->instantiable_mesh() || !asset->mesh_bounds.has_value()) continue;
 
-        const auto transformed = local_ray(
-            ray_origin,
-            direction,
-            *entity.spatial_state,
-            entity.authored_transform
-        );
+        const auto override = std::find_if(geometry.begin(), geometry.end(), [&](const auto &g) {
+            return g.entity == entity.persistent_id;
+        });
+        const auto transformed =
+            local_ray(ray_origin, direction,
+                      override == geometry.end() ? *entity.spatial_state : override->spatial,
+                      override == geometry.end() ? entity.authored_transform : override->authored);
         if (!transformed.has_value()) continue;
 
-        const auto distance = ray_aabb_distance(
-            transformed->first,
-            transformed->second,
-            *asset->mesh_bounds
-        );
+        const auto distance =
+            ray_aabb_distance(transformed->first, transformed->second,
+                              override == geometry.end() ? *asset->mesh_bounds : override->bounds);
         if (!distance.has_value() || *distance >= nearest) continue;
 
         nearest = *distance;

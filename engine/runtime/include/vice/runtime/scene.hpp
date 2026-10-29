@@ -27,6 +27,7 @@ struct CookedMeshRecord {
     std::filesystem::path path;
     render::MeshAsset asset;
     bool runtime_generated = false;
+    std::uint64_t additional_resident_geometry_bytes = 0;
 };
 
 class CookedMeshCatalog final {
@@ -35,6 +36,7 @@ public:
     [[nodiscard]] const CookedMeshRecord* find(world::ResourceId resource_id) const noexcept;
     [[nodiscard]] std::span<const CookedMeshRecord> records() const noexcept;
     [[nodiscard]] const std::string& diagnostics() const noexcept;
+    bool erase_runtime_record(world::ResourceId resource) noexcept;
     [[nodiscard]] bool upsert_runtime_record(
         CookedMeshRecord record,
         std::string* diagnostics = nullptr
@@ -257,6 +259,19 @@ runtime_point_shadow_views(
     float aspect_ratio
 ) noexcept;
 
+struct SkinningInfo {
+    std::size_t instances = 0, vertices = 0, evaluated_vertices = 0;
+};
+struct SkinningObservation {
+    world::PersistentId entity{}, root{};
+    world::ResourceId source{}, resource{};
+    std::size_t vertices = 0;
+    std::uint32_t clip = 0;
+    double sampled_time = 0;
+    std::uint64_t fingerprint = 0, previous_fingerprint = 0;
+    math::Vec3 minimum{}, maximum{};
+    bool reduced = false, gpu_uploaded = false;
+};
 class RuntimeSceneRenderer final {
 public:
     RuntimeSceneRenderer();
@@ -311,6 +326,9 @@ public:
     [[nodiscard]] RuntimeDirectionalShadowMode directional_shadow_mode() const noexcept;
     [[nodiscard]] RuntimeDirectionalShadowTelemetry directional_shadow_telemetry() const noexcept;
     [[nodiscard]] RuntimeRayTracingTelemetry ray_tracing_telemetry() const noexcept;
+    [[nodiscard]] SkinningInfo skinning_info() const noexcept;
+    [[nodiscard]] std::vector<SkinningObservation>
+    skinning_observations(world::PersistentId endpoint) const;
     [[nodiscard]] render::Texture* reflection_surface_guide() const noexcept;
     [[nodiscard]] render::Texture* ray_reflection_radiance() const noexcept;
     [[nodiscard]] render::Buffer* ray_reflection_hits() const noexcept;

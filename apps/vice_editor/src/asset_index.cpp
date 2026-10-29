@@ -105,7 +105,20 @@ void inspect_cooked_asset(AssetRecord& record) {
     switch (record.kind) {
     case AssetKind::rig: {
         const auto rig=presentation::read_rig(record.cooked_path,&record.diagnostics);
-        record.cooked_valid=rig.has_value();if(rig){record.resource_id=rig->id;record.format_version=1;record.summary=std::to_string(rig->nodes.size())+" nodes, "+std::to_string(rig->clips.size())+" clips";}break;
+        record.cooked_valid = rig.has_value();
+        if (rig) {
+            record.resource_id = rig->id;
+            const bool cubic = std::any_of(rig->clips.begin(), rig->clips.end(), [](const auto& clip) {
+                return std::any_of(clip.tracks.begin(), clip.tracks.end(), [](const auto& track) {
+                    return track.interpolation == presentation::Interpolation::cubic_spline;
+                });
+            });
+            record.format_version = rig->skins.empty() && !cubic ? 1 : 2;
+            record.summary = std::to_string(rig->skins.size()) + " skins, " +
+                             std::to_string(rig->nodes.size()) + " nodes, " +
+                             std::to_string(rig->clips.size()) + " clips";
+        }
+        break;
     }
     case AssetKind::sound: {
         const auto sound=presentation::read_pcm(record.cooked_path,&record.diagnostics);

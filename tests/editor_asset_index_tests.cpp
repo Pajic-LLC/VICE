@@ -1,4 +1,5 @@
 #include <vice/editor/asset_index.hpp>
+#include <vice/presentation/assets.hpp>
 #include <vice/tools/mesh_cooker.hpp>
 #include <vice/world/persistent_id.hpp>
 
@@ -90,6 +91,27 @@ triangle 0 1 2
         }
     }
     assert(shader_found);
+
+    // Cubic channels alone require rig v2, even without a weighted mesh binding.
+    presentation::Rig rig;
+    rig.id = {*world::PersistentId::parse("50000000-0000-4000-8000-000000000056")};
+    rig.nodes.push_back({"joint", -1, {}, {}});
+    presentation::Track track;
+    track.node = 0;
+    track.path = presentation::Path::translation;
+    track.interpolation = presentation::Interpolation::cubic_spline;
+    track.keys.push_back({0, {0, 0, 0, 0}, {}, {}});
+    rig.clips.push_back({"still", 1, {track}});
+    const auto text = presentation::serialize_rig(rig);
+    assert(text.starts_with("vice-rig 2"));
+    for (const auto& folder : {source_root, cooked_root}) {
+        std::ofstream output{folder / (folder == source_root ? "cubic.vrig" : "cubic.vrigc")};
+        output << text;
+        assert(output.good());
+    }
+    assert(index.refresh(source_root, cooked_root));
+    const auto* cubic = index.find_resource(rig.id);
+    assert(cubic && cubic->cooked_valid && cubic->format_version == 2);
 
     std::filesystem::remove_all(root, error);
     return 0;

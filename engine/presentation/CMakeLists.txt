@@ -1,6 +1,6 @@
 include(FetchContent)
 option(VICE_ENABLE_AUDIO_OUTPUT "Build native output behind the VICE audio boundary" ON)
-add_library(vice_presentation STATIC src/assets.cpp src/system.cpp)
+add_library(vice_presentation STATIC src/assets.cpp src/system.cpp src/skinning.cpp)
 add_library(VICE::Presentation ALIAS vice_presentation)
 target_include_directories(vice_presentation PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>)
 target_link_libraries(vice_presentation PUBLIC VICE::World VICE::Math)

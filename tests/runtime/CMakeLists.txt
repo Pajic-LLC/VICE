@@ -768,3 +768,18 @@ if(TARGET vice_presentation_cooker)
     target_compile_definitions(vice_rule_runtime_tests PRIVATE VICE_RULE_EDITOR=1)
   endif()
 endif()
+
+add_executable(vice_weighted_skinning_tests ../weighted_skinning_tests.cpp)
+target_link_libraries(vice_weighted_skinning_tests PRIVATE VICE::Presentation)
+vice_enable_warnings(vice_weighted_skinning_tests)
+add_test(NAME vice_weighted_skinning_tests COMMAND vice_weighted_skinning_tests)
+
+add_executable(vice_skinning_runtime_tests ../skinning_runtime_tests.cpp)
+target_link_libraries(vice_skinning_runtime_tests PRIVATE VICE::Runtime VICE::RuntimeDiagnostics)
+vice_enable_warnings(vice_skinning_runtime_tests)
+add_test(NAME vice_skinning_runtime_tests COMMAND vice_skinning_runtime_tests)
+
+if(TARGET vice_editor_preview)
+  target_link_libraries(vice_skinning_runtime_tests PRIVATE VICE::EditorPreview)
+  target_compile_definitions(vice_skinning_runtime_tests PRIVATE VICE_SKINNING_EDITOR=1)
+endif()

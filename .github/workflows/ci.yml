@@ -64,6 +64,7 @@ jobs:
           subprocess.run([sys.executable, "scripts/validate_scheduler_workflow.py", "--vice", str(executable)], check=True)
           subprocess.run([sys.executable, "scripts/validate_quantity_workflow.py", "--vice", str(executable)], check=True)
           subprocess.run([sys.executable, "scripts/validate_rule_workflow.py", "--vice", str(executable)], check=True)
+          subprocess.run([sys.executable, "scripts/validate_skinning_workflow.py", "--vice", str(executable)], check=True)
 
       - name: Shader cooker DXIL smoke test
         if: runner.os == 'Windows'
