@@ -1,0 +1,7 @@
+vice-project 1
+id a1000000-0000-4000-8000-000000000001
+name "Vehicle Playground"
+game_name "Vehicle Playground"
+game_target "vehicle-playground"
+assets "assets"
+startup_world "worlds/vehicles.vworld"

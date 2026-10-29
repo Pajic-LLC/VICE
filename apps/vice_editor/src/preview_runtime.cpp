@@ -542,6 +542,8 @@ PreviewSnapshot PreviewRuntime::snapshot() const {
         result.activation_requests.assign(state_->authored->bridge().region_activation_requests().begin(), state_->authored->bridge().region_activation_requests().end());
         for (const auto& record : world_snapshot.entities) {
             if (!record.spatial_state) continue;
+            if(record.vehicle) if(const auto v=state_->authored->vehicle(record.persistent_id))
+                result.vehicles.push_back({record.persistent_id,*v});
             if (record.character) {
                 const auto observed = state_->authored->character(record.persistent_id);
                 const auto owner = state_->world.find(record.persistent_id);

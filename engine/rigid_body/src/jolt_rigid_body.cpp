@@ -1247,6 +1247,13 @@ bool Domain::set_body_active(
     return true;
 }
 
+bool Domain::apply_body_impulse(simulation::ParticipantId participant, math::Vec3 impulse, math::Vec3 point) {
+    auto* body=impl_->find(participant);
+    if(!body || body->motion!=MotionType::dynamic_body || !finite(impulse) || !finite(point))return false;
+    if(math::dot(impulse,impulse)>0)impl_->physics_system_.GetBodyInterface().AddImpulse(body->body_id,jolt_vector(impulse),jolt_position(point));
+    return true;
+}
+
 bool Domain::set_body_velocity(const simulation::ParticipantId participant, const math::Vec3 linear, const math::Vec3 angular) {
     auto* body = impl_->find(participant);
     if (!body || body->motion == MotionType::static_body || !finite(linear) || !finite(angular)) return false;

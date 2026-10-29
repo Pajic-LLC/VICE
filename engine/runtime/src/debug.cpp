@@ -113,7 +113,16 @@ RuntimeDebugEntitySnapshot sample_runtime_debug_entity(
     result.spatial = entity->spatial_state;
     result.authored_transform = entity->authored_transform;
     result.character = entity->character;
+    result.vehicle = entity->vehicle;
 #if defined(VICE_RUNTIME_AUTHORED_PHYSICS)
+    if(physics && result.vehicle) if(const auto v=physics->vehicle(persistent_id)) {
+        VehicleRuntimeDebug debug;debug.forward_speed=v->forward_speed;
+        for(std::size_t i=0;i<4;++i) {
+            const auto& w=v->wheels[i];
+            debug.wheels[i]={w.grounded,w.supporting_entity,w.material,w.point,w.normal,w.suspension_length,w.normal_force,w.longitudinal_force,w.lateral_force};
+        }
+        result.vehicle_state=debug;
+    }
     if (physics && result.character) {
         if (const auto c = physics->character(persistent_id)) {
             std::string ground;
@@ -231,6 +240,27 @@ std::string serialize_runtime_debug_entity_snapshot(
         output += "]}";
     }
 
+    output += ",\"vehicle\":" + world::serialize_vehicle(snapshot.vehicle);
+    output += ",\"vehicle_state\":";
+    if(!snapshot.vehicle_state)output+="null";
+    else {
+        const auto& v=*snapshot.vehicle_state;
+        output+="{\"forward_speed\":";append_float(output,v.forward_speed);output+=",\"wheels\":[";
+        for(std::size_t i=0;i<4;++i) {
+            if(i)output+=',';
+            const auto& w=v.wheels[i];
+            output+="{\"grounded\":";output+=w.grounded?"true":"false";
+            output+=",\"supporting_entity\":";append_json_string(output,w.supporting_entity.to_string());
+            output+=",\"material\":";append_json_string(output,w.material.to_string());
+            output+=",\"point\":[";append_float(output,w.point.x);output+=',';append_float(output,w.point.y);output+=',';append_float(output,w.point.z);output+=']';
+            output+=",\"normal\":[";append_float(output,w.normal.x);output+=',';append_float(output,w.normal.y);output+=',';append_float(output,w.normal.z);output+=']';
+            output+=",\"suspension_length\":";append_float(output,w.suspension_length);
+            output+=",\"normal_force\":";append_float(output,w.normal_force);
+            output+=",\"longitudinal_force\":";append_float(output,w.longitudinal_force);
+            output+=",\"lateral_force\":";append_float(output,w.lateral_force);output+='}';
+        }
+        output+="]}";
+    }
     output += ",\"character\":" + world::serialize_character(snapshot.character);
     output += ",\"character_state\":";
     if (!snapshot.character_state) output += "null";

@@ -3,6 +3,7 @@
 #include "distance_link_source.hpp"
 #include "dependency_source.hpp"
 #include "character_source.hpp"
+#include "vehicle_source.hpp"
 #include "material_source.hpp"
 
 #include <vice/platform/file.hpp>
@@ -89,6 +90,11 @@ std::optional<Operation> read_operation(const std::string& name, std::istream& i
     } else if (name == "clear_transform") {
         SetEntityTransform op;
         if (read_id(input, op.entity)) return op;
+    } else if (name == "set_vehicle" || name == "clear_vehicle") {
+        SetVehicle op;
+        if(!read_id(input,op.entity))return std::nullopt;
+        if(name=="set_vehicle"){world::Vehicle v;if(!world_cooker::read_vehicle(input,v))return std::nullopt;op.vehicle=v;}
+        return op;
     } else if (name == "set_character" || name == "clear_character") {
         SetCharacter op;
         if (!read_id(input,op.entity)) return std::nullopt;
@@ -180,7 +186,7 @@ void affected(FileEditResult& result, const Transaction& transaction, const worl
                 if (previous != before.entities.end() && previous->distance_link) add_endpoints(*previous->distance_link);
             } else {
                 result.affected_entities.push_back(value.entity);
-                if constexpr (std::is_same_v<T, SetCharacter> || std::is_same_v<T, SetEntityMaterial>) {
+                if constexpr (std::is_same_v<T, SetVehicle> || std::is_same_v<T, SetCharacter> || std::is_same_v<T, SetEntityMaterial>) {
                     const auto previous = std::find_if(before.entities.begin(),before.entities.end(),[&](const auto& e) { return e.persistent_id == value.entity; });
                     if (previous != before.entities.end() && previous->spatial_state) result.affected_regions.push_back(previous->spatial_state->region);
                 }

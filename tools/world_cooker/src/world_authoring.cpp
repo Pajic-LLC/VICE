@@ -122,6 +122,10 @@ namespace {
                 }
                 entity->authored_transform = value.transform;
                 return true;
+            } else if constexpr (std::is_same_v<Value, SetVehicle>) {
+                auto* entity=find_entity(candidate,value.entity);
+                if(!entity || (value.vehicle && !world::valid(*value.vehicle))){diagnostics="Invalid vehicle entity/profile.";return false;}
+                entity->vehicle=value.vehicle;return true;
             } else if constexpr (std::is_same_v<Value, SetCharacter>) {
                 auto* entity = find_entity(candidate,value.entity);
                 if (!entity) { diagnostics = "Character entity does not exist."; return false; }

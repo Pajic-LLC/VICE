@@ -41,6 +41,7 @@ EntityId World::allocate(const PersistentId persistent_id) {
     slot.distance_link.reset();
     slot.dependency.reset();
     slot.character.reset();
+    slot.vehicle.reset();
     slot.material={};
     slot.resource_references.clear();
     slot.alive = true;
@@ -61,6 +62,7 @@ bool World::destroy_entity(const EntityId entity) {
     auto& slot = slots_[entity.index];
     if(!causal_room((slot.dependency ? 2U:0U)+(slot.distance_link ? 1U:0U))) return false;
     if(!slot.material.is_nil() && !advance_material_revision())return false;
+    if (!clear_vehicle(entity)) return false;
     (void)clear_character(entity);
     (void)clear_dependency(entity);
     (void)clear_distance_link(entity);
@@ -75,6 +77,7 @@ bool World::destroy_entity(const EntityId entity) {
     slot.distance_link.reset();
     slot.dependency.reset();
     slot.character.reset();
+    slot.vehicle.reset();
     slot.material={};
     slot.resource_references.clear();
     slot.alive = false;
@@ -302,6 +305,7 @@ bool World::clear_spatial_state(const EntityId entity) {
         return false;
     }
     if (!link_endpoint_change_allowed(entity, std::nullopt, std::nullopt)) return false;
+    if (!clear_vehicle(entity)) return false;
     slots_[entity.index].spatial_state.reset();
     slots_[entity.index].authored_transform.reset();
     slots_[entity.index].camera.reset();
@@ -338,6 +342,7 @@ bool World::set_local_position(const EntityId entity, const LocalPosition positi
 
 bool World::set_rigid_box(const EntityId entity, const RigidBox& box) {
     if (!alive(entity) || !slots_[entity.index].spatial_state || slots_[entity.index].character || !valid(box)) return false;
+    if (slots_[entity.index].vehicle && (box.motion != RigidMotion::dynamic_body || box.trigger)) return false;
     const auto& previous = slots_[entity.index].rigid_box;
     if ((!previous || previous->motion != box.motion) &&
         !link_endpoint_change_allowed(entity, slots_[entity.index].spatial_state->region, box.motion)) return false;
@@ -347,6 +352,7 @@ bool World::set_rigid_box(const EntityId entity, const RigidBox& box) {
 
 bool World::clear_rigid_box(const EntityId entity) {
     if (!alive(entity) || !link_endpoint_change_allowed(entity, std::nullopt, std::nullopt)) return false;
+    if (!clear_vehicle(entity)) return false;
     slots_[entity.index].rigid_box.reset();
     return true;
 }

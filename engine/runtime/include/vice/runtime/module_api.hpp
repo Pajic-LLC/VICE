@@ -137,7 +137,7 @@ struct EntityId { std::uint8_t bytes[16]{}; };
 struct Vector3 { float x = 0, y = 0, z = 0; };
 enum class Result : std::uint32_t {
     success, unavailable, invalid_argument, not_found, no_body,
-    static_body, inactive_region, reset_required, wrong_phase, no_link, no_dependency, no_character, not_grounded, history_mismatch, event_pruned, sequence_exhausted,
+    static_body, inactive_region, reset_required, wrong_phase, no_link, no_dependency, no_character, not_grounded, history_mismatch, event_pruned, sequence_exhausted, no_vehicle,
 };
 enum class Motion : std::uint32_t { static_body, kinematic_body, dynamic_body };
 struct EntitySnapshot {
@@ -229,6 +229,19 @@ struct CausalMaterialSnapshot {
     std::uint32_t size=sizeof(CausalMaterialSnapshot);
     EntityId event_id{}, first_material{}, second_material{};
 };
+struct VehicleWheelSnapshot {
+    std::uint32_t grounded=0;
+    EntityId supporting_entity{},material{};
+    double point[3]{};
+    Vector3 normal{};
+    float suspension_length=0,normal_force=0,longitudinal_force=0,lateral_force=0;
+};
+struct VehicleSnapshot {
+    std::uint32_t size=sizeof(VehicleSnapshot);
+    float throttle=0,steering=0,brake=0,forward_speed=0;
+    double distance=0;
+    VehicleWheelSnapshot wheels[4]{};
+};
 struct HostApi {
     std::uint32_t abi_version = module::abi_version;
     std::uint32_t size = sizeof(HostApi);
@@ -249,6 +262,8 @@ struct HostApi {
     Result (*set_dependency_enabled)(void* context,EntityId id,std::uint32_t enabled) noexcept = nullptr;
     Result (*read_material)(void* context,EntityId entity,MaterialSnapshot* output) noexcept = nullptr;
     Result (*read_causal_materials)(void* context,EntityId history,std::uint64_t sequence,CausalMaterialSnapshot* output) noexcept = nullptr;
+    Result (*read_vehicle)(void* context,EntityId id,VehicleSnapshot* output) noexcept = nullptr;
+    Result (*control_vehicle)(void* context,EntityId id,float throttle,float steering,float brake) noexcept = nullptr;
 };
 
 inline constexpr std::size_t host_api_v1_size = offsetof(HostApi, read_entity);
@@ -346,6 +361,14 @@ public:
     [[nodiscard]] Result read_causal_materials(EntityId history,std::uint64_t sequence,CausalMaterialSnapshot& output) const noexcept {
         if(!host_ || host_->size<offsetof(HostApi,read_causal_materials)+sizeof(host_->read_causal_materials) || !host_->read_causal_materials)return Result::unavailable;
         return host_->read_causal_materials(host_->context,history,sequence,&output);
+    }
+    [[nodiscard]] Result read_vehicle(EntityId id,VehicleSnapshot& output) const noexcept {
+        if(!host_ || host_->size<offsetof(HostApi,read_vehicle)+sizeof(host_->read_vehicle) || !host_->read_vehicle)return Result::unavailable;
+        return host_->read_vehicle(host_->context,id,&output);
+    }
+    [[nodiscard]] Result control_vehicle(EntityId id,float throttle,float steering,float brake) const noexcept {
+        if(!host_ || host_->size<offsetof(HostApi,control_vehicle)+sizeof(host_->control_vehicle) || !host_->control_vehicle)return Result::unavailable;
+        return host_->control_vehicle(host_->context,id,throttle,steering,brake);
     }
     void log(const LogLevel level, const char* const message) const noexcept {
         if (host_ != nullptr && host_->log != nullptr) {

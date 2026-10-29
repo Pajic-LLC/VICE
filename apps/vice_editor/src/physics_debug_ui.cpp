@@ -261,6 +261,17 @@ void PhysicsDebugUi::draw_inspector_live(
                         : "None"
                 );
             }
+            const auto vehicle=std::find_if(preview.vehicles.begin(),preview.vehicles.end(),[&](const auto& v){return v.owner==*selected;});
+            if(vehicle!=preview.vehicles.end()) {
+                property("Vehicle speed (m/s)",std::to_string(vehicle->vehicle.forward_speed));
+                property("Travelled (m)",std::to_string(vehicle->vehicle.state.distance));
+                for(std::size_t i=0;i<4;++i) {
+                    const auto& w=vehicle->vehicle.wheels[i];
+                    property(("Wheel "+std::to_string(i)+" support").c_str(),w.grounded?w.supporting_entity.to_string():"Airborne");
+                    property(("Wheel "+std::to_string(i)+" load (N)").c_str(),std::to_string(w.normal_force));
+                    property(("Wheel "+std::to_string(i)+" material").c_str(),w.material.to_string());
+                }
+            }
             ImGui::EndTable();
         }
     }

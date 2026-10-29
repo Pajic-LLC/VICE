@@ -44,6 +44,10 @@ struct SetDistanceLink {
     std::optional<world::DistanceLink> link;
 };
 
+struct SetVehicle {
+    world::PersistentId entity;
+    std::optional<world::Vehicle> vehicle;
+};
 struct SetCharacter {
     world::PersistentId entity{};
     std::optional<world::Character> character;
@@ -82,6 +86,7 @@ using Operation = std::variant<
     SetDistanceLink,
     SetDependency,
     SetCharacter,
+    SetVehicle,
     AddRelation,
     RemoveRelation,
     AddResourceReference,

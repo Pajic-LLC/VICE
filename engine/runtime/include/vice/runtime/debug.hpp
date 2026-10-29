@@ -5,6 +5,7 @@
 #include <vice/world/world.hpp>
 
 #include <cstddef>
+#include <array>
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -34,6 +35,17 @@ struct CharacterRuntimeDebug {
     math::Vec3 ground_normal{}, ground_velocity{};
 };
 
+struct VehicleWheelRuntimeDebug {
+    bool grounded=false;
+    world::PersistentId supporting_entity{},material{};
+    world::GlobalPosition point{};
+    math::Vec3 normal{};
+    float suspension_length=0,normal_force=0,longitudinal_force=0,lateral_force=0;
+};
+struct VehicleRuntimeDebug {
+    float forward_speed=0;
+    std::array<VehicleWheelRuntimeDebug,4> wheels{};
+};
 struct RuntimeDebugEntitySnapshot {
     RuntimeDebugEntityState state = RuntimeDebugEntityState::invalid_request;
     world::PersistentId requested_id{};
@@ -42,6 +54,8 @@ struct RuntimeDebugEntitySnapshot {
     world::CausalContext causal_history;
     std::optional<world::MaterialSurface> material;
     std::optional<float> native_mass;
+    std::optional<world::Vehicle> vehicle;
+    std::optional<VehicleRuntimeDebug> vehicle_state;
     std::optional<world::Character> character;
     std::optional<CharacterRuntimeDebug> character_state;
     std::optional<world::RigidBox> rigid_box;

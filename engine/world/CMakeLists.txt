@@ -4,6 +4,7 @@ add_library(
     src/material.cpp
     src/causal.cpp
     src/character.cpp
+    src/vehicle.cpp
     src/dependency.cpp
     src/persistent_id.cpp
     src/primitives.cpp

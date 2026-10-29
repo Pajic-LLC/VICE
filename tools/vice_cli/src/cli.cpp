@@ -596,6 +596,7 @@ void append_entities(std::string& data, const world::WorldSnapshot& snapshot) {
 
         const auto owner = observed.find(value.persistent_id);
         data += ",\"dependency\":" + world::serialize_dependency_state(owner ? observed.dependency_state(*owner) : std::nullopt);
+        data += ",\"vehicle\":" + world::serialize_vehicle(value.vehicle);
         data += ",\"character\":" + world::serialize_character(value.character);
         auto references = value.resource_references;
         std::sort(references.begin(), references.end(), [](const auto& lhs, const auto& rhs) {

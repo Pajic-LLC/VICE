@@ -3,6 +3,7 @@
 #include "distance_link_source.hpp"
 #include "dependency_source.hpp"
 #include "character_source.hpp"
+#include "vehicle_source.hpp"
 #include "causal_source.hpp"
 #include "material_source.hpp"
 
@@ -46,7 +47,7 @@ std::string serialize_source_manifest(
     const world::WorldSnapshot& snapshot,
     std::string* const diagnostics
 ) {
-    if (!world::validate_distance_links(snapshot, diagnostics) || !world::validate_dependencies(snapshot, diagnostics) || !world::validate_characters(snapshot, diagnostics)) return {};
+    if (!world::validate_distance_links(snapshot, diagnostics) || !world::validate_dependencies(snapshot, diagnostics) || !world::validate_vehicles(snapshot, diagnostics) || !world::validate_characters(snapshot, diagnostics)) return {};
     if(!world::validate_causal_history(snapshot.causal_history,diagnostics))return {};
     world::World canonical;
     if (!canonical.restore(snapshot)) {
@@ -133,6 +134,7 @@ std::string serialize_source_manifest(
             output << " rigid_box ";
             write_rigid_box(output, *entity.rigid_box);
         }
+        if (entity.vehicle) { output << " vehicle "; write_vehicle(output,*entity.vehicle); }
         if (entity.character) { output << " character "; write_character(output,*entity.character); }
         if (entity.dependency) {
             output << " dependency "; write_dependency(output, *entity.dependency);
