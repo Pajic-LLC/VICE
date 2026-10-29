@@ -597,7 +597,11 @@ vertex float4 vice_runtime_gpu_shadow_vs(
     device const uint* compacted_instance_indices [[buffer(2)]],
     uint instance_id [[instance_id]]) {
     const uint scene_instance = compacted_instance_indices[instance_id];
-    return frame.view_projection * instance_models[scene_instance] * float4(input.position, 1.0);
+    // Match the color/motion shaders and HLSL: transform the vertex to world
+    // first. (VP * model) * vertex rounds differently from VP * (model * vertex)
+    // and can reject visible color/motion fragments against prepass depth.
+    const float4 world_position = instance_models[scene_instance] * float4(input.position, 1.0);
+    return frame.view_projection * world_position;
 }
 )";
 
