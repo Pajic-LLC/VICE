@@ -64,6 +64,16 @@ std::string serialize_source_manifest(
     output << "vice-world-source 1\n\n";
     output<<"world_clock ";world::write_world_clock(output,value.clock);output<<'\n';
     write_causal_history(output,value.causal_history);
+    for (const auto &type : value.quantity_types) {
+        output << "quantity_type ";
+        world::write_quantity_type(output, type);
+        output << '\n';
+    }
+    for (const auto &account : value.quantity_accounts) {
+        output << "quantity_account ";
+        world::write_quantity_account(output, account);
+        output << '\n';
+    }
     for (const auto &schedule : value.schedules) {
         output << "world_schedule ";
         world::write_world_schedule(output, schedule);

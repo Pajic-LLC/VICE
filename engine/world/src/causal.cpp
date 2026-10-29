@@ -146,6 +146,7 @@ World::CausalKey World::append_causal(CausalEvent event,CausalKey parent) {
     const auto ref = CausalKey{event.sequence, event.id};
     if (event.data)
         ++component_users_[event.data->payload.type];
+    retain_quantity_receipt(event);
     causal_events_.push_back(std::move(event));
     ++next_causal_sequence_;
     if (causal_events_.size() > causal_history_capacity) {

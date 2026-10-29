@@ -1060,6 +1060,203 @@ module::Result host_read_event_schedule(void *value, module::EventRef ref, std::
     *output = out;
     return module::Result::success;
 }
+world::QuantityKey quantity_key(module::QuantityKey key) {
+    return {persistent_id(key.holder), {persistent_id(key.type)}};
+}
+module::Result quantity_result(world::QuantityResult r) {
+    using R = world::QuantityResult;
+    switch (r) {
+    case R::success:
+        return module::Result::success;
+    case R::invalid_argument:
+        return module::Result::invalid_argument;
+    case R::invalid_type:
+        return module::Result::invalid_quantity_type;
+    case R::invalid_owner:
+        return module::Result::invalid_quantity_owner;
+    case R::missing_account:
+        return module::Result::no_quantity_account;
+    case R::insufficient_quantity:
+        return module::Result::insufficient_quantity;
+    case R::capacity_exceeded:
+        return module::Result::quantity_capacity_exceeded;
+    case R::nonempty_account:
+        return module::Result::quantity_not_empty;
+    case R::duplicate_account:
+        return module::Result::quantity_account_exists;
+    case R::schema_conflict:
+        return module::Result::schema_conflict;
+    case R::storage_limit:
+        return module::Result::capacity_exceeded;
+    case R::event_rejected:
+        return module::Result::quantity_event_rejected;
+    }
+    return module::Result::invalid_argument;
+}
+module::QuantityTypeSnapshot encode_quantity_type(const world::QuantityTypeDesc &t) {
+    module::QuantityTypeSnapshot out;
+    out.id = module_id(t.id.value);
+    out.version = t.version;
+    out.quanta_per_unit = t.quanta_per_unit;
+    std::copy(t.name.begin(), t.name.end(), out.name);
+    return out;
+}
+module::QuantityAccount encode_quantity_account(const world::QuantityAccount &a) {
+    return {{module_id(a.key.holder), module_id(a.key.type.value)}, a.amount, a.capacity};
+}
+module::Result host_register_quantity_type(void *value,
+                                           const module::QuantityTypeSnapshot *input) noexcept {
+    const auto *b = current_bridge(value);
+    if (!b || !b->context || !b->writable)
+        return module::Result::wrong_phase;
+    if (!input || input->size < sizeof(*input))
+        return module::Result::invalid_argument;
+    const auto name = component_string(input->name);
+    if (!name)
+        return module::Result::invalid_argument;
+    world::QuantityTypeDesc t{
+        {persistent_id(input->id)}, *name, input->version, input->quanta_per_unit};
+    if (!world::valid_quantity_type(t))
+        return module::Result::invalid_argument;
+    if (b->context->world.register_quantity_type(t))
+        return module::Result::success;
+    if (b->context->world.quantity_type_count() >= world::quantity_type_capacity &&
+        !b->context->world.quantity_type(t.id))
+        return module::Result::capacity_exceeded;
+    return module::Result::schema_conflict;
+}
+module::Result host_remove_quantity_type(void *value, module::EntityId id) noexcept {
+    const auto *b = current_bridge(value);
+    if (!b || !b->context || !b->writable)
+        return module::Result::wrong_phase;
+    if (persistent_id(id).is_nil())
+        return module::Result::invalid_argument;
+    if (!b->context->world.quantity_type({persistent_id(id)}))
+        return module::Result::invalid_quantity_type;
+    return b->context->world.remove_quantity_type({persistent_id(id)})
+               ? module::Result::success
+               : module::Result::quantity_type_in_use;
+}
+module::Result host_read_quantity_type(void *value, module::EntityId id,
+                                       module::QuantityTypeSnapshot *output) noexcept {
+    const auto *b = current_bridge(value);
+    if (!b || !b->context)
+        return module::Result::wrong_phase;
+    if (!output || output->size < sizeof(*output) || persistent_id(id).is_nil())
+        return module::Result::invalid_argument;
+    const auto t = b->context->world.quantity_type({persistent_id(id)});
+    if (!t)
+        return module::Result::invalid_quantity_type;
+    *output = encode_quantity_type(*t);
+    return module::Result::success;
+}
+module::Result host_read_quantity_types(void *value,
+                                        module::QuantityTypePageSnapshot *output) noexcept {
+    const auto *b = current_bridge(value);
+    if (!b || !b->context)
+        return module::Result::wrong_phase;
+    if (!output || output->size < sizeof(*output))
+        return module::Result::invalid_argument;
+    const auto page = b->context->world.quantity_type_page(persistent_id(output->after));
+    module::QuantityTypePageSnapshot out;
+    out.after = output->after;
+    out.count = static_cast<std::uint32_t>(page.entries.size());
+    out.has_more = page.has_more ? 1U : 0U;
+    for (std::size_t i = 0; i < page.entries.size(); ++i)
+        out.entries[i] = encode_quantity_type(page.entries[i]);
+    if (out.count)
+        out.after = out.entries[out.count - 1].id;
+    *output = out;
+    return module::Result::success;
+}
+module::Result host_create_quantity_account(void *value, module::QuantityKey key,
+                                            std::int64_t capacity) noexcept {
+    const auto *b = current_bridge(value);
+    if (!b || !b->context || !b->writable)
+        return module::Result::wrong_phase;
+    return quantity_result(b->context->world.create_quantity_account(quantity_key(key), capacity));
+}
+module::Result host_set_quantity_capacity(void *value, module::QuantityKey key,
+                                          std::int64_t capacity) noexcept {
+    const auto *b = current_bridge(value);
+    if (!b || !b->context || !b->writable)
+        return module::Result::wrong_phase;
+    return quantity_result(b->context->world.set_quantity_capacity(quantity_key(key), capacity));
+}
+module::Result host_remove_quantity_account(void *value, module::QuantityKey key) noexcept {
+    const auto *b = current_bridge(value);
+    if (!b || !b->context || !b->writable)
+        return module::Result::wrong_phase;
+    return quantity_result(b->context->world.remove_quantity_account(quantity_key(key)));
+}
+module::Result host_read_quantity_account(void *value, module::QuantityKey key,
+                                          module::QuantityAccountSnapshot *output) noexcept {
+    const auto *b = current_bridge(value);
+    if (!b || !b->context)
+        return module::Result::wrong_phase;
+    if (!output || output->size < sizeof(*output))
+        return module::Result::invalid_argument;
+    const auto k = quantity_key(key);
+    if (!b->context->world.quantity_type(k.type))
+        return module::Result::invalid_quantity_type;
+    if (!b->context->world.find(k.holder))
+        return module::Result::invalid_quantity_owner;
+    const auto a = b->context->world.quantity_account(k);
+    if (!a)
+        return module::Result::no_quantity_account;
+    module::QuantityAccountSnapshot out;
+    out.account = encode_quantity_account(*a);
+    *output = out;
+    return module::Result::success;
+}
+module::Result host_read_quantity_accounts(void *value, module::EntityId holder,
+                                           module::QuantityAccountsSnapshot *output) noexcept {
+    const auto *b = current_bridge(value);
+    if (!b || !b->context)
+        return module::Result::wrong_phase;
+    if (!output || output->size < sizeof(*output))
+        return module::Result::invalid_argument;
+    if (!b->context->world.find(persistent_id(holder)))
+        return module::Result::invalid_quantity_owner;
+    const auto entries = b->context->world.quantity_accounts(persistent_id(holder));
+    module::QuantityAccountsSnapshot out;
+    out.count = static_cast<std::uint32_t>(entries.size());
+    for (std::size_t i = 0; i < entries.size(); ++i)
+        out.entries[i] = encode_quantity_account(entries[i]);
+    *output = out;
+    return module::Result::success;
+}
+module::Result host_transact_quantity(void *value, const module::QuantityTransactionRequest *input,
+                                      module::QuantityReceiptSnapshot *output) noexcept {
+    const auto *b = current_bridge(value);
+    if (!b || !b->context || !b->writable)
+        return module::Result::wrong_phase;
+    if (!input || input->size < sizeof(*input) || !output || output->size < sizeof(*output) ||
+        input->parent_count > world::world_event_parent_capacity ||
+        static_cast<unsigned>(input->operation) > 2)
+        return module::Result::invalid_argument;
+    world::QuantityTransaction t;
+    t.operation = static_cast<world::QuantityOperation>(input->operation);
+    t.type = {persistent_id(input->type)};
+    t.source = persistent_id(input->source);
+    t.target = persistent_id(input->target);
+    t.amount = input->amount;
+    for (std::uint32_t i = 0; i < input->parent_count; ++i) {
+        const auto &p = input->parents[i];
+        t.parents.push_back({persistent_id(p.history), persistent_id(p.id), p.sequence});
+    }
+    const auto receipt = b->context->world.transact_quantity(t);
+    module::QuantityReceiptSnapshot out;
+    out.result = quantity_result(receipt.result);
+    out.event_result = event_result(receipt.event_result);
+    out.event = encode_event_ref(receipt.event);
+    out.source_before = receipt.source_before;
+    out.source_after = receipt.source_after;
+    out.target_before = receipt.target_before;
+    out.target_after = receipt.target_after;
+    *output = out;
+    return out.result;
+}
 module::Result host_read_material(void* value,module::EntityId id,module::MaterialSnapshot* output) noexcept {
     const auto* b=current_bridge(value);if(!b || !b->context)return module::Result::wrong_phase;
     if(!output || output->size<sizeof(module::MaterialSnapshot) || persistent_id(id).is_nil())return module::Result::invalid_argument;
@@ -1280,6 +1477,16 @@ public:
         host_.read_world_event = &host_read_world_event;
         host_.read_signal_window = &host_read_signal_window;
         host_.read_world_signal = &host_read_world_signal;
+        host_.register_quantity_type = &host_register_quantity_type;
+        host_.remove_quantity_type = &host_remove_quantity_type;
+        host_.read_quantity_type = &host_read_quantity_type;
+        host_.read_quantity_types = &host_read_quantity_types;
+        host_.create_quantity_account = &host_create_quantity_account;
+        host_.set_quantity_capacity = &host_set_quantity_capacity;
+        host_.remove_quantity_account = &host_remove_quantity_account;
+        host_.read_quantity_account = &host_read_quantity_account;
+        host_.read_quantity_accounts = &host_read_quantity_accounts;
+        host_.transact_quantity = &host_transact_quantity;
         host_.schedule_event = &host_schedule_event;
         host_.cancel_schedule = &host_cancel_schedule;
         host_.read_schedule = &host_read_schedule;

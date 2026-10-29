@@ -155,6 +155,23 @@ public:
     [[nodiscard]] SignalContext signal_context(PersistentId subject = {},
                                                std::size_t budget = causal_query_max_events) const;
     void clear_world_signals();
+    bool register_quantity_type(QuantityTypeDesc type);
+    bool remove_quantity_type(QuantityTypeId type);
+    [[nodiscard]] std::optional<QuantityTypeDesc> quantity_type(QuantityTypeId type) const;
+    [[nodiscard]] QuantityTypePage
+    quantity_type_page(PersistentId after = {}, std::size_t limit = quantity_query_limit) const;
+    [[nodiscard]] std::size_t quantity_type_count() const noexcept {
+        return quantity_types_.size();
+    }
+    [[nodiscard]] std::size_t quantity_account_count() const noexcept {
+        return quantity_accounts_.size();
+    }
+    QuantityResult create_quantity_account(QuantityKey key, std::int64_t capacity);
+    QuantityResult set_quantity_capacity(QuantityKey key, std::int64_t capacity);
+    QuantityResult remove_quantity_account(QuantityKey key);
+    [[nodiscard]] std::optional<QuantityAccount> quantity_account(QuantityKey key) const;
+    [[nodiscard]] std::vector<QuantityAccount> quantity_accounts(PersistentId holder) const;
+    [[nodiscard]] QuantityReceipt transact_quantity(const QuantityTransaction &transaction);
     [[nodiscard]] ScheduleCreation
     schedule_event(WorldEventRequest event, std::uint64_t due_ticks,
                    std::uint64_t interval_ticks = 0,
@@ -249,13 +266,26 @@ private:
             return a.first != b.first ? a.first < b.first : a.second.bytes() < b.second.bytes();
         }
     };
+    struct QuantityKeyLess {
+        bool operator()(const QuantityKey &a, const QuantityKey &b) const noexcept {
+            return a.holder != b.holder ? a.holder.bytes() < b.holder.bytes()
+                                        : a.type.value.bytes() < b.type.value.bytes();
+        }
+    };
+    std::map<PersistentId, QuantityTypeDesc, ScheduleIdLess> quantity_types_;
+    std::map<QuantityKey, QuantityAccount, QuantityKeyLess> quantity_accounts_;
+    std::unordered_map<PersistentId, std::size_t, PersistentIdHash> quantity_type_uses_;
+    bool install_quantity_account(QuantityAccount account);
+    [[nodiscard]] bool valid_quantity_receipt(const CausalEvent &event) const;
+    void retain_quantity_receipt(const CausalEvent &event);
+    void release_quantity_type(QuantityTypeId type);
     std::map<PersistentId, WorldSchedule, ScheduleIdLess> schedules_;
     std::set<std::pair<std::uint64_t, PersistentId>, ScheduleDueLess> schedule_due_;
     ScheduleCreation install_schedule(WorldSchedule schedule, bool restoring);
     WorldEventResult validate_event_request(const WorldEventRequest &request, bool live,
                                             bool allow_pruned) const;
     WorldEventEmission emit_world_event_impl(WorldEventRequest request, CausalOrigin origin,
-                                             bool scheduled);
+                                             bool scheduled, bool quantity_receipt = false);
     WorldClock clock_;
     PersistentId causal_id_{}, capture_id_{};
     std::uint64_t next_causal_sequence_ = 1;

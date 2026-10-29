@@ -226,7 +226,7 @@ int main() {
     world::World legacy;
     require(legacy.begin_causal_recording(), "legacy marker");
     auto v18 = bytes(legacy);
-    v18.erase(v18.end() - 30, v18.end() - 26);
+    v18.erase(v18.end() - 38, v18.end() - 26);
     v18.erase(v18.end() - 35, v18.end() - 26);
     v18[8] = std::byte{18};
     rehash(v18);
@@ -234,7 +234,7 @@ int main() {
     require(read18.snapshot && read18.snapshot->causal_history.events[0].world_ticks == 0,
             "v18 journal defaults timestamps");
     auto corrupt = before;
-    corrupt[corrupt.size() - 31] = std::byte{255};
+    corrupt[corrupt.size() - 39] = std::byte{255};
     rehash(corrupt);
     require(!world::decode_world_snapshot(corrupt).snapshot,
             "malformed typed text rejected after checksum repair");

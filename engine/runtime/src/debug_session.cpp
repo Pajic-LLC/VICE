@@ -40,26 +40,31 @@ constexpr std::string_view response_filename = "debug-response.json";
     return false;
 }
 
-[[nodiscard]] bool read_bounded_text(
-    const std::filesystem::path& path,
-    std::string& value,
-    std::string& diagnostics
-) {
-    std::error_code error;
-    const auto size = std::filesystem::file_size(path, error);
-    if (error) {
-        diagnostics = "Could not inspect Runtime debug transport file `" +
-            path.generic_string() + "`: " + error.message();
+[[nodiscard]] bool read_bounded_text(const std::filesystem::path &path, std::string &value,
+                                     std::string &diagnostics, bool* unavailable=nullptr) {
+    if(unavailable)*unavailable=false;
+    // Hold one opened file while measuring and reading. The publisher replaces
+    // the path, so a path-based size can describe a different response revision.
+    std::ifstream input{path, std::ios::binary | std::ios::ate};
+    if (!input) {
+        if(unavailable)*unavailable=true;
+        diagnostics =
+            "Could not open Runtime debug transport file `" + path.generic_string() + "`.";
         return false;
     }
+    const auto end = input.tellg();
+    if (end < 0) {
+        diagnostics = "Could not measure Runtime debug transport file.";
+        return false;
+    }
+    const auto size = static_cast<std::uintmax_t>(end);
     if (size > runtime_debug_transport_max_bytes) {
         diagnostics = "Runtime debug transport file exceeds the bounded message size.";
         return false;
     }
-    std::ifstream input{path, std::ios::binary};
+    input.seekg(0, std::ios::beg);
     if (!input) {
-        diagnostics = "Could not open Runtime debug transport file `" +
-            path.generic_string() + "`.";
+        diagnostics = "Could not seek Runtime debug transport file.";
         return false;
     }
     value.resize(static_cast<std::size_t>(size));
@@ -104,8 +109,7 @@ constexpr std::string_view response_filename = "debug-response.json";
         return false;
     }
 
-    std::filesystem::remove(path, error);
-    error.clear();
+    // Replace the prior complete message without publishing a missing-file gap.
     std::filesystem::rename(temporary, path, error);
     if (error) {
         std::filesystem::remove(temporary, error);
@@ -291,20 +295,11 @@ RuntimeDebugRequest read_runtime_debug_request(const RuntimeDevSession& session)
         result.diagnostics = std::move(diagnostics);
         return result;
     }
-    const auto path = request_path(session);
-    std::error_code error;
-    if (!std::filesystem::exists(path, error)) {
-        if (error) {
-            result.state = RuntimeDebugRequestState::invalid;
-            result.diagnostics = "Could not inspect Runtime debug request: " + error.message();
-        }
-        return result;
-    }
     std::string contents;
-    if (!read_bounded_text(path, contents, diagnostics)) {
-        result.state = RuntimeDebugRequestState::invalid;
-        result.diagnostics = std::move(diagnostics);
-        return result;
+    bool unavailable=false;
+    if(!read_bounded_text(request_path(session),contents,diagnostics,&unavailable)){
+        result.state=unavailable?RuntimeDebugRequestState::none:RuntimeDebugRequestState::invalid;
+        result.diagnostics=std::move(diagnostics);return result;
     }
     return parse_request(contents);
 }
@@ -354,23 +349,14 @@ RuntimeDebugResponse read_runtime_debug_response(
         result.diagnostics = std::move(diagnostics);
         return result;
     }
-    const auto path = response_path(session);
-    std::error_code error;
-    if (!std::filesystem::exists(path, error)) {
-        if (error) {
-            result.state = RuntimeDebugResponseState::invalid;
-            result.diagnostics = "Could not inspect Runtime debug response: " + error.message();
-        } else {
-            result.state = RuntimeDebugResponseState::disconnected;
-            result.diagnostics = "Runtime has not answered this debug request yet.";
-        }
-        return result;
-    }
     std::string contents;
-    if (!read_bounded_text(path, contents, diagnostics)) {
-        result.state = RuntimeDebugResponseState::invalid;
-        result.diagnostics = std::move(diagnostics);
-        return result;
+    bool unavailable=false;
+    if(!read_bounded_text(response_path(session),contents,diagnostics,&unavailable)){
+        // A publisher/reader sharing conflict or a not-yet-present message is
+        // transport unavailability, not malformed data. Existing bounded waits
+        // can observe the next complete publication; format/read errors stay invalid.
+        result.state=unavailable?RuntimeDebugResponseState::disconnected:RuntimeDebugResponseState::invalid;
+        result.diagnostics=std::move(diagnostics);return result;
     }
     return parse_response(contents, request_id);
 }

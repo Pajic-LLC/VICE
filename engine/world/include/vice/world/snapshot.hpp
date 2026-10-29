@@ -11,6 +11,7 @@
 #include <vice/world/material.hpp>
 #include <vice/world/persistent_id.hpp>
 #include <vice/world/presentation.hpp>
+#include <vice/world/quantity.hpp>
 #include <vice/world/reflection_probe.hpp>
 #include <vice/world/resource.hpp>
 #include <vice/world/rigid_box.hpp>
@@ -69,6 +70,8 @@ struct WorldSnapshot {
     CausalHistory causal_history;
     WorldClock clock;
     std::vector<WorldSchedule> schedules;
+    std::vector<QuantityTypeDesc> quantity_types;
+    std::vector<QuantityAccount> quantity_accounts;
     std::vector<MaterialDefinition> materials;
 };
 

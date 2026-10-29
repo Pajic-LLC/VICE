@@ -123,7 +123,7 @@ namespace {
     }
 
     const auto snapshot = world.snapshot();
-    if(!world.relations_for(command.entity.persistent_id).empty())return false;
+    if(!world.relations_for(command.entity.persistent_id).empty()||!world.quantity_accounts(command.entity.persistent_id).empty())return false;
     for (const auto owned_resource : command.owned_resources) {
         if(std::any_of(snapshot.materials.begin(),snapshot.materials.end(),[&](const auto& m){return m.render_material==owned_resource;}))return false;
         for (const auto& current_entity : snapshot.entities) {

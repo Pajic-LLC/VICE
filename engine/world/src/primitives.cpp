@@ -54,6 +54,14 @@ bool World::register_component_type(ComponentTypeDesc type) {
         return false;
     }
 
+    if (type.id == quantity_receipt_type() || type.name == "vice.quantity.transaction") {
+        auto canonical = type;
+        std::sort(canonical.fields.begin(), canonical.fields.end(),
+                  [](const auto &a, const auto &b) { return a.id < b.id; });
+        if (canonical != quantity_receipt_schema())
+            return false;
+    }
+
     const bool duplicate_name = std::any_of(
         component_types_.begin(),
         component_types_.end(),
@@ -71,7 +79,9 @@ bool World::register_component_type(ComponentTypeDesc type) {
 }
 
 bool World::unregister_component_type(const ComponentTypeId id) {
-    if(component_users_.contains(id))return false;
+    if (component_users_.contains(id) ||
+        (id == quantity_receipt_type() && !quantity_types_.empty()))
+        return false;
     return component_types_.erase(id) == 1U;
 }
 
@@ -309,6 +319,16 @@ WorldSnapshot World::snapshot(ComponentPayloadSnapshot payloads) const {
     if (payloads != ComponentPayloadSnapshot::render)
         output.causal_history = causal_snapshot();
     output.clock=clock_;
+    if (payloads == ComponentPayloadSnapshot::include) {
+        for (const auto &[id, t] : quantity_types_) {
+            (void)id;
+            output.quantity_types.push_back(t);
+        }
+        for (const auto &[key, a] : quantity_accounts_) {
+            (void)key;
+            output.quantity_accounts.push_back(a);
+        }
+    }
     if (payloads == ComponentPayloadSnapshot::include)
         for (const auto &[id, s] : schedules_) {
             (void)id;
@@ -333,6 +353,9 @@ bool World::restore(const WorldSnapshot& snapshot_data) {
         }
     }
 
+    for (const auto &type : snapshot_data.quantity_types)
+        if (restored.quantity_type(type.id) || !restored.register_quantity_type(type))
+            return false;
     for (const auto resource : snapshot_data.resources) {
         if (!restored.create_resource(resource).has_value()) {
             return false;
@@ -421,8 +444,11 @@ bool World::restore(const WorldSnapshot& snapshot_data) {
     if(!restored.advance_material_revision() || !restored.advance_vehicle_revision() || !restored.advance_attachment_revision() || !restored.advance_presentation_revision())return false;
     restored.causal_id_=snapshot_data.causal_history.id;
     restored.next_causal_sequence_=snapshot_data.causal_history.next_sequence;
+    for (const auto &account : snapshot_data.quantity_accounts)
+        if (!restored.install_quantity_account(account))
+            return false;
     for (auto event : snapshot_data.causal_history.events) {
-        if (event.world_ticks > restored.clock_.ticks)
+        if (event.world_ticks > restored.clock_.ticks || !restored.valid_quantity_receipt(event))
             return false;
         if (event.data) {
             const auto type = restored.component_types_.find(event.data->payload.type);
@@ -437,6 +463,7 @@ bool World::restore(const WorldSnapshot& snapshot_data) {
                     *n = 0;
             ++restored.component_users_[event.data->payload.type];
         }
+        restored.retain_quantity_receipt(event);
         restored.causal_events_.push_back(std::move(event));
     }
     for (const auto &schedule : snapshot_data.schedules)

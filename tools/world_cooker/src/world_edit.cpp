@@ -92,6 +92,21 @@ std::optional<Operation> read_operation(const std::string& name, std::istream& i
     } else if (name == "clear_transform") {
         SetEntityTransform op;
         if (read_id(input, op.entity)) return op;
+    } else if (name == "register_quantity_type") {
+        RegisterQuantityType op;
+        if (!world::read_quantity_type(input, op.type))
+            return std::nullopt;
+        return op;
+    } else if (name == "set_quantity_account") {
+        SetQuantityAccount op;
+        if (!world::read_quantity_account(input, op.account))
+            return std::nullopt;
+        return op;
+    } else if (name == "remove_quantity_account") {
+        RemoveQuantityAccount op;
+        if (!read_id(input, op.key.holder) || !read_id(input, op.key.type.value))
+            return std::nullopt;
+        return op;
     } else if (name == "schedule_event") {
         CreateSchedule op;
         if (!world::read_world_schedule(input, op.schedule))
@@ -187,7 +202,22 @@ void affected(FileEditResult& result, const Transaction& transaction, const worl
     for (const auto& op : transaction.operations) {
         std::visit([&](const auto& value) {
             using T = std::decay_t<decltype(value)>;
-            if constexpr (std::is_same_v<T, CreateSchedule> || std::is_same_v<T, CancelSchedule>) {
+            if constexpr (std::is_same_v<T, RegisterQuantityType>) {
+            } else if constexpr (std::is_same_v<T, SetQuantityAccount> ||
+                                 std::is_same_v<T, RemoveQuantityAccount>) {
+                const auto id = [&] {
+                    if constexpr (std::is_same_v<T, SetQuantityAccount>)
+                        return value.account.key.holder;
+                    else
+                        return value.key.holder;
+                }();
+                result.affected_entities.push_back(id);
+                for (const auto *snapshot : {&before, &after})
+                    for (const auto &e : snapshot->entities)
+                        if (e.persistent_id == id && e.spatial_state)
+                            result.affected_regions.push_back(e.spatial_state->region);
+            } else if constexpr (std::is_same_v<T, CreateSchedule> ||
+                                 std::is_same_v<T, CancelSchedule>) {
                 const auto add = [&](const world::WorldSchedule &s) {
                     for (const auto id : {s.event.subject, s.event.target, s.event.object}) {
                         if (id.is_nil())

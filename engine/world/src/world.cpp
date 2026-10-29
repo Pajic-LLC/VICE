@@ -63,6 +63,10 @@ bool World::destroy_entity(const EntityId entity) {
         return false;
     }
 
+    const auto accounts = quantity_accounts(*persistent_id(entity));
+    for (const auto &a : accounts)
+        if (a.amount)
+            return false;
     auto& slot = slots_[entity.index];
     if(!causal_room((slot.dependency ? 2U:0U)+(slot.distance_link ? 1U:0U))) return false;
     if(!slot.material.is_nil() && !advance_material_revision())return false;
@@ -73,6 +77,8 @@ bool World::destroy_entity(const EntityId entity) {
     (void)clear_distance_link(entity);
     if(!remove_entity_relations(slot.persistent_id))return false;
     clear_components(entity);
+    for (const auto &a : accounts)
+        (void)remove_quantity_account(a.key);
     persistent_lookup_.erase(slot.persistent_id);
     slot.persistent_id = PersistentId{};
     slot.spatial_state.reset();

@@ -71,7 +71,47 @@ namespace {
         [&](const auto& value) -> bool {
             using Value = std::decay_t<decltype(value)>;
 
-            if constexpr (std::is_same_v<Value, CreateSchedule>) {
+            if constexpr (std::is_same_v<Value, RegisterQuantityType>) {
+                if (!world::valid_quantity_type(value.type)) {
+                    diagnostics = "Invalid quantity type.";
+                    return false;
+                }
+                const auto found =
+                    std::find_if(candidate.quantity_types.begin(), candidate.quantity_types.end(),
+                                 [&](const auto &t) { return t.id == value.type.id; });
+                if (found != candidate.quantity_types.end()) {
+                    if (*found != value.type) {
+                        diagnostics = "Quantity schema conflict.";
+                        return false;
+                    }
+                } else
+                    candidate.quantity_types.push_back(value.type);
+                return true;
+            } else if constexpr (std::is_same_v<Value, SetQuantityAccount>) {
+                const auto &a = value.account;
+                if (!has_entity(candidate, a.key.holder)) {
+                    diagnostics = "Quantity holder missing.";
+                    return false;
+                }
+                const auto found = std::find_if(candidate.quantity_accounts.begin(),
+                                                candidate.quantity_accounts.end(),
+                                                [&](const auto &old) { return old.key == a.key; });
+                if (found == candidate.quantity_accounts.end())
+                    candidate.quantity_accounts.push_back(a);
+                else
+                    *found = a;
+                return true;
+            } else if constexpr (std::is_same_v<Value, RemoveQuantityAccount>) {
+                const auto found = std::find_if(candidate.quantity_accounts.begin(),
+                                                candidate.quantity_accounts.end(),
+                                                [&](const auto &a) { return a.key == value.key; });
+                if (found == candidate.quantity_accounts.end() || found->amount) {
+                    diagnostics = "Quantity account missing or nonempty.";
+                    return false;
+                }
+                candidate.quantity_accounts.erase(found);
+                return true;
+            } else if constexpr (std::is_same_v<Value, CreateSchedule>) {
                 const auto &s = value.schedule;
                 if (s.id.is_nil() || s.occurrence || s.failure != world::ScheduleFailure::none ||
                     s.event_result != world::WorldEventResult::success || s.event.data.schedule ||

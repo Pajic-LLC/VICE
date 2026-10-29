@@ -167,6 +167,15 @@ enum class Result : std::uint32_t {
     no_schedule,
     capacity_exceeded,
     duplicate_id,
+    invalid_quantity_type,
+    invalid_quantity_owner,
+    no_quantity_account,
+    insufficient_quantity,
+    quantity_capacity_exceeded,
+    quantity_not_empty,
+    quantity_account_exists,
+    quantity_type_in_use,
+    quantity_event_rejected,
 };
 enum class Motion : std::uint32_t { static_body, kinematic_body, dynamic_body };
 struct EntitySnapshot {
@@ -424,6 +433,48 @@ struct EventScheduleSnapshot {
     EntityId id{};
     std::uint64_t due_ticks = 0, occurrence = 0, count = 0;
 };
+inline constexpr std::uint32_t quantity_type_capacity = 4096, quantity_account_capacity = 65536,
+                               quantity_accounts_per_holder = 64;
+struct QuantityKey {
+    EntityId holder{}, type{};
+};
+struct QuantityTypeSnapshot {
+    std::uint32_t size = sizeof(QuantityTypeSnapshot), version = 1, quanta_per_unit = 1;
+    EntityId id{};
+    char name[129]{};
+};
+struct QuantityTypePageSnapshot {
+    std::uint32_t size = sizeof(QuantityTypePageSnapshot), count = 0, has_more = 0;
+    EntityId after{};
+    QuantityTypeSnapshot entries[64]{};
+};
+struct QuantityAccount {
+    QuantityKey key;
+    std::int64_t amount = 0, capacity = 0;
+};
+struct QuantityAccountSnapshot {
+    std::uint32_t size = sizeof(QuantityAccountSnapshot);
+    QuantityAccount account;
+};
+struct QuantityAccountsSnapshot {
+    std::uint32_t size = sizeof(QuantityAccountsSnapshot), count = 0;
+    QuantityAccount entries[64]{};
+};
+enum class QuantityOperation : std::uint32_t { produce, consume, transfer };
+struct QuantityTransactionRequest {
+    std::uint32_t size = sizeof(QuantityTransactionRequest);
+    QuantityOperation operation = QuantityOperation::transfer;
+    EntityId type{}, source{}, target{};
+    std::int64_t amount = 0;
+    std::uint32_t parent_count = 0;
+    EventRef parents[4]{};
+};
+struct QuantityReceiptSnapshot {
+    std::uint32_t size = sizeof(QuantityReceiptSnapshot);
+    Result result = Result::invalid_argument, event_result = Result::success;
+    EventRef event;
+    std::int64_t source_before = 0, source_after = 0, target_before = 0, target_after = 0;
+};
 struct HostApi {
     std::uint32_t abi_version = module::abi_version;
     std::uint32_t size = sizeof(HostApi);
@@ -489,6 +540,19 @@ struct HostApi {
                                  ScheduleDispatchSnapshot *) noexcept = nullptr;
     Result (*read_event_schedule)(void *, EventRef, std::uint32_t,
                                   EventScheduleSnapshot *) noexcept = nullptr;
+    Result (*register_quantity_type)(void *, const QuantityTypeSnapshot *) noexcept = nullptr;
+    Result (*remove_quantity_type)(void *, EntityId) noexcept = nullptr;
+    Result (*read_quantity_type)(void *, EntityId, QuantityTypeSnapshot *) noexcept = nullptr;
+    Result (*read_quantity_types)(void *, QuantityTypePageSnapshot *) noexcept = nullptr;
+    Result (*create_quantity_account)(void *, QuantityKey, std::int64_t) noexcept = nullptr;
+    Result (*set_quantity_capacity)(void *, QuantityKey, std::int64_t) noexcept = nullptr;
+    Result (*remove_quantity_account)(void *, QuantityKey) noexcept = nullptr;
+    Result (*read_quantity_account)(void *, QuantityKey,
+                                    QuantityAccountSnapshot *) noexcept = nullptr;
+    Result (*read_quantity_accounts)(void *, EntityId,
+                                     QuantityAccountsSnapshot *) noexcept = nullptr;
+    Result (*transact_quantity)(void *, const QuantityTransactionRequest *,
+                                QuantityReceiptSnapshot *) noexcept = nullptr;
 };
 
 inline constexpr std::size_t host_api_v1_size = offsetof(HostApi, read_entity);
@@ -731,6 +795,91 @@ public:
     [[nodiscard]] Result read_world_clock(WorldClockSnapshot& output)const noexcept {if(!host_||host_->size<offsetof(HostApi,read_world_clock)+sizeof(host_->read_world_clock)||!host_->read_world_clock)return Result::unavailable;return host_->read_world_clock(host_->context,&output);}
     [[nodiscard]] Result configure_world_clock(bool paused,std::uint32_t rate_milli=1000,bool automatic=true)const noexcept {if(!host_||host_->size<offsetof(HostApi,configure_world_clock)+sizeof(host_->configure_world_clock)||!host_->configure_world_clock)return Result::unavailable;return host_->configure_world_clock(host_->context,paused?1U:0U,rate_milli,automatic?1U:0U);}
     [[nodiscard]] Result step_world_clock(std::uint64_t ticks)const noexcept {if(!host_||host_->size<offsetof(HostApi,step_world_clock)+sizeof(host_->step_world_clock)||!host_->step_world_clock)return Result::unavailable;return host_->step_world_clock(host_->context,ticks);}
+    [[nodiscard]] Result register_quantity_type(const QuantityTypeSnapshot &type) const noexcept {
+        if (!host_ ||
+            host_->size <
+                offsetof(HostApi, register_quantity_type) + sizeof(host_->register_quantity_type) ||
+            !host_->register_quantity_type)
+            return Result::unavailable;
+        return host_->register_quantity_type(host_->context, &type);
+    }
+    [[nodiscard]] Result remove_quantity_type(EntityId type) const noexcept {
+        if (!host_ ||
+            host_->size <
+                offsetof(HostApi, remove_quantity_type) + sizeof(host_->remove_quantity_type) ||
+            !host_->remove_quantity_type)
+            return Result::unavailable;
+        return host_->remove_quantity_type(host_->context, type);
+    }
+    [[nodiscard]] Result read_quantity_type(EntityId type,
+                                            QuantityTypeSnapshot &output) const noexcept {
+        if (!host_ ||
+            host_->size <
+                offsetof(HostApi, read_quantity_type) + sizeof(host_->read_quantity_type) ||
+            !host_->read_quantity_type)
+            return Result::unavailable;
+        return host_->read_quantity_type(host_->context, type, &output);
+    }
+    [[nodiscard]] Result read_quantity_types(QuantityTypePageSnapshot &output) const noexcept {
+        if (!host_ ||
+            host_->size <
+                offsetof(HostApi, read_quantity_types) + sizeof(host_->read_quantity_types) ||
+            !host_->read_quantity_types)
+            return Result::unavailable;
+        return host_->read_quantity_types(host_->context, &output);
+    }
+    [[nodiscard]] Result create_quantity_account(QuantityKey key,
+                                                 std::int64_t capacity) const noexcept {
+        if (!host_ ||
+            host_->size < offsetof(HostApi, create_quantity_account) +
+                              sizeof(host_->create_quantity_account) ||
+            !host_->create_quantity_account)
+            return Result::unavailable;
+        return host_->create_quantity_account(host_->context, key, capacity);
+    }
+    [[nodiscard]] Result set_quantity_capacity(QuantityKey key,
+                                               std::int64_t capacity) const noexcept {
+        if (!host_ ||
+            host_->size <
+                offsetof(HostApi, set_quantity_capacity) + sizeof(host_->set_quantity_capacity) ||
+            !host_->set_quantity_capacity)
+            return Result::unavailable;
+        return host_->set_quantity_capacity(host_->context, key, capacity);
+    }
+    [[nodiscard]] Result remove_quantity_account(QuantityKey key) const noexcept {
+        if (!host_ ||
+            host_->size < offsetof(HostApi, remove_quantity_account) +
+                              sizeof(host_->remove_quantity_account) ||
+            !host_->remove_quantity_account)
+            return Result::unavailable;
+        return host_->remove_quantity_account(host_->context, key);
+    }
+    [[nodiscard]] Result read_quantity_account(QuantityKey key,
+                                               QuantityAccountSnapshot &output) const noexcept {
+        if (!host_ ||
+            host_->size <
+                offsetof(HostApi, read_quantity_account) + sizeof(host_->read_quantity_account) ||
+            !host_->read_quantity_account)
+            return Result::unavailable;
+        return host_->read_quantity_account(host_->context, key, &output);
+    }
+    [[nodiscard]] Result read_quantity_accounts(EntityId holder,
+                                                QuantityAccountsSnapshot &output) const noexcept {
+        if (!host_ ||
+            host_->size <
+                offsetof(HostApi, read_quantity_accounts) + sizeof(host_->read_quantity_accounts) ||
+            !host_->read_quantity_accounts)
+            return Result::unavailable;
+        return host_->read_quantity_accounts(host_->context, holder, &output);
+    }
+    [[nodiscard]] Result transact_quantity(const QuantityTransactionRequest &request,
+                                           QuantityReceiptSnapshot &output) const noexcept {
+        if (!host_ ||
+            host_->size < offsetof(HostApi, transact_quantity) + sizeof(host_->transact_quantity) ||
+            !host_->transact_quantity)
+            return Result::unavailable;
+        return host_->transact_quantity(host_->context, &request, &output);
+    }
     [[nodiscard]] Result schedule_event(const ScheduleRequest &request,
                                         EntityId &output) const noexcept {
         if (!host_ ||
