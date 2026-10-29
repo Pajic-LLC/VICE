@@ -185,6 +185,13 @@ public:
     schedule_context(PersistentId endpoint = {},
                      std::size_t budget = world_schedule_query_limit) const;
     ScheduleDispatch dispatch_schedules(std::size_t budget = world_schedule_dispatch_budget);
+    RuleResult add_rule(WorldRule rule);
+    bool remove_rule(PersistentId id);
+    bool set_rule_enabled(PersistentId id, bool enabled);
+    [[nodiscard]] std::optional<WorldRule> rule(PersistentId id) const;
+    [[nodiscard]] RuleInfo rule_info() const noexcept;
+    [[nodiscard]] RulePage rule_page(PersistentId after = {}, std::size_t limit = world_rule_query_limit) const;
+    RuleDispatch dispatch_rules(std::size_t budget = world_rule_dispatch_budget);
     bool begin_causal_recording(bool new_segment = false);
     [[nodiscard]] CausalInfo causal_info() const noexcept;
     [[nodiscard]] CausalHistory causal_snapshot() const;
@@ -286,6 +293,15 @@ private:
                                             bool allow_pruned) const;
     WorldEventEmission emit_world_event_impl(WorldEventRequest request, CausalOrigin origin,
                                              bool scheduled, bool quantity_receipt = false);
+    std::map<PersistentId, WorldRule, ScheduleIdLess> rules_;
+    std::map<PersistentId, std::set<PersistentId, ScheduleIdLess>, ScheduleIdLess> rule_subscribers_;
+    std::set<std::pair<std::uint64_t, PersistentId>, ScheduleDueLess> rule_pending_;
+    RuleResult install_rule(WorldRule rule, bool restoring);
+    [[nodiscard]] bool valid_rule(const WorldRule &rule, bool restoring) const;
+    [[nodiscard]] bool rules_use_component(ComponentTypeId type) const;
+    [[nodiscard]] bool rules_use_quantity(QuantityTypeId type) const;
+    [[nodiscard]] std::size_t rule_enabled_count() const noexcept;
+    void queue_rules(ComponentTypeId type, PersistentId subject, EventRef trigger);
     WorldClock clock_;
     PersistentId causal_id_{}, capture_id_{};
     std::uint64_t next_causal_sequence_ = 1;

@@ -179,7 +179,7 @@ int main() {
     require(!tools::import_wav(f.path / "bad.wav", {rig}, &d), "malformed WAV length rejected");
     const auto empty = world::World{};
     auto old = world::encode_world_snapshot(empty.snapshot()).bytes;
-    old.resize(old.size() - 50);
+    old.resize(old.size() - 54);
     old[8] = std::byte{14};
     rehash(old);
     require(world::decode_world_snapshot(old).snapshot.has_value(),

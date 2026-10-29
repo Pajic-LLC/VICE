@@ -1257,6 +1257,7 @@ module::Result host_transact_quantity(void *value, const module::QuantityTransac
     *output = out;
     return out.result;
 }
+#include "rule_module.inl"
 module::Result host_read_material(void* value,module::EntityId id,module::MaterialSnapshot* output) noexcept {
     const auto* b=current_bridge(value);if(!b || !b->context)return module::Result::wrong_phase;
     if(!output || output->size<sizeof(module::MaterialSnapshot) || persistent_id(id).is_nil())return module::Result::invalid_argument;
@@ -1487,6 +1488,14 @@ public:
         host_.read_quantity_account = &host_read_quantity_account;
         host_.read_quantity_accounts = &host_read_quantity_accounts;
         host_.transact_quantity = &host_transact_quantity;
+        host_.add_rule = &host_add_rule;
+        host_.remove_rule = &host_remove_rule;
+        host_.set_rule_enabled = &host_set_rule_enabled;
+        host_.read_rule = &host_read_rule;
+        host_.read_rules = &host_read_rules;
+        host_.read_rule_info = &host_read_rule_info;
+        host_.dispatch_rules = &host_dispatch_rules;
+
         host_.schedule_event = &host_schedule_event;
         host_.cancel_schedule = &host_cancel_schedule;
         host_.read_schedule = &host_read_schedule;

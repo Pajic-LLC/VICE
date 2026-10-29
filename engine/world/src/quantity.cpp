@@ -111,7 +111,7 @@ bool World::register_quantity_type(QuantityTypeDesc t) {
     return true;
 }
 bool World::remove_quantity_type(QuantityTypeId type) {
-    if (quantity_type_uses_.contains(type.value))
+    if (rules_use_quantity(type) || quantity_type_uses_.contains(type.value))
         return false;
     return quantity_types_.erase(type.value) == 1;
 }

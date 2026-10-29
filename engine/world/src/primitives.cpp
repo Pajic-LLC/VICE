@@ -79,7 +79,7 @@ bool World::register_component_type(ComponentTypeDesc type) {
 }
 
 bool World::unregister_component_type(const ComponentTypeId id) {
-    if (component_users_.contains(id) ||
+    if (rules_use_component(id) || component_users_.contains(id) ||
         (id == quantity_receipt_type() && !quantity_types_.empty()))
         return false;
     return component_types_.erase(id) == 1U;
@@ -320,6 +320,7 @@ WorldSnapshot World::snapshot(ComponentPayloadSnapshot payloads) const {
         output.causal_history = causal_snapshot();
     output.clock=clock_;
     if (payloads == ComponentPayloadSnapshot::include) {
+        for (const auto &[id, r] : rules_) { (void)id; output.rules.push_back(r); }
         for (const auto &[id, t] : quantity_types_) {
             (void)id;
             output.quantity_types.push_back(t);
@@ -469,6 +470,8 @@ bool World::restore(const WorldSnapshot& snapshot_data) {
     for (const auto &schedule : snapshot_data.schedules)
         if (!restored.install_schedule(schedule, true))
             return false;
+    for (const auto &rule : snapshot_data.rules)
+        if (restored.install_rule(rule, true) != RuleResult::success) return false;
     *this = std::move(restored);
     return true;
 }

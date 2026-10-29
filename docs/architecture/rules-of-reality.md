@@ -49,3 +49,8 @@ A is the payload foundation; it is not the whole Phase 7 logic framework. Contin
 Physics results remain physical facts; games can translate them into component changes and, once C/G exist, generic causal events/effects. Names such as trust, ammunition, a purchase or an objective remain outside core APIs. Future perception will consume deliberately exposed observations; component storage is not an agent belief database and does not yet implement access grants or cognition.
 
 Animation, vehicle quality, navigation, spatial audio, small-district streaming and time/weather should be advanced against concrete game scenes once these first substrates are stable. Do not expand into full dialogue, economy, police, military command, LLM cognition or visual scripting here. The transition target is building CRASHOUT on VICE and extending only reusable missing capabilities—not declaring the entire engine finished.
+
+
+## Declarative rule foundation
+
+The first Slice G increment is implemented through [World rules](world-rules.md) and [ADR 0031](../adr/0031-declarative-world-rules.md): retained typed event subscriptions, bounded queued evaluation, five condition operations, five single-effect operations, persisted pending work/latest decisions, source edits, SDK and Runtime inspection. This is a deliberately small state-reconciliation format with explicit wakeup coalescing. Multi-effect transactions, lossless per-event obligations, implicit mutation dependency tracking and parameterized bindings remain future concrete requirements. Current World snapshot writer is v22; readers accept v1–21.

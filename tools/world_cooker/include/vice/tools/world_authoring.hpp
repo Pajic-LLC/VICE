@@ -13,6 +13,9 @@ namespace vice::tools::world_authoring {
 
 inline constexpr std::size_t max_transaction_operations = 256U;
 
+struct CreateRule { world::WorldRule rule; };
+struct RemoveRule { world::PersistentId id; };
+struct SetRuleEnabled { world::PersistentId id; bool enabled = true; };
 struct RegisterQuantityType {
     world::QuantityTypeDesc type;
 };
@@ -104,7 +107,7 @@ struct RemoveResourceReference {
 };
 
 using Operation =
-    std::variant<RegisterQuantityType, SetQuantityAccount, RemoveQuantityAccount, SetWorldClock,
+    std::variant<CreateRule, RemoveRule, SetRuleEnabled, RegisterQuantityType, SetQuantityAccount, RemoveQuantityAccount, SetWorldClock,
                  CreateSchedule, CancelSchedule, SetEntitySpatial, SetEntityTransform,
                  SetRegionFidelity, SetRigidBox, SetWorldMaterial, SetEntityMaterial,
                  SetDistanceLink, SetDependency, SetCharacter, SetVehicle, RegisterComponentType,

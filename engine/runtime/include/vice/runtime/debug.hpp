@@ -56,6 +56,8 @@ struct RuntimeDebugEntitySnapshot {
     world::WorldClock clock;
     world::SignalContext signals;
     world::ScheduleContext schedules;
+    world::RuleInfo rules;
+    world::RulePage rule_page;
     std::vector<world::QuantityAccount> quantity_accounts;
     std::vector<world::QuantityTypeDesc> quantity_types;
     std::optional<world::MaterialSurface> material;
