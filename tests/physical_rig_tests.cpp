@@ -29,6 +29,9 @@ int main() {
     world::World w;
     require(w.restore(fixture()), "restore");
     const auto root = *w.find(id(1)), body = *w.find(id(3));
+    const auto projection = w.snapshot(world::ComponentPayloadSnapshot::render);
+    require(projection.physical_rig_bindings.empty() && !w.restore(projection),
+            "render projection skips persistent simulation bindings");
     const auto bytes = world::encode_world_snapshot(w.snapshot()).bytes;
     const auto decoded = world::decode_world_snapshot(bytes);
     require(decoded && decoded.snapshot->physical_rig_bindings.size() == 1 &&

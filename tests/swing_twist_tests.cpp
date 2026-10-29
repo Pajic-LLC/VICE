@@ -4,6 +4,8 @@ int main() {
     world::World w;
     require(w.restore(fixture), "swing fixture");
     const auto owner = *w.find(joint_id(3)), body = *w.find(joint_id(2));
+    require(w.snapshot(world::ComponentPayloadSnapshot::render).swing_twist_joints.empty(),
+            "render projection skips joint topology");
     const auto bytes = world::encode_world_snapshot(w.snapshot()).bytes;
     const auto read = world::decode_world_snapshot(bytes);
     require(read && read.snapshot->swing_twist_joints.size() == 1 &&
