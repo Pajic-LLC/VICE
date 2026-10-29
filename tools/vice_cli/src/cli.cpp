@@ -7,6 +7,7 @@
 #include <vice/tools/project_workflow.hpp>
 #include <vice/tools/world_cooker.hpp>
 #include <vice/world/snapshot.hpp>
+#include <vice/world/snapshot_file.hpp>
 #include <vice/world/world.hpp>
 #include <vice/tools/presentation_cooker.hpp>
 
@@ -672,8 +673,8 @@ void append_relations(std::string& data, const world::WorldSnapshot& snapshot) {
     const std::string_view command,
     const std::filesystem::path& world_path
 ) {
-    if (world_path.extension() != ".vworld") {
-        return failure(exit_validation, command, "Authored World path must use the `.vworld` extension.");
+    if (world_path.extension() != ".vworld" && world_path.extension() != ".vworldc") {
+        return failure(exit_validation, command, "World path must use `.vworld` or `.vworldc`.");
     }
 
     std::error_code error;
@@ -692,7 +693,15 @@ void append_relations(std::string& data, const world::WorldSnapshot& snapshot) {
 
     const auto revision = platform::text_revision(source.contents);
     if (revision.empty()) return failure(exit_unavailable, command, "Could not compute source revision.");
-    const auto parsed = tools::world_cooker::parse_source_manifest(source.contents);
+    world::WorldSnapshotDecodeResult parsed;
+    if (world_path.extension() == ".vworldc") {
+        parsed = world::decode_world_snapshot(std::as_bytes(std::span{source.contents.data(), source.contents.size()}));
+    } else {
+        auto authored = tools::world_cooker::parse_source_manifest(source.contents);
+        parsed.snapshot = std::move(authored.snapshot);
+        parsed.diagnostics = std::move(authored.diagnostics);
+    }
+
     if (!parsed.snapshot.has_value()) {
         return failure(exit_validation, command, parsed.diagnostics);
     }
@@ -866,11 +875,19 @@ CommandResult execute(
     if (arguments.size() == 4U && arguments[0] == "runtime" && arguments[1] == "debug") {
         return execute_runtime_debug(std::filesystem::path{std::string{arguments[2]}}, arguments[3]);
     }
+    if ((arguments.size() == 5U || arguments.size() == 7U) &&
+        arguments[0] == "runtime" && arguments[1] == "simulate") {
+        if (arguments.size() == 7U && arguments[5] != "--restore")
+            return failure(exit_usage, "runtime.simulate", "Expected --restore <checkpoint>.");
+        return execute_runtime_simulate(
+            std::filesystem::path{arguments[2]}, arguments[3], std::filesystem::path{arguments[4]},
+            arguments.size() == 7U ? std::filesystem::path{arguments[6]} : std::filesystem::path{});
+    }
     if (arguments.size() != 3U) {
         return failure(
             exit_usage,
             "usage",
-            "Usage: vice <project|world|runtime> <inspect|validate|build|run> <path>; vice runtime checkpoint <session> <new-output.vworldc>"
+            "Usage: vice <project|world|runtime> <inspect|validate|build|run> <path>; vice runtime checkpoint <session> <new-output.vworldc>; vice runtime simulate <staged-executable> <steps> <new-output.vworldc> [--restore <checkpoint.vworldc>]"
         );
     }
 
