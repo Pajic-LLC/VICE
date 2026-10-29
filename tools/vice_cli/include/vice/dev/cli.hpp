@@ -30,7 +30,12 @@ struct CommandEnvironment {
 
 [[nodiscard]] CommandEnvironment configured_command_environment();
 
-[[nodiscard]] CommandResult execute_runtime_simulate(const std::filesystem::path& executable,std::string_view steps,const std::filesystem::path& output,const std::filesystem::path& restore={});
+[[nodiscard]] CommandResult execute_runtime_simulate(
+    const std::filesystem::path& executable,
+    std::string_view steps,
+    const std::filesystem::path& output,
+    const std::filesystem::path& restore = {}
+);
 
 [[nodiscard]] CommandResult execute_runtime_profile(
     const std::filesystem::path& runtime_session_path

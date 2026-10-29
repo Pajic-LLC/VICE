@@ -16,7 +16,8 @@ namespace {
 std::string json_quote(std::string_view text) {
   std::string out = "\"";
   constexpr char hex[] = "0123456789abcdef";
-  for (unsigned char c : text) {
+  for (const char character : text) {
+    const auto c = static_cast<unsigned char>(character);
     if (c == '\"' || c == '\\') {
       out += '\\';
       out += static_cast<char>(c);
