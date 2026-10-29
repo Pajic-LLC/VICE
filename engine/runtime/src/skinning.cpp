@@ -178,11 +178,12 @@ bool RuntimeSkinningCache::evaluate(const world::World &w, world::PersistentId i
     entry.seen = true;
     entry.reduced = region && region->fidelity == world::RegionFidelity::reduced;
     const bool restored = entry.presentation_revision != w.presentation_revision();
-    if (entry.time != time || entry.clip != p->clip || restored) {
+    if (entry.time != time || entry.clip != p->clip || restored ||
+        w.has_physical_rig_bindings(part->root)) {
         std::vector<presentation::Pose> pose;
         std::vector<math::Mat4> palette;
         std::vector<presentation::SkinVertex> input, result;
-        if (!presentation::sample_pose(rig, p->clip, time, pose) ||
+        if (!presentation::sample_world_pose(w, *owner, rig, p->clip, time, pose) ||
             !presentation::skin_palette(*skin, pose, palette))
             return fail(d, "Could not evaluate skeletal pose/palette.");
         const bool unchanged =

@@ -254,6 +254,17 @@ namespace {
                 if (!entity) { diagnostics = "Dependency entity does not exist."; return false; }
                 entity->dependency = value.dependency;
                 return true;
+            } else if constexpr (std::is_same_v<Value, SetPhysicalRigBinding>) {
+                if (!find_entity(candidate, value.entity) ||
+                    (value.binding && !world::valid(*value.binding))) {
+                    diagnostics = "Invalid physical rig binding/body.";
+                    return false;
+                }
+                std::erase_if(candidate.physical_rig_bindings,
+                              [&](const auto &r) { return r.body == value.entity; });
+                if (value.binding)
+                    candidate.physical_rig_bindings.push_back({value.entity, *value.binding});
+                return true;
             } else if constexpr (std::is_same_v<Value, SetSwingTwistJoint>) {
                 if (!find_entity(candidate, value.entity) ||
                     (value.joint && !world::valid(*value.joint))) {

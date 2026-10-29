@@ -74,6 +74,8 @@ bool World::destroy_entity(const EntityId entity) {
     auto& slot = slots_[entity.index];
     if(!causal_room((slot.dependency ? 2U:0U)+(slot.distance_link ? 1U:0U))) return false;
     if(!slot.material.is_nil() && !advance_material_revision())return false;
+    if (!clear_physical_rig_binding(entity))
+        return false;
     if (!clear_animation(entity) || !clear_rig_part(entity) || !clear_audio_emitter(entity)) return false;
     if (!clear_vehicle(entity)) return false;
     (void)clear_character(entity);
@@ -286,6 +288,8 @@ bool World::set_spatial_state(const EntityId entity, const SpatialState state) {
         return false;
     }
 
+    if (!physical_rig_region_allowed(entity, state.region))
+        return false;
     const auto& previous = slots_[entity.index].spatial_state;
     if ((!previous || previous->region != state.region) &&
         !link_endpoint_change_allowed(entity, state.region,
@@ -295,6 +299,8 @@ bool World::set_spatial_state(const EntityId entity, const SpatialState state) {
 }
 
 bool World::clear_spatial_state(const EntityId entity) {
+    if (physical_rig_binding(entity))
+        return false;
     if (has_attached_characters(entity) || has_rig_parts(entity)) return false;
     if (!alive(entity) || !slots_[entity.index].spatial_state.has_value()) {
         return false;
@@ -348,6 +354,8 @@ bool World::set_rigid_box(const EntityId entity, const RigidBox& box) {
 }
 
 bool World::clear_rigid_box(const EntityId entity) {
+    if (physical_rig_binding(entity))
+        return false;
     if (has_attached_characters(entity)) return false;
     if (!alive(entity) || !link_endpoint_change_allowed(entity, std::nullopt, std::nullopt)) return false;
     if (!clear_vehicle(entity)) return false;
@@ -471,6 +479,8 @@ bool World::handoff_spatial(const EntityId entity, const RegionId target_region)
         return false;
     }
 
+    if (!physical_rig_region_allowed(entity, target_region))
+        return false;
     if (!link_endpoint_change_allowed(entity, target_region, slot.rigid_box ? std::optional{slot.rigid_box->motion} : std::nullopt)) return false;
     slot.spatial_state->region = target_region;
     return true;
@@ -480,6 +490,9 @@ bool World::set_authored_transform(const EntityId entity, const AuthoredTransfor
     if (!alive(entity) || !slots_[entity.index].spatial_state.has_value() || !valid(transform)) {
         return false;
     }
+    if (has_physical_rig_bindings(*persistent_id(entity)) &&
+        (transform.scale.x != 1 || transform.scale.y != 1 || transform.scale.z != 1))
+        return false;
     if(slots_[entity.index].animation && (transform.scale.x!=transform.scale.y||transform.scale.x!=transform.scale.z))return false;
     slots_[entity.index].authored_transform = transform;
     return true;

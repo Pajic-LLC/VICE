@@ -586,6 +586,9 @@ void append_entities(std::string& data, const world::WorldSnapshot& snapshot) {
             data += "}";
         } else
             data += "null";
+        data += ",\"physical_rig\":" +
+                world::serialize_physical_rig(
+                    material_owner ? observed.physical_rig_binding(*material_owner) : std::nullopt);
         data += ",\"powered_hinge\":";
         if (value.powered_hinge) {
             std::ostringstream text;

@@ -322,6 +322,12 @@ struct SwingTwistDrive {
     float target_orientation[4]{0, 0, 0, 1}, target_velocity[3]{};
     float frequency_hz = 4, damping_ratio = 1, max_swing_axis_torque = 100, max_twist_torque = 100;
 };
+struct PhysicalRigSnapshot {
+    std::uint32_t size = sizeof(PhysicalRigSnapshot);
+    EntityId root{};
+    std::uint32_t node = 0;
+    float translation[3]{}, rotation[4]{0, 0, 0, 1};
+};
 struct SwingTwistSnapshot {
     std::uint32_t size = sizeof(SwingTwistSnapshot);
     EntityId first{}, second{};
@@ -653,6 +659,7 @@ struct HostApi {
     Result (*read_swing_twist_joint)(void *, EntityId, SwingTwistSnapshot *) noexcept = nullptr;
     Result (*control_swing_twist_joint)(void *, EntityId, const SwingTwistDrive *,
                                         std::uint32_t) noexcept = nullptr;
+    Result (*read_physical_rig)(void *, EntityId, PhysicalRigSnapshot *) noexcept = nullptr;
 };
 
 inline constexpr std::size_t host_api_v1_size = offsetof(HostApi, read_entity);
@@ -778,6 +785,13 @@ public:
     [[nodiscard]] Result set_camera_pose(EntityId id,const CameraPose& pose) const noexcept {
         if(!host_ || host_->size<offsetof(HostApi,set_camera_pose)+sizeof(host_->set_camera_pose)||!host_->set_camera_pose)return Result::unavailable;
         return host_->set_camera_pose(host_->context,id,&pose);
+    }
+    [[nodiscard]] Result read_physical_rig(EntityId id, PhysicalRigSnapshot &out) const noexcept {
+        if (!host_ ||
+            host_->size < offsetof(HostApi, read_physical_rig) + sizeof(host_->read_physical_rig) ||
+            !host_->read_physical_rig)
+            return Result::unavailable;
+        return host_->read_physical_rig(host_->context, id, &out);
     }
     [[nodiscard]] Result read_swing_twist_joint(EntityId id,
                                                 SwingTwistSnapshot &out) const noexcept {

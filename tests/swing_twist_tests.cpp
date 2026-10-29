@@ -57,7 +57,7 @@ int main() {
     require(w.clear_swing_twist_joint(owner) && w.clear_rigid_box(body), "endpoint index cleared");
     world::World empty;
     auto old = world::encode_world_snapshot(empty.snapshot()).bytes;
-    old.erase(old.end() - 30, old.end() - 26);
+    old.erase(old.end() - 34, old.end() - 26);
     old[8] = std::byte{23};
     std::uint64_t hash = 14695981039346656037ULL;
     for (std::size_t i = 40; i < old.size(); ++i) {

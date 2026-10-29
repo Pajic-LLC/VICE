@@ -181,6 +181,8 @@ struct InspectorData {
     std::optional<world::DistanceLink> distance_link;
     std::optional<world::PoweredHinge> powered_hinge;
     std::optional<world::PoweredSwingTwist> swing_twist_joint;
+    std::optional<world::PhysicalRigBinding> physical_rig;
+    std::size_t physical_rig_source_count = 0;
     std::optional<world::Dependency> dependency;
     std::optional<world::Character> character;
     std::optional<world::Vehicle> vehicle;

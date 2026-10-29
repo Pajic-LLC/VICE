@@ -782,6 +782,13 @@ void EditorUi::draw(
                 ImGui::Text("Entity  %s", short_id(inspector->persistent_id).c_str());
                 ImGui::Separator();
 
+                if (inspector->physical_rig) {
+                    const auto &b = *inspector->physical_rig;
+                    ImGui::Text("Physical rig root: %s", b.root.to_string().c_str());
+                    ImGui::Text("Physical rig node: %u", b.node);
+                }
+                if (inspector->physical_rig_source_count)
+                    ImGui::Text("Physical bone sources: %zu", inspector->physical_rig_source_count);
                 if (inspector->swing_twist_joint &&
                     ImGui::CollapsingHeader("Swing / twist joint")) {
                     const auto &h = *inspector->swing_twist_joint;

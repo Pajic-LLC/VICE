@@ -80,6 +80,8 @@ struct RuntimeDebugEntitySnapshot {
     std::optional<world::PoweredHinge> powered_hinge;
     std::string powered_hinge_state = "null";
     std::optional<world::PoweredSwingTwist> swing_twist_joint;
+    std::optional<world::PhysicalRigBinding> physical_rig;
+    std::vector<world::OwnedPhysicalRigBinding> physical_rig_sources;
     std::string swing_twist_state = "null";
     std::optional<world::DependencyState> dependency;
     std::optional<RuntimeDebugRegionSnapshot> region;

@@ -505,6 +505,27 @@ module::Result host_read_dependency(void* value, module::EntityId id, module::De
     *output = result; return module::Result::success;
 }
 
+module::Result host_read_physical_rig(void *value, module::EntityId id,
+                                      module::PhysicalRigSnapshot *out) noexcept {
+    const auto *b = current_bridge(value);
+    if (!b || !b->context)
+        return module::Result::wrong_phase;
+    if (!out || out->size < sizeof(*out) || persistent_id(id).is_nil())
+        return module::Result::invalid_argument;
+    const auto entity = b->context->world.find(persistent_id(id));
+    if (!entity)
+        return module::Result::not_found;
+    const auto binding = b->context->world.physical_rig_binding(*entity);
+    if (!binding)
+        return module::Result::no_component;
+    module::PhysicalRigSnapshot result;
+    std::copy(binding->root.bytes().begin(), binding->root.bytes().end(), result.root.bytes);
+    result.node = binding->node;
+    std::copy(binding->translation.begin(), binding->translation.end(), result.translation);
+    std::copy(binding->rotation.begin(), binding->rotation.end(), result.rotation);
+    *out = result;
+    return module::Result::success;
+}
 module::Result host_read_swing_twist_joint(void *value, module::EntityId id,
                                            module::SwingTwistSnapshot *out) noexcept {
     const auto *b = current_bridge(value);
@@ -1682,6 +1703,7 @@ public:
         host_.read_world_clock=&host_read_world_clock;host_.configure_world_clock=&host_configure_world_clock;host_.step_world_clock=&host_step_world_clock;
         host_.read_relation=&host_read_relation;host_.read_relations=&host_read_relations;host_.add_relation=&host_add_relation;host_.remove_relation=&host_remove_relation;host_.read_relation_component=&host_read_relation_component;host_.set_relation_component=&host_set_relation_component;host_.remove_relation_component=&host_remove_relation_component;
         host_.register_component_schema=&host_register_component_schema;host_.read_component_schema=&host_read_component_schema;host_.read_component=&host_read_component;host_.set_component=&host_set_component;host_.remove_component=&host_remove_component;
+        host_.read_physical_rig = &host_read_physical_rig;
         host_.read_swing_twist_joint = &host_read_swing_twist_joint;
         host_.control_swing_twist_joint = &host_control_swing_twist_joint;
         host_.read_powered_hinge = &host_read_powered_hinge;
