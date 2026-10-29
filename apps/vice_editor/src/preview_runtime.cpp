@@ -1,4 +1,5 @@
 #include <vice/editor/preview_runtime.hpp>
+#include <vice/presentation/system.hpp>
 #include <vice/runtime/module_loader.hpp>
 #include <vice/rigid_body/authored_simulation.hpp>
 
@@ -128,13 +129,15 @@ struct PreviewRuntime::State {
         if (!loaded) return fail(loaded.diagnostics);
         game_module = std::move(loaded.module);
         game_lifecycle = std::make_unique<runtime::GameModuleLifecycle>(*game_module,
-            runtime::GameContext{manifest, world, authored.get()});
+            runtime::GameContext{manifest, world, authored.get(),&presentation});
         if (!game_lifecycle->start()) return fail("Project game module rejected preview startup.");
         game_lifecycle->frame(game_color);
         return true;
     }
     void frame() { if (game_lifecycle) game_lifecycle->frame(game_color); }
 
+    presentation::System presentation;
+    bool enable_audio_output=false;
     simulation::Coordinator simulation{1.0 / 120.0};
     simulation::EntityBindings bindings;
     rigid_body::WorldBridge bridge;
@@ -208,6 +211,8 @@ bool PreviewRuntime::reset(
         return false;
     }
 
+    next->enable_audio_output=game&&game->enable_audio_output;
+    if(!next->presentation.reset(next->world,game?game->cooked_content_root:std::filesystem::path{},diagnostics))return false;
     const auto snapshot = next->world.snapshot();
     if (game || std::any_of(snapshot.entities.begin(), snapshot.entities.end(), [](const auto& entity) { return entity.rigid_box.has_value() || entity.character.has_value(); })) {
         next->authored = std::make_unique<rigid_body::AuthoredSimulation>();
@@ -427,14 +432,14 @@ void PreviewRuntime::play() noexcept {
 
 void PreviewRuntime::pause() noexcept {
     set_input_focus(false);
-    if (active()) state_->playback = PreviewPlayback::paused;
+    if (active()) {state_->presentation.stop_audio();state_->playback = PreviewPlayback::paused;}
 }
 
 bool PreviewRuntime::step_once() {
     if (!active()) return false;
     const auto delta = state_->authored ? state_->authored->coordinator().fixed_delta_seconds() : state_->simulation.fixed_delta_seconds();
     if (state_->game_lifecycle) state_->game_lifecycle->update(delta);
-    if (!state_->fixed_step()) return false;
+    if (!state_->fixed_step()||!state_->presentation.advance(delta)) return false;
     state_->frame();
     return true;
 }
@@ -446,7 +451,7 @@ bool PreviewRuntime::update(const double delta_seconds) {
     }
     if (state_->game_lifecycle) state_->game_lifecycle->update(delta_seconds);
     if (state_->authored) {
-        if (!state_->authored->advance(delta_seconds)) return false;
+        if (!state_->authored->advance(delta_seconds)||!state_->presentation.advance(std::min(delta_seconds,0.25))) return false;
         state_->frame();
         return true;
     }
@@ -464,11 +469,12 @@ bool PreviewRuntime::update(const double delta_seconds) {
 }
 
 void PreviewRuntime::set_input_focus(bool focused) {
-    if (!active() || !state_->game_lifecycle) return;
+    if (!active()) return;
     focused = focused && state_->playback == PreviewPlayback::running;
     if (state_->input_focus == focused) return;
     state_->input_focus = focused;
-    state_->game_lifecycle->event(platform::Event{platform::WindowFocusChanged{.focused = focused}});
+    if(state_->enable_audio_output){if(focused)(void)state_->presentation.start_audio();else state_->presentation.stop_audio();}
+    if(state_->game_lifecycle)state_->game_lifecycle->event(platform::Event{platform::WindowFocusChanged{.focused = focused}});
 }
 
 bool PreviewRuntime::handle_event(const platform::Event& event, const double origin_x, const double origin_y) {

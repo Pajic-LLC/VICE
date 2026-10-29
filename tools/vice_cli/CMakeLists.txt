@@ -24,6 +24,7 @@ target_link_libraries(
   PRIVATE
     VICE::Platform
     VICE::RuntimeDevSession
+    VICE::PresentationCooker
 )
 if(VICE_BUILD_PLAYER)
   target_compile_definitions(
@@ -63,6 +64,7 @@ if(VICE_BUILD_TESTS)
     PRIVATE
       VICE::DevCLI
       VICE::RuntimeDevSession
+    VICE::PresentationCooker
   )
   target_compile_features(vice_runtime_debug_cli_tests PRIVATE cxx_std_23)
   vice_enable_warnings(vice_runtime_debug_cli_tests)
@@ -80,6 +82,7 @@ if(VICE_BUILD_TESTS)
     PRIVATE
       VICE::DevCLI
       VICE::RuntimeDevSession
+    VICE::PresentationCooker
   )
   target_compile_features(vice_runtime_profile_cli_tests PRIVATE cxx_std_23)
   vice_enable_warnings(vice_runtime_profile_cli_tests)

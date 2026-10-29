@@ -1,0 +1,7 @@
+vice-project 1
+id a4000000-0000-4000-8000-000000000001
+name "Animated Walk and Drive"
+game_name "Animated Walk and Drive"
+game_target "animated-walk-drive"
+assets "assets"
+startup_world "worlds/presentation.vworld"

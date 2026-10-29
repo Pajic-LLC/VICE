@@ -1,7 +1,9 @@
+#include <vice/presentation/system.hpp>
 #include <vice/tools/project_workflow.hpp>
 
 #include <vice/tools/project_environment_cook.hpp>
 #include <vice/tools/project_mesh_cook.hpp>
+#include <vice/tools/presentation_cooker.hpp>
 #include <vice/tools/project_render_material_cook.hpp>
 #include <vice/tools/project_texture_cook.hpp>
 #include <vice/tools/world_cooker.hpp>
@@ -94,6 +96,8 @@ ProjectAssetCookResult cook_project_assets(const project::Workspace& workspace) 
         );
     }
 
+    const auto presentation_cook=cook_project_presentation(workspace);
+    if(!presentation_cook)return fail(presentation_cook.diagnostics);
     const auto mesh_cook = cook_project_meshes(workspace);
     if (!mesh_cook) return fail(mesh_cook.diagnostics);
 
@@ -106,6 +110,11 @@ ProjectAssetCookResult cook_project_assets(const project::Workspace& workspace) 
     const auto texture_ids = cooked_texture_ids(texture_cook);
     const auto material_cook = cook_project_render_materials(workspace, texture_ids);
     if (!material_cook) return fail(material_cook.diagnostics);
+
+    world::World presentation_world;
+    if(!presentation_world.restore(*parsed.snapshot))return fail("Could not restore presentation validation World.");
+    presentation::System presentation;
+    if(!presentation.reset(presentation_world,workspace.cooked_root,&diagnostics))return fail("Presentation validation: "+diagnostics);
 
     ProjectAssetCookResult result;
     result.success = true;

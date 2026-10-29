@@ -45,6 +45,9 @@ struct SetDistanceLink {
 };
 
 struct SetCharacterAttachment {world::PersistentId entity;std::optional<world::CharacterAttachment> attachment;};
+struct SetAnimation {world::PersistentId entity;std::optional<world::AnimationPlayer> value;};
+struct SetRigPart {world::PersistentId entity;std::optional<world::RigPart> value;};
+struct SetAudioEmitter {world::PersistentId entity;std::optional<world::AudioEmitter> value;};
 struct SetVehicle {
     world::PersistentId entity;
     std::optional<world::Vehicle> vehicle;
@@ -88,6 +91,7 @@ using Operation = std::variant<
     SetDependency,
     SetCharacter,
     SetVehicle,
+    SetAnimation,SetRigPart,SetAudioEmitter,
     SetCharacterAttachment,
     AddRelation,
     RemoveRelation,

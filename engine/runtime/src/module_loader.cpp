@@ -1,4 +1,6 @@
 #include <vice/runtime/module_loader.hpp>
+#include <vice/presentation/system.hpp>
+#include <algorithm>
 #if defined(VICE_RUNTIME_AUTHORED_PHYSICS)
 #include <vice/rigid_body/authored_simulation.hpp>
 #endif
@@ -170,6 +172,36 @@ module::Result host_read_dependency(void* value, module::EntityId id, module::De
     result.break_impulse = state->break_impulse; result.break_step = state->break_step;
     result.path_length = static_cast<std::uint32_t>(state->path.size());
     *output = result; return module::Result::success;
+}
+
+module::Result host_read_animation(void* value,module::EntityId id,module::AnimationSnapshot* output) noexcept {
+    const auto* b=current_bridge(value);if(!b||!b->context)return module::Result::wrong_phase;
+    if(!output||output->size<sizeof(module::AnimationSnapshot)||persistent_id(id).is_nil())return module::Result::invalid_argument;
+    const auto e=b->context->world.find(persistent_id(id));if(!e)return module::Result::not_found;const auto p=b->context->world.animation(*e);if(!p)return module::Result::no_animation;
+    if(!b->context->presentation)return module::Result::unavailable;const auto o=b->context->presentation->animation(persistent_id(id));if(!o)return module::Result::reset_required;
+    module::AnimationSnapshot result;result.clip=p->clip;result.playing=p->playing?1U:0U;result.looping=p->looping?1U:0U;result.rate=p->rate;result.time=p->time;result.duration=o->duration;result.node_count=static_cast<std::uint32_t>(o->node_count);result.part_count=static_cast<std::uint32_t>(o->part_count);std::copy_n(o->clip_name.data(),std::min(o->clip_name.size(),std::size_t{128}),result.clip_name);*output=result;return module::Result::success;
+}
+module::Result host_control_animation(void* value,module::EntityId id,std::uint32_t clip,float rate,std::uint32_t playing,std::uint32_t looping,std::uint32_t restart) noexcept {
+    const auto* b=current_bridge(value);if(!b||!b->context||!b->writable)return module::Result::wrong_phase;
+    if(persistent_id(id).is_nil()||clip>=64||!std::isfinite(rate)||rate<0||rate>8||playing>1||looping>1||restart>1)return module::Result::invalid_argument;
+    const auto e=b->context->world.find(persistent_id(id));if(!e)return module::Result::not_found;if(!b->context->world.animation(*e))return module::Result::no_animation;if(!b->context->presentation)return module::Result::unavailable;
+    if(!b->context->presentation->animation(persistent_id(id)))return module::Result::reset_required;
+    return b->context->presentation->control_animation(persistent_id(id),clip,rate,playing!=0,looping!=0,restart!=0)?module::Result::success:module::Result::invalid_argument;
+}
+module::Result host_read_audio(void* value,module::EntityId id,module::AudioSnapshot* output) noexcept {
+    const auto* b=current_bridge(value);if(!b||!b->context)return module::Result::wrong_phase;if(!output||output->size<sizeof(module::AudioSnapshot)||persistent_id(id).is_nil())return module::Result::invalid_argument;
+    const auto e=b->context->world.find(persistent_id(id));if(!e)return module::Result::not_found;const auto p=b->context->world.audio_emitter(*e);if(!p)return module::Result::no_audio;if(!b->context->presentation)return module::Result::unavailable;const auto o=b->context->presentation->audio(persistent_id(id));if(!o)return module::Result::reset_required;
+    module::AudioSnapshot result;result.playing=p->playing?1U:0U;result.looping=p->looping?1U:0U;result.output_active=o->output_active?1U:0U;result.gain=p->gain;result.pitch=p->pitch;result.reference_distance=p->reference_distance;result.max_distance=p->max_distance;result.time=p->time;result.duration=o->duration;result.left_gain=o->left_gain;result.right_gain=o->right_gain;result.distance=o->distance;result.delivered_frames=o->delivered_frames;result.underrun_frames=o->underrun_frames;*output=result;return module::Result::success;
+}
+module::Result host_control_audio(void* value,module::EntityId id,float gain,float pitch,std::uint32_t playing,std::uint32_t restart) noexcept {
+    const auto* b=current_bridge(value);if(!b||!b->context||!b->writable)return module::Result::wrong_phase;if(persistent_id(id).is_nil()||!std::isfinite(gain)||gain<0||gain>1||!std::isfinite(pitch)||pitch<0.25F||pitch>4||playing>1||restart>1)return module::Result::invalid_argument;
+    const auto e=b->context->world.find(persistent_id(id));if(!e)return module::Result::not_found;if(!b->context->world.audio_emitter(*e))return module::Result::no_audio;if(!b->context->presentation)return module::Result::unavailable;
+    if(!b->context->presentation->audio(persistent_id(id)))return module::Result::reset_required;
+    return b->context->presentation->control_audio(persistent_id(id),gain,pitch,playing!=0,restart!=0)?module::Result::success:module::Result::invalid_argument;
+}
+module::Result host_set_character_facing(void* value,module::EntityId id,module::Quaternion q) noexcept {
+    const auto* b=current_bridge(value);if(!b||!b->context||!b->writable)return module::Result::wrong_phase;if(persistent_id(id).is_nil()||!world::valid(world::AuthoredRotation{q.x,q.y,q.z,q.w}))return module::Result::invalid_argument;
+    const auto e=b->context->world.find(persistent_id(id));if(!e)return module::Result::not_found;if(!b->context->world.character(*e))return module::Result::no_character;auto t=b->context->world.authored_transform(*e).value_or(world::AuthoredTransform{});t.rotation={q.x,q.y,q.z,q.w};return b->context->world.set_authored_transform(*e,t)?module::Result::success:module::Result::invalid_argument;
 }
 
 module::Result host_read_character_attachment(void* value,module::EntityId id,module::CharacterAttachmentSnapshot* output) noexcept {
@@ -572,6 +604,8 @@ public:
         host_.read_character_attachment=&host_read_character_attachment;
         host_.attach_character=&host_attach_character;host_.detach_character=&host_detach_character;
         host_.read_camera_pose=&host_read_camera_pose;host_.set_camera_pose=&host_set_camera_pose;
+        host_.read_animation=&host_read_animation;host_.control_animation=&host_control_animation;
+        host_.read_audio=&host_read_audio;host_.control_audio=&host_control_audio;host_.set_character_facing=&host_set_character_facing;
     }
 
     ~DynamicGameModule() override {

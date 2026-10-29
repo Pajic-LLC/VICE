@@ -15,7 +15,7 @@ bool validate_characters(const WorldSnapshot& snapshot, std::string* diagnostics
     return true;
 }
 bool World::set_character(EntityId entity, const Character& c) {
-    if (!alive(entity) || !slots_[entity.index].spatial_state || slots_[entity.index].rigid_box || !valid(c)) return false;
+    if (!alive(entity) || !slots_[entity.index].spatial_state || slots_[entity.index].rigid_box || slots_[entity.index].rig_part || !valid(c)) return false;
     if (slots_[entity.index].character == c) return true;
     slots_[entity.index].character = c; ++character_revision_; return true;
 }

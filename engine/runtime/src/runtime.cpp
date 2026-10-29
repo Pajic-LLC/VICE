@@ -1,4 +1,5 @@
 #include <vice/runtime/runtime.hpp>
+#include <vice/presentation/system.hpp>
 #if defined(VICE_RUNTIME_AUTHORED_PHYSICS)
 #include <vice/jobs/jobs.hpp>
 #include <vice/rigid_body/authored_simulation.hpp>
@@ -316,12 +317,19 @@ int run_native_game(
             std::to_string(runtime_project.world->resource_count()) + " resources"
     );
 
+    presentation::System presentation_service;
+    std::string presentation_diagnostics;
+    if(!presentation_service.reset(*runtime_project.world,runtime_project.cooked_content_root,&presentation_diagnostics)) {
+        log(LogLevel::error,"Could not initialize presentation: "+presentation_diagnostics);return 1;
+    }
+    bool audio_start_attempted=false;
     GameContext context{
         .project = runtime_project.manifest,
         .world = *runtime_project.world,
 #if defined(VICE_RUNTIME_AUTHORED_PHYSICS)
         .physics = physics.get(),
 #endif
+        .presentation = &presentation_service,
     };
     GameModuleLifecycle lifecycle{module, context};
     if (!lifecycle.start()) {
@@ -362,6 +370,7 @@ int run_native_game(
 #if defined(VICE_RUNTIME_AUTHORED_PHYSICS)
             .physics = physics.get(),
 #endif
+            .presentation = &presentation_service,
         });
     };
     observe(RuntimeExecutionState::starting, 0.0, 0.0, 0.0);
@@ -410,6 +419,9 @@ int run_native_game(
             }
         }
 #endif
+        if(!presentation_service.advance(delta_seconds,&presentation_diagnostics)) {
+            log(LogLevel::error,"Presentation update failed: "+presentation_diagnostics);running=false;exit_code=1;break;
+        }
         render::Color clear_color = config.clear_color;
         lifecycle.frame(clear_color);
         const auto render_begin = std::chrono::steady_clock::now();
@@ -425,6 +437,10 @@ int run_native_game(
             log(LogLevel::error, "VICE Runtime could not render the game frame: " + scene_diagnostics);
             running = false;
             exit_code = 1;
+        }
+        if(drawable&&running&&!audio_start_attempted){
+            audio_start_attempted=true;
+            if(presentation_service.enabled()&&!presentation_service.start_audio())log(LogLevel::info,"Native audio output is inactive; World presentation continues.");
         }
         const auto render_end = std::chrono::steady_clock::now();
         last_render_seconds = std::chrono::duration<double>(render_end - render_begin).count();

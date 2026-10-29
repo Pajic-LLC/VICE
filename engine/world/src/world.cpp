@@ -43,6 +43,7 @@ EntityId World::allocate(const PersistentId persistent_id) {
     slot.character.reset();
     slot.vehicle.reset();
     slot.character_attachment.reset();
+    slot.animation.reset();slot.rig_part.reset();slot.audio_emitter.reset();
     slot.material={};
     slot.resource_references.clear();
     slot.alive = true;
@@ -54,7 +55,7 @@ EntityId World::allocate(const PersistentId persistent_id) {
 }
 
 bool World::destroy_entity(const EntityId entity) {
-    if (has_attached_characters(entity)) return false;
+    if (has_attached_characters(entity) || has_rig_parts(entity)) return false;
     if (alive(entity) && (distance_link_users_.contains(slots_[entity.index].persistent_id) ||
         dependency_provider_users_.contains(slots_[entity.index].persistent_id) || dependency_gate_users_.contains(slots_[entity.index].persistent_id))) return false;
     if (!alive(entity)) {
@@ -64,6 +65,7 @@ bool World::destroy_entity(const EntityId entity) {
     auto& slot = slots_[entity.index];
     if(!causal_room((slot.dependency ? 2U:0U)+(slot.distance_link ? 1U:0U))) return false;
     if(!slot.material.is_nil() && !advance_material_revision())return false;
+    if (!clear_animation(entity) || !clear_rig_part(entity) || !clear_audio_emitter(entity)) return false;
     if (!clear_vehicle(entity)) return false;
     (void)clear_character(entity);
     (void)clear_dependency(entity);
@@ -81,6 +83,7 @@ bool World::destroy_entity(const EntityId entity) {
     slot.character.reset();
     slot.vehicle.reset();
     slot.character_attachment.reset();
+    slot.animation.reset();slot.rig_part.reset();slot.audio_emitter.reset();
     slot.material={};
     slot.resource_references.clear();
     slot.alive = false;
@@ -304,11 +307,12 @@ bool World::set_spatial_state(const EntityId entity, const SpatialState state) {
 }
 
 bool World::clear_spatial_state(const EntityId entity) {
-    if (has_attached_characters(entity)) return false;
+    if (has_attached_characters(entity) || has_rig_parts(entity)) return false;
     if (!alive(entity) || !slots_[entity.index].spatial_state.has_value()) {
         return false;
     }
     if (!link_endpoint_change_allowed(entity, std::nullopt, std::nullopt)) return false;
+    if (!clear_animation(entity) || !clear_rig_part(entity) || !clear_audio_emitter(entity)) return false;
     if (!clear_vehicle(entity)) return false;
     slots_[entity.index].spatial_state.reset();
     slots_[entity.index].authored_transform.reset();
@@ -345,7 +349,7 @@ bool World::set_local_position(const EntityId entity, const LocalPosition positi
 }
 
 bool World::set_rigid_box(const EntityId entity, const RigidBox& box) {
-    if (!alive(entity) || !slots_[entity.index].spatial_state || slots_[entity.index].character || !valid(box)) return false;
+    if (!alive(entity) || !slots_[entity.index].spatial_state || slots_[entity.index].character || slots_[entity.index].rig_part || !valid(box)) return false;
     if (box.trigger && has_attached_characters(entity)) return false;
     if (slots_[entity.index].vehicle && (box.motion != RigidMotion::dynamic_body || box.trigger)) return false;
     const auto& previous = slots_[entity.index].rigid_box;
@@ -471,6 +475,7 @@ bool World::set_authored_transform(const EntityId entity, const AuthoredTransfor
     if (!alive(entity) || !slots_[entity.index].spatial_state.has_value() || !valid(transform)) {
         return false;
     }
+    if(slots_[entity.index].animation && (transform.scale.x!=transform.scale.y||transform.scale.x!=transform.scale.z))return false;
     slots_[entity.index].authored_transform = transform;
     return true;
 }

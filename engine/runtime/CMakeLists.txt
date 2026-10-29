@@ -76,6 +76,7 @@ target_link_libraries(
     VICE::Project
     VICE::Render
     VICE::World
+    VICE::Presentation
 )
 
 target_compile_features(vice_runtime PUBLIC cxx_std_23)
@@ -137,6 +138,7 @@ target_link_libraries(
   vice_runtime_dev_session
   PUBLIC
     VICE::World
+    VICE::Presentation
 )
 target_link_libraries(vice_runtime_dev_session PUBLIC VICE::Platform)
 target_compile_features(vice_runtime_dev_session PUBLIC cxx_std_23)

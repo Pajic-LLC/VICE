@@ -179,6 +179,9 @@ struct InspectorData {
     std::optional<world::Dependency> dependency;
     std::optional<world::Character> character;
     std::optional<world::Vehicle> vehicle;
+    std::optional<world::AnimationPlayer> animation;
+    std::optional<world::RigPart> rig_part;
+    std::optional<world::AudioEmitter> audio_emitter;
     std::optional<world::CharacterAttachment> character_attachment;
     std::vector<world::ResourceReference> resource_references;
     std::optional<world::RegionDesc> region;

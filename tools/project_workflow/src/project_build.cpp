@@ -529,6 +529,13 @@ ProjectBuildResult build_project(
         cleanup_staging();
         return fail_build(std::move(result), std::move(stage_diagnostics));
     }
+    for (const auto& [source_ext,cooked_ext] : {std::pair{".vrig", ".vrigc"}, std::pair{".vsound", ".vpcmc"}}) {
+        if (!stage_cooked_assets(workspace,staged_project_content_root,source_ext,cooked_ext,"presentation",stage_diagnostics)) {
+            cleanup_staging();return fail_build(std::move(result),std::move(stage_diagnostics));
+        }
+    }
+    std::filesystem::copy_file(VICE_PRESENTATION_NOTICES,staging_root/"THIRD_PARTY_PRESENTATION.txt",std::filesystem::copy_options::overwrite_existing,error);
+    if(error){cleanup_staging();return fail_build(std::move(result),"Could not stage presentation notices: "+error.message());}
     if (!stage_project_render_materials(
             workspace,
             staged_project_content_root,
