@@ -154,9 +154,9 @@ public:
         return true;
     }
 
-    bool read_string(std::string& value) {
+    bool read_string(std::string& value,std::size_t limit=max_name_bytes) {
         std::uint32_t length = 0;
-        if (!read_u32(length) || length > max_name_bytes || remaining() < length) {
+        if (!read_u32(length) || length > limit || remaining() < length) {
             return false;
         }
         value.clear();
@@ -223,6 +223,7 @@ WorldSnapshotEncodeResult encode_world_snapshot(const WorldSnapshot& snapshot_da
         append_id(payload, type.id.value);
         append_u32(payload, type.version);
         append_string(payload, type.name);
+        std::ostringstream fields;fields.imbue(std::locale::classic());write_component_fields(fields,type.fields);append_string(payload,fields.str());
     }
     for (const ResourceId resource : snapshot.resources) {
         append_id(payload, resource.value);
@@ -376,6 +377,9 @@ WorldSnapshotEncodeResult encode_world_snapshot(const WorldSnapshot& snapshot_da
         append_id(payload,e.persistent_id);std::ostringstream o;o.imbue(std::locale::classic());o<<std::setprecision(17);
         if(e.animation){o<<"animation ";write_animation(o,*e.animation);o<<' ';}if(e.rig_part){o<<"rig_part ";write_rig_part(o,*e.rig_part);o<<' ';}if(e.audio_emitter){o<<"audio_emitter ";write_audio_emitter(o,*e.audio_emitter);o<<' ';}append_string(payload,o.str());
     }
+    std::size_t component_count=0;for(const auto& e:snapshot.entities)component_count+=e.components.size();
+    append_u32(payload,static_cast<std::uint32_t>(component_count));
+    for(const auto& e:snapshot.entities)for(const auto& c:e.components){append_id(payload,e.persistent_id);std::ostringstream data;data.imbue(std::locale::classic());write_component_payload(data,c);append_string(payload,data.str());}
     result.bytes.reserve(header_size + payload.size());
     result.bytes.insert(result.bytes.end(), world_magic.begin(), world_magic.end());
     append_u32(result.bytes, world_snapshot_file_format_version);
@@ -448,6 +452,7 @@ WorldSnapshotDecodeResult decode_world_snapshot(const std::span<const std::byte>
             result.diagnostics = "World snapshot ended inside a component type record.";
             return result;
         }
+        if(version>=16U){std::string data;if(!reader.read_string(data)){result.diagnostics="Truncated component schema.";return result;}std::istringstream fields{data};if(!read_component_fields(fields,type.fields)||(fields>>std::ws,!fields.eof())){result.diagnostics="Invalid component schema.";return result;}}
         snapshot.component_types.push_back(std::move(type));
     }
     for (std::uint32_t index = 0; index < resource_count; ++index) {
@@ -830,6 +835,16 @@ WorldSnapshotDecodeResult decode_world_snapshot(const std::span<const std::byte>
             while(in>>field){bool ok=false;if(field=="animation"&&!e.animation){AnimationPlayer p;ok=read_animation(in,p);if(ok)e.animation=p;}else if(field=="rig_part"&&!e.rig_part){RigPart p;ok=read_rig_part(in,p);if(ok)e.rig_part=p;}else if(field=="audio_emitter"&&!e.audio_emitter){AudioEmitter p;ok=read_audio_emitter(in,p);if(ok)e.audio_emitter=p;}if(!ok){result.diagnostics="Invalid presentation fields.";return result;}}
             records.erase(found);
         }if(!records.empty()||!validate_presentation(snapshot,&result.diagnostics)){result.diagnostics="Invalid presentation references.";return result;}
+    }
+    if(version>=16U){
+        std::uint32_t count=0;if(!reader.read_u32(count)||count>max_world_component_payloads||count>snapshot.entities.size()*max_entity_components){result.diagnostics="Invalid component payload count.";return result;}
+        std::unordered_map<PersistentId,std::size_t,PersistentIdHash> owners;for(std::size_t i=0;i<snapshot.entities.size();++i)owners.emplace(snapshot.entities[i].persistent_id,i);
+        for(std::uint32_t i=0;i<count;++i){PersistentId owner;std::string data;ComponentPayload p;
+            if(!reader.read_id(owner)||!reader.read_string(data,8192)){result.diagnostics="Truncated component payload.";return result;}
+            const auto found=owners.find(owner);std::istringstream input{data};
+            if(found==owners.end()||!read_component_payload(input,p)||(input>>std::ws,!input.eof())){result.diagnostics="Invalid component payload/owner.";return result;}
+            auto& components=snapshot.entities[found->second].components;if(components.size()>=max_entity_components){result.diagnostics="Entity component capacity exceeded.";return result;}components.push_back(std::move(p));
+        }
     }
     if (!reader.finished()) {
         result.diagnostics = "World snapshot contains trailing data.";

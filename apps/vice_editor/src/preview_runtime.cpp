@@ -532,7 +532,7 @@ PreviewSnapshot PreviewRuntime::snapshot() const {
     result.box_region_events = state_->recent_box_events;
     result.activation_requests = state_->recent_activation_requests;
 
-    const auto world_snapshot = state_->world.snapshot();
+    const auto world_snapshot = state_->world.snapshot(world::ComponentPayloadSnapshot::omit);
     result.regions.reserve(world_snapshot.regions.size());
     for (const auto& region : world_snapshot.regions) {
         PreviewRegionSnapshot preview_region{.region = region};

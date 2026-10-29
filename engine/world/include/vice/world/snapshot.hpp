@@ -40,6 +40,7 @@ struct SnapshotEntity {
     std::optional<AudioEmitter> audio_emitter;
     PersistentId material{};
     std::vector<ResourceReference> resource_references;
+    std::vector<ComponentPayload> components;
 };
 
 struct SnapshotRelation {
@@ -50,7 +51,11 @@ struct SnapshotRelation {
     friend bool operator==(const SnapshotRelation&, const SnapshotRelation&) = default;
 };
 
+enum class ComponentPayloadSnapshot { include, omit };
+
 struct WorldSnapshot {
+    // Read projections are intentionally incomplete and must never be restored or saved.
+    bool component_payloads_included=true;
     std::vector<ComponentTypeDesc> component_types;
     std::vector<ResourceId> resources;
     std::vector<RegionDesc> regions;

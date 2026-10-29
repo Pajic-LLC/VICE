@@ -787,6 +787,9 @@ void EditorUi::draw(
                     ImGui::Text("Carrier %s",a.carrier.to_string().c_str());
                     ImGui::Text("Local foot %.2f %.2f %.2f",static_cast<double>(a.offset.x),static_cast<double>(a.offset.y),static_cast<double>(a.offset.z));
                 }
+                if(!inspector->components.empty()&&ImGui::CollapsingHeader("Persistent components")) {
+                    for(std::size_t i=0;i<inspector->components.size();++i){const auto& schema=inspector->component_schemas[i];ImGui::Text("%s v%u",schema.name.c_str(),schema.version);ImGui::TextWrapped("%s",world::serialize_component_payloads({inspector->components[i]}).c_str());}
+                }
                 if(inspector->animation&&ImGui::CollapsingHeader("Animation")){const auto& a=*inspector->animation;ImGui::Text("Rig %s",a.rig.value.to_string().c_str());ImGui::Text("Clip %u  Time %.3f  Rate %.2f",a.clip,a.time,static_cast<double>(a.rate));}
                 if(inspector->rig_part&&ImGui::CollapsingHeader("Rig part")){ImGui::Text("Root %s",inspector->rig_part->root.to_string().c_str());ImGui::Text("Node %u",inspector->rig_part->node);}
                 if(inspector->audio_emitter&&ImGui::CollapsingHeader("Spatial audio")){const auto& a=*inspector->audio_emitter;ImGui::Text("Sound %s",a.sound.value.to_string().c_str());ImGui::Text("Time %.3f  Gain %.2f  Pitch %.2f",a.time,static_cast<double>(a.gain),static_cast<double>(a.pitch));}

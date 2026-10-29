@@ -46,6 +46,7 @@ EntityId World::allocate(const PersistentId persistent_id) {
     slot.animation.reset();slot.rig_part.reset();slot.audio_emitter.reset();
     slot.material={};
     slot.resource_references.clear();
+    slot.components.clear();
     slot.alive = true;
 
     const EntityId entity{index, slot.generation};
@@ -70,6 +71,7 @@ bool World::destroy_entity(const EntityId entity) {
     (void)clear_character(entity);
     (void)clear_dependency(entity);
     (void)clear_distance_link(entity);
+    clear_components(entity);
     persistent_lookup_.erase(slot.persistent_id);
     slot.persistent_id = PersistentId{};
     slot.spatial_state.reset();
@@ -86,6 +88,7 @@ bool World::destroy_entity(const EntityId entity) {
     slot.animation.reset();slot.rig_part.reset();slot.audio_emitter.reset();
     slot.material={};
     slot.resource_references.clear();
+    slot.components.clear();
     slot.alive = false;
 
     ++slot.generation;

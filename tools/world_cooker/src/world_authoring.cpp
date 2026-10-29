@@ -122,6 +122,14 @@ namespace {
                 }
                 entity->authored_transform = value.transform;
                 return true;
+            } else if constexpr(std::is_same_v<Value,RegisterComponentType>){
+                if(std::any_of(candidate.component_types.begin(),candidate.component_types.end(),[&](const auto& s){return s.id==value.schema.id;})){diagnostics="Component schema already exists.";return false;}candidate.component_types.push_back(value.schema);return true;
+            } else if constexpr(std::is_same_v<Value,SetComponent>||std::is_same_v<Value,RemoveComponent>){
+                auto* e=find_entity(candidate,value.entity);if(!e){diagnostics="Component owner is missing.";return false;}
+                const auto type=[&]{if constexpr(std::is_same_v<Value,SetComponent>)return value.payload.type;else return value.type;}();
+                auto found=std::find_if(e->components.begin(),e->components.end(),[&](const auto& c){return c.type==type;});
+                if constexpr(std::is_same_v<Value,SetComponent>){if(found==e->components.end())e->components.push_back(value.payload);else *found=value.payload;}
+                else {if(found==e->components.end()){diagnostics="Component is missing.";return false;}e->components.erase(found);}return true;
             } else if constexpr (std::is_same_v<Value, SetCharacterAttachment>) {
                 auto* entity=find_entity(candidate,value.entity);
                 if(!entity || (value.attachment && !world::valid(*value.attachment))){diagnostics="Invalid character attachment.";return false;}

@@ -12,7 +12,7 @@
 
 namespace vice::world {
 
-inline constexpr std::uint32_t world_snapshot_file_format_version = 15;
+inline constexpr std::uint32_t world_snapshot_file_format_version = 16;
 inline constexpr std::uint32_t world_snapshot_file_min_supported_version = 1;
 inline constexpr std::size_t world_snapshot_file_magic_size = 8;
 

@@ -44,6 +44,12 @@ public:
     [[nodiscard]] std::uint64_t material_revision() const noexcept { return material_revision_; }
 
     bool register_component_type(ComponentTypeDesc type);
+    // Atomic whole-payload upsert. Schemas are immutable; exact versions/fields are required.
+    bool set_component(EntityId entity,ComponentPayload payload);
+    bool remove_component(EntityId entity,ComponentTypeId type);
+    [[nodiscard]] std::optional<ComponentPayload> component(EntityId entity,ComponentTypeId type) const;
+    [[nodiscard]] std::vector<ComponentPayload> components(EntityId entity) const;
+    [[nodiscard]] std::size_t component_payload_count() const noexcept {return component_payload_count_;}
     bool unregister_component_type(ComponentTypeId id);
     [[nodiscard]] std::optional<ComponentTypeDesc> component_type(ComponentTypeId id) const;
     [[nodiscard]] std::size_t component_type_count() const noexcept;
@@ -142,7 +148,7 @@ public:
     [[nodiscard]] std::optional<SimulationIslandId> simulation_island(EntityId entity) const noexcept;
     [[nodiscard]] std::optional<StreamingCellId> streaming_cell(EntityId entity) const noexcept;
 
-    [[nodiscard]] WorldSnapshot snapshot() const;
+    [[nodiscard]] WorldSnapshot snapshot(ComponentPayloadSnapshot payloads=ComponentPayloadSnapshot::include) const;
     bool restore(const WorldSnapshot& snapshot);
 
 private:
@@ -164,6 +170,7 @@ private:
         std::optional<AudioEmitter> audio_emitter;
         PersistentId material{};
         std::vector<ResourceReference> resource_references;
+        std::vector<ComponentPayload> components;
         std::uint32_t generation = 1;
         bool alive = false;
     };
@@ -213,6 +220,9 @@ private:
     std::vector<std::uint32_t> free_indices_;
     std::unordered_map<PersistentId, EntityId, PersistentIdHash> persistent_lookup_;
     std::unordered_map<ComponentTypeId, ComponentTypeDesc, ComponentTypeIdHash> component_types_;
+    std::unordered_map<ComponentTypeId,std::size_t,ComponentTypeIdHash> component_users_;
+    std::size_t component_payload_count_=0;
+    void clear_components(EntityId entity);
     std::vector<ResourceSlot> resource_slots_;
     std::vector<std::uint32_t> free_resource_indices_;
     std::unordered_map<ResourceId, ResourceHandle, ResourceIdHash> resource_lookup_;

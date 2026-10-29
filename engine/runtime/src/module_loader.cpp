@@ -46,6 +46,187 @@ world::PersistentId persistent_id(module::EntityId id) noexcept {
     for (std::size_t i = 0; i < bytes.size(); ++i) bytes[i] = id.bytes[i];
     return world::PersistentId{bytes};
 }
+module::EntityId component_id(world::PersistentId p) noexcept {
+    module::EntityId out;
+    std::copy(p.bytes().begin(), p.bytes().end(), out.bytes);
+    return out;
+}
+template <std::size_t N> std::optional<std::string> component_string(const char (&data)[N]) {
+    const auto end = std::find(std::begin(data), std::end(data), '\0');
+    if (end == std::end(data))
+        return {};
+    return std::string{std::begin(data), end};
+}
+static_assert(module::component_field_capacity == world::max_component_fields);
+module::Result host_register_component_schema(void *value,
+                                              const module::ComponentSchema *input) noexcept {
+    const auto *b = current_bridge(value);
+    if (!b || !b->context || !b->writable)
+        return module::Result::wrong_phase;
+    if (!input || input->size < sizeof(*input) ||
+        input->field_count > module::component_field_capacity)
+        return module::Result::invalid_argument;
+    const auto name = component_string(input->name);
+    if (!name)
+        return module::Result::invalid_argument;
+    world::ComponentTypeDesc schema{{persistent_id(input->type)}, *name, input->version};
+    for (std::uint32_t i = 0; i < input->field_count; ++i) {
+        const auto &f = input->fields[i];
+        const auto field = component_string(f.name);
+        if (!field)
+            return module::Result::invalid_argument;
+        schema.fields.push_back({f.id, static_cast<world::ComponentValueKind>(f.kind), *field});
+    }
+    if (!world::valid_component_type(schema))
+        return module::Result::invalid_argument;
+    std::sort(schema.fields.begin(), schema.fields.end(),
+              [](const auto &a, const auto &c) { return a.id < c.id; });
+    auto &w = b->context->world;
+    if (const auto existing = w.component_type(schema.id))
+        return *existing == schema ? module::Result::success : module::Result::schema_conflict;
+    return w.register_component_type(std::move(schema)) ? module::Result::success
+                                                        : module::Result::schema_conflict;
+}
+module::Result host_read_component_schema(void *value, module::EntityId type,
+                                          module::ComponentSchema *output) noexcept {
+    const auto *b = current_bridge(value);
+    if (!b || !b->context)
+        return module::Result::wrong_phase;
+    if (!output || output->size < sizeof(*output) || persistent_id(type).is_nil())
+        return module::Result::invalid_argument;
+    const auto schema = b->context->world.component_type({persistent_id(type)});
+    if (!schema)
+        return module::Result::not_found;
+    if (schema->name.size() > 128)
+        return module::Result::invalid_argument;
+    module::ComponentSchema result;
+    result.type = type;
+    result.version = schema->version;
+    result.field_count = static_cast<std::uint32_t>(schema->fields.size());
+    std::copy(schema->name.begin(), schema->name.end(), result.name);
+    for (std::size_t i = 0; i < schema->fields.size(); ++i) {
+        const auto &f = schema->fields[i];
+        auto &out = result.fields[i];
+        out.id = f.id;
+        out.kind = static_cast<module::ComponentKind>(f.kind);
+        std::copy(f.name.begin(), f.name.end(), out.name);
+    }
+    *output = result;
+    return module::Result::success;
+}
+module::Result host_read_component(void *value, module::EntityId owner, module::EntityId type,
+                                   module::ComponentData *output) noexcept {
+    const auto *b = current_bridge(value);
+    if (!b || !b->context)
+        return module::Result::wrong_phase;
+    if (!output || output->size < sizeof(*output) || persistent_id(owner).is_nil() ||
+        persistent_id(type).is_nil())
+        return module::Result::invalid_argument;
+    const auto &w = b->context->world;
+    const auto e = w.find(persistent_id(owner));
+    if (!e)
+        return module::Result::not_found;
+    const auto data = w.component(*e, {persistent_id(type)});
+    if (!data)
+        return module::Result::no_component;
+    module::ComponentData result;
+    result.type = type;
+    result.version = data->version;
+    result.field_count = static_cast<std::uint32_t>(data->fields.size());
+    for (std::size_t i = 0; i < data->fields.size(); ++i) {
+        const auto &v = data->fields[i];
+        auto &out = result.fields[i];
+        out.id = v.id;
+        out.kind = static_cast<module::ComponentKind>(world::component_value_kind(v.value));
+        switch (out.kind) {
+        case module::ComponentKind::boolean:
+            out.boolean = std::get<bool>(v.value) ? 1U : 0U;
+            break;
+        case module::ComponentKind::integer:
+            out.integer = std::get<std::int64_t>(v.value);
+            break;
+        case module::ComponentKind::real:
+            out.real = std::get<double>(v.value);
+            break;
+        case module::ComponentKind::text: {
+            const auto &s = std::get<std::string>(v.value);
+            std::copy(s.begin(), s.end(), out.text);
+            break;
+        }
+        case module::ComponentKind::identifier:
+            out.identifier = component_id(std::get<world::PersistentId>(v.value));
+            break;
+        }
+    }
+    *output = result;
+    return module::Result::success;
+}
+module::Result host_set_component(void *value, module::EntityId owner,
+                                  const module::ComponentData *input) noexcept {
+    const auto *b = current_bridge(value);
+    if (!b || !b->context || !b->writable)
+        return module::Result::wrong_phase;
+    if (!input || input->size < sizeof(*input) ||
+        input->field_count > module::component_field_capacity || persistent_id(owner).is_nil())
+        return module::Result::invalid_argument;
+    auto &w = b->context->world;
+    const auto e = w.find(persistent_id(owner));
+    if (!e)
+        return module::Result::not_found;
+    world::ComponentPayload data{{persistent_id(input->type)}, input->version, {}};
+    const auto schema = w.component_type(data.type);
+    if (!schema)
+        return module::Result::not_found;
+    if (schema->version != data.version)
+        return module::Result::schema_conflict;
+    for (std::uint32_t i = 0; i < input->field_count; ++i) {
+        const auto &in = input->fields[i];
+        world::ComponentFieldValue v;
+        v.id = in.id;
+        switch (in.kind) {
+        case module::ComponentKind::boolean:
+            if (in.boolean > 1)
+                return module::Result::invalid_argument;
+            v.value = in.boolean != 0;
+            break;
+        case module::ComponentKind::integer:
+            v.value = in.integer;
+            break;
+        case module::ComponentKind::real:
+            v.value = in.real;
+            break;
+        case module::ComponentKind::text: {
+            const auto s = component_string(in.text);
+            if (!s)
+                return module::Result::invalid_argument;
+            v.value = *s;
+            break;
+        }
+        case module::ComponentKind::identifier:
+            v.value = persistent_id(in.identifier);
+            break;
+        default:
+            return module::Result::invalid_argument;
+        }
+        data.fields.push_back(std::move(v));
+    }
+    return w.set_component(*e, std::move(data)) ? module::Result::success
+                                                : module::Result::invalid_argument;
+}
+module::Result host_remove_component(void *value, module::EntityId owner,
+                                     module::EntityId type) noexcept {
+    const auto *b = current_bridge(value);
+    if (!b || !b->context || !b->writable)
+        return module::Result::wrong_phase;
+    if (persistent_id(owner).is_nil() || persistent_id(type).is_nil())
+        return module::Result::invalid_argument;
+    auto &w = b->context->world;
+    const auto e = w.find(persistent_id(owner));
+    if (!e)
+        return module::Result::not_found;
+    return w.remove_component(*e, {persistent_id(type)}) ? module::Result::success
+                                                         : module::Result::no_component;
+}
 module::Result host_read_entity(void* value, module::EntityId id, module::EntitySnapshot* output) noexcept {
     const auto* bridge = current_bridge(value);
     if (!bridge || !bridge->context) return module::Result::wrong_phase;
@@ -604,6 +785,7 @@ public:
         host_.read_character_attachment=&host_read_character_attachment;
         host_.attach_character=&host_attach_character;host_.detach_character=&host_detach_character;
         host_.read_camera_pose=&host_read_camera_pose;host_.set_camera_pose=&host_set_camera_pose;
+        host_.register_component_schema=&host_register_component_schema;host_.read_component_schema=&host_read_component_schema;host_.read_component=&host_read_component;host_.set_component=&host_set_component;host_.remove_component=&host_remove_component;
         host_.read_animation=&host_read_animation;host_.control_animation=&host_control_animation;
         host_.read_audio=&host_read_audio;host_.control_audio=&host_control_audio;host_.set_character_facing=&host_set_character_facing;
     }

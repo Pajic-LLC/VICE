@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <utility>
+#include <unordered_set>
 
 namespace vice::world {
 namespace {
@@ -48,8 +49,8 @@ bool validate_distance_links(const WorldSnapshot& snapshot, std::string* diagnos
 }
 
 bool World::register_component_type(ComponentTypeDesc type) {
-    if (!type.id.valid() || type.name.empty() || type.version == 0U ||
-        component_types_.contains(type.id)) {
+    if (!valid_component_type(type) ||
+        component_types_.contains(type.id)||component_types_.size()>=65536) {
         return false;
     }
 
@@ -64,11 +65,13 @@ bool World::register_component_type(ComponentTypeDesc type) {
         return false;
     }
 
+    std::sort(type.fields.begin(),type.fields.end(),[](const auto& a,const auto& b){return a.id<b.id;});
     component_types_.emplace(type.id, std::move(type));
     return true;
 }
 
 bool World::unregister_component_type(const ComponentTypeId id) {
+    if(component_users_.contains(id))return false;
     return component_types_.erase(id) == 1U;
 }
 
@@ -186,8 +189,9 @@ std::optional<ResourceHandle> World::find_resource(const ResourceId resource_id)
     return found->second;
 }
 
-WorldSnapshot World::snapshot() const {
+WorldSnapshot World::snapshot(ComponentPayloadSnapshot payloads) const {
     WorldSnapshot output;
+    output.component_payloads_included=payloads==ComponentPayloadSnapshot::include;
 
     output.component_types.reserve(component_types_.size());
     for (const auto& entry : component_types_) {
@@ -248,6 +252,7 @@ WorldSnapshot World::snapshot() const {
             .animation=slot.animation,.rig_part=slot.rig_part,.audio_emitter=slot.audio_emitter,
             .material = slot.material,
             .resource_references = slot.resource_references,
+            .components = output.component_payloads_included?slot.components:std::vector<ComponentPayload>{},
         };
         std::sort(
             entity.resource_references.begin(),
@@ -303,6 +308,7 @@ WorldSnapshot World::snapshot() const {
 }
 
 bool World::restore(const WorldSnapshot& snapshot_data) {
+    if(!snapshot_data.component_payloads_included)return false;
     if (!validate_presentation(snapshot_data))return false;
     if (!validate_character_attachments(snapshot_data)) return false;
     if (!validate_vehicles(snapshot_data)) return false;
@@ -334,6 +340,11 @@ bool World::restore(const WorldSnapshot& snapshot_data) {
         const auto entity = restored.create_entity(entity_record.persistent_id);
         if (!entity.has_value()) {
             return false;
+        }
+        if(entity_record.components.size()>max_entity_components)return false;
+        std::unordered_set<ComponentTypeId,ComponentTypeIdHash> seen_components;
+        for(const auto& payload:entity_record.components) {
+            if(!seen_components.insert(payload.type).second||!restored.set_component(*entity,payload))return false;
         }
         if (entity_record.spatial_state.has_value() &&
             !restored.set_spatial_state(*entity, *entity_record.spatial_state)) {

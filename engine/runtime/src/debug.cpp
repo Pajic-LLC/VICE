@@ -112,6 +112,7 @@ RuntimeDebugEntitySnapshot sample_runtime_debug_entity(
     }
 
     result.state = RuntimeDebugEntityState::available;
+    result.components=entity->components;for(const auto& p:result.components)if(const auto schema=world.component_type(p.type))result.component_schemas.push_back(*schema);
     result.spatial = entity->spatial_state;
     result.authored_transform = entity->authored_transform;
     result.animation=entity->animation;result.rig_part=entity->rig_part;result.audio_emitter=entity->audio_emitter;
@@ -253,6 +254,7 @@ std::string serialize_runtime_debug_entity_snapshot(
     }
 
     output += ",\"character_attachment\":" + world::serialize_character_attachment(snapshot.character_attachment);
+    output += ",\"component_payloads\":"+world::serialize_component_payloads(snapshot.components)+",\"component_schemas\":[";for(std::size_t i=0;i<snapshot.component_schemas.size();++i){if(i)output+=',';output+=world::serialize_component_type(snapshot.component_schemas[i]);}output+=']';
     output += ",\"animation\":"+world::serialize_animation(snapshot.animation)+",\"rig_part\":"+world::serialize_rig_part(snapshot.rig_part)+",\"audio_emitter\":"+world::serialize_audio_emitter(snapshot.audio_emitter)+",\"animation_state\":"+snapshot.animation_state+",\"audio_state\":"+snapshot.audio_state;
     output += ",\"vehicle\":" + world::serialize_vehicle(snapshot.vehicle);
     output += ",\"vehicle_state\":";

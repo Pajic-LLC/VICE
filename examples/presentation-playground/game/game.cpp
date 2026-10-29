@@ -1,5 +1,7 @@
 #include <algorithm>
 #include <cmath>
+#include <cstring>
+#include <limits>
 #include <vice/runtime/module_api.hpp>
 namespace {
 using namespace vice::runtime::module;
@@ -10,6 +12,29 @@ constexpr EntityId entity(unsigned n) {
     id.bytes[8] = 0x80;
     id.bytes[15] = static_cast<std::uint8_t>(n);
     return id;
+}
+constexpr EntityId session_type() {
+    auto id = entity(0);
+    id.bytes[0] = 0xa4;
+    id.bytes[14] = 4;
+    return id;
+}
+bool session(Context &c, bool launch) {
+    ComponentData data;
+    const auto result = c.read_component(entity(2), session_type(), data);
+    if (result == Result::no_component) {
+        data.type = session_type();
+        data.field_count = 2;
+        for (unsigned i = 0; i < 2; ++i) {
+            data.fields[i].id = i + 1;
+            data.fields[i].kind = ComponentKind::integer;
+        }
+    } else if (result != Result::success)
+        return false;
+    auto &counter = data.fields[launch ? 0 : 1].integer;
+    if (counter < std::numeric_limits<std::int64_t>::max())
+        ++counter;
+    return c.set_component(entity(2), data) == Result::success;
 }
 class InteractionGame final : public Game {
     bool automatic_ = false, up_ = false, down_ = false, left_ = false, right_ = false,
@@ -70,6 +95,18 @@ class InteractionGame final : public Game {
 
   public:
     bool on_start(Context &c) override {
+        ComponentSchema schema;
+        schema.type = session_type();
+        schema.field_count = 2;
+        std::strcpy(schema.name, "SessionState");
+        for (unsigned i = 0; i < 2; ++i) {
+            schema.fields[i].id = i + 1;
+            schema.fields[i].kind = ComponentKind::integer;
+        }
+        std::strcpy(schema.fields[0].name, "launch_count");
+        std::strcpy(schema.fields[1].name, "interaction_count");
+        if (c.register_component_schema(schema) != Result::success || !session(c, true))
+            return false;
         CharacterSnapshot character;
         CharacterAttachmentSnapshot a;
         if (c.read_character_attachment(entity(3), a) != Result::success)
@@ -93,6 +130,7 @@ class InteractionGame final : public Game {
         const auto key = static_cast<Key>(e.code);
         const bool pressed = (e.flags & 1U) != 0;
         if (key == Key::e && pressed) {
+            (void)session(c, false);
             automatic_ = false;
             CharacterAttachmentSnapshot a;
             (void)c.read_character_attachment(entity(3), a);
