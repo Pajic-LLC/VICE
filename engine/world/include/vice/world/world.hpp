@@ -121,6 +121,9 @@ public:
         return powered_hinge_revision_;
     }
     bool set_powered_hinge(EntityId entity, const PoweredHinge &joint);
+    bool set_swing_twist_joint(EntityId, const PoweredSwingTwist &);
+    bool clear_swing_twist_joint(EntityId);
+    [[nodiscard]] std::optional<PoweredSwingTwist> swing_twist_joint(EntityId) const noexcept;
     bool clear_powered_hinge(EntityId entity);
     [[nodiscard]] std::optional<PoweredHinge> powered_hinge(EntityId entity) const noexcept;
     bool set_distance_link(EntityId entity, const DistanceLink& link);
@@ -133,6 +136,12 @@ public:
     bool set_animation(EntityId entity,const AnimationPlayer& player);
     bool clear_animation(EntityId entity);
     [[nodiscard]] std::optional<AnimationPlayer> animation(EntityId entity) const noexcept;
+    bool set_physical_rig_binding(EntityId, const PhysicalRigBinding &);
+    bool clear_physical_rig_binding(EntityId);
+    [[nodiscard]] std::optional<PhysicalRigBinding> physical_rig_binding(EntityId) const noexcept;
+    [[nodiscard]] std::vector<OwnedPhysicalRigBinding>
+    physical_rig_bindings(PersistentId root) const;
+    [[nodiscard]] bool has_physical_rig_bindings(PersistentId root) const noexcept;
     bool set_rig_part(EntityId entity,const RigPart& part);
     bool clear_rig_part(EntityId entity);
     [[nodiscard]] std::optional<RigPart> rig_part(EntityId entity) const noexcept;
@@ -326,6 +335,9 @@ private:
     std::uint64_t presentation_revision_=0;
     bool advance_presentation_revision() noexcept;
     bool has_rig_parts(EntityId entity) const noexcept;
+    bool physical_rig_region_allowed(EntityId, RegionId) const;
+    std::unordered_map<PersistentId, PhysicalRigBinding, PersistentIdHash> physical_rigs_;
+    std::unordered_map<PersistentId, std::vector<EntityId>, PersistentIdHash> physical_rig_users_;
     std::uint64_t attachment_revision_ = 0;
     bool advance_attachment_revision() noexcept;
     bool has_attached_characters(EntityId carrier) const noexcept;
@@ -334,6 +346,7 @@ private:
     bool advance_powered_hinge_revision() noexcept;
     std::uint64_t powered_hinge_revision_ = 0;
     std::unordered_map<PersistentId, PoweredHinge, PersistentIdHash> powered_hinges_;
+    std::unordered_map<PersistentId, PoweredSwingTwist, PersistentIdHash> swing_twist_joints_;
     std::unordered_map<PersistentId, std::vector<EntityId>, PersistentIdHash> powered_hinge_users_;
     std::uint64_t distance_link_revision_ = 0;
     std::unordered_map<PersistentId, std::vector<EntityId>, PersistentIdHash> distance_link_users_;

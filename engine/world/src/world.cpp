@@ -74,11 +74,15 @@ bool World::destroy_entity(const EntityId entity) {
     auto& slot = slots_[entity.index];
     if(!causal_room((slot.dependency ? 2U:0U)+(slot.distance_link ? 1U:0U))) return false;
     if(!slot.material.is_nil() && !advance_material_revision())return false;
+    if (!clear_physical_rig_binding(entity))
+        return false;
     if (!clear_animation(entity) || !clear_rig_part(entity) || !clear_audio_emitter(entity)) return false;
     if (!clear_vehicle(entity)) return false;
     (void)clear_character(entity);
     (void)clear_dependency(entity);
     (void)clear_distance_link(entity);
+    if (!clear_swing_twist_joint(entity))
+        return false;
     if (!clear_powered_hinge(entity))
         return false;
     if(!remove_entity_relations(slot.persistent_id))return false;
@@ -284,6 +288,8 @@ bool World::set_spatial_state(const EntityId entity, const SpatialState state) {
         return false;
     }
 
+    if (!physical_rig_region_allowed(entity, state.region))
+        return false;
     const auto& previous = slots_[entity.index].spatial_state;
     if ((!previous || previous->region != state.region) &&
         !link_endpoint_change_allowed(entity, state.region,
@@ -293,6 +299,8 @@ bool World::set_spatial_state(const EntityId entity, const SpatialState state) {
 }
 
 bool World::clear_spatial_state(const EntityId entity) {
+    if (physical_rig_binding(entity))
+        return false;
     if (has_attached_characters(entity) || has_rig_parts(entity)) return false;
     if (!alive(entity) || !slots_[entity.index].spatial_state.has_value()) {
         return false;
@@ -346,6 +354,8 @@ bool World::set_rigid_box(const EntityId entity, const RigidBox& box) {
 }
 
 bool World::clear_rigid_box(const EntityId entity) {
+    if (physical_rig_binding(entity))
+        return false;
     if (has_attached_characters(entity)) return false;
     if (!alive(entity) || !link_endpoint_change_allowed(entity, std::nullopt, std::nullopt)) return false;
     if (!clear_vehicle(entity)) return false;
@@ -363,8 +373,13 @@ bool World::link_endpoint_change_allowed(const EntityId entity, const std::optio
     if (const auto joints = powered_hinge_users_.find(owner);
         joints != powered_hinge_users_.end()) {
         for (auto user : joints->second) {
-            const auto &h = powered_hinges_.at(slots_[user.index].persistent_id);
-            const auto other = find(h.first == owner ? h.second : h.first);
+            const auto key = slots_[user.index].persistent_id;
+            const auto hinge = powered_hinges_.find(key);
+            const auto first = hinge != powered_hinges_.end() ? hinge->second.first
+                                                              : swing_twist_joints_.at(key).first;
+            const auto second = hinge != powered_hinges_.end() ? hinge->second.second
+                                                               : swing_twist_joints_.at(key).second;
+            const auto other = find(first == owner ? second : first);
             const auto p = other ? spatial_state(*other) : std::nullopt;
             const auto b = other ? rigid_box(*other) : std::nullopt;
             if (!region_id || !motion || !p || !b || p->region != *region_id ||
@@ -464,6 +479,8 @@ bool World::handoff_spatial(const EntityId entity, const RegionId target_region)
         return false;
     }
 
+    if (!physical_rig_region_allowed(entity, target_region))
+        return false;
     if (!link_endpoint_change_allowed(entity, target_region, slot.rigid_box ? std::optional{slot.rigid_box->motion} : std::nullopt)) return false;
     slot.spatial_state->region = target_region;
     return true;
@@ -473,6 +490,9 @@ bool World::set_authored_transform(const EntityId entity, const AuthoredTransfor
     if (!alive(entity) || !slots_[entity.index].spatial_state.has_value() || !valid(transform)) {
         return false;
     }
+    if (has_physical_rig_bindings(*persistent_id(entity)) &&
+        (transform.scale.x != 1 || transform.scale.y != 1 || transform.scale.z != 1))
+        return false;
     if(slots_[entity.index].animation && (transform.scale.x!=transform.scale.y||transform.scale.x!=transform.scale.z))return false;
     slots_[entity.index].authored_transform = transform;
     return true;
@@ -635,7 +655,7 @@ bool World::advance_powered_hinge_revision() noexcept {
     }
 }
 bool World::set_powered_hinge(EntityId entity, const PoweredHinge &h) {
-    if (!alive(entity) || !valid(h))
+    if (!alive(entity) || !valid(h) || swing_twist_joint(entity))
         return false;
     const auto owner = *persistent_id(entity);
     const auto a = find(h.first), b = find(h.second);
@@ -647,7 +667,7 @@ bool World::set_powered_hinge(EntityId entity, const PoweredHinge &h) {
         (ba->motion != RigidMotion::dynamic_body && bb->motion != RigidMotion::dynamic_body))
         return false;
     auto old = powered_hinge(entity);
-    if (!old && powered_hinges_.size() >= 4096)
+    if (!old && powered_hinges_.size() + swing_twist_joints_.size() >= 4096)
         return false;
     if (old == h)
         return true;
@@ -701,5 +721,75 @@ std::optional<PoweredHinge> World::powered_hinge(EntityId entity) const noexcept
         return std::nullopt;
     const auto i = powered_hinges_.find(*persistent_id(entity));
     return i == powered_hinges_.end() ? std::nullopt : std::optional{i->second};
+}
+} // namespace vice::world
+
+namespace vice::world {
+bool World::set_swing_twist_joint(EntityId entity, const PoweredSwingTwist &h) {
+    if (!alive(entity) || !valid(h) || powered_hinge(entity))
+        return false;
+    const auto owner = *persistent_id(entity);
+    const auto a = find(h.first), b = find(h.second);
+    if (!a || !b || owner == h.first || owner == h.second)
+        return false;
+    const auto pa = spatial_state(*a), pb = spatial_state(*b);
+    const auto ba = rigid_box(*a), bb = rigid_box(*b);
+    if (!pa || !pb || !ba || !bb || pa->region != pb->region ||
+        (ba->motion != RigidMotion::dynamic_body && bb->motion != RigidMotion::dynamic_body))
+        return false;
+    auto old = swing_twist_joint(entity);
+    if (!old && powered_hinges_.size() + swing_twist_joints_.size() >= 4096)
+        return false;
+    if (old == h)
+        return true;
+    if (old) {
+        auto config = h;
+        config.configuration.drive = old->configuration.drive;
+        config.enabled = old->enabled;
+        if (config == *old) {
+            swing_twist_joints_.at(owner) = h;
+            return true;
+        }
+    }
+    if (!advance_powered_hinge_revision())
+        return false;
+    if (old)
+        for (auto id : {old->first, old->second}) {
+            auto i = powered_hinge_users_.find(id);
+            if (i != powered_hinge_users_.end()) {
+                std::erase(i->second, entity);
+                if (i->second.empty())
+                    powered_hinge_users_.erase(i);
+            }
+        }
+    swing_twist_joints_.insert_or_assign(owner, h);
+    powered_hinge_users_[h.first].push_back(entity);
+    powered_hinge_users_[h.second].push_back(entity);
+    return true;
+}
+bool World::clear_swing_twist_joint(EntityId entity) {
+    if (!alive(entity))
+        return false;
+    const auto h = swing_twist_joint(entity);
+    if (!h)
+        return true;
+    if (!advance_powered_hinge_revision())
+        return false;
+    for (auto id : {h->first, h->second}) {
+        auto i = powered_hinge_users_.find(id);
+        if (i != powered_hinge_users_.end()) {
+            std::erase(i->second, entity);
+            if (i->second.empty())
+                powered_hinge_users_.erase(i);
+        }
+    }
+    swing_twist_joints_.erase(*persistent_id(entity));
+    return true;
+}
+std::optional<PoweredSwingTwist> World::swing_twist_joint(EntityId entity) const noexcept {
+    if (!alive(entity))
+        return {};
+    const auto i = swing_twist_joints_.find(*persistent_id(entity));
+    return i == swing_twist_joints_.end() ? std::nullopt : std::optional{i->second};
 }
 } // namespace vice::world

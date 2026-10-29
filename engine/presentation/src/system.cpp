@@ -140,6 +140,16 @@ bool System::reset(world::World &w, const std::filesystem::path &root, std::stri
             const auto rig = next->rigs.find(p.rig);
             if (rig == next->rigs.end() || p.clip >= rig->second.clips.size())
                 return fail(d, "Animation references a missing rig or clip.");
+            std::vector<Pose> checked;
+            if (!sample_world_pose(w, r.entity, rig->second, p.clip, p.time, checked))
+                return fail(d, "Invalid physical/animated rig pose.");
+        }
+        for (const auto &record : snapshot.physical_rig_bindings) {
+            const auto root = w.find(record.binding.root);
+            const auto animation = root ? w.animation(*root) : std::nullopt;
+            const auto rig = animation ? next->rigs.find(animation->rig) : next->rigs.end();
+            if (rig == next->rigs.end() || record.binding.node >= rig->second.nodes.size())
+                return fail(d, "Physical rig node is out of range.");
         }
         for (const auto &e : next->emitters)
             if (!next->sounds.contains(w.audio_emitter(e.entity)->sound))
@@ -229,7 +239,7 @@ bool System::advance(double seconds, std::string *d) {
             }
         }
         std::vector<Pose> pose;
-        if (!sample_pose(rig->second, p->clip, p->time, pose))
+        if (!sample_world_pose(*impl_->world, root.entity, rig->second, p->clip, p->time, pose))
             return fail(d, "Invalid evaluated rig pose.");
         const auto spatial = impl_->world->spatial_state(root.entity);
         const auto transform = root_pose(*impl_->world, root.entity);

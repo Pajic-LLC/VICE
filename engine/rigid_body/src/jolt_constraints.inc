@@ -3,6 +3,7 @@
 #include <Jolt/Physics/Constraints/FixedConstraint.h>
 #include <Jolt/Physics/Constraints/HingeConstraint.h>
 #include <Jolt/Physics/Constraints/SliderConstraint.h>
+#include <Jolt/Physics/Constraints/SwingTwistConstraint.h>
 
 #include <algorithm>
 #include <array>
@@ -243,6 +244,8 @@ template <typename ImplType, typename SettingsType>
 
 [[nodiscard]] ConstraintType constraint_type(const JPH::EConstraintSubType type) noexcept {
     switch (type) {
+    case JPH::EConstraintSubType::SwingTwist:
+        return ConstraintType::swing_twist;
     case JPH::EConstraintSubType::Hinge:
         return ConstraintType::hinge;
     case JPH::EConstraintSubType::Slider:
@@ -256,10 +259,9 @@ template <typename ImplType, typename SettingsType>
 }
 
 [[nodiscard]] bool supported_constraint(const JPH::EConstraintSubType type) noexcept {
-    return type == JPH::EConstraintSubType::Fixed ||
-        type == JPH::EConstraintSubType::Hinge ||
-        type == JPH::EConstraintSubType::Slider ||
-        type == JPH::EConstraintSubType::Distance;
+    return type == JPH::EConstraintSubType::SwingTwist || type == JPH::EConstraintSubType::Fixed ||
+           type == JPH::EConstraintSubType::Hinge || type == JPH::EConstraintSubType::Slider ||
+           type == JPH::EConstraintSubType::Distance;
 }
 
 [[nodiscard]] bool constraint_references(
@@ -311,6 +313,40 @@ void configure_slider_motor(JPH::SliderConstraint& constraint, const SliderMotor
     constraint.SetMotorState(jolt_motor_mode(motor.mode));
 }
 
+bool valid_swing_motor(const SwingTwistMotorDesc &d) {
+    const auto mode = [](ConstraintMotorMode m) { return static_cast<unsigned>(m) <= 3; };
+    return mode(d.swing_mode) && mode(d.twist_mode) && finite(d.target_orientation) &&
+           std::abs(length_squared(d.target_orientation) - 1) < 1e-4F &&
+           finite(d.target_velocity) && valid_constraint_spring(d.drive_spring) &&
+           d.drive_spring.frequency_hz <= 120 && d.drive_spring.damping_ratio <= 10 &&
+           valid_nonnegative(d.max_swing_axis_torque) && valid_nonnegative(d.max_twist_torque) &&
+           (d.swing_mode == ConstraintMotorMode::off || d.max_swing_axis_torque > 0) &&
+           (d.twist_mode == ConstraintMotorMode::off || d.max_twist_torque > 0) &&
+           (!(motor_uses_position(d.swing_mode) || motor_uses_position(d.twist_mode)) ||
+            d.drive_spring.frequency_hz > 0);
+}
+bool target_in_swing_limits(math::Quat q, float swing, float low, float high) {
+    if (!finite(q) || std::abs(length_squared(q) - 1) > 1e-4F)
+        return false;
+    const double t = std::hypot(double(q.x), double(q.w));
+    if (t < 1e-8)
+        return false;
+    const double a = 2 * std::acos(std::clamp(t / std::sqrt(double(length_squared(q))), 0.0, 1.0));
+    const double twist =
+        std::remainder(2 * std::atan2(double(q.x), double(q.w)), 2 * 3.141592653589793);
+    return a <= swing + 1e-6 && twist >= low - 1e-6 && twist <= high + 1e-6;
+}
+void configure_swing_motor(JPH::SwingTwistConstraint &c, const SwingTwistMotorDesc &d) {
+    c.GetSwingMotorSettings().mSpringSettings = jolt_spring(d.drive_spring);
+    c.GetSwingMotorSettings().SetTorqueLimit(d.max_swing_axis_torque);
+    c.GetTwistMotorSettings().mSpringSettings = jolt_spring(d.drive_spring);
+    c.GetTwistMotorSettings().SetTorqueLimit(d.max_twist_torque);
+    c.SetTargetOrientationCS(jolt_quaternion(d.target_orientation));
+    c.SetTargetAngularVelocityCS(jolt_vector(d.target_velocity));
+    c.SetSwingMotorState(jolt_motor_mode(d.swing_mode));
+    c.SetTwistMotorState(jolt_motor_mode(d.twist_mode));
+}
+
 [[nodiscard]] NativeConstraintImpulse constraint_impulse(
     const JPH::Constraint& constraint
 ) noexcept {
@@ -342,6 +378,16 @@ void configure_slider_motor(JPH::SliderConstraint& constraint, const SliderMotor
             position * position + result.limit * result.limit + result.motor * result.motor
         );
         result.angular = slider.GetTotalLambdaRotation().Length();
+        break;
+    }
+    case JPH::EConstraintSubType::SwingTwist: {
+        const auto &c = static_cast<const JPH::SwingTwistConstraint &>(constraint);
+        result.linear = c.GetTotalLambdaPosition().Length();
+        result.motor = c.GetTotalLambdaMotor().Length();
+        const float x = c.GetTotalLambdaTwist(), y = c.GetTotalLambdaSwingY(),
+                    z = c.GetTotalLambdaSwingZ();
+        result.limit = std::sqrt(x * x + y * y + z * z);
+        result.angular = std::hypot(result.limit, result.motor);
         break;
     }
     case JPH::EConstraintSubType::Distance: {
@@ -441,6 +487,65 @@ bool Domain::create_constraint(const HingeConstraintDesc& desc) {
     }
     configure_hinge_motor(*constraint, desc.motor);
     constraint_runtime_->break_thresholds[desc.id.value] = desc.break_thresholds;
+    return true;
+}
+
+bool Domain::create_constraint(const SwingTwistConstraintDesc &d) {
+    if (!valid_constraint_pair(*impl_, d.id, d.first, d.second) || !valid_swing_motor(d.motor) ||
+        !valid_break_thresholds(d.break_thresholds) || !std::isfinite(d.swing_half_angle) ||
+        d.swing_half_angle < 0 || d.swing_half_angle > 3.13F || !std::isfinite(d.twist_min) ||
+        !std::isfinite(d.twist_max) || d.twist_min < -pi || d.twist_min > 0 || d.twist_max < 0 ||
+        d.twist_max > pi ||
+        !target_in_swing_limits(d.motor.target_orientation, d.swing_half_angle, d.twist_min,
+                                d.twist_max))
+        return false;
+    for (const auto &f : d.local_frames)
+        if (!finite(f.anchor) || !perpendicular_axes(f.axis, f.normal))
+            return false;
+    if (!constraint_runtime_)
+        constraint_runtime_ = std::make_shared<ConstraintRuntimeState>();
+    JPH::SwingTwistConstraintSettings s;
+    s.mSpace = JPH::EConstraintSpace::LocalToBodyCOM;
+    s.mPosition1 = jolt_position(d.local_frames[0].anchor);
+    s.mPosition2 = jolt_position(d.local_frames[1].anchor);
+    s.mTwistAxis1 = normalized_jolt_vector(d.local_frames[0].axis);
+    s.mTwistAxis2 = normalized_jolt_vector(d.local_frames[1].axis);
+    // Jolt uses twist=X, plane=Z and derives Y=plane cross twist.
+    // VICE exposes twist=X and normal=Y; convert the basis at the adapter boundary.
+    s.mPlaneAxis1 =
+        normalized_jolt_vector(math::cross(d.local_frames[0].axis, d.local_frames[0].normal));
+    s.mPlaneAxis2 =
+        normalized_jolt_vector(math::cross(d.local_frames[1].axis, d.local_frames[1].normal));
+    s.mNormalHalfConeAngle = d.swing_half_angle;
+    s.mPlaneHalfConeAngle = d.swing_half_angle;
+    s.mTwistMinAngle = d.twist_min;
+    s.mTwistMaxAngle = d.twist_max;
+    s.mEnabled = d.enabled;
+    if (!add_constraint(*impl_, d.id, d.first, d.second, s))
+        return false;
+    auto *c = static_cast<JPH::SwingTwistConstraint *>(find_constraint(*impl_, d.id));
+    configure_swing_motor(*c, d.motor);
+    if (!d.collide_connected) {
+        const auto a = impl_->find(d.first)->body_id, b = impl_->find(d.second)->body_id;
+        ++impl_->excluded_contact_pairs_[Impl::contact_pair(a, b)];
+        constraint_runtime_->excluded_pairs.emplace(d.id.value, std::array{a, b});
+        auto &bi = impl_->physics_system_.GetBodyInterface();
+        bi.InvalidateContactCache(a);
+        bi.InvalidateContactCache(b);
+    }
+    constraint_runtime_->break_thresholds[d.id.value] = d.break_thresholds;
+    return true;
+}
+bool Domain::set_swing_twist_motor(ConstraintId id, const SwingTwistMotorDesc &d) {
+    auto *c = find_constraint(*impl_, id);
+    if (!c || c->GetSubType() != JPH::EConstraintSubType::SwingTwist || !valid_swing_motor(d))
+        return false;
+    auto &s = static_cast<JPH::SwingTwistConstraint &>(*c);
+    if (!target_in_swing_limits(d.target_orientation, s.GetNormalHalfConeAngle(),
+                                s.GetTwistMinAngle(), s.GetTwistMaxAngle()))
+        return false;
+    configure_swing_motor(s, d);
+    activate_constraint_bodies(*impl_, s);
     return true;
 }
 
@@ -654,6 +759,16 @@ std::optional<ConstraintState> Domain::constraint_state(const ConstraintId id) c
         const auto& hinge = static_cast<const JPH::HingeConstraint&>(*constraint);
         state.coordinate = hinge.GetCurrentAngle();
         state.motor_mode = vice_motor_mode(hinge.GetMotorState());
+    } else if (constraint->GetSubType() == JPH::EConstraintSubType::SwingTwist) {
+        const auto &c = static_cast<const JPH::SwingTwistConstraint &>(*constraint);
+        const auto q = c.GetRotationInConstraintSpace();
+        state.relative_orientation = math::Quat{q.GetX(), q.GetY(), q.GetZ(), q.GetW()};
+        const auto v = c.GetTotalLambdaMotor();
+        state.motor_impulses = {v.GetX(), v.GetY(), v.GetZ()};
+        state.limit_impulses = {c.GetTotalLambdaTwist(), c.GetTotalLambdaSwingY(),
+                                c.GetTotalLambdaSwingZ()};
+        state.motor_mode = vice_motor_mode(c.GetSwingMotorState());
+        state.twist_motor_mode = vice_motor_mode(c.GetTwistMotorState());
     } else if (constraint->GetSubType() == JPH::EConstraintSubType::Slider) {
         const auto& slider = static_cast<const JPH::SliderConstraint&>(*constraint);
         state.coordinate = slider.GetCurrentPosition();

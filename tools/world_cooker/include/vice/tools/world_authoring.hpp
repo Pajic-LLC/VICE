@@ -60,6 +60,14 @@ struct SetRigidBox {
     std::optional<world::RigidBox> body;
 };
 
+struct SetPhysicalRigBinding {
+    world::PersistentId entity{};
+    std::optional<world::PhysicalRigBinding> binding;
+};
+struct SetSwingTwistJoint {
+    world::PersistentId entity{};
+    std::optional<world::PoweredSwingTwist> joint;
+};
 struct SetPoweredHinge {
     world::PersistentId entity{};
     std::optional<world::PoweredHinge> joint;
@@ -115,10 +123,11 @@ using Operation =
                  RemoveQuantityAccount, SetWorldClock, CreateSchedule, CancelSchedule,
                  SetEntitySpatial, SetEntityTransform, SetRegionFidelity, SetRigidBox,
                  SetWorldMaterial, SetEntityMaterial, SetDistanceLink, SetPoweredHinge,
-                 SetDependency, SetCharacter, SetVehicle, RegisterComponentType, SetComponent,
-                 RemoveComponent, SetAnimation, SetRigPart, SetAudioEmitter, SetCharacterAttachment,
-                 SetRelationComponent, RemoveRelationComponent, AddRelation, RemoveRelation,
-                 AddResourceReference, RemoveResourceReference>;
+                 SetPhysicalRigBinding, SetSwingTwistJoint, SetDependency, SetCharacter, SetVehicle,
+                 RegisterComponentType, SetComponent, RemoveComponent, SetAnimation, SetRigPart,
+                 SetAudioEmitter, SetCharacterAttachment, SetRelationComponent,
+                 RemoveRelationComponent, AddRelation, RemoveRelation, AddResourceReference,
+                 RemoveResourceReference>;
 
 struct Transaction {
     std::vector<Operation> operations;

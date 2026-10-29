@@ -250,7 +250,7 @@ int main() {
             "inactive region resume");
     world::World legacy;
     auto old = bytes(legacy);
-    old.erase(old.end() - 42, old.end() - 26);
+    old.erase(old.end() - 50, old.end() - 26);
     old[8] = std::byte{20};
     rehash(old);
     const auto v20 = world::decode_world_snapshot(old);
