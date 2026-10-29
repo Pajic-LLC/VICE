@@ -782,6 +782,11 @@ void EditorUi::draw(
                 ImGui::Text("Entity  %s", short_id(inspector->persistent_id).c_str());
                 ImGui::Separator();
 
+                if(inspector->character_attachment && ImGui::CollapsingHeader("Character carrier")) {
+                    const auto& a=*inspector->character_attachment;
+                    ImGui::Text("Carrier %s",a.carrier.to_string().c_str());
+                    ImGui::Text("Local foot %.2f %.2f %.2f",static_cast<double>(a.offset.x),static_cast<double>(a.offset.y),static_cast<double>(a.offset.z));
+                }
                 if(inspector->vehicle && ImGui::CollapsingHeader("Vehicle")) {
                     const auto& v=*inspector->vehicle;
                     ImGui::Text("Wheelbase %.2f m   Track %.2f m",static_cast<double>(v.wheelbase),static_cast<double>(v.track));

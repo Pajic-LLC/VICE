@@ -102,6 +102,11 @@ public:
     bool clear_vehicle(EntityId entity);
     [[nodiscard]] std::optional<Vehicle> vehicle(EntityId entity) const noexcept;
     [[nodiscard]] std::uint64_t vehicle_revision() const noexcept { return vehicle_revision_; }
+    bool set_character_attachment(EntityId entity, const CharacterAttachment& attachment);
+    bool clear_character_attachment(EntityId entity);
+    bool sync_character_attachment(EntityId entity);
+    [[nodiscard]] std::optional<CharacterAttachment> character_attachment(EntityId entity) const noexcept;
+    [[nodiscard]] std::uint64_t attachment_revision() const noexcept { return attachment_revision_; }
     bool set_character(EntityId entity, const Character& character);
     bool clear_character(EntityId entity);
     [[nodiscard]] std::optional<Character> character(EntityId entity) const noexcept;
@@ -143,6 +148,7 @@ private:
         std::optional<Dependency> dependency;
         std::optional<Character> character;
         std::optional<Vehicle> vehicle;
+        std::optional<CharacterAttachment> character_attachment;
         PersistentId material{};
         std::vector<ResourceReference> resource_references;
         std::uint32_t generation = 1;
@@ -180,6 +186,9 @@ private:
     std::unordered_map<PersistentId, std::vector<EntityId>, PersistentIdHash> dependency_provider_users_;
     std::unordered_map<PersistentId, std::vector<EntityId>, PersistentIdHash> dependency_gate_users_;
     std::uint64_t character_revision_ = 0;
+    std::uint64_t attachment_revision_ = 0;
+    bool advance_attachment_revision() noexcept;
+    bool has_attached_characters(EntityId carrier) const noexcept;
     std::uint64_t vehicle_revision_ = 0;
     bool advance_vehicle_revision() noexcept;
     std::uint64_t distance_link_revision_ = 0;

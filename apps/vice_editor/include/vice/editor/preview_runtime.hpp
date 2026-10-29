@@ -41,6 +41,7 @@ struct PreviewCharacterSnapshot {
     world::GlobalPosition global_position{};
     world::LocalPosition local_position{};
     rigid_body::CharacterDebugSnapshot character{};
+    bool attached=false;
 };
 
 struct PreviewVehicleSnapshot {

@@ -55,6 +55,7 @@ struct RuntimeDebugEntitySnapshot {
     std::optional<world::MaterialSurface> material;
     std::optional<float> native_mass;
     std::optional<world::Vehicle> vehicle;
+    std::optional<world::CharacterAttachment> character_attachment;
     std::optional<VehicleRuntimeDebug> vehicle_state;
     std::optional<world::Character> character;
     std::optional<CharacterRuntimeDebug> character_state;

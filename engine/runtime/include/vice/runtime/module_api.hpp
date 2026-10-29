@@ -137,7 +137,7 @@ struct EntityId { std::uint8_t bytes[16]{}; };
 struct Vector3 { float x = 0, y = 0, z = 0; };
 enum class Result : std::uint32_t {
     success, unavailable, invalid_argument, not_found, no_body,
-    static_body, inactive_region, reset_required, wrong_phase, no_link, no_dependency, no_character, not_grounded, history_mismatch, event_pruned, sequence_exhausted, no_vehicle,
+    static_body, inactive_region, reset_required, wrong_phase, no_link, no_dependency, no_character, not_grounded, history_mismatch, event_pruned, sequence_exhausted, no_vehicle, attached, blocked, out_of_range, no_attachment, no_camera,
 };
 enum class Motion : std::uint32_t { static_body, kinematic_body, dynamic_body };
 struct EntitySnapshot {
@@ -242,6 +242,16 @@ struct VehicleSnapshot {
     double distance=0;
     VehicleWheelSnapshot wheels[4]{};
 };
+struct CharacterAttachmentSnapshot {
+    std::uint32_t size=sizeof(CharacterAttachmentSnapshot),attached=0;
+    EntityId carrier{};
+    Vector3 offset{};
+};
+struct CameraPose {
+    std::uint32_t size=sizeof(CameraPose);
+    double position[3]{};
+    float rotation[4]{0,0,0,1};
+};
 struct HostApi {
     std::uint32_t abi_version = module::abi_version;
     std::uint32_t size = sizeof(HostApi);
@@ -264,6 +274,11 @@ struct HostApi {
     Result (*read_causal_materials)(void* context,EntityId history,std::uint64_t sequence,CausalMaterialSnapshot* output) noexcept = nullptr;
     Result (*read_vehicle)(void* context,EntityId id,VehicleSnapshot* output) noexcept = nullptr;
     Result (*control_vehicle)(void* context,EntityId id,float throttle,float steering,float brake) noexcept = nullptr;
+    Result (*read_character_attachment)(void* context,EntityId id,CharacterAttachmentSnapshot* output) noexcept = nullptr;
+    Result (*attach_character)(void* context,EntityId character,EntityId carrier,Vector3 offset,float max_distance) noexcept = nullptr;
+    Result (*detach_character)(void* context,EntityId character,Vector3 offset,float max_speed,float max_drop) noexcept = nullptr;
+    Result (*read_camera_pose)(void* context,EntityId camera,CameraPose* output) noexcept = nullptr;
+    Result (*set_camera_pose)(void* context,EntityId camera,const CameraPose* pose) noexcept = nullptr;
 };
 
 inline constexpr std::size_t host_api_v1_size = offsetof(HostApi, read_entity);
@@ -369,6 +384,26 @@ public:
     [[nodiscard]] Result control_vehicle(EntityId id,float throttle,float steering,float brake) const noexcept {
         if(!host_ || host_->size<offsetof(HostApi,control_vehicle)+sizeof(host_->control_vehicle) || !host_->control_vehicle)return Result::unavailable;
         return host_->control_vehicle(host_->context,id,throttle,steering,brake);
+    }
+    [[nodiscard]] Result read_character_attachment(EntityId id,CharacterAttachmentSnapshot& output) const noexcept {
+        if(!host_ || host_->size<offsetof(HostApi,read_character_attachment)+sizeof(host_->read_character_attachment)||!host_->read_character_attachment)return Result::unavailable;
+        return host_->read_character_attachment(host_->context,id,&output);
+    }
+    [[nodiscard]] Result attach_character(EntityId id,EntityId carrier,Vector3 offset,float max_distance) const noexcept {
+        if(!host_ || host_->size<offsetof(HostApi,attach_character)+sizeof(host_->attach_character)||!host_->attach_character)return Result::unavailable;
+        return host_->attach_character(host_->context,id,carrier,offset,max_distance);
+    }
+    [[nodiscard]] Result detach_character(EntityId id,Vector3 offset,float max_speed,float max_drop) const noexcept {
+        if(!host_ || host_->size<offsetof(HostApi,detach_character)+sizeof(host_->detach_character)||!host_->detach_character)return Result::unavailable;
+        return host_->detach_character(host_->context,id,offset,max_speed,max_drop);
+    }
+    [[nodiscard]] Result read_camera_pose(EntityId id,CameraPose& output) const noexcept {
+        if(!host_ || host_->size<offsetof(HostApi,read_camera_pose)+sizeof(host_->read_camera_pose)||!host_->read_camera_pose)return Result::unavailable;
+        return host_->read_camera_pose(host_->context,id,&output);
+    }
+    [[nodiscard]] Result set_camera_pose(EntityId id,const CameraPose& pose) const noexcept {
+        if(!host_ || host_->size<offsetof(HostApi,set_camera_pose)+sizeof(host_->set_camera_pose)||!host_->set_camera_pose)return Result::unavailable;
+        return host_->set_camera_pose(host_->context,id,&pose);
     }
     void log(const LogLevel level, const char* const message) const noexcept {
         if (host_ != nullptr && host_->log != nullptr) {

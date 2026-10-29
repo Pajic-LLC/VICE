@@ -111,6 +111,7 @@ namespace {
         return false;
     }
     if (command.entity.vehicle && !world.set_vehicle(*entity,*command.entity.vehicle)) { rollback_entity(); return false; }
+    if(command.entity.character_attachment && !world.set_character_attachment(*entity,*command.entity.character_attachment)){rollback_entity();return false;}
     if(!world.set_entity_material(*entity,command.entity.material)) {rollback_entity();return false;}
     for (const auto reference : command.entity.resource_references) {
         if (!world.set_resource_reference(*entity, reference)) {
@@ -563,6 +564,7 @@ std::optional<InspectorData> project_inspector(
     inspector.dependency = world.dependency(*entity);
     inspector.character = world.character(*entity);
     inspector.vehicle = world.vehicle(*entity);
+    inspector.character_attachment=world.character_attachment(*entity);
     const auto references = world.resource_references(*entity);
     inspector.resource_references.assign(references.begin(), references.end());
     inspector.simulation_island = world.simulation_island(*entity);

@@ -52,6 +52,7 @@ struct AuthoredSimulation::State {
         world::EntityId entity;
         world::Character expected;
         world::SpatialState expected_spatial;
+        std::optional<world::CharacterAttachment> attachment;
     };
     struct VehicleRecord {
         world::PersistentId owner;
@@ -67,6 +68,8 @@ struct AuthoredSimulation::State {
     std::vector<Controller> characters;
     std::unordered_map<world::PersistentId,std::size_t,world::PersistentIdHash> character_lookup;
     std::uint64_t character_revision = 0;
+    std::uint64_t attachment_revision = 0;
+    bool controllers_current() const;
     std::uint64_t material_revision = 0;
     struct Link {
         world::PersistentId owner;
@@ -104,11 +107,20 @@ struct AuthoredSimulation::State {
     }
 
     bool matches(const Controller& record) const {
+        if(record.attachment) {
+            const auto parent=body_lookup.find(record.attachment->carrier);
+            if(parent==body_lookup.end() || !matches(bodies[parent->second]))return false;
+        }
         return world->material_revision()==material_revision && world->find(record.owner) == record.entity && world->character(record.entity) == record.expected &&
-            world->spatial_state(record.entity) == record.expected_spatial;
+            world->spatial_state(record.entity) == record.expected_spatial && world->character_attachment(record.entity)==record.attachment;
     }
     std::optional<CharacterObservation> observed_character(const Controller& record) const noexcept {
         const auto spatial = world->spatial_state(record.entity);
+        if(record.attachment) {
+            const auto local=world->local_position(record.entity);if(!local)return std::nullopt;
+            CharacterState state;state.position={local->x,local->y,local->z};state.velocity=record.expected.velocity;state.ground_state=CharacterGroundState::unsupported;
+            return CharacterObservation{state,{},{}};
+        }
         const auto* target = spatial ? domain(spatial->region) : nullptr;
         if (!target) return std::nullopt;
         const auto native = bridge.character_id(*world,coordinator,record.entity);
@@ -122,6 +134,10 @@ struct AuthoredSimulation::State {
         return result;
     }
     bool publish_character(Controller& record) {
+        if(record.attachment) {
+            if(!world->sync_character_attachment(record.entity))return false;
+            record.expected=*world->character(record.entity);record.expected_spatial=*world->spatial_state(record.entity);return true;
+        }
         const auto spatial = world->spatial_state(record.entity);
         // A transferred controller has new contact caches. Reconstruct support
         // before publishing so the next SDK read does not invent an airborne tick.
@@ -157,6 +173,7 @@ struct AuthoredSimulation::State {
 };
 
 #include "authored_vehicles.inc"
+#include "authored_attachments.inc"
 
 AuthoredSimulation::AuthoredSimulation() : state_{std::make_unique<State>()} {}
 AuthoredSimulation::~AuthoredSimulation() = default;
@@ -249,6 +266,7 @@ bool AuthoredSimulation::reset(world::World& world, jobs::Scheduler& jobs, std::
         const auto& c = *entity.character;
         if (!owner || !entity.spatial_state || !world::valid(c) || next->characters.size() >= std::numeric_limits<std::uint32_t>::max()-1U)
             return fail(diagnostics,"Invalid authored character: " + entity.persistent_id.to_string());
+        if(!entity.character_attachment) {
         auto* target = next->domain_lookup.at(entity.spatial_state->region);
         CharacterDesc desc;
         desc.id = CharacterId{static_cast<std::uint32_t>(next->characters.size()+1U)};
@@ -260,8 +278,9 @@ bool AuthoredSimulation::reset(world::World& world, jobs::Scheduler& jobs, std::
         if (!native || !initial || !target->set_character_position(*native,initial->position) ||
             !target->set_character_velocity(*native,c.velocity) || !target->set_character_horizontal_velocity(*native,c.horizontal_velocity) ||
             (c.pending_jump_speed && !target->request_character_jump(*native,*c.pending_jump_speed))) return fail(diagnostics,"Could not restore authored character motion.");
+        }
         next->character_lookup.emplace(entity.persistent_id,next->characters.size());
-        next->characters.push_back({entity.persistent_id,*owner,c,*entity.spatial_state});
+        next->characters.push_back({entity.persistent_id,*owner,c,*entity.spatial_state,entity.character_attachment});
     }
     for(const auto& entity:snapshot.entities) if(entity.vehicle) {
         const auto owner=world.find(entity.persistent_id);
@@ -269,6 +288,7 @@ bool AuthoredSimulation::reset(world::World& world, jobs::Scheduler& jobs, std::
         next->vehicle_lookup.emplace(entity.persistent_id,next->vehicles.size());
         next->vehicles.push_back({entity.persistent_id,*owner,*entity.vehicle,VehicleObservation{*entity.vehicle,0,{}}});
     }
+    next->attachment_revision=world.attachment_revision();
     next->vehicle_revision=world.vehicle_revision();
     next->character_revision = world.character_revision();
     next->link_revision = world.distance_link_revision();
@@ -287,6 +307,7 @@ bool AuthoredSimulation::step(std::string* diagnostics) {
         if (state_->world->find(link.owner) != link.entity || state_->world->distance_link(link.entity) != link.expected)
             return fail(diagnostics, "Distance link state changed externally; reset the simulation.");
     }
+    if(state_->world->attachment_revision()!=state_->attachment_revision)return fail(diagnostics,"Character attachments changed; reset the simulation.");
     if (state_->world->character_revision() != state_->character_revision) return fail(diagnostics,"Characters were edited externally; reset the simulation.");
     for (const auto& record : state_->characters) if (!state_->matches(record)) return fail(diagnostics,"Character state changed externally; reset the simulation.");
     if(state_->world->vehicle_revision()!=state_->vehicle_revision)return fail(diagnostics,"Vehicles were edited externally; reset the simulation.");
@@ -370,6 +391,8 @@ BodyControlResult AuthoredSimulation::set_body_velocity(const world::PersistentI
     const auto found = state_->body_lookup.find(owner);
     if (!state_->world || found == state_->body_lookup.end()) return BodyControlResult::not_found;
     auto& record = state_->bodies[found->second];
+    if(state_->unpublished_step || state_->world->attachment_revision()!=state_->attachment_revision)return BodyControlResult::reset_required;
+    for(const auto& c:state_->characters)if(c.attachment && c.attachment->carrier==owner && !state_->matches(c))return BodyControlResult::reset_required;
     if (!state_->matches(record)) return BodyControlResult::reset_required;
     if (record.expected_body.motion == world::RigidMotion::static_body) return BodyControlResult::static_body;
     const auto region = state_->world->region(record.expected_spatial.region);
@@ -386,12 +409,16 @@ BodyControlResult AuthoredSimulation::set_body_velocity(const world::PersistentI
     current.angular_velocity = observed->angular_velocity;
     if (!state_->world->set_rigid_box(record.entity, current)) return BodyControlResult::reset_required;
     record.expected_body = current;
+    for(auto& c:state_->characters)if(c.attachment && c.attachment->carrier==owner) {
+        if(!state_->publish_character(c)){state_->unpublished_step=true;return BodyControlResult::reset_required;}
+    }
+    state_->character_revision=state_->world->character_revision();
     return BodyControlResult::applied;
 }
 
 std::size_t AuthoredSimulation::character_count() const noexcept { return state_->characters.size(); }
 std::optional<CharacterObservation> AuthoredSimulation::character(world::PersistentId owner) const noexcept {
-    if (!state_->world || state_->world->character_revision() != state_->character_revision) return std::nullopt;
+    if (!state_->world || state_->unpublished_step || state_->world->character_revision() != state_->character_revision || state_->world->attachment_revision()!=state_->attachment_revision) return std::nullopt;
     const auto found = state_->character_lookup.find(owner);
     if (found == state_->character_lookup.end() || !state_->matches(state_->characters[found->second])) return std::nullopt;
     return state_->observed_character(state_->characters[found->second]);
@@ -403,7 +430,8 @@ CharacterControlResult AuthoredSimulation::control_character(world::PersistentId
     const auto found = state_->character_lookup.find(owner);
     if (found == state_->character_lookup.end()) return CharacterControlResult::not_found;
     auto& record = state_->characters[found->second];
-    if (state_->world->character_revision() != state_->character_revision || !state_->matches(record)) return CharacterControlResult::reset_required;
+    if (state_->unpublished_step || state_->world->character_revision() != state_->character_revision || state_->world->attachment_revision()!=state_->attachment_revision || !state_->matches(record)) return CharacterControlResult::reset_required;
+    if(record.attachment)return CharacterControlResult::attached;
     const auto region = state_->world->region(record.expected_spatial.region);
     if (!region) return CharacterControlResult::reset_required;
     if (region->fidelity == world::RegionFidelity::inactive) return CharacterControlResult::inactive_region;
@@ -424,7 +452,7 @@ std::size_t AuthoredSimulation::body_count() const noexcept { return state_->bod
 const WorldBridge& AuthoredSimulation::bridge() const noexcept { return state_->bridge; }
 
 std::optional<BodyDebugSnapshot> AuthoredSimulation::body(const world::PersistentId owner) const noexcept {
-    if (!state_->world) return std::nullopt;
+    if (!state_->world || state_->unpublished_step) return std::nullopt;
     const auto record = state_->body_lookup.find(owner);
     if(record==state_->body_lookup.end() || !state_->matches(state_->bodies[record->second]))return std::nullopt;
     return state_->observed_body(state_->bodies[record->second]);

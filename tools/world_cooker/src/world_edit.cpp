@@ -90,6 +90,9 @@ std::optional<Operation> read_operation(const std::string& name, std::istream& i
     } else if (name == "clear_transform") {
         SetEntityTransform op;
         if (read_id(input, op.entity)) return op;
+    } else if(name=="set_character_attachment" || name=="clear_character_attachment") {
+        SetCharacterAttachment op;if(!read_id(input,op.entity))return std::nullopt;
+        if(name=="set_character_attachment"){world::CharacterAttachment a;if(!read_id(input,a.carrier) || !(input>>a.offset.x>>a.offset.y>>a.offset.z) || !world::valid(a))return std::nullopt;op.attachment=a;}return op;
     } else if (name == "set_vehicle" || name == "clear_vehicle") {
         SetVehicle op;
         if(!read_id(input,op.entity))return std::nullopt;
@@ -186,7 +189,17 @@ void affected(FileEditResult& result, const Transaction& transaction, const worl
                 if (previous != before.entities.end() && previous->distance_link) add_endpoints(*previous->distance_link);
             } else {
                 result.affected_entities.push_back(value.entity);
-                if constexpr (std::is_same_v<T, SetVehicle> || std::is_same_v<T, SetCharacter> || std::is_same_v<T, SetEntityMaterial>) {
+                if constexpr (std::is_same_v<T, SetCharacterAttachment>) {
+                    const auto add=[&](const world::WorldSnapshot& snapshot){
+                        const auto e=std::find_if(snapshot.entities.begin(),snapshot.entities.end(),[&](const auto& item){return item.persistent_id==value.entity;});
+                        if(e!=snapshot.entities.end() && e->character_attachment) {
+                            result.affected_entities.push_back(e->character_attachment->carrier);
+                            const auto parent=std::find_if(snapshot.entities.begin(),snapshot.entities.end(),[&](const auto& item){return item.persistent_id==e->character_attachment->carrier;});
+                            if(parent!=snapshot.entities.end() && parent->spatial_state)result.affected_regions.push_back(parent->spatial_state->region);
+                        }
+                    };add(before);add(after);
+                }
+                if constexpr (std::is_same_v<T, SetCharacterAttachment> || std::is_same_v<T, SetVehicle> || std::is_same_v<T, SetCharacter> || std::is_same_v<T, SetEntityMaterial>) {
                     const auto previous = std::find_if(before.entities.begin(),before.entities.end(),[&](const auto& e) { return e.persistent_id == value.entity; });
                     if (previous != before.entities.end() && previous->spatial_state) result.affected_regions.push_back(previous->spatial_state->region);
                 }

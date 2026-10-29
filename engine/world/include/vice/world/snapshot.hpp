@@ -33,6 +33,7 @@ struct SnapshotEntity {
     std::optional<Dependency> dependency;
     std::optional<Character> character;
     std::optional<Vehicle> vehicle;
+    std::optional<CharacterAttachment> character_attachment;
     PersistentId material{};
     std::vector<ResourceReference> resource_references;
 };
@@ -54,6 +55,8 @@ struct WorldSnapshot {
     CausalHistory causal_history;
     std::vector<MaterialDefinition> materials;
 };
+
+[[nodiscard]] bool validate_character_attachments(const WorldSnapshot& snapshot, std::string* diagnostics = nullptr);
 
 [[nodiscard]] bool validate_vehicles(const WorldSnapshot& snapshot, std::string* diagnostics = nullptr);
 

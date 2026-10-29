@@ -253,7 +253,7 @@ void PhysicsDebugUi::draw_inspector_live(
                 property("Region local", local_position(character->local_position));
                 property("Region", std::to_string(character->region.value));
                 property("Velocity", vec3(character->character.velocity));
-                property("Ground", ground_state_name(character->character.ground_state));
+                property("Ground", character->attached?"Carried (no independent capsule)":ground_state_name(character->character.ground_state));
                 property(
                     "Ground material",
                     character->character.ground_material.has_value()

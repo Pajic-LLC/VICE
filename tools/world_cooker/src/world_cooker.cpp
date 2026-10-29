@@ -189,6 +189,12 @@ ParseResult parse_source_manifest(const std::string_view source) {
 
             std::string metadata;
             while (values >> metadata) {
+                if(metadata=="character_attachment") {
+                    world::CharacterAttachment a;std::string parent;
+                    if(entity.character_attachment || !(values>>parent>>a.offset.x>>a.offset.y>>a.offset.z)) {fail("invalid character attachment.");return result;}
+                    const auto id=world::PersistentId::parse(parent);if(!id){fail("invalid carrier UUID.");return result;}a.carrier=*id;
+                    if(!world::valid(a)){fail("invalid attachment offset.");return result;}entity.character_attachment=a;continue;
+                }
                 if (metadata == "vehicle") {
                     world::Vehicle v;
                     if(entity.vehicle || !read_vehicle(values,v)){fail("invalid or duplicate vehicle record.");return result;}
@@ -424,7 +430,7 @@ ParseResult parse_source_manifest(const std::string_view source) {
     if(!world::validate_materials(parsed,&result.diagnostics))return result;
     std::sort(parsed.causal_history.events.begin(),parsed.causal_history.events.end(),[](const auto& a,const auto& b){return a.sequence<b.sequence;});
     if(!world::validate_causal_history(parsed.causal_history,&result.diagnostics))return result;
-    if (!world::validate_distance_links(parsed, &result.diagnostics) || !world::validate_dependencies(parsed, &result.diagnostics) || !world::validate_vehicles(parsed, &result.diagnostics) || !world::validate_characters(parsed, &result.diagnostics)) return result;
+    if (!world::validate_distance_links(parsed, &result.diagnostics) || !world::validate_dependencies(parsed, &result.diagnostics) || !world::validate_character_attachments(parsed, &result.diagnostics) || !world::validate_vehicles(parsed, &result.diagnostics) || !world::validate_characters(parsed, &result.diagnostics)) return result;
     world::World canonical;
     if (!canonical.restore(parsed)) {
         result.diagnostics = "World source violates World validation rules.";

@@ -554,7 +554,7 @@ PreviewSnapshot PreviewRuntime::snapshot() const {
                         .owner=record.persistent_id,.region=record.spatial_state->region,.global_position=record.spatial_state->global_position,.local_position=*local,
                         .character={.id=observed->id,.height=record.character->height,.radius=record.character->radius,.position=c.position,.velocity=c.velocity,
                             .horizontal_velocity=c.horizontal_velocity,.ground_state=c.ground_state,.ground_normal=c.ground_normal,.ground_velocity=c.ground_velocity,
-                            .ground_participant=c.ground_participant,.ground_material=c.ground_material}});
+                            .ground_participant=c.ground_participant,.ground_material=c.ground_material},.attached=record.character_attachment.has_value()});
                 }
             }
             if (!record.rigid_box) continue;

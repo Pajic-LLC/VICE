@@ -471,6 +471,7 @@ void PhysicsDebugRenderer::handle_event(
                         }
                     }
                     for (const auto& character : preview.characters) {
+                        if(character.attached)continue;
                         const auto base = float_position(character.global_position);
                         const math::Vec3 half{
                             character.character.radius,
@@ -635,6 +636,7 @@ bool PhysicsDebugRenderer::render(
         }
         if (layers.characters) {
             for (const auto& character : preview.characters) {
+                if(character.attached)continue;
                 const bool highlighted = selected.has_value() && *selected == character.owner;
                 const auto base = float_position(character.global_position);
                 const float radius = character.character.radius;

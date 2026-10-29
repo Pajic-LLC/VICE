@@ -113,6 +113,7 @@ RuntimeDebugEntitySnapshot sample_runtime_debug_entity(
     result.spatial = entity->spatial_state;
     result.authored_transform = entity->authored_transform;
     result.character = entity->character;
+    result.character_attachment=entity->character_attachment;
     result.vehicle = entity->vehicle;
 #if defined(VICE_RUNTIME_AUTHORED_PHYSICS)
     if(physics && result.vehicle) if(const auto v=physics->vehicle(persistent_id)) {
@@ -240,6 +241,7 @@ std::string serialize_runtime_debug_entity_snapshot(
         output += "]}";
     }
 
+    output += ",\"character_attachment\":" + world::serialize_character_attachment(snapshot.character_attachment);
     output += ",\"vehicle\":" + world::serialize_vehicle(snapshot.vehicle);
     output += ",\"vehicle_state\":";
     if(!snapshot.vehicle_state)output+="null";

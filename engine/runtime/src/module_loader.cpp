@@ -172,6 +172,66 @@ module::Result host_read_dependency(void* value, module::EntityId id, module::De
     *output = result; return module::Result::success;
 }
 
+module::Result host_read_character_attachment(void* value,module::EntityId id,module::CharacterAttachmentSnapshot* output) noexcept {
+    const auto* bridge=current_bridge(value);if(!bridge || !bridge->context)return module::Result::wrong_phase;
+    if(!output || output->size<sizeof(module::CharacterAttachmentSnapshot) || persistent_id(id).is_nil())return module::Result::invalid_argument;
+    const auto& world=bridge->context->world;const auto e=world.find(persistent_id(id));if(!e)return module::Result::not_found;
+    if(!world.character(*e))return module::Result::no_character;
+    module::CharacterAttachmentSnapshot result;
+    if(const auto a=world.character_attachment(*e)){result.attached=1;result.offset={a->offset.x,a->offset.y,a->offset.z};for(std::size_t i=0;i<16;++i)result.carrier.bytes[i]=a->carrier.bytes()[i];}
+    *output=result;return module::Result::success;
+}
+#if defined(VICE_RUNTIME_AUTHORED_PHYSICS)
+module::Result attachment_result(rigid_body::AttachmentControlResult result) noexcept {
+    using R=rigid_body::AttachmentControlResult;
+    switch(result){case R::applied:return module::Result::success;case R::not_found:return module::Result::not_found;
+    case R::invalid_argument:return module::Result::invalid_argument;case R::inactive_region:return module::Result::inactive_region;
+    case R::reset_required:return module::Result::reset_required;case R::out_of_range:return module::Result::out_of_range;
+    case R::already_attached:return module::Result::attached;case R::not_attached:return module::Result::no_attachment;case R::blocked:return module::Result::blocked;}
+    return module::Result::unavailable;
+}
+#endif
+module::Result host_attach_character(void* value,module::EntityId id,module::EntityId carrier,module::Vector3 offset,float distance) noexcept {
+    const auto* bridge=current_bridge(value);if(!bridge||!bridge->context||!bridge->writable)return module::Result::wrong_phase;
+    if(persistent_id(id).is_nil()||persistent_id(carrier).is_nil()||!std::isfinite(offset.x)||!std::isfinite(offset.y)||!std::isfinite(offset.z)||std::hypot(offset.x,offset.y,offset.z)>100||!std::isfinite(distance)||distance<0||distance>100)return module::Result::invalid_argument;
+#if defined(VICE_RUNTIME_AUTHORED_PHYSICS)
+    if(bridge->context->physics)return attachment_result(bridge->context->physics->attach_character(persistent_id(id),persistent_id(carrier),{offset.x,offset.y,offset.z},distance));
+#endif
+    return module::Result::unavailable;
+}
+module::Result host_detach_character(void* value,module::EntityId id,module::Vector3 offset,float speed,float drop) noexcept {
+    const auto* bridge=current_bridge(value);if(!bridge||!bridge->context||!bridge->writable)return module::Result::wrong_phase;
+    if(persistent_id(id).is_nil()||!std::isfinite(offset.x)||!std::isfinite(offset.y)||!std::isfinite(offset.z)||std::hypot(offset.x,offset.y,offset.z)>100||!std::isfinite(speed)||!std::isfinite(drop)||speed<0||speed>100||drop<0||drop>5)return module::Result::invalid_argument;
+#if defined(VICE_RUNTIME_AUTHORED_PHYSICS)
+    if(bridge->context->physics)return attachment_result(bridge->context->physics->detach_character(persistent_id(id),{offset.x,offset.y,offset.z},speed,drop));
+#endif
+    return module::Result::unavailable;
+}
+module::Result host_read_camera_pose(void* value,module::EntityId id,module::CameraPose* output) noexcept {
+    const auto* bridge=current_bridge(value);if(!bridge||!bridge->context)return module::Result::wrong_phase;
+    if(!output||output->size<sizeof(module::CameraPose)||persistent_id(id).is_nil())return module::Result::invalid_argument;
+    const auto& world=bridge->context->world;const auto e=world.find(persistent_id(id));if(!e)return module::Result::not_found;
+    if(!world.camera(*e))return module::Result::no_camera;
+    const auto spatial=world.spatial_state(*e);if(!spatial)return module::Result::invalid_argument;
+    const auto rotation=world.authored_transform(*e).value_or(world::AuthoredTransform{}).rotation;
+    module::CameraPose result;result.position[0]=spatial->global_position.x;result.position[1]=spatial->global_position.y;result.position[2]=spatial->global_position.z;
+    result.rotation[0]=rotation.x;result.rotation[1]=rotation.y;result.rotation[2]=rotation.z;result.rotation[3]=rotation.w;*output=result;return module::Result::success;
+}
+module::Result host_set_camera_pose(void* value,module::EntityId id,const module::CameraPose* pose) noexcept {
+    const auto* bridge=current_bridge(value);if(!bridge||!bridge->context||!bridge->writable)return module::Result::wrong_phase;
+    if(!pose||pose->size<sizeof(module::CameraPose)||persistent_id(id).is_nil())return module::Result::invalid_argument;
+    auto& world=bridge->context->world;const auto e=world.find(persistent_id(id));if(!e)return module::Result::not_found;
+    if(!world.camera(*e))return module::Result::no_camera;
+    const auto spatial=world.spatial_state(*e);if(!spatial||world.rigid_box(*e)||world.character(*e))return module::Result::invalid_argument;
+    auto transform=world.authored_transform(*e).value_or(world::AuthoredTransform{});
+    transform.rotation={pose->rotation[0],pose->rotation[1],pose->rotation[2],pose->rotation[3]};
+    const world::GlobalPosition position{pose->position[0],pose->position[1],pose->position[2]};
+    if(!world::finite(position)||!world::valid(transform))return module::Result::invalid_argument;
+    // Both records are validated before publishing; camera entities have no physical representation.
+    if(!world.set_authored_transform(*e,transform)||!world.set_spatial_state(*e,{position,spatial->region}))return module::Result::invalid_argument;
+    return module::Result::success;
+}
+
 module::Result host_read_vehicle(void* value,module::EntityId id,module::VehicleSnapshot* output) noexcept {
     const auto* bridge=current_bridge(value);
     if(!bridge || !bridge->context)return module::Result::wrong_phase;
@@ -266,6 +326,7 @@ module::Result host_control_character(void* value, module::EntityId id, module::
     case C::invalid_argument: return module::Result::invalid_argument;
     case C::inactive_region: return module::Result::inactive_region;
     case C::not_grounded: return module::Result::not_grounded;
+    case C::attached:return module::Result::attached;
     }
 #endif
     return module::Result::unavailable;
@@ -508,6 +569,9 @@ public:
         host_.read_causal_materials = &host_read_causal_materials;
         host_.read_vehicle=&host_read_vehicle;
         host_.control_vehicle=&host_control_vehicle;
+        host_.read_character_attachment=&host_read_character_attachment;
+        host_.attach_character=&host_attach_character;host_.detach_character=&host_detach_character;
+        host_.read_camera_pose=&host_read_camera_pose;host_.set_camera_pose=&host_set_camera_pose;
     }
 
     ~DynamicGameModule() override {

@@ -362,6 +362,10 @@ WorldSnapshotEncodeResult encode_world_snapshot(const WorldSnapshot& snapshot_da
             v.brake_force,v.lateral_stiffness,v.max_steer,v.tire_friction,v.throttle,v.steering,v.brake})append_f32(payload,x);
         append_f64(payload,v.distance);
     }
+    const auto attachments=std::count_if(snapshot.entities.begin(),snapshot.entities.end(),[](const auto& e){return e.character_attachment.has_value();});
+    append_u32(payload,static_cast<std::uint32_t>(attachments));
+    for(const auto& e:snapshot.entities)if(e.character_attachment){append_id(payload,e.persistent_id);const auto& a=*e.character_attachment;
+        append_id(payload,a.carrier);append_f32(payload,a.offset.x);append_f32(payload,a.offset.y);append_f32(payload,a.offset.z);}
     result.bytes.reserve(header_size + payload.size());
     result.bytes.insert(result.bytes.end(), world_magic.begin(), world_magic.end());
     append_u32(result.bytes, world_snapshot_file_format_version);
@@ -798,6 +802,15 @@ WorldSnapshotDecodeResult decode_world_snapshot(const std::span<const std::byte>
         }
         if(!vehicles.empty()){result.diagnostics="Vehicle entity is missing.";return result;}
         if(!validate_vehicles(snapshot,&result.diagnostics))return result;
+    }
+    if(version>=14U) {
+        std::uint32_t count=0;
+        if(!reader.read_u32(count) || count>snapshot.entities.size()){result.diagnostics="Invalid character attachment count.";return result;}
+        std::unordered_map<PersistentId,CharacterAttachment,PersistentIdHash> attachments;attachments.reserve(count);
+        for(std::uint32_t i=0;i<count;++i){PersistentId id;CharacterAttachment a;
+            if(!reader.read_id(id) || !reader.read_id(a.carrier) || !reader.read_f32(a.offset.x) || !reader.read_f32(a.offset.y) || !reader.read_f32(a.offset.z) || !valid(a) || !attachments.emplace(id,a).second){result.diagnostics="Invalid or duplicate character attachment.";return result;}}
+        if(count)for(auto& e:snapshot.entities){const auto found=attachments.find(e.persistent_id);if(found!=attachments.end()){e.character_attachment=found->second;attachments.erase(found);}}
+        if(!attachments.empty() || !validate_character_attachments(snapshot,&result.diagnostics)){result.diagnostics="Invalid character attachment references.";return result;}
     }
     if (!reader.finished()) {
         result.diagnostics = "World snapshot contains trailing data.";

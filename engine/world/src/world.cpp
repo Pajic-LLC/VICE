@@ -42,6 +42,7 @@ EntityId World::allocate(const PersistentId persistent_id) {
     slot.dependency.reset();
     slot.character.reset();
     slot.vehicle.reset();
+    slot.character_attachment.reset();
     slot.material={};
     slot.resource_references.clear();
     slot.alive = true;
@@ -53,6 +54,7 @@ EntityId World::allocate(const PersistentId persistent_id) {
 }
 
 bool World::destroy_entity(const EntityId entity) {
+    if (has_attached_characters(entity)) return false;
     if (alive(entity) && (distance_link_users_.contains(slots_[entity.index].persistent_id) ||
         dependency_provider_users_.contains(slots_[entity.index].persistent_id) || dependency_gate_users_.contains(slots_[entity.index].persistent_id))) return false;
     if (!alive(entity)) {
@@ -78,6 +80,7 @@ bool World::destroy_entity(const EntityId entity) {
     slot.dependency.reset();
     slot.character.reset();
     slot.vehicle.reset();
+    slot.character_attachment.reset();
     slot.material={};
     slot.resource_references.clear();
     slot.alive = false;
@@ -301,6 +304,7 @@ bool World::set_spatial_state(const EntityId entity, const SpatialState state) {
 }
 
 bool World::clear_spatial_state(const EntityId entity) {
+    if (has_attached_characters(entity)) return false;
     if (!alive(entity) || !slots_[entity.index].spatial_state.has_value()) {
         return false;
     }
@@ -342,6 +346,7 @@ bool World::set_local_position(const EntityId entity, const LocalPosition positi
 
 bool World::set_rigid_box(const EntityId entity, const RigidBox& box) {
     if (!alive(entity) || !slots_[entity.index].spatial_state || slots_[entity.index].character || !valid(box)) return false;
+    if (box.trigger && has_attached_characters(entity)) return false;
     if (slots_[entity.index].vehicle && (box.motion != RigidMotion::dynamic_body || box.trigger)) return false;
     const auto& previous = slots_[entity.index].rigid_box;
     if ((!previous || previous->motion != box.motion) &&
@@ -351,6 +356,7 @@ bool World::set_rigid_box(const EntityId entity, const RigidBox& box) {
 }
 
 bool World::clear_rigid_box(const EntityId entity) {
+    if (has_attached_characters(entity)) return false;
     if (!alive(entity) || !link_endpoint_change_allowed(entity, std::nullopt, std::nullopt)) return false;
     if (!clear_vehicle(entity)) return false;
     slots_[entity.index].rigid_box.reset();

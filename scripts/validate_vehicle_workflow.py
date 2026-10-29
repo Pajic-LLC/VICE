@@ -106,11 +106,11 @@ def validate(vice, native):
                 passed += ["native_suspension_loads_and_material_identities", "native_dry_and_slippery_traction", "native_zero_grip_prevents_propulsion"]
                 saved = root / "saved.vworldc"
                 command("runtime", "checkpoint", session, saved)
-                # Format 13 ends with a sparse vehicle table. Decode only that
+                # Format 14 follows the vehicle table with an empty attachment count. Decode only that
                 # documented tail here; the engine validates the full file on restart.
                 raw = saved.read_bytes()
-                tail = len(raw) - 4 - 3 * 84
-                if struct.unpack_from("<I", raw, 8)[0] != 13 or struct.unpack_from("<I", raw, tail)[0] != 3:
+                tail = len(raw) - 4 - 3 * 84 - 4
+                if struct.unpack_from("<I", raw, 8)[0] != 14 or struct.unpack_from("<I", raw, tail)[0] != 3:
                     raise RuntimeError("Checkpoint vehicle table missing")
                 saved_vehicles = {}
                 for i in range(3):
