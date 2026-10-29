@@ -164,6 +164,17 @@ std::optional<Operation> read_operation(const std::string& name, std::istream& i
             op.dependency = d;
         }
         return op;
+    } else if (name == "set_physical_rig" || name == "clear_physical_rig") {
+        SetPhysicalRigBinding op;
+        if (!read_id(input, op.entity))
+            return std::nullopt;
+        if (name == "set_physical_rig") {
+            world::PhysicalRigBinding b;
+            if (!world::read_physical_rig(input, b))
+                return std::nullopt;
+            op.binding = b;
+        }
+        return op;
     } else if (name == "set_swing_twist_joint" || name == "clear_swing_twist_joint") {
         SetSwingTwistJoint op;
         if (!read_id(input, op.entity))
@@ -309,6 +320,20 @@ void affected(FileEditResult& result, const Transaction& transaction, const worl
                 if (value.dependency) add(*value.dependency);
                 const auto old = std::find_if(before.entities.begin(), before.entities.end(), [&](const auto& e) { return e.persistent_id == value.entity; });
                 if (old != before.entities.end() && old->dependency) add(*old->dependency);
+            } else if constexpr (std::is_same_v<T, SetPhysicalRigBinding>) {
+                result.affected_entities.push_back(value.entity);
+                if (value.binding)
+                    result.affected_entities.push_back(value.binding->root);
+                for (const auto *snapshot : {&before, &after}) {
+                    for (const auto &r : snapshot->physical_rig_bindings)
+                        if (r.body == value.entity)
+                            result.affected_entities.push_back(r.binding.root);
+                    const auto body = std::find_if(
+                        snapshot->entities.begin(), snapshot->entities.end(),
+                        [&](const auto &e) { return e.persistent_id == value.entity; });
+                    if (body != snapshot->entities.end() && body->spatial_state)
+                        result.affected_regions.push_back(body->spatial_state->region);
+                }
             } else if constexpr (std::is_same_v<T, SetSwingTwistJoint>) {
                 result.affected_entities.push_back(value.entity);
                 const auto add = [&](const auto &joint) {

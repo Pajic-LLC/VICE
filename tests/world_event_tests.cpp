@@ -226,7 +226,7 @@ int main() {
     world::World legacy;
     require(legacy.begin_causal_recording(), "legacy marker");
     auto v18 = bytes(legacy);
-    v18.erase(v18.end() - 50, v18.end() - 26);
+    v18.erase(v18.end() - 54, v18.end() - 26);
     v18.erase(v18.end() - 35, v18.end() - 26);
     v18[8] = std::byte{18};
     rehash(v18);

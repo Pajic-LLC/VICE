@@ -136,6 +136,12 @@ public:
     bool set_animation(EntityId entity,const AnimationPlayer& player);
     bool clear_animation(EntityId entity);
     [[nodiscard]] std::optional<AnimationPlayer> animation(EntityId entity) const noexcept;
+    bool set_physical_rig_binding(EntityId, const PhysicalRigBinding &);
+    bool clear_physical_rig_binding(EntityId);
+    [[nodiscard]] std::optional<PhysicalRigBinding> physical_rig_binding(EntityId) const noexcept;
+    [[nodiscard]] std::vector<OwnedPhysicalRigBinding>
+    physical_rig_bindings(PersistentId root) const;
+    [[nodiscard]] bool has_physical_rig_bindings(PersistentId root) const noexcept;
     bool set_rig_part(EntityId entity,const RigPart& part);
     bool clear_rig_part(EntityId entity);
     [[nodiscard]] std::optional<RigPart> rig_part(EntityId entity) const noexcept;
@@ -329,6 +335,9 @@ private:
     std::uint64_t presentation_revision_=0;
     bool advance_presentation_revision() noexcept;
     bool has_rig_parts(EntityId entity) const noexcept;
+    bool physical_rig_region_allowed(EntityId, RegionId) const;
+    std::unordered_map<PersistentId, PhysicalRigBinding, PersistentIdHash> physical_rigs_;
+    std::unordered_map<PersistentId, std::vector<EntityId>, PersistentIdHash> physical_rig_users_;
     std::uint64_t attachment_revision_ = 0;
     bool advance_attachment_revision() noexcept;
     bool has_attached_characters(EntityId carrier) const noexcept;

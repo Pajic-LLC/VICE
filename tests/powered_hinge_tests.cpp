@@ -45,7 +45,7 @@ int main() {
     require(!world::decode_world_snapshot(truncated), "truncation rejected");
     world::World empty;
     auto legacy = world::encode_world_snapshot(empty.snapshot()).bytes;
-    legacy.erase(legacy.end() - 34, legacy.end() - 26);
+    legacy.erase(legacy.end() - 38, legacy.end() - 26);
     legacy[8] = std::byte{22};
     std::uint64_t hash = 14695981039346656037ULL;
     for (std::size_t i = 40; i < legacy.size(); ++i) {

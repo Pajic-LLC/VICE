@@ -254,6 +254,19 @@ ParseResult parse_source_manifest(const std::string_view source) {
                     if (entity.dependency || !read_dependency(values, d)) { fail("invalid or duplicate dependency record."); return result; }
                     entity.dependency = d; continue;
                 }
+                if (metadata == "physical_rig") {
+                    world::PhysicalRigBinding b;
+                    if (!world::read_physical_rig(values, b) ||
+                        std::any_of(parsed.physical_rig_bindings.begin(),
+                                    parsed.physical_rig_bindings.end(), [&](const auto &r) {
+                                        return r.body == entity.persistent_id;
+                                    })) {
+                        fail("Invalid or duplicate physical_rig binding.");
+                        return result;
+                    }
+                    parsed.physical_rig_bindings.push_back({entity.persistent_id, b});
+                    continue;
+                }
                 if (metadata == "swing_twist_joint") {
                     world::PoweredSwingTwist joint;
                     if (!world::read_swing_twist(values, joint) ||
@@ -497,7 +510,8 @@ ParseResult parse_source_manifest(const std::string_view source) {
     if(!world::validate_materials(parsed,&result.diagnostics))return result;
     std::sort(parsed.causal_history.events.begin(),parsed.causal_history.events.end(),[](const auto& a,const auto& b){return a.sequence<b.sequence;});
     if(!world::validate_causal_history(parsed.causal_history,&result.diagnostics))return result;
-    if (!world::validate_swing_twist_joints(parsed, &result.diagnostics) ||
+    if (!world::validate_physical_rigs(parsed, &result.diagnostics) ||
+        !world::validate_swing_twist_joints(parsed, &result.diagnostics) ||
         !world::validate_powered_hinges(parsed, &result.diagnostics) ||
         !world::validate_distance_links(parsed, &result.diagnostics) ||
         !world::validate_dependencies(parsed, &result.diagnostics) ||

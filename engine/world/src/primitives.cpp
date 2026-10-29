@@ -397,6 +397,10 @@ WorldSnapshot World::snapshot(ComponentPayloadSnapshot payloads) const {
         output.swing_twist_joints.push_back({owner, joint});
     std::sort(output.swing_twist_joints.begin(), output.swing_twist_joints.end(),
               [](const auto &a, const auto &b) { return a.owner.bytes() < b.owner.bytes(); });
+    for (const auto &[body, binding] : physical_rigs_)
+        output.physical_rig_bindings.push_back({body, binding});
+    std::sort(output.physical_rig_bindings.begin(), output.physical_rig_bindings.end(),
+              [](const auto &a, const auto &b) { return a.body.bytes() < b.body.bytes(); });
     output.clock=clock_;
     if (payloads == ComponentPayloadSnapshot::include) {
         for (const auto &[id, r] : rules_) { (void)id; output.rules.push_back(r); }
@@ -419,7 +423,8 @@ WorldSnapshot World::snapshot(ComponentPayloadSnapshot payloads) const {
 
 bool World::restore(const WorldSnapshot& snapshot_data) {
     if(!snapshot_data.component_payloads_included||!valid(snapshot_data.clock))return false;
-    if (!validate_presentation(snapshot_data))return false;
+    if (!validate_physical_rigs(snapshot_data) || !validate_presentation(snapshot_data))
+        return false;
     if (!validate_character_attachments(snapshot_data)) return false;
     if (!validate_vehicles(snapshot_data)) return false;
     if (!validate_swing_twist_joints(snapshot_data) || !validate_powered_hinges(snapshot_data) ||
@@ -500,6 +505,9 @@ bool World::restore(const WorldSnapshot& snapshot_data) {
         if(e.animation && !restored.set_animation(owner,*e.animation))return false;
         if(e.audio_emitter && !restored.set_audio_emitter(owner,*e.audio_emitter))return false;
     }
+    for (const auto &r : snapshot_data.physical_rig_bindings)
+        if (!restored.set_physical_rig_binding(*restored.find(r.body), r.binding))
+            return false;
     for(const auto& e:snapshot_data.entities)if(e.rig_part && !restored.set_rig_part(*restored.find(e.persistent_id),*e.rig_part))return false;
     for (const auto& e:snapshot_data.entities) if(e.character_attachment && !restored.set_character_attachment(*restored.find(e.persistent_id),*e.character_attachment))return false;
 

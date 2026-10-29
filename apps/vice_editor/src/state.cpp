@@ -148,6 +148,8 @@ namespace {
         }
     }
 
+    if (world.physical_rig_binding(*entity))
+        return false;
     if (world.swing_twist_joint(*entity))
         return false;
     if (!world.destroy_entity(*entity)) {
@@ -561,6 +563,9 @@ std::optional<InspectorData> project_inspector(
     inspector.material = world.material_surface(*entity);
     inspector.rigid_box = world.rigid_box(*entity);
     inspector.distance_link = world.distance_link(*entity);
+    inspector.physical_rig = world.physical_rig_binding(*entity);
+    inspector.physical_rig_source_count =
+        world.physical_rig_bindings(*world.persistent_id(*entity)).size();
     inspector.powered_hinge = world.powered_hinge(*entity);
     inspector.swing_twist_joint = world.swing_twist_joint(*entity);
     inspector.dependency = world.dependency(*entity);

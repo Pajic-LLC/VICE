@@ -230,6 +230,8 @@ sample_runtime_debug_entity(const world::World &world, const world::PersistentId
     if(physics)if(const auto body=physics->body(persistent_id))result.native_mass=body->mass;
 #endif
     result.distance_link = entity->distance_link;
+    result.physical_rig = world.physical_rig_binding(*handle);
+    result.physical_rig_sources = world.physical_rig_bindings(persistent_id);
     result.powered_hinge = entity->powered_hinge;
     result.swing_twist_joint = world.swing_twist_joint(*handle);
 #if defined(VICE_RUNTIME_AUTHORED_PHYSICS)
@@ -443,6 +445,17 @@ std::string serialize_runtime_debug_entity_snapshot(
             ",\"max_torque\":" + std::to_string(snapshot.powered_hinge->drive.max_torque) + "}";
     } else
         output += "null";
+    output += ",\"physical_rig\":" + world::serialize_physical_rig(snapshot.physical_rig);
+    output += ",\"physical_rig_sources\":[";
+    for (std::size_t i = 0; i < snapshot.physical_rig_sources.size(); ++i) {
+        if (i)
+            output += ",";
+        const auto &r = snapshot.physical_rig_sources[i];
+        output += "{\"body\":";
+        append_json_string(output, r.body.to_string());
+        output += ",\"binding\":" + world::serialize_physical_rig(r.binding) + "}";
+    }
+    output += "]";
     output += ",\"powered_hinge_state\":" + snapshot.powered_hinge_state;
     output += ",\"swing_twist_joint\":";
     if (snapshot.swing_twist_joint) {

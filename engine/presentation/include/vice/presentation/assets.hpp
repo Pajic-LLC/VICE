@@ -70,6 +70,10 @@ struct Sound {
 [[nodiscard]] std::string serialize_rig(const Rig &rig);
 [[nodiscard]] bool sample_pose(const Rig &rig, std::uint32_t clip, double time,
                                std::vector<Pose> &pose);
+// Shared derived pose: physical nodes override animation; unbound descendants follow.
+// Output remains unchanged on failure.
+[[nodiscard]] bool sample_world_pose(const world::World &, world::EntityId root, const Rig &,
+                                     std::uint32_t clip, double time, std::vector<Pose> &);
 [[nodiscard]] std::optional<Sound> read_pcm(const std::filesystem::path &path,
                                             std::string *diagnostics = nullptr);
 [[nodiscard]] bool write_pcm(const std::filesystem::path &path, const Sound &sound,
