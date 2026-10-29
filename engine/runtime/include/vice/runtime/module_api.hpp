@@ -136,8 +136,34 @@ struct Frame {
 struct EntityId { std::uint8_t bytes[16]{}; };
 struct Vector3 { float x = 0, y = 0, z = 0; };
 enum class Result : std::uint32_t {
-    success, unavailable, invalid_argument, not_found, no_body,
-    static_body, inactive_region, reset_required, wrong_phase, no_link, no_dependency, no_character, not_grounded, history_mismatch, event_pruned, sequence_exhausted, no_vehicle, attached, blocked, out_of_range, no_attachment, no_camera, no_animation, no_audio, no_component, schema_conflict, no_relation,
+    success,
+    unavailable,
+    invalid_argument,
+    not_found,
+    no_body,
+    static_body,
+    inactive_region,
+    reset_required,
+    wrong_phase,
+    no_link,
+    no_dependency,
+    no_character,
+    not_grounded,
+    history_mismatch,
+    event_pruned,
+    sequence_exhausted,
+    no_vehicle,
+    attached,
+    blocked,
+    out_of_range,
+    no_attachment,
+    no_camera,
+    no_animation,
+    no_audio,
+    no_component,
+    schema_conflict,
+    no_relation,
+    invalid_parent,
 };
 enum class Motion : std::uint32_t { static_body, kinematic_body, dynamic_body };
 struct EntitySnapshot {
@@ -196,8 +222,17 @@ struct CharacterSnapshot {
     EntityId supporting_entity{};
 };
 
-enum class CausalKind : std::uint32_t { capture_started, distance_link_changed, distance_link_removed, constraint_broken,
-    dependency_configured, dependency_removed, dependency_enabled, dependency_state_changed };
+enum class CausalKind : std::uint32_t {
+    capture_started,
+    distance_link_changed,
+    distance_link_removed,
+    constraint_broken,
+    dependency_configured,
+    dependency_removed,
+    dependency_enabled,
+    dependency_state_changed,
+    world_event
+};
 enum class CausalOrigin : std::uint32_t { runtime, authoring, physics, gameplay, derived };
 enum class CausalQuantity : std::uint32_t { none, linear_impulse };
 struct CausalHistorySnapshot {
@@ -314,6 +349,32 @@ struct RelationPage {
 };
 enum class RelationDirection : std::uint32_t { outgoing = 1, incoming = 2, both = 3 };
 struct WorldClockSnapshot {std::uint32_t size=sizeof(WorldClockSnapshot),rate_milli=1000,rate_remainder=0,paused=0,automatic=1;std::uint64_t ticks=0,ticks_per_second=1'000'000;double input_fraction=0;};
+struct EventRef {
+    EntityId history{}, id{};
+    std::uint64_t sequence = 0;
+};
+struct WorldEventRequest {
+    std::uint32_t size = sizeof(WorldEventRequest), retained = 1, parent_count = 0;
+    EntityId subject{}, target{}, object{};
+    std::uint64_t region = 0;
+    ComponentData payload;
+    EventRef parents[4]{};
+};
+struct WorldEventSnapshot {
+    std::uint32_t size = sizeof(WorldEventSnapshot), kind = 0, origin = 0, has_payload = 0,
+                  parent_count = 0, retained = 1;
+    EventRef ref;
+    std::uint64_t world_ticks = 0, region = 0;
+    EntityId subject{}, target{}, object{};
+    ComponentData payload;
+    EventRef parents[4]{};
+    std::uint32_t parent_retained[4]{};
+};
+struct SignalWindowSnapshot {
+    std::uint32_t size = sizeof(SignalWindowSnapshot), retained_count = 0, capacity = 256;
+    EntityId stream{};
+    std::uint64_t first_sequence = 1, next_sequence = 1, lifetime_ticks = 1'000'000;
+};
 struct HostApi {
     std::uint32_t abi_version = module::abi_version;
     std::uint32_t size = sizeof(HostApi);
@@ -364,6 +425,12 @@ struct HostApi {
     Result (*configure_world_clock)(void*,std::uint32_t paused,std::uint32_t rate,std::uint32_t automatic) noexcept=nullptr;
     Result (*step_world_clock)(void*,std::uint64_t ticks) noexcept=nullptr;
 
+    Result (*emit_world_event)(void *, const WorldEventRequest *, EventRef *) noexcept = nullptr;
+    Result (*read_world_event)(void *, EntityId history, std::uint64_t sequence,
+                               WorldEventSnapshot *) noexcept = nullptr;
+    Result (*read_signal_window)(void *, SignalWindowSnapshot *) noexcept = nullptr;
+    Result (*read_world_signal)(void *, EntityId stream, std::uint64_t sequence,
+                                WorldEventSnapshot *) noexcept = nullptr;
 };
 
 inline constexpr std::size_t host_api_v1_size = offsetof(HostApi, read_entity);
@@ -606,6 +673,38 @@ public:
     [[nodiscard]] Result read_world_clock(WorldClockSnapshot& output)const noexcept {if(!host_||host_->size<offsetof(HostApi,read_world_clock)+sizeof(host_->read_world_clock)||!host_->read_world_clock)return Result::unavailable;return host_->read_world_clock(host_->context,&output);}
     [[nodiscard]] Result configure_world_clock(bool paused,std::uint32_t rate_milli=1000,bool automatic=true)const noexcept {if(!host_||host_->size<offsetof(HostApi,configure_world_clock)+sizeof(host_->configure_world_clock)||!host_->configure_world_clock)return Result::unavailable;return host_->configure_world_clock(host_->context,paused?1U:0U,rate_milli,automatic?1U:0U);}
     [[nodiscard]] Result step_world_clock(std::uint64_t ticks)const noexcept {if(!host_||host_->size<offsetof(HostApi,step_world_clock)+sizeof(host_->step_world_clock)||!host_->step_world_clock)return Result::unavailable;return host_->step_world_clock(host_->context,ticks);}
+    [[nodiscard]] Result emit_world_event(const WorldEventRequest &request,
+                                          EventRef &output) const noexcept {
+        if (!host_ ||
+            host_->size < offsetof(HostApi, emit_world_event) + sizeof(host_->emit_world_event) ||
+            !host_->emit_world_event)
+            return Result::unavailable;
+        return host_->emit_world_event(host_->context, &request, &output);
+    }
+    [[nodiscard]] Result read_world_event(EntityId history, std::uint64_t sequence,
+                                          WorldEventSnapshot &output) const noexcept {
+        if (!host_ ||
+            host_->size < offsetof(HostApi, read_world_event) + sizeof(host_->read_world_event) ||
+            !host_->read_world_event)
+            return Result::unavailable;
+        return host_->read_world_event(host_->context, history, sequence, &output);
+    }
+    [[nodiscard]] Result read_signal_window(SignalWindowSnapshot &output) const noexcept {
+        if (!host_ ||
+            host_->size <
+                offsetof(HostApi, read_signal_window) + sizeof(host_->read_signal_window) ||
+            !host_->read_signal_window)
+            return Result::unavailable;
+        return host_->read_signal_window(host_->context, &output);
+    }
+    [[nodiscard]] Result read_world_signal(EntityId stream, std::uint64_t sequence,
+                                           WorldEventSnapshot &output) const noexcept {
+        if (!host_ ||
+            host_->size < offsetof(HostApi, read_world_signal) + sizeof(host_->read_world_signal) ||
+            !host_->read_world_signal)
+            return Result::unavailable;
+        return host_->read_world_signal(host_->context, stream, sequence, &output);
+    }
     void log(const LogLevel level, const char* const message) const noexcept {
         if (host_ != nullptr && host_->log != nullptr) {
             host_->log(host_->context, level, message != nullptr ? message : "");

@@ -719,6 +719,136 @@ module::Result host_read_causal_event(void* value,module::EntityId history,std::
     result.id=module_id(e->id);result.parent_id=module_id(e->parent_id);result.capture_id=module_id(e->capture_id);result.subject=module_id(e->subject);
     result.first=module_id(e->first);result.second=module_id(e->second);result.root_entity=module_id(e->root_entity);*output=result;return module::Result::success;
 }
+module::EventRef encode_event_ref(const world::EventRef &ref) {
+    return {module_id(ref.history), module_id(ref.id), ref.sequence};
+}
+module::WorldEventSnapshot encode_world_event(const world::World &w, const world::CausalEvent &e,
+                                              world::PersistentId stream, bool retained) {
+    module::WorldEventSnapshot out;
+    out.kind = static_cast<std::uint32_t>(e.kind);
+    out.origin = static_cast<std::uint32_t>(e.origin);
+    out.retained = retained ? 1U : 0U;
+    out.ref = encode_event_ref({stream, e.id, e.sequence});
+    out.world_ticks = e.world_ticks;
+    out.region = e.region.value;
+    out.subject = module_id(e.subject);
+    out.target = module_id(e.first);
+    out.object = module_id(e.second);
+    if (e.data) {
+        out.has_payload = 1;
+        out.payload = encode_component_data(e.data->payload);
+        out.parent_count = static_cast<std::uint32_t>(e.data->parents.size());
+        for (std::size_t i = 0; i < e.data->parents.size(); ++i)
+            out.parents[i] = encode_event_ref(e.data->parents[i]);
+    } else if (e.parent_sequence) {
+        out.parent_count = 1;
+        out.parents[0] = encode_event_ref({stream, e.parent_id, e.parent_sequence});
+    }
+    for (std::uint32_t i = 0; i < out.parent_count; ++i) {
+        const auto parent = w.causal_event(out.parents[i].sequence);
+        out.parent_retained[i] = parent && parent->id == persistent_id(out.parents[i].id) ? 1U : 0U;
+    }
+    return out;
+}
+module::Result host_emit_world_event(void *value, const module::WorldEventRequest *input,
+                                     module::EventRef *output) noexcept {
+    const auto *b = current_bridge(value);
+    if (!b || !b->context || !b->writable)
+        return module::Result::wrong_phase;
+    if (!input || input->size < sizeof(*input) || !output || input->retained > 1 ||
+        input->parent_count > world::world_event_parent_capacity)
+        return module::Result::invalid_argument;
+    const auto payload = decode_component_data(&input->payload);
+    if (!payload)
+        return module::Result::invalid_argument;
+    world::WorldEventRequest request;
+    request.subject = persistent_id(input->subject);
+    request.target = persistent_id(input->target);
+    request.object = persistent_id(input->object);
+    request.region = {input->region};
+    request.retained = input->retained != 0;
+    request.data.payload = *payload;
+    for (std::uint32_t i = 0; i < input->parent_count; ++i) {
+        const auto &p = input->parents[i];
+        request.data.parents.push_back({persistent_id(p.history), persistent_id(p.id), p.sequence});
+    }
+    const auto result = b->context->world.emit_world_event(std::move(request));
+    using R = world::WorldEventResult;
+    switch (result.result) {
+    case R::success:
+        *output = encode_event_ref(result.ref);
+        return module::Result::success;
+    case R::missing_entity:
+    case R::missing_schema:
+        return module::Result::not_found;
+    case R::schema_conflict:
+        return module::Result::schema_conflict;
+    case R::history_mismatch:
+        return module::Result::history_mismatch;
+    case R::parent_pruned:
+        return module::Result::event_pruned;
+    case R::invalid_parent:
+        return module::Result::invalid_parent;
+    case R::sequence_exhausted:
+        return module::Result::sequence_exhausted;
+    case R::invalid_argument:
+        return module::Result::invalid_argument;
+    }
+    return module::Result::invalid_argument;
+}
+module::Result host_read_world_event(void *value, module::EntityId history, std::uint64_t sequence,
+                                     module::WorldEventSnapshot *output) noexcept {
+    const auto *b = current_bridge(value);
+    if (!b || !b->context)
+        return module::Result::wrong_phase;
+    if (!output || output->size < sizeof(*output) || !sequence || persistent_id(history).is_nil())
+        return module::Result::invalid_argument;
+    const auto &w = b->context->world;
+    const auto info = w.causal_info();
+    if (info.id != persistent_id(history))
+        return module::Result::history_mismatch;
+    if (sequence < info.first_sequence)
+        return module::Result::event_pruned;
+    const auto e = w.causal_event(sequence);
+    if (!e)
+        return module::Result::not_found;
+    *output = encode_world_event(w, *e, info.id, true);
+    return module::Result::success;
+}
+module::Result host_read_signal_window(void *value, module::SignalWindowSnapshot *output) noexcept {
+    const auto *b = current_bridge(value);
+    if (!b || !b->context)
+        return module::Result::wrong_phase;
+    if (!output || output->size < sizeof(*output))
+        return module::Result::invalid_argument;
+    const auto info = b->context->world.signal_info();
+    module::SignalWindowSnapshot out;
+    out.stream = module_id(info.stream);
+    out.first_sequence = info.first_sequence;
+    out.next_sequence = info.next_sequence;
+    out.retained_count = static_cast<std::uint32_t>(info.retained_count);
+    *output = out;
+    return module::Result::success;
+}
+module::Result host_read_world_signal(void *value, module::EntityId stream, std::uint64_t sequence,
+                                      module::WorldEventSnapshot *output) noexcept {
+    const auto *b = current_bridge(value);
+    if (!b || !b->context)
+        return module::Result::wrong_phase;
+    if (!output || output->size < sizeof(*output) || !sequence || persistent_id(stream).is_nil())
+        return module::Result::invalid_argument;
+    const auto &w = b->context->world;
+    const auto info = w.signal_info();
+    if (info.stream != persistent_id(stream))
+        return module::Result::history_mismatch;
+    if (sequence < info.first_sequence)
+        return module::Result::event_pruned;
+    const auto e = w.world_signal(sequence);
+    if (!e)
+        return module::Result::not_found;
+    *output = encode_world_event(w, *e, info.stream, false);
+    return module::Result::success;
+}
 module::Result host_read_material(void* value,module::EntityId id,module::MaterialSnapshot* output) noexcept {
     const auto* b=current_bridge(value);if(!b || !b->context)return module::Result::wrong_phase;
     if(!output || output->size<sizeof(module::MaterialSnapshot) || persistent_id(id).is_nil())return module::Result::invalid_argument;
@@ -935,6 +1065,10 @@ public:
         host_.read_character_attachment=&host_read_character_attachment;
         host_.attach_character=&host_attach_character;host_.detach_character=&host_detach_character;
         host_.read_camera_pose=&host_read_camera_pose;host_.set_camera_pose=&host_set_camera_pose;
+        host_.emit_world_event = &host_emit_world_event;
+        host_.read_world_event = &host_read_world_event;
+        host_.read_signal_window = &host_read_signal_window;
+        host_.read_world_signal = &host_read_world_signal;
         host_.read_world_clock=&host_read_world_clock;host_.configure_world_clock=&host_configure_world_clock;host_.step_world_clock=&host_step_world_clock;
         host_.read_relation=&host_read_relation;host_.read_relations=&host_read_relations;host_.add_relation=&host_add_relation;host_.remove_relation=&host_remove_relation;host_.read_relation_component=&host_read_relation_component;host_.set_relation_component=&host_set_relation_component;host_.remove_relation_component=&host_remove_relation_component;
         host_.register_component_schema=&host_register_component_schema;host_.read_component_schema=&host_read_component_schema;host_.read_component=&host_read_component;host_.set_component=&host_set_component;host_.remove_component=&host_remove_component;

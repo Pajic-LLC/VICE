@@ -36,6 +36,23 @@ void verify_chain(const world::World& w){
  require(b->subject==id(5) && c->subject==id(6) && b->parent_id==a->id && c->parent_id==b->id && b->parent_sequence==2 && c->parent_sequence==3,"physical-to-harness-to-lamp causal parentage");
  require(a->capture_id==b->capture_id && b->capture_id==c->capture_id && w.dependency_state(*w.find(id(7)))->available,"one capture and independent supply");
  require(world::validate_causal_history(w.causal_snapshot()),"generated history validates");
+ world::World derived;
+ require(derived.restore(w.snapshot()) &&
+             derived.register_component_type({{id(100)}, "PhysicsConsequence", 1, {}}),
+         "typed consequence schema");
+ world::WorldEventRequest consequence;
+ consequence.subject = id(2);
+ consequence.data.payload = {{id(100)}, 1, {}};
+ consequence.data.parents = {{w.causal_info().id, a->id, a->sequence},
+                             {w.causal_info().id, b->id, b->sequence}};
+ const auto fact = derived.emit_world_event(consequence);
+ require(static_cast<bool>(fact), "gameplay fact cites actual physical and propagated causes");
+ const auto evidence = derived.causal_context(id(2));
+ require(
+     std::any_of(evidence.events.begin(), evidence.events.end(),
+                 [](const auto &e) { return e.kind == world::CausalKind::constraint_broken; }) &&
+         derived.causal_event(fact.ref.sequence)->data->parents.size() == 2,
+     "multi-parent inspection traverses physics evidence");
 }
 void rehash(std::vector<std::byte>& bytes){std::uint64_t h=14695981039346656037ULL;for(std::size_t i=40;i<bytes.size();++i){h^=std::to_integer<std::uint8_t>(bytes[i]);h*=1099511628211ULL;}for(unsigned i=0;i<8;++i)bytes[32+i]=static_cast<std::byte>((h>>(8U*i))&255U);}
 }

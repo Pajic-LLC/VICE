@@ -147,10 +147,17 @@ public:
     bool step_world_clock(std::uint64_t ticks);
     bool advance_world_clock_ticks(std::uint64_t input_ticks);
     bool advance_world_clock(double seconds);
+    [[nodiscard]] WorldEventEmission emit_world_event(WorldEventRequest request,
+                                                      CausalOrigin origin = CausalOrigin::gameplay);
+    [[nodiscard]] SignalInfo signal_info() const noexcept;
+    [[nodiscard]] std::optional<CausalEvent> world_signal(std::uint64_t sequence) const;
+    [[nodiscard]] SignalContext signal_context(PersistentId subject = {},
+                                               std::size_t budget = causal_query_max_events) const;
+    void clear_world_signals();
     bool begin_causal_recording(bool new_segment = false);
     [[nodiscard]] CausalInfo causal_info() const noexcept;
     [[nodiscard]] CausalHistory causal_snapshot() const;
-    [[nodiscard]] std::optional<CausalEvent> causal_event(std::uint64_t sequence) const noexcept;
+    [[nodiscard]] std::optional<CausalEvent> causal_event(std::uint64_t sequence) const;
     [[nodiscard]] CausalContext causal_context(PersistentId subject = {}, std::size_t latest = 8, std::size_t budget = causal_query_max_events) const;
     bool publish_distance_link_break(EntityId entity,float impulse,std::uint64_t solver_step);
     bool set_dependency_enabled(EntityId entity,bool enabled);
@@ -222,6 +229,11 @@ private:
     std::uint64_t next_causal_sequence_ = 1;
     std::deque<CausalEvent> causal_events_;
     bool capturing_causality_ = false;
+    PersistentId signal_stream_{};
+    std::uint64_t next_signal_sequence_ = 1;
+    std::deque<CausalEvent> signals_;
+    void prune_world_signals();
+    void release_event_schema(const CausalEvent &event);
     void install_dependency(EntityId entity, const Dependency& dependency);
     void remove_dependency_references(EntityId entity);
     std::unordered_map<PersistentId, std::vector<EntityId>, PersistentIdHash> dependency_provider_users_;

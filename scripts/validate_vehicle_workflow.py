@@ -110,7 +110,7 @@ def validate(vice, native):
                 # documented tail here; the engine validates the full file on restart.
                 raw = saved.read_bytes()
                 tail = len(raw) - 4 - 3 * 84 - 42
-                if struct.unpack_from("<I", raw, 8)[0] != 18 or struct.unpack_from("<I", raw, tail)[0] != 3:
+                if struct.unpack_from("<I", raw, 8)[0] != 19 or struct.unpack_from("<I", raw, tail)[0] != 3:
                     raise RuntimeError("Checkpoint vehicle table missing")
                 saved_vehicles = {}
                 for i in range(3):

@@ -71,6 +71,54 @@ bool relation_session(Context &c, bool launch) {
         ++counter;
     return c.set_relation_component(connection(), data) == Result::success;
 }
+constexpr EntityId lifecycle_type() {
+    auto id = session_type();
+    id.bytes[14] = 6;
+    return id;
+}
+bool lifecycle_fact(Context &c) {
+    ComponentSchema schema;
+    schema.type = lifecycle_type();
+    schema.field_count = 2;
+    std::strcpy(schema.name, "LifecycleFact");
+    for (unsigned i = 0; i < 2; ++i) {
+        schema.fields[i].id = i + 1;
+        schema.fields[i].kind = ComponentKind::integer;
+    }
+    std::strcpy(schema.fields[0].name, "launch_count");
+    std::strcpy(schema.fields[1].name, "interaction_count");
+    if (c.register_component_schema(schema) != Result::success)
+        return false;
+    WorldEventRequest request;
+    request.subject = entity(3);
+    request.target = entity(2);
+    if (c.read_component(entity(2), session_type(), request.payload) != Result::success)
+        return false;
+    request.payload.type = lifecycle_type();
+    CausalHistorySnapshot history;
+    if (c.read_causal_history(history) != Result::success)
+        return false;
+    for (auto seq = history.next_sequence; seq > history.first_sequence;) {
+        WorldEventSnapshot prior;
+        --seq;
+        if (c.read_world_event(history.history_id, seq, prior) != Result::success)
+            return false;
+        if (prior.has_payload &&
+            std::memcmp(prior.payload.type.bytes, request.payload.type.bytes, 16) == 0) {
+            request.parent_count = 1;
+            request.parents[0] = prior.ref;
+            break;
+        }
+    }
+    EventRef fact;
+    if (c.emit_world_event(request, fact) != Result::success)
+        return false;
+    request.retained = 0;
+    request.parent_count = 1;
+    request.parents[0] = fact;
+    EventRef signal;
+    return c.emit_world_event(request, signal) == Result::success;
+}
 class InteractionGame final : public Game {
     bool automatic_ = false, up_ = false, down_ = false, left_ = false, right_ = false,
          brake_ = false;
@@ -146,7 +194,7 @@ class InteractionGame final : public Game {
         edge_schema.type = connection_type();
         std::strcpy(edge_schema.name, "ConnectionState");
         if (c.register_component_schema(edge_schema) != Result::success ||
-            !relation_session(c, true))
+            !relation_session(c, true) || !lifecycle_fact(c))
             return false;
         CharacterSnapshot character;
         CharacterAttachmentSnapshot a;

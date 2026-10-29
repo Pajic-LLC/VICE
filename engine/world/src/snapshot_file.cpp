@@ -349,6 +349,13 @@ WorldSnapshotEncodeResult encode_world_snapshot(const WorldSnapshot& snapshot_da
             append_u8(payload,e.value?1U:0U);append_u8(payload,static_cast<std::uint8_t>(e.reason));append_u8(payload,static_cast<std::uint8_t>(e.root_reason));
             append_u8(payload,static_cast<std::uint8_t>(e.quantity_kind));append_f32(payload,e.quantity);append_u64(payload,e.solver_step);append_u64(payload,e.region.value);
             append_id(payload,e.first_material);append_id(payload,e.second_material);
+            append_u64(payload, e.world_ticks);
+            append_u8(payload, e.data ? 1U : 0U);
+            if (e.data) {
+                std::ostringstream data;
+                write_world_event_data(data, *e.data);
+                append_string(payload, data.str());
+            }
         }
     }
     append_u32(payload,static_cast<std::uint32_t>(snapshot.materials.size()));
@@ -769,7 +776,28 @@ WorldSnapshotDecodeResult decode_world_snapshot(const std::span<const std::byte>
                 e.kind=static_cast<CausalKind>(kind);e.origin=static_cast<CausalOrigin>(origin);e.value=value!=0;e.reason=static_cast<DependencyReason>(reason);
                 e.root_reason=static_cast<DependencyReason>(root_reason);e.quantity_kind=static_cast<CausalQuantity>(quantity);
                 if(version>=12U && (!reader.read_id(e.first_material) || !reader.read_id(e.second_material))) {result.diagnostics="Truncated causal material identities.";return result;}
-                h.events.push_back(e);
+                if (version >= 19U) {
+                    std::uint8_t typed = 0;
+                    if (!reader.read_u64(e.world_ticks) || !reader.read_u8(typed) || typed > 1U) {
+                        result.diagnostics = "Truncated event timestamp/data flag.";
+                        return result;
+                    }
+                    if (typed) {
+                        std::string text;
+                        WorldEventData data;
+                        if (!reader.read_string(text, 8192)) {
+                            result.diagnostics = "Truncated typed event.";
+                            return result;
+                        }
+                        std::istringstream in{text};
+                        if (!read_world_event_data(in, data) || (in >> std::ws, !in.eof())) {
+                            result.diagnostics = "Invalid typed event data.";
+                            return result;
+                        }
+                        e.data = std::move(data);
+                    }
+                }
+                h.events.push_back(std::move(e));
             }
             if(!validate_causal_history(h,&result.diagnostics))return result;
         }

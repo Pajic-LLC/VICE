@@ -98,7 +98,20 @@ RuntimeDebugEntitySnapshot sample_runtime_debug_entity(
     }
 
     result.clock=world.world_clock();
+    result.signals = world.signal_context(persistent_id);
     result.causal_history=world.causal_context(persistent_id);
+    const auto add_schema = [&](world::ComponentTypeId type) {
+        if (std::none_of(result.component_schemas.begin(), result.component_schemas.end(),
+                         [&](const auto &s) { return s.id == type; }))
+            if (const auto schema = world.component_type(type))
+                result.component_schemas.push_back(*schema);
+    };
+    for (const auto &event : result.causal_history.events)
+        if (event.data)
+            add_schema(event.data->payload.type);
+    for (const auto &event : result.signals.events)
+        if (event.data)
+            add_schema(event.data->payload.type);
     const auto handle=world.find(persistent_id);
     if(!handle){result.state=RuntimeDebugEntityState::not_found;return result;}
     world::SnapshotEntity selected;
@@ -110,7 +123,9 @@ RuntimeDebugEntitySnapshot sample_runtime_debug_entity(
     selected.components=world.components(*handle);const auto refs=world.resource_references(*handle);selected.resource_references.assign(refs.begin(),refs.end());
     const auto* entity=&selected;
     result.state = RuntimeDebugEntityState::available;
-    result.components=entity->components;for(const auto& p:result.components)if(const auto schema=world.component_type(p.type))result.component_schemas.push_back(*schema);
+    result.components = entity->components;
+    for (const auto &p : result.components)
+        add_schema(p.type);
     result.spatial = entity->spatial_state;
     result.authored_transform = entity->authored_transform;
     result.animation=entity->animation;result.rig_part=entity->rig_part;result.audio_emitter=entity->audio_emitter;
@@ -201,6 +216,7 @@ std::string serialize_runtime_debug_entity_snapshot(
         append_json_string(output, snapshot.requested_id.to_string());
     }
 
+    output += ",\"world_signals\":" + world::serialize_signal_context(snapshot.signals);
     output += ",\"world_clock\":"+world::serialize_world_clock(snapshot.clock);
     output += ",\"causal_history\":"+world::serialize_causal_context(snapshot.causal_history);
     output += ",\"material\":"+world::serialize_material_surface(snapshot.material);

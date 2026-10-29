@@ -68,3 +68,11 @@ See [Rules of Reality](rules-of-reality.md), [ADR 0025](../adr/0025-persistent-c
 ## World time
 
 `read_world_clock` returns integer microsecond ticks, fixed-point `rate_milli` (1000 = 1x), pause/automatic flags and saved remainders. `configure_world_clock` changes policy without resetting time. `step_world_clock` adds an exact tick duration even while paused; overflow rejects the entire step. Automatic Runtime/Editor updates advance this World clock before game update. Clock pause controls time only, not every engine subsystem. Queries work in read-only callbacks; writes retain normal owner-thread/phase guards. Tick values are strings in development JSON. See ADR 0027; no calendar is imposed.
+
+## Typed World events (Phase 7, Slice C)
+
+`Context::emit_world_event(WorldEventRequest, EventRef&)` publishes validated structured facts. Set the request's payload UUID/version to a registered `ComponentSchema`, subject to a live entity, optional target/object/region, `retained` to 1 (history) or 0 (transient), and up to four retained parent references. All references use UUIDs, never process handles. `EventRef` contains lineage/stream UUID, event UUID and sequence. World sets time and gameplay origin. Failed publication leaves the output reference unchanged.
+
+`read_world_event(history, sequence, WorldEventSnapshot&)` reads the rich envelope of either typed facts or existing physical evidence. `has_payload` distinguishes them; `parents` and `parent_retained` explain all causes. `read_signal_window` returns stream/range/capacity/lifetime; `read_world_signal` reads that stream. Reads distinguish `history_mismatch`, `event_pruned` and `not_found`; writes additionally report `invalid_parent`, `schema_conflict` and `sequence_exhausted`. A missing schema or live entity returns `not_found`. No signal is restored or accepted as a causal parent. Read a snapshot's exact event UUID before reusing a sequence across a fork.
+
+These fixed-size value DTOs/functions append to HostApi under size checks; old CausalEventSnapshot layout is frozen. Writes remain start/event/update only on the lifecycle thread, reads work in frame/stop, and old hosts return `unavailable`. No callbacks, STL containers or backend types cross the ABI. See [World events](world-events.md) for retention and persistence semantics.

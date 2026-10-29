@@ -306,7 +306,8 @@ WorldSnapshot World::snapshot(ComponentPayloadSnapshot payloads) const {
     }
     for(const auto& [id,m]:materials_) { (void)id;output.materials.push_back(m); }
     std::sort(output.materials.begin(),output.materials.end(),[](const auto& a,const auto& b){return a.id.bytes()<b.id.bytes();});
-    output.causal_history=causal_snapshot();
+    if (payloads != ComponentPayloadSnapshot::render)
+        output.causal_history = causal_snapshot();
     output.clock=clock_;
     return output;
 }
@@ -415,7 +416,24 @@ bool World::restore(const WorldSnapshot& snapshot_data) {
     if(!restored.advance_material_revision() || !restored.advance_vehicle_revision() || !restored.advance_attachment_revision() || !restored.advance_presentation_revision())return false;
     restored.causal_id_=snapshot_data.causal_history.id;
     restored.next_causal_sequence_=snapshot_data.causal_history.next_sequence;
-    restored.causal_events_.assign(snapshot_data.causal_history.events.begin(),snapshot_data.causal_history.events.end());
+    for (auto event : snapshot_data.causal_history.events) {
+        if (event.world_ticks > restored.clock_.ticks)
+            return false;
+        if (event.data) {
+            const auto type = restored.component_types_.find(event.data->payload.type);
+            if (type == restored.component_types_.end() ||
+                !valid_component_payload(event.data->payload, type->second))
+                return false;
+            auto &fs = event.data->payload.fields;
+            std::sort(fs.begin(), fs.end(),
+                      [](const auto &a, const auto &b) { return a.id < b.id; });
+            for (auto &f : fs)
+                if (auto n = std::get_if<double>(&f.value); n && *n == 0)
+                    *n = 0;
+            ++restored.component_users_[event.data->payload.type];
+        }
+        restored.causal_events_.push_back(std::move(event));
+    }
     *this = std::move(restored);
     return true;
 }
