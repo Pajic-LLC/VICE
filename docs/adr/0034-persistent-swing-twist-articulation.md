@@ -6,6 +6,8 @@ Status: accepted
 
 Add `PoweredSwingTwist` as a generic World primitive alongside `PoweredHinge`. Two body-local COM reference frames define a circular swing cone and independent twist limits. Targets are unit quaternions in constraint space, whose X axis is twist and whose Y axis is the frame normal. Games can command position, velocity, both, or passive behavior independently for swing and twist. Frequency, damping and independent torque caps are explicit. The swing cap applies separately to the two swing motor axes.
 
+The adapter converts backend basis conventions explicitly: VICE normal is constraint Y, whereas Jolt plane is constraint Z. Actual World-body rotation tests verify that quaternion targets follow the documented frame.
+
 The solver remains a replaceable adapter. World owns UUIDs, frames, limits, target, velocities, caps and enablement; native constraints and warm-start impulses are disposable derived state. This enables shoulders, suspensions, robotic assemblies and other mechanisms without defining anatomy or genres.
 
 ## Invariants and rejected alternatives

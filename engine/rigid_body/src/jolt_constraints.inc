@@ -510,8 +510,12 @@ bool Domain::create_constraint(const SwingTwistConstraintDesc &d) {
     s.mPosition2 = jolt_position(d.local_frames[1].anchor);
     s.mTwistAxis1 = normalized_jolt_vector(d.local_frames[0].axis);
     s.mTwistAxis2 = normalized_jolt_vector(d.local_frames[1].axis);
-    s.mPlaneAxis1 = normalized_jolt_vector(d.local_frames[0].normal);
-    s.mPlaneAxis2 = normalized_jolt_vector(d.local_frames[1].normal);
+    // Jolt uses twist=X, plane=Z and derives Y=plane cross twist.
+    // VICE exposes twist=X and normal=Y; convert the basis at the adapter boundary.
+    s.mPlaneAxis1 =
+        normalized_jolt_vector(math::cross(d.local_frames[0].axis, d.local_frames[0].normal));
+    s.mPlaneAxis2 =
+        normalized_jolt_vector(math::cross(d.local_frames[1].axis, d.local_frames[1].normal));
     s.mNormalHalfConeAngle = d.swing_half_angle;
     s.mPlaneHalfConeAngle = d.swing_half_angle;
     s.mTwistMinAngle = d.twist_min;

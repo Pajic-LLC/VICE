@@ -183,7 +183,7 @@ struct SwingTwistMotorDesc {
 struct SwingTwistConstraintDesc {
     ConstraintId id{};
     simulation::ParticipantId first{}, second{};
-    std::array<HingeLocalFrame, 2> local_frames{}; // axis=twist X, normal=plane Y
+    std::array<HingeLocalFrame, 2> local_frames{}; // axis=twist X, normal=constraint Y
     float swing_half_angle = 1, twist_min = -1, twist_max = 1;
     SwingTwistMotorDesc motor{};
     ConstraintBreakThresholds break_thresholds{};
