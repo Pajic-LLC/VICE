@@ -21,6 +21,38 @@ namespace {
 
 } // namespace
 
+bool validate_powered_hinges(const WorldSnapshot &snapshot, std::string *d) {
+    if (d)
+        d->clear();
+    if (std::none_of(snapshot.entities.begin(), snapshot.entities.end(),
+                     [](const auto &e) { return e.powered_hinge.has_value(); }))
+        return true;
+    std::size_t count = 0;
+    std::unordered_map<PersistentId, const SnapshotEntity *, PersistentIdHash> entities;
+    for (const auto &e : snapshot.entities)
+        entities.emplace(e.persistent_id, &e);
+    for (const auto &e : snapshot.entities)
+        if (e.powered_hinge) {
+            const auto &h = *e.powered_hinge;
+            const auto a = entities.find(h.first), b = entities.find(h.second);
+            if (++count > 4096 || !valid(h) || h.first == e.persistent_id ||
+                h.second == e.persistent_id || a == entities.end() || b == entities.end() ||
+                !a->second->rigid_box || !b->second->rigid_box || !a->second->spatial_state ||
+                !b->second->spatial_state ||
+                a->second->spatial_state->region != b->second->spatial_state->region ||
+                (a->second->rigid_box->motion != RigidMotion::dynamic_body &&
+                 b->second->rigid_box->motion != RigidMotion::dynamic_body)) {
+                if (d)
+                    *d = "Invalid powered hinge endpoints, frames, drive or region: " +
+                         e.persistent_id.to_string();
+                return false;
+            }
+        }
+    if (d)
+        d->clear();
+    return true;
+}
+
 bool validate_distance_links(const WorldSnapshot& snapshot, std::string* diagnostics) {
     if (diagnostics) diagnostics->clear();
     if (!std::any_of(snapshot.entities.begin(), snapshot.entities.end(), [](const auto& e) { return e.distance_link.has_value(); })) return true;
@@ -246,6 +278,7 @@ WorldSnapshot World::snapshot(ComponentPayloadSnapshot payloads) const {
         if (!slot.alive) {
             continue;
         }
+        const auto joint = powered_hinges_.find(slot.persistent_id);
         SnapshotEntity entity{
             .persistent_id = slot.persistent_id,
             .spatial_state = slot.spatial_state,
@@ -255,14 +288,19 @@ WorldSnapshot World::snapshot(ComponentPayloadSnapshot payloads) const {
             .reflection_probe = slot.reflection_probe,
             .rigid_box = slot.rigid_box,
             .distance_link = slot.distance_link,
+            .powered_hinge =
+                joint == powered_hinges_.end() ? std::nullopt : std::optional{joint->second},
             .dependency = slot.dependency,
             .character = slot.character,
             .vehicle = slot.vehicle,
             .character_attachment = slot.character_attachment,
-            .animation=slot.animation,.rig_part=slot.rig_part,.audio_emitter=slot.audio_emitter,
+            .animation = slot.animation,
+            .rig_part = slot.rig_part,
+            .audio_emitter = slot.audio_emitter,
             .material = slot.material,
             .resource_references = slot.resource_references,
-            .components = output.component_payloads_included?slot.components:std::vector<ComponentPayload>{},
+            .components = output.component_payloads_included ? slot.components
+                                                             : std::vector<ComponentPayload>{},
         };
         std::sort(
             entity.resource_references.begin(),
@@ -343,7 +381,10 @@ bool World::restore(const WorldSnapshot& snapshot_data) {
     if (!validate_presentation(snapshot_data))return false;
     if (!validate_character_attachments(snapshot_data)) return false;
     if (!validate_vehicles(snapshot_data)) return false;
-    if (!validate_distance_links(snapshot_data) || !validate_dependencies(snapshot_data) || !validate_characters(snapshot_data) || !validate_causal_history(snapshot_data.causal_history)) return false;
+    if (!validate_powered_hinges(snapshot_data) || !validate_distance_links(snapshot_data) ||
+        !validate_dependencies(snapshot_data) || !validate_characters(snapshot_data) ||
+        !validate_causal_history(snapshot_data.causal_history))
+        return false;
     if(!validate_materials(snapshot_data)) return false;
     World restored;
     restored.clock_=snapshot_data.clock;if(restored.clock_.input_fraction==0)restored.clock_.input_fraction=0;
@@ -425,6 +466,11 @@ bool World::restore(const WorldSnapshot& snapshot_data) {
             !restored.set_distance_link(*restored.find(entity_record.persistent_id), *entity_record.distance_link)) return false;
     }
 
+    for (const auto &e : snapshot_data.entities)
+        if (e.powered_hinge &&
+            !restored.set_powered_hinge(*restored.find(e.persistent_id), *e.powered_hinge))
+            return false;
+
     for (const auto& e : snapshot_data.entities) {
         if (e.dependency) restored.install_dependency(*restored.find(e.persistent_id), *e.dependency);
     }
@@ -443,6 +489,8 @@ bool World::restore(const WorldSnapshot& snapshot_data) {
 
     if(!restored.advance_relation_revision())return false;
     if(!restored.advance_material_revision() || !restored.advance_vehicle_revision() || !restored.advance_attachment_revision() || !restored.advance_presentation_revision())return false;
+    if (!restored.advance_powered_hinge_revision())
+        return false;
     restored.causal_id_=snapshot_data.causal_history.id;
     restored.next_causal_sequence_=snapshot_data.causal_history.next_sequence;
     for (const auto &account : snapshot_data.quantity_accounts)

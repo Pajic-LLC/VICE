@@ -12,6 +12,7 @@
 #include <charconv>
 #include <cmath>
 #include <limits>
+#include <sstream>
 
 namespace vice::runtime {
 namespace {
@@ -164,7 +165,12 @@ sample_runtime_debug_entity(const world::World &world, const world::PersistentId
     selected.spatial_state=world.spatial_state(*handle);selected.authored_transform=world.authored_transform(*handle);
     selected.animation=world.animation(*handle);selected.rig_part=world.rig_part(*handle);selected.audio_emitter=world.audio_emitter(*handle);
     selected.character=world.character(*handle);selected.character_attachment=world.character_attachment(*handle);selected.vehicle=world.vehicle(*handle);
-    selected.rigid_box=world.rigid_box(*handle);selected.distance_link=world.distance_link(*handle);selected.camera=world.camera(*handle);selected.light=world.light(*handle);selected.reflection_probe=world.reflection_probe(*handle);
+    selected.rigid_box = world.rigid_box(*handle);
+    selected.distance_link = world.distance_link(*handle);
+    selected.powered_hinge = world.powered_hinge(*handle);
+    selected.camera = world.camera(*handle);
+    selected.light = world.light(*handle);
+    selected.reflection_probe = world.reflection_probe(*handle);
     selected.components=world.components(*handle);const auto refs=world.resource_references(*handle);selected.resource_references.assign(refs.begin(),refs.end());
     const auto* entity=&selected;
     result.state = RuntimeDebugEntityState::available;
@@ -224,6 +230,19 @@ sample_runtime_debug_entity(const world::World &world, const world::PersistentId
     if(physics)if(const auto body=physics->body(persistent_id))result.native_mass=body->mass;
 #endif
     result.distance_link = entity->distance_link;
+    result.powered_hinge = entity->powered_hinge;
+#if defined(VICE_RUNTIME_AUTHORED_PHYSICS)
+    if (physics)
+        if (const auto h = physics->powered_hinge(persistent_id)) {
+            result.powered_hinge_state =
+                "{\"angle\":" + std::to_string(h->angle) +
+                ",\"error\":" + std::to_string(h->error) +
+                ",\"motor_impulse\":" + std::to_string(h->motor_impulse) +
+                ",\"limit_impulse\":" + std::to_string(h->limit_impulse) +
+                ",\"linear_impulse\":" + std::to_string(h->linear_impulse) +
+                ",\"active\":" + (h->active ? "true" : "false") + "}";
+        }
+#endif
     result.dependency = world.dependency_state(*world.find(persistent_id));
     result.camera = entity->camera.has_value();
     result.light = entity->light.has_value();
@@ -390,6 +409,23 @@ std::string serialize_runtime_debug_entity_snapshot(
         output += ",\"trigger\":"; output += box.trigger ? "true" : "false";
         output += '}';
     }
+    output += ",\"powered_hinge\":";
+    if (snapshot.powered_hinge) {
+        std::ostringstream text;
+        text.precision(9);
+        world::write_powered_hinge(text, *snapshot.powered_hinge);
+        output += "{\"record\":";
+        append_json_string(output, text.str());
+        output += ",\"first\":";
+        append_json_string(output, snapshot.powered_hinge->first.to_string());
+        output += ",\"second\":";
+        append_json_string(output, snapshot.powered_hinge->second.to_string());
+        output +=
+            ",\"target_angle\":" + std::to_string(snapshot.powered_hinge->drive.target_angle) +
+            ",\"max_torque\":" + std::to_string(snapshot.powered_hinge->drive.max_torque) + "}";
+    } else
+        output += "null";
+    output += ",\"powered_hinge_state\":" + snapshot.powered_hinge_state;
     output += ",\"distance_link\":";
     if (!snapshot.distance_link) output += "null";
     else {

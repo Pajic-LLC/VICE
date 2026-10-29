@@ -107,3 +107,7 @@ The first retained event remains pending while repeated matching events incremen
 ## Weighted animation assets
 
 The existing animation read/control callbacks also operate on weighted rig v2 assets. DTO sizes and ABI 1 remain unchanged: games retain stable rig/root/part identities and control the clip clock; they do not access renderer palettes or generated mesh handles. [Weighted skeletal presentation](weighted-skeletal-presentation.md) documents import, diagnostics, fidelity and persistence. The skinning playground exercises these same callbacks through physical walk/drive and saved continuation.
+
+## Powered joint drives
+
+`read_powered_hinge` copies endpoint identities, limits, drive intent, enable/active flags and available solver angle/error/impulses. `control_powered_hinge` accepts a size-checked JointDrive and enabled flag. New callbacks append to HostApi ABI 1; existing DTOs and callbacks retain their layouts. Mutation is limited to writable owner-thread lifecycle phases and an active simulation region. Structural frames/endpoints are authored through World source/edit contracts, then reconstructed by reset. See [powered articulation](powered-articulation.md) and ADR 0033.

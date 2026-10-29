@@ -254,6 +254,15 @@ ParseResult parse_source_manifest(const std::string_view source) {
                     if (entity.dependency || !read_dependency(values, d)) { fail("invalid or duplicate dependency record."); return result; }
                     entity.dependency = d; continue;
                 }
+                if (metadata == "powered_hinge") {
+                    world::PoweredHinge h;
+                    if (entity.powered_hinge || !world::read_powered_hinge(values, h)) {
+                        fail("invalid or duplicate powered_hinge.");
+                        return result;
+                    }
+                    entity.powered_hinge = h;
+                    continue;
+                }
                 if (metadata == "distance_link") {
                     world::DistanceLink link;
                     if (entity.distance_link || !read_distance_link(values, link)) {
@@ -476,7 +485,14 @@ ParseResult parse_source_manifest(const std::string_view source) {
     if(!world::validate_materials(parsed,&result.diagnostics))return result;
     std::sort(parsed.causal_history.events.begin(),parsed.causal_history.events.end(),[](const auto& a,const auto& b){return a.sequence<b.sequence;});
     if(!world::validate_causal_history(parsed.causal_history,&result.diagnostics))return result;
-    if (!world::validate_distance_links(parsed, &result.diagnostics) || !world::validate_dependencies(parsed, &result.diagnostics) || !world::validate_character_attachments(parsed, &result.diagnostics) || !world::validate_presentation(parsed, &result.diagnostics) || !world::validate_vehicles(parsed, &result.diagnostics) || !world::validate_characters(parsed, &result.diagnostics)) return result;
+    if (!world::validate_powered_hinges(parsed, &result.diagnostics) ||
+        !world::validate_distance_links(parsed, &result.diagnostics) ||
+        !world::validate_dependencies(parsed, &result.diagnostics) ||
+        !world::validate_character_attachments(parsed, &result.diagnostics) ||
+        !world::validate_presentation(parsed, &result.diagnostics) ||
+        !world::validate_vehicles(parsed, &result.diagnostics) ||
+        !world::validate_characters(parsed, &result.diagnostics))
+        return result;
     world::World canonical;
     if (!canonical.restore(parsed)) {
         result.diagnostics = "World source violates World validation rules.";

@@ -513,9 +513,23 @@ public:
         JPH::RefConst<JPH::Shape> shape;
     };
 
+    static std::uint64_t contact_pair(JPH::BodyID a, JPH::BodyID b) {
+        auto x = a.GetIndexAndSequenceNumber(), y = b.GetIndexAndSequenceNumber();
+        if (x > y)
+            std::swap(x, y);
+        return (static_cast<std::uint64_t>(x) << 32U) | y;
+    }
+    // Mutated only outside Update; concurrent solver callbacks perform read-only lookups.
+    std::unordered_map<std::uint64_t, unsigned> excluded_contact_pairs_;
     class ContactListener final : public JPH::ContactListener {
     public:
         explicit ContactListener(Impl& owner) noexcept : owner_{owner} {}
+        JPH::ValidateResult OnContactValidate(const JPH::Body &a, const JPH::Body &b, JPH::RVec3Arg,
+                                              const JPH::CollideShapeResult &) override {
+            return owner_.excluded_contact_pairs_.contains(Impl::contact_pair(a.GetID(), b.GetID()))
+                       ? JPH::ValidateResult::RejectAllContactsForThisBodyPair
+                       : JPH::ValidateResult::AcceptAllContactsForThisBodyPair;
+        }
 
         void OnContactAdded(
             const JPH::Body& body1,

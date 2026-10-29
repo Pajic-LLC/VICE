@@ -782,6 +782,20 @@ void EditorUi::draw(
                 ImGui::Text("Entity  %s", short_id(inspector->persistent_id).c_str());
                 ImGui::Separator();
 
+                if (inspector->powered_hinge && ImGui::CollapsingHeader("Powered joint")) {
+                    const auto &h = *inspector->powered_hinge;
+                    ImGui::TextWrapped("%s -> %s", h.first.to_string().c_str(),
+                                       h.second.to_string().c_str());
+                    ImGui::Text("Target %.3f rad  Cap %.1f Nm",
+                                static_cast<double>(h.drive.target_angle),
+                                static_cast<double>(h.drive.max_torque));
+                    ImGui::Text("Drive %.1f Hz  Damping %.2f",
+                                static_cast<double>(h.drive.frequency_hz),
+                                static_cast<double>(h.drive.damping_ratio));
+                    ImGui::Text("Limits %.2f / %.2f rad  %s", static_cast<double>(h.min_angle),
+                                static_cast<double>(h.max_angle),
+                                h.enabled ? "enabled" : "disabled");
+                }
                 if(inspector->character_attachment && ImGui::CollapsingHeader("Character carrier")) {
                     const auto& a=*inspector->character_attachment;
                     ImGui::Text("Carrier %s",a.carrier.to_string().c_str());

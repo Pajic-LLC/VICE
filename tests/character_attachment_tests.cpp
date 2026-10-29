@@ -48,7 +48,7 @@ int main(){
     require(decoded.snapshot && restored.restore(*decoded.snapshot) && restored.character_attachment(*restored.find(id(3)))==w.character_attachment(actor),"binary carrier round trip");
     auto invalid=w.snapshot();invalid.entities[1].rigid_box.reset();require(!w.restore(invalid) && w.character_attachment(actor).has_value(),"invalid parent restore is atomic");
     auto old = world::encode_world_snapshot(load().snapshot()).bytes;
-    old.resize(old.size() - 58);
+    old.resize(old.size() - 62);
     old[8] = std::byte{13};
     rehash(old);
     const auto v13 = world::decode_world_snapshot(old);

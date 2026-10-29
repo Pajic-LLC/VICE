@@ -9,6 +9,11 @@
 
 namespace vice::rigid_body {
 
+struct PoweredHingeObservation {
+    world::PoweredHinge intent;
+    float angle = 0, error = 0, motor_impulse = 0, limit_impulse = 0, linear_impulse = 0;
+    bool active = false;
+};
 struct BodySupport {
     bool supported = false;
     world::PersistentId supporting_entity{};
@@ -64,6 +69,11 @@ public:
     [[nodiscard]] VehicleControlResult control_vehicle(world::PersistentId owner, float throttle, float steering, float brake);
     [[nodiscard]] std::optional<VehicleObservation> vehicle(world::PersistentId owner) const noexcept;
     [[nodiscard]] std::size_t vehicle_count() const noexcept;
+    [[nodiscard]] std::optional<PoweredHingeObservation>
+    powered_hinge(world::PersistentId owner) const noexcept;
+    [[nodiscard]] BodyControlResult control_powered_hinge(world::PersistentId owner,
+                                                          const world::JointDrive &drive,
+                                                          bool enabled = true);
     [[nodiscard]] std::optional<CharacterObservation> character(world::PersistentId owner) const noexcept;
     [[nodiscard]] CharacterControlResult control_character(world::PersistentId owner, math::Vec3 horizontal, float jump_speed = 0);
     [[nodiscard]] std::size_t character_count() const noexcept;

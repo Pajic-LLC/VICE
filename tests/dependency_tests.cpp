@@ -113,8 +113,8 @@ int main() {
     // Minimal old v8 file: remove only the new optional presence byte and rehash.
     world::World empty; require(empty.create_entity(id(1)).has_value(), "old fixture");
     auto bytes = world::encode_world_snapshot(empty.snapshot()).bytes;
-    require(bytes.size() == 140, "minimal current format");
-    bytes.resize(bytes.size() - 70U);
+    require(bytes.size() == 144, "minimal current format");
+    bytes.resize(bytes.size() - 74U);
     bytes.pop_back();
     bytes.erase(bytes.begin() + 64);
     bytes.erase(bytes.begin() + 63);

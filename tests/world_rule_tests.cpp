@@ -94,7 +94,13 @@ int main(){
         Fixture f;auto &w=f.w;auto r=rule();
         const auto before=bytes(w);tools::world_authoring::Transaction tx;tx.operations={tools::world_authoring::CreateRule{r},tools::world_authoring::RemoveRule{id(999)}};
         require(!tools::world_authoring::apply(w.snapshot(),tx)&&bytes(w)==before,"authoring transaction fails atomically");tx.operations.pop_back();const auto result=tools::world_authoring::apply(w.snapshot(),tx);require(result&&result.snapshot.rules.size()==1,"authoring creates rule");
-        Fixture legacy;auto old=bytes(legacy.w);old.erase(old.end()-30,old.end()-26);old[8]=std::byte{21};old[9]=old[10]=old[11]=std::byte{0};rehash(old);require(static_cast<bool>(decode_world_snapshot(old)),"v21 backward read");
+        Fixture legacy;
+        auto old = bytes(legacy.w);
+        old.erase(old.end() - 34, old.end() - 26);
+        old[8] = std::byte{21};
+        old[9] = old[10] = old[11] = std::byte{0};
+        rehash(old);
+        require(static_cast<bool>(decode_world_snapshot(old)), "v21 backward read");
         auto malformed=bytes(legacy.w);for(unsigned i=0;i<4;++i)malformed[malformed.size()-30+i]=std::byte{255};rehash(malformed);require(!decode_world_snapshot(malformed),"unsafe rule count rejected before allocation");
         auto unknown=rule();std::ostringstream text;write_world_rule(text,unknown);std::istringstream in(text.str());WorldRule read;require(read_world_rule(in,read),"stable operation wire format");std::ostringstream round;write_world_rule(round,read);require(round.str()==text.str(),"deterministic record");
     }

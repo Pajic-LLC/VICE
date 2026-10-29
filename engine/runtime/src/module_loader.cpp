@@ -505,6 +505,86 @@ module::Result host_read_dependency(void* value, module::EntityId id, module::De
     *output = result; return module::Result::success;
 }
 
+module::Result host_read_powered_hinge(void *value, module::EntityId id,
+                                       module::PoweredHingeSnapshot *out) noexcept {
+    const auto *b = current_bridge(value);
+    if (!b || !b->context)
+        return module::Result::wrong_phase;
+    if (!out || out->size < sizeof(*out) || persistent_id(id).is_nil())
+        return module::Result::invalid_argument;
+    const auto e = b->context->world.find(persistent_id(id));
+    if (!e)
+        return module::Result::not_found;
+    const auto h = b->context->world.powered_hinge(*e);
+    if (!h)
+        return module::Result::no_link;
+    module::PoweredHingeSnapshot result;
+    std::copy(h->first.bytes().begin(), h->first.bytes().end(), result.first.bytes);
+    std::copy(h->second.bytes().begin(), h->second.bytes().end(), result.second.bytes);
+    result.drive = {sizeof(module::JointDrive), static_cast<module::JointDriveMode>(h->drive.mode),
+                    h->drive.target_angle,      h->drive.target_velocity,
+                    h->drive.frequency_hz,      h->drive.damping_ratio,
+                    h->drive.max_torque};
+    result.enabled = h->enabled;
+    result.min_angle = h->min_angle;
+    result.max_angle = h->max_angle;
+#if defined(VICE_RUNTIME_AUTHORED_PHYSICS)
+    if (b->context->physics) {
+        const auto o = b->context->physics->powered_hinge(persistent_id(id));
+        if (!o)
+            return module::Result::reset_required;
+        result.simulated = 1;
+        result.active = o->active;
+        result.angle = o->angle;
+        result.error = o->error;
+        result.motor_impulse = o->motor_impulse;
+        result.limit_impulse = o->limit_impulse;
+        result.linear_impulse = o->linear_impulse;
+    }
+#endif
+    *out = result;
+    return module::Result::success;
+}
+module::Result host_control_powered_hinge(void *value, module::EntityId id,
+                                          const module::JointDrive *d,
+                                          std::uint32_t enabled) noexcept {
+    const auto *b = current_bridge(value);
+    if (!b || !b->context || !b->writable)
+        return module::Result::wrong_phase;
+    if (!d || d->size < sizeof(*d) || persistent_id(id).is_nil() || enabled > 1)
+        return module::Result::invalid_argument;
+    const world::JointDrive drive{static_cast<world::JointDriveMode>(d->mode),
+                                  d->target_angle,
+                                  d->target_velocity,
+                                  d->frequency_hz,
+                                  d->damping_ratio,
+                                  d->max_torque};
+    if (!world::valid(drive))
+        return module::Result::invalid_argument;
+    const auto e = b->context->world.find(persistent_id(id));
+    if (!e)
+        return module::Result::not_found;
+    if (!b->context->world.powered_hinge(*e))
+        return module::Result::no_link;
+#if defined(VICE_RUNTIME_AUTHORED_PHYSICS)
+    if (b->context->physics) {
+        using R = rigid_body::BodyControlResult;
+        switch (
+            b->context->physics->control_powered_hinge(persistent_id(id), drive, enabled != 0)) {
+        case R::applied:
+            return module::Result::success;
+        case R::invalid_argument:
+            return module::Result::invalid_argument;
+        case R::inactive_region:
+            return module::Result::inactive_region;
+        default:
+            return module::Result::reset_required;
+        }
+    }
+#endif
+    return module::Result::unavailable;
+}
+
 module::Result host_read_animation(void* value,module::EntityId id,module::AnimationSnapshot* output) noexcept {
     const auto* b=current_bridge(value);if(!b||!b->context)return module::Result::wrong_phase;
     if(!output||output->size<sizeof(module::AnimationSnapshot)||persistent_id(id).is_nil())return module::Result::invalid_argument;
@@ -1506,6 +1586,8 @@ public:
         host_.read_world_clock=&host_read_world_clock;host_.configure_world_clock=&host_configure_world_clock;host_.step_world_clock=&host_step_world_clock;
         host_.read_relation=&host_read_relation;host_.read_relations=&host_read_relations;host_.add_relation=&host_add_relation;host_.remove_relation=&host_remove_relation;host_.read_relation_component=&host_read_relation_component;host_.set_relation_component=&host_set_relation_component;host_.remove_relation_component=&host_remove_relation_component;
         host_.register_component_schema=&host_register_component_schema;host_.read_component_schema=&host_read_component_schema;host_.read_component=&host_read_component;host_.set_component=&host_set_component;host_.remove_component=&host_remove_component;
+        host_.read_powered_hinge = &host_read_powered_hinge;
+        host_.control_powered_hinge = &host_control_powered_hinge;
         host_.read_animation=&host_read_animation;host_.control_animation=&host_control_animation;
         host_.read_audio=&host_read_audio;host_.control_audio=&host_control_audio;host_.set_character_facing=&host_set_character_facing;
     }
