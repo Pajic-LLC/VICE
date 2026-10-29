@@ -147,7 +147,7 @@ std::optional<MeshPickResult> pick_render_mesh(
     float nearest = std::numeric_limits<float>::max();
     std::optional<MeshPickResult> result;
 
-    for (const auto& entity : world.snapshot(world::ComponentPayloadSnapshot::omit).entities) {
+    for (const auto& entity : world.snapshot(world::ComponentPayloadSnapshot::render).entities) {
         if (!entity.spatial_state.has_value()) continue;
         const auto resource = render_mesh_resource(entity);
         if (!resource.has_value()) continue;

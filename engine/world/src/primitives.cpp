@@ -274,6 +274,7 @@ WorldSnapshot World::snapshot(ComponentPayloadSnapshot payloads) const {
         }
     );
 
+    if(payloads!=ComponentPayloadSnapshot::render){
     output.relations.reserve(relations_.size());
     for (const auto& relation : relations_) {
         const auto subject_id = persistent_id(relation.subject);
@@ -285,6 +286,7 @@ WorldSnapshot World::snapshot(ComponentPayloadSnapshot payloads) const {
             .subject = *subject_id,
             .kind = relation.kind,
             .object = *object_id,
+            .components=output.component_payloads_included?relation_components({*subject_id,relation.kind,*object_id}):std::vector<ComponentPayload>{},
         });
     }
     std::sort(
@@ -301,6 +303,7 @@ WorldSnapshot World::snapshot(ComponentPayloadSnapshot payloads) const {
         }
     );
 
+    }
     for(const auto& [id,m]:materials_) { (void)id;output.materials.push_back(m); }
     std::sort(output.materials.begin(),output.materials.end(),[](const auto& a,const auto& b){return a.id.bytes()<b.id.bytes();});
     output.causal_history=causal_snapshot();
@@ -401,8 +404,12 @@ bool World::restore(const WorldSnapshot& snapshot_data) {
             !restored.add_relation(Relation{*subject, relation_record.kind, *object})) {
             return false;
         }
+        if(relation_record.components.size()>max_entity_components)return false;
+        std::unordered_set<ComponentTypeId,ComponentTypeIdHash> seen;
+        for(const auto& p:relation_record.components)if(!seen.insert(p.type).second||!restored.set_relation_component({relation_record.subject,relation_record.kind,relation_record.object},p))return false;
     }
 
+    if(!restored.advance_relation_revision())return false;
     if(!restored.advance_material_revision() || !restored.advance_vehicle_revision() || !restored.advance_attachment_revision() || !restored.advance_presentation_revision())return false;
     restored.causal_id_=snapshot_data.causal_history.id;
     restored.next_causal_sequence_=snapshot_data.causal_history.next_sequence;

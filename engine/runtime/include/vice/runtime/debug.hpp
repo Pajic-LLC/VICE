@@ -59,6 +59,7 @@ struct RuntimeDebugEntitySnapshot {
     std::optional<world::RigPart> rig_part;
     std::optional<world::AudioEmitter> audio_emitter;
     std::vector<world::ComponentPayload> components;
+    std::vector<world::RelationState> relation_states;
     std::vector<world::ComponentTypeDesc> component_schemas;
     std::string animation_state="null",audio_state="null";
     std::optional<world::Vehicle> vehicle;

@@ -17,19 +17,6 @@ namespace {
     return left.bytes() < right.bytes();
 }
 
-[[nodiscard]] bool relation_less(
-    const world::SnapshotRelation& left,
-    const world::SnapshotRelation& right
-) noexcept {
-    if (left.subject != right.subject) {
-        return persistent_id_less(left.subject, right.subject);
-    }
-    if (left.kind != right.kind) {
-        return persistent_id_less(left.kind, right.kind);
-    }
-    return persistent_id_less(left.object, right.object);
-}
-
 [[nodiscard]] std::string entry_label(const CommandHistory::Entry& entry) {
     return std::visit([](const auto& command) { return command.label; }, entry);
 }
@@ -136,6 +123,7 @@ namespace {
     }
 
     const auto snapshot = world.snapshot();
+    if(!world.relations_for(command.entity.persistent_id).empty())return false;
     for (const auto owned_resource : command.owned_resources) {
         if(std::any_of(snapshot.materials.begin(),snapshot.materials.end(),[&](const auto& m){return m.render_material==owned_resource;}))return false;
         for (const auto& current_entity : snapshot.entities) {
@@ -529,7 +517,7 @@ std::optional<world::PersistentId> create_mesh_instance(
 }
 
 std::vector<HierarchyEntry> build_hierarchy(const world::World& world) {
-    const auto snapshot = world.snapshot(world::ComponentPayloadSnapshot::omit);
+    const auto snapshot = world.snapshot(world::ComponentPayloadSnapshot::render);
     std::vector<HierarchyEntry> entries;
     entries.reserve(snapshot.entities.size());
     for (const auto& entity : snapshot.entities) {
@@ -579,13 +567,7 @@ std::optional<InspectorData> project_inspector(
         inspector.region = world.region(inspector.spatial_state->region);
     }
 
-    const auto snapshot = world.snapshot();
-    for (const auto& relation : snapshot.relations) {
-        if (relation.subject == persistent_id || relation.object == persistent_id) {
-            inspector.relations.push_back(relation);
-        }
-    }
-    std::sort(inspector.relations.begin(), inspector.relations.end(), relation_less);
+    for(const auto key:world.relations_for(persistent_id))inspector.relations.push_back({key.subject,key.kind,key.object,world.relation_components(key)});
     return inspector;
 }
 

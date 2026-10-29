@@ -48,10 +48,13 @@ struct SnapshotRelation {
     PersistentId kind{};
     PersistentId object{};
 
+    std::vector<ComponentPayload> components;
+
     friend bool operator==(const SnapshotRelation&, const SnapshotRelation&) = default;
 };
 
-enum class ComponentPayloadSnapshot { include, omit };
+// render also omits the generic relation graph; all projections are non-persistent.
+enum class ComponentPayloadSnapshot { include, omit, render };
 
 struct WorldSnapshot {
     // Read projections are intentionally incomplete and must never be restored or saved.

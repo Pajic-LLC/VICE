@@ -28,6 +28,10 @@ python3 scripts/validate_component_workflow.py --vice build/tools/vice_cli/vice 
 
 The CTest stress fixture stores 10000 owners and emits measured sizes/timings when run directly. See ADR 0025 for bounds, complexity, persistence and alternatives.
 
+## Slice B: stateful relationships
+
+[Stateful relationships](stateful-relationships.md) and [ADR 0026](../adr/0026-stateful-world-relationships.md) extend the same schema/value contracts to persistent directed edges, with indexed endpoint queries, bounded SDK cursor pages, persistence and tooling. Slice C is next.
+
 ## Subsequent independently verified slices
 
 A is the payload foundation; it is not the whole Phase 7 logic framework. Continue in this order:

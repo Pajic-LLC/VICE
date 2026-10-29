@@ -380,6 +380,8 @@ WorldSnapshotEncodeResult encode_world_snapshot(const WorldSnapshot& snapshot_da
     std::size_t component_count=0;for(const auto& e:snapshot.entities)component_count+=e.components.size();
     append_u32(payload,static_cast<std::uint32_t>(component_count));
     for(const auto& e:snapshot.entities)for(const auto& c:e.components){append_id(payload,e.persistent_id);std::ostringstream data;data.imbue(std::locale::classic());write_component_payload(data,c);append_string(payload,data.str());}
+    std::size_t relation_payloads=0;for(const auto& edge:snapshot.relations)relation_payloads+=edge.components.size();append_u32(payload,static_cast<std::uint32_t>(relation_payloads));
+    for(const auto& edge:snapshot.relations)for(const auto& c:edge.components){append_id(payload,edge.subject);append_id(payload,edge.kind);append_id(payload,edge.object);std::ostringstream data;write_component_payload(data,c);append_string(payload,data.str());}
     result.bytes.reserve(header_size + payload.size());
     result.bytes.insert(result.bytes.end(), world_magic.begin(), world_magic.end());
     append_u32(result.bytes, world_snapshot_file_format_version);
@@ -844,6 +846,15 @@ WorldSnapshotDecodeResult decode_world_snapshot(const std::span<const std::byte>
             const auto found=owners.find(owner);std::istringstream input{data};
             if(found==owners.end()||!read_component_payload(input,p)||(input>>std::ws,!input.eof())){result.diagnostics="Invalid component payload/owner.";return result;}
             auto& components=snapshot.entities[found->second].components;if(components.size()>=max_entity_components){result.diagnostics="Entity component capacity exceeded.";return result;}components.push_back(std::move(p));
+        }
+    }
+    if(version>=17U){
+        std::uint32_t count=0;if(!reader.read_u32(count)||count>max_world_relation_payloads||count>snapshot.relations.size()*max_entity_components){result.diagnostics="Invalid relation state count.";return result;}
+        std::unordered_map<RelationKey,std::size_t,RelationKeyHash> edges;for(std::size_t i=0;i<snapshot.relations.size();++i){const auto& edge=snapshot.relations[i];edges.emplace(RelationKey{edge.subject,edge.kind,edge.object},i);}
+        for(std::uint32_t i=0;i<count;++i){RelationKey key;std::string data;ComponentPayload p;
+            if(!reader.read_id(key.subject)||!reader.read_id(key.kind)||!reader.read_id(key.object)||!reader.read_string(data,8192)){result.diagnostics="Truncated relation state.";return result;}
+            const auto edge=edges.find(key);std::istringstream input{data};if(edge==edges.end()||!read_component_payload(input,p)||(input>>std::ws,!input.eof())){result.diagnostics="Invalid relation state/key.";return result;}
+            auto& state=snapshot.relations[edge->second].components;if(state.size()>=max_entity_components){result.diagnostics="Relation state capacity exceeded.";return result;}state.push_back(std::move(p));
         }
     }
     if (!reader.finished()) {

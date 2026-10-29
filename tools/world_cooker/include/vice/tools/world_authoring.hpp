@@ -1,6 +1,7 @@
 #pragma once
 
 #include <vice/world/snapshot.hpp>
+#include <vice/world/relation.hpp>
 
 #include <cstddef>
 #include <optional>
@@ -65,6 +66,8 @@ struct SetDependency {
     std::optional<world::Dependency> dependency;
 };
 
+struct SetRelationComponent {world::RelationKey relation;world::ComponentPayload payload;};
+struct RemoveRelationComponent {world::RelationKey relation;world::ComponentTypeId type;};
 struct AddRelation {
     world::SnapshotRelation relation{};
 };
@@ -97,6 +100,7 @@ using Operation = std::variant<
     RegisterComponentType,SetComponent,RemoveComponent,
     SetAnimation,SetRigPart,SetAudioEmitter,
     SetCharacterAttachment,
+    SetRelationComponent,RemoveRelationComponent,
     AddRelation,
     RemoveRelation,
     AddResourceReference,

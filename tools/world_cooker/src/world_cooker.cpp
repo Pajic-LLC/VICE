@@ -418,7 +418,9 @@ ParseResult parse_source_manifest(const std::string_view source) {
                 fail("relation contains an invalid persistent ID.");
                 return result;
             }
-            parsed.relations.push_back(world::SnapshotRelation{*subject, *kind, *object});
+            world::SnapshotRelation edge{*subject,*kind,*object,{}};std::string metadata;
+            while(values>>metadata){world::ComponentPayload p;if(metadata!="state"||edge.components.size()>=world::max_entity_components||!world::read_component_payload(values,p)){fail("invalid relation state.");return result;}edge.components.push_back(std::move(p));}
+            parsed.relations.push_back(std::move(edge));
         } else {
             fail("unknown keyword `" + keyword + "`.");
             return result;

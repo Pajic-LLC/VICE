@@ -1229,7 +1229,7 @@ const std::string& CookedMeshCatalog::diagnostics() const noexcept {
 
 std::vector<RenderMeshInstance> collect_render_mesh_instances(const world::World& world) {
     std::vector<RenderMeshInstance> instances;
-    const auto snapshot = world.snapshot(world::ComponentPayloadSnapshot::omit);
+    const auto snapshot = world.snapshot(world::ComponentPayloadSnapshot::render);
     for (const auto& entity : snapshot.entities) {
         if (!entity.spatial_state.has_value()) continue;
         std::optional<world::ResourceId> mesh;
@@ -1255,7 +1255,7 @@ std::vector<RenderMeshInstance> collect_render_mesh_instances(const world::World
 std::vector<RuntimeLight> collect_runtime_lights(const world::World& world) {
     std::vector<RuntimeLight> lights;
     lights.reserve(max_runtime_lights);
-    const auto snapshot = world.snapshot(world::ComponentPayloadSnapshot::omit);
+    const auto snapshot = world.snapshot(world::ComponentPayloadSnapshot::render);
     for (const auto& entity : snapshot.entities) {
         if (lights.size() >= max_runtime_lights) break;
         if (!entity.spatial_state.has_value() || !entity.light.has_value() || !entity.light->enabled) {
@@ -1398,7 +1398,7 @@ math::Vec3 evaluate_runtime_sky_radiance(
 
 std::vector<RuntimeReflectionProbe> collect_runtime_reflection_probes(const world::World& world) {
     std::vector<RuntimeReflectionProbe> probes;
-    const auto snapshot = world.snapshot(world::ComponentPayloadSnapshot::omit);
+    const auto snapshot = world.snapshot(world::ComponentPayloadSnapshot::render);
     for (const auto& entity : snapshot.entities) {
         if (!entity.spatial_state.has_value() || !entity.reflection_probe.has_value() ||
             !entity.reflection_probe->enabled) continue;

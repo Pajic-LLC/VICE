@@ -787,6 +787,9 @@ void EditorUi::draw(
                     ImGui::Text("Carrier %s",a.carrier.to_string().c_str());
                     ImGui::Text("Local foot %.2f %.2f %.2f",static_cast<double>(a.offset.x),static_cast<double>(a.offset.y),static_cast<double>(a.offset.z));
                 }
+                if(!inspector->relations.empty()&&ImGui::CollapsingHeader("Relationships")){
+                    for(const auto& edge:inspector->relations){ImGui::TextWrapped("%s --%s--> %s",edge.subject.to_string().c_str(),edge.kind.to_string().c_str(),edge.object.to_string().c_str());for(const auto& p:edge.components)if(const auto type=world.component_type(p.type))ImGui::Text("%s v%u",type->name.c_str(),p.version);ImGui::TextWrapped("%s",world::serialize_component_payloads(edge.components).c_str());}
+                }
                 if(!inspector->components.empty()&&ImGui::CollapsingHeader("Persistent components")) {
                     for(std::size_t i=0;i<inspector->components.size();++i){const auto& schema=inspector->component_schemas[i];ImGui::Text("%s v%u",schema.name.c_str(),schema.version);ImGui::TextWrapped("%s",world::serialize_component_payloads({inspector->components[i]}).c_str());}
                 }

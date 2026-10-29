@@ -57,7 +57,7 @@ int main(){
     require(request.request && tools::world_authoring::apply(w.snapshot(),request.request->transaction),"vehicle file edit parsed");
     auto legacy=world::encode_world_snapshot(load().snapshot()).bytes;
     // Strip sparse vehicle section to produce a valid v12 fixture, retaining chassis/materials.
-    legacy.resize(legacy.size()-100);legacy[8]=std::byte{12};rehash(legacy);
+    legacy.resize(legacy.size()-104);legacy[8]=std::byte{12};rehash(legacy);
     const auto v12=world::decode_world_snapshot(legacy);require(v12.snapshot && !v12.snapshot->entities.back().vehicle,"v12 has no invented vehicle");
     auto truncated=bytes.bytes;truncated.pop_back();rehash(truncated);require(!world::decode_world_snapshot(truncated),"truncated vehicle record rejected");
     auto clean=load();const auto victim=*clean.find(id(2));require(clean.clear_rigid_box(victim) && !clean.vehicle(victim),"removing chassis clears dependent vehicle");
