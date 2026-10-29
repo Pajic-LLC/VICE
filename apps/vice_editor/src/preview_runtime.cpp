@@ -438,6 +438,7 @@ void PreviewRuntime::pause() noexcept {
 bool PreviewRuntime::step_once() {
     if (!active()) return false;
     const auto delta = state_->authored ? state_->authored->coordinator().fixed_delta_seconds() : state_->simulation.fixed_delta_seconds();
+    if(!state_->world.advance_world_clock(delta))return false;
     if (state_->game_lifecycle) state_->game_lifecycle->update(delta);
     if (!state_->fixed_step()||!state_->presentation.advance(delta)) return false;
     state_->frame();
@@ -449,6 +450,7 @@ bool PreviewRuntime::update(const double delta_seconds) {
         !std::isfinite(delta_seconds) || delta_seconds <= 0.0) {
         return true;
     }
+    if(!state_->world.advance_world_clock(std::min(delta_seconds,0.25)))return false;
     if (state_->game_lifecycle) state_->game_lifecycle->update(delta_seconds);
     if (state_->authored) {
         if (!state_->authored->advance(delta_seconds)||!state_->presentation.advance(std::min(delta_seconds,0.25))) return false;

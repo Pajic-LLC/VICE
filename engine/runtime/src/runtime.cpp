@@ -407,6 +407,7 @@ int run_native_game(
         last_frame_seconds = delta_seconds;
 
         const auto update_begin = std::chrono::steady_clock::now();
+        if(!runtime_project.world->advance_world_clock(delta_seconds)){log(LogLevel::error,"World clock advance failed.");exit_code=1;break;}
         lifecycle.update(delta_seconds);
 #if defined(VICE_RUNTIME_AUTHORED_PHYSICS)
         if (physics) {

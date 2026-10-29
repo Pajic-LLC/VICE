@@ -307,17 +307,19 @@ WorldSnapshot World::snapshot(ComponentPayloadSnapshot payloads) const {
     for(const auto& [id,m]:materials_) { (void)id;output.materials.push_back(m); }
     std::sort(output.materials.begin(),output.materials.end(),[](const auto& a,const auto& b){return a.id.bytes()<b.id.bytes();});
     output.causal_history=causal_snapshot();
+    output.clock=clock_;
     return output;
 }
 
 bool World::restore(const WorldSnapshot& snapshot_data) {
-    if(!snapshot_data.component_payloads_included)return false;
+    if(!snapshot_data.component_payloads_included||!valid(snapshot_data.clock))return false;
     if (!validate_presentation(snapshot_data))return false;
     if (!validate_character_attachments(snapshot_data)) return false;
     if (!validate_vehicles(snapshot_data)) return false;
     if (!validate_distance_links(snapshot_data) || !validate_dependencies(snapshot_data) || !validate_characters(snapshot_data) || !validate_causal_history(snapshot_data.causal_history)) return false;
     if(!validate_materials(snapshot_data)) return false;
     World restored;
+    restored.clock_=snapshot_data.clock;if(restored.clock_.input_fraction==0)restored.clock_.input_fraction=0;
 
     for (const auto& type : snapshot_data.component_types) {
         if (!restored.register_component_type(type)) {

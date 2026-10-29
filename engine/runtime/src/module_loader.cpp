@@ -374,6 +374,9 @@ module::Result host_remove_relation_component(void *value, module::RelationKey k
     return w.remove_relation_component(k, {persistent_id(type)}) ? module::Result::success
                                                                  : module::Result::no_component;
 }
+module::Result host_read_world_clock(void* value,module::WorldClockSnapshot* output) noexcept {const auto* b=current_bridge(value);if(!b||!b->context)return module::Result::wrong_phase;if(!output||output->size<sizeof(*output))return module::Result::invalid_argument;const auto c=b->context->world.world_clock();module::WorldClockSnapshot result;result.ticks=c.ticks;result.ticks_per_second=world::world_ticks_per_second;result.rate_milli=c.rate_milli;result.rate_remainder=c.rate_remainder;result.input_fraction=c.input_fraction;result.paused=c.paused?1U:0U;result.automatic=c.automatic?1U:0U;*output=result;return module::Result::success;}
+module::Result host_configure_world_clock(void* value,std::uint32_t paused,std::uint32_t rate,std::uint32_t automatic) noexcept {const auto* b=current_bridge(value);if(!b||!b->context||!b->writable)return module::Result::wrong_phase;if(paused>1||automatic>1)return module::Result::invalid_argument;return b->context->world.configure_world_clock(paused!=0,rate,automatic!=0)?module::Result::success:module::Result::invalid_argument;}
+module::Result host_step_world_clock(void* value,std::uint64_t ticks) noexcept {const auto* b=current_bridge(value);if(!b||!b->context||!b->writable)return module::Result::wrong_phase;return b->context->world.step_world_clock(ticks)?module::Result::success:module::Result::invalid_argument;}
 module::Result host_read_entity(void* value, module::EntityId id, module::EntitySnapshot* output) noexcept {
     const auto* bridge = current_bridge(value);
     if (!bridge || !bridge->context) return module::Result::wrong_phase;
@@ -932,6 +935,7 @@ public:
         host_.read_character_attachment=&host_read_character_attachment;
         host_.attach_character=&host_attach_character;host_.detach_character=&host_detach_character;
         host_.read_camera_pose=&host_read_camera_pose;host_.set_camera_pose=&host_set_camera_pose;
+        host_.read_world_clock=&host_read_world_clock;host_.configure_world_clock=&host_configure_world_clock;host_.step_world_clock=&host_step_world_clock;
         host_.read_relation=&host_read_relation;host_.read_relations=&host_read_relations;host_.add_relation=&host_add_relation;host_.remove_relation=&host_remove_relation;host_.read_relation_component=&host_read_relation_component;host_.set_relation_component=&host_set_relation_component;host_.remove_relation_component=&host_remove_relation_component;
         host_.register_component_schema=&host_register_component_schema;host_.read_component_schema=&host_read_component_schema;host_.read_component=&host_read_component;host_.set_component=&host_set_component;host_.remove_component=&host_remove_component;
         host_.read_animation=&host_read_animation;host_.control_animation=&host_control_animation;

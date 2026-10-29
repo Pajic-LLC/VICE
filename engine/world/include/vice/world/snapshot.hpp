@@ -9,6 +9,7 @@
 #include <vice/world/distance_link.hpp>
 #include <vice/world/dependency.hpp>
 #include <vice/world/component.hpp>
+#include <vice/world/clock.hpp>
 #include <vice/world/light.hpp>
 #include <vice/world/persistent_id.hpp>
 #include <vice/world/reflection_probe.hpp>
@@ -65,6 +66,7 @@ struct WorldSnapshot {
     std::vector<SnapshotEntity> entities;
     std::vector<SnapshotRelation> relations;
     CausalHistory causal_history;
+    WorldClock clock;
     std::vector<MaterialDefinition> materials;
 };
 

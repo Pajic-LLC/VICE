@@ -71,7 +71,8 @@ namespace {
         [&](const auto& value) -> bool {
             using Value = std::decay_t<decltype(value)>;
 
-            if constexpr (std::is_same_v<Value, SetWorldMaterial>) {
+            if constexpr(std::is_same_v<Value,SetWorldClock>){if(!world::valid(value.clock)){diagnostics="Invalid World clock.";return false;}candidate.clock=value.clock;return true;
+            } else if constexpr (std::is_same_v<Value, SetWorldMaterial>) {
                 if(value.id.is_nil() || (value.definition && (value.definition->id!=value.id || !world::valid(*value.definition)))) {
                     diagnostics="Invalid World material definition.";return false;
                 }

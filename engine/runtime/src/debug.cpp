@@ -97,6 +97,7 @@ RuntimeDebugEntitySnapshot sample_runtime_debug_entity(
         return result;
     }
 
+    result.clock=world.world_clock();
     result.causal_history=world.causal_context(persistent_id);
     const auto handle=world.find(persistent_id);
     if(!handle){result.state=RuntimeDebugEntityState::not_found;return result;}
@@ -200,6 +201,7 @@ std::string serialize_runtime_debug_entity_snapshot(
         append_json_string(output, snapshot.requested_id.to_string());
     }
 
+    output += ",\"world_clock\":"+world::serialize_world_clock(snapshot.clock);
     output += ",\"causal_history\":"+world::serialize_causal_context(snapshot.causal_history);
     output += ",\"material\":"+world::serialize_material_surface(snapshot.material);
     output += ",\"native_mass\":";

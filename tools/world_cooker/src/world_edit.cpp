@@ -92,6 +92,7 @@ std::optional<Operation> read_operation(const std::string& name, std::istream& i
     } else if (name == "clear_transform") {
         SetEntityTransform op;
         if (read_id(input, op.entity)) return op;
+    } else if(name=="set_world_clock"){SetWorldClock op;if(!world::read_world_clock(input,op.clock))return std::nullopt;return op;
     } else if(name=="register_component"){
         RegisterComponentType op;world::PersistentId id;if(!read_id(input,id)||!(input>>op.schema.version>>std::quoted(op.schema.name))||!world::read_component_fields(input,op.schema.fields))return std::nullopt;op.schema.id={id};return op;
     } else if(name=="set_component"){
@@ -172,7 +173,7 @@ void affected(FileEditResult& result, const Transaction& transaction, const worl
     for (const auto& op : transaction.operations) {
         std::visit([&](const auto& value) {
             using T = std::decay_t<decltype(value)>;
-            if constexpr (std::is_same_v<T, RegisterComponentType>) {
+            if constexpr (std::is_same_v<T,SetWorldClock>||std::is_same_v<T, RegisterComponentType>) {
                 // Schema registration has no entity/region owner.
             } else if constexpr (std::is_same_v<T, SetWorldMaterial>) {
                 const auto add=[&](const world::WorldSnapshot& s) {

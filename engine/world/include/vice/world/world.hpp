@@ -2,6 +2,7 @@
 
 #include <vice/world/camera.hpp>
 #include <vice/world/component.hpp>
+#include <vice/world/clock.hpp>
 #include <vice/world/entity.hpp>
 #include <vice/world/light.hpp>
 #include <vice/world/persistent_id.hpp>
@@ -141,6 +142,11 @@ public:
     bool clear_character(EntityId entity);
     [[nodiscard]] std::optional<Character> character(EntityId entity) const noexcept;
     [[nodiscard]] std::uint64_t character_revision() const noexcept { return character_revision_; }
+    [[nodiscard]] WorldClock world_clock() const noexcept {return clock_;}
+    bool configure_world_clock(bool paused,std::uint32_t rate_milli,bool automatic);
+    bool step_world_clock(std::uint64_t ticks);
+    bool advance_world_clock_ticks(std::uint64_t input_ticks);
+    bool advance_world_clock(double seconds);
     bool begin_causal_recording(bool new_segment = false);
     [[nodiscard]] CausalInfo causal_info() const noexcept;
     [[nodiscard]] CausalHistory causal_snapshot() const;
@@ -211,6 +217,7 @@ private:
     std::unordered_map<PersistentId,MaterialDefinition,PersistentIdHash> materials_;
     std::uint64_t material_revision_=0;
     bool advance_material_revision() noexcept;
+    WorldClock clock_;
     PersistentId causal_id_{}, capture_id_{};
     std::uint64_t next_causal_sequence_ = 1;
     std::deque<CausalEvent> causal_events_;
