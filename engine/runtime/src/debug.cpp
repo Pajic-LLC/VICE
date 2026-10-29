@@ -1,5 +1,6 @@
-#include <vice/runtime/debug.hpp>
 #include <vice/presentation/system.hpp>
+#include <vice/runtime/debug.hpp>
+#include <vice/runtime/scene.hpp>
 #if defined(VICE_RUNTIME_AUTHORED_PHYSICS)
 #include <vice/rigid_body/authored_simulation.hpp>
 #endif
@@ -84,12 +85,11 @@ void append_float(std::string& output, const float value) {
 
 } // namespace
 
-RuntimeDebugEntitySnapshot sample_runtime_debug_entity(
-    const world::World& world,
-    const world::PersistentId persistent_id,
-    const rigid_body::AuthoredSimulation* physics,
-    const presentation::System* presentation
-) {
+RuntimeDebugEntitySnapshot
+sample_runtime_debug_entity(const world::World &world, const world::PersistentId persistent_id,
+                            const rigid_body::AuthoredSimulation *physics,
+                            const presentation::System *presentation,
+                            const RuntimeSceneRenderer *renderer) {
     RuntimeDebugEntitySnapshot result;
     result.requested_id = persistent_id;
     if (persistent_id.is_nil()) {
@@ -97,6 +97,31 @@ RuntimeDebugEntitySnapshot sample_runtime_debug_entity(
         return result;
     }
 
+    if (renderer) {
+        const auto info = renderer->skinning_info();
+        result.skin_render = "{\"cached_instances\":" + std::to_string(info.instances) +
+                             ",\"cached_vertices\":" + std::to_string(info.vertices) +
+                             ",\"evaluated_vertices\":" + std::to_string(info.evaluated_vertices) +
+                             ",\"meshes\":[";
+        const auto entries = renderer->skinning_observations(persistent_id);
+        for (std::size_t i = 0; i < entries.size(); ++i) {
+            if (i)
+                result.skin_render += ',';
+            const auto &e = entries[i];
+            result.skin_render +=
+                "{\"entity\":\"" + e.entity.to_string() + "\",\"root\":\"" + e.root.to_string() +
+                "\",\"source\":\"" + e.source.value.to_string() + "\",\"derived_resource\":\"" +
+                e.resource.value.to_string() + "\",\"vertices\":" + std::to_string(e.vertices) +
+                ",\"clip\":" + std::to_string(e.clip) + ",\"sampled_time\":";
+            append_float(result.skin_render, e.sampled_time);
+            result.skin_render += ",\"fingerprint\":\"" + std::to_string(e.fingerprint) +
+                                  "\",\"previous_fingerprint\":\"" +
+                                  std::to_string(e.previous_fingerprint) +
+                                  "\",\"reduced\":" + (e.reduced ? "true" : "false") +
+                                  ",\"gpu_uploaded\":" + (e.gpu_uploaded ? "true" : "false") + '}';
+        }
+        result.skin_render += "]}";
+    }
     result.clock=world.world_clock();
     result.signals = world.signal_context(persistent_id);
     result.schedules = world.schedule_context(persistent_id);
@@ -151,7 +176,16 @@ RuntimeDebugEntitySnapshot sample_runtime_debug_entity(
     result.animation=entity->animation;result.rig_part=entity->rig_part;result.audio_emitter=entity->audio_emitter;
     if(presentation) {
         if(const auto a=presentation->animation(persistent_id)) {
-            result.animation_state="{\"clip_name\":";append_json_string(result.animation_state,a->clip_name);result.animation_state+=",\"duration\":";append_float(result.animation_state,a->duration);result.animation_state+=",\"node_count\":"+std::to_string(a->node_count)+",\"part_count\":"+std::to_string(a->part_count)+'}';
+            result.animation_state = "{\"clip_name\":";
+            append_json_string(result.animation_state, a->clip_name);
+            result.animation_state += ",\"duration\":";
+            append_float(result.animation_state, a->duration);
+            result.animation_state +=
+                ",\"node_count\":" + std::to_string(a->node_count) +
+                ",\"part_count\":" + std::to_string(a->part_count) +
+                ",\"skin_count\":" + std::to_string(a->skin_count) +
+                ",\"joint_count\":" + std::to_string(a->joint_count) +
+                ",\"weighted_vertices\":" + std::to_string(a->weighted_vertices) + '}';
         }
         if(const auto a=presentation->audio(persistent_id)) {
             auto& o=result.audio_state;o="{\"duration\":";append_float(o,a->duration);o+=",\"left_gain\":";append_float(o,a->left_gain);o+=",\"right_gain\":";append_float(o,a->right_gain);o+=",\"distance\":";append_float(o,a->distance);o+=",\"output_active\":";o+=a->output_active?"true":"false";o+=",\"delivered_frames\":"+std::to_string(a->delivered_frames)+",\"underrun_frames\":"+std::to_string(a->underrun_frames)+'}';
@@ -300,6 +334,7 @@ std::string serialize_runtime_debug_entity_snapshot(
 
     output += ",\"character_attachment\":" + world::serialize_character_attachment(snapshot.character_attachment);
     output += ",\"relation_states\":"+world::serialize_relation_states(snapshot.relation_states);
+    output += ",\"skin_render\":" + snapshot.skin_render;
     output += ",\"component_payloads\":"+world::serialize_component_payloads(snapshot.components)+",\"component_schemas\":[";for(std::size_t i=0;i<snapshot.component_schemas.size();++i){if(i)output+=',';output+=world::serialize_component_type(snapshot.component_schemas[i]);}output+=']';
     output += ",\"animation\":"+world::serialize_animation(snapshot.animation)+",\"rig_part\":"+world::serialize_rig_part(snapshot.rig_part)+",\"audio_emitter\":"+world::serialize_audio_emitter(snapshot.audio_emitter)+",\"animation_state\":"+snapshot.animation_state+",\"audio_state\":"+snapshot.audio_state;
     output += ",\"vehicle\":" + world::serialize_vehicle(snapshot.vehicle);

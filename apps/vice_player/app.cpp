@@ -50,7 +50,9 @@ public:
 private:
     static constexpr double publish_interval_seconds = 0.10;
 
-    void service_debug_request(const vice::rigid_body::AuthoredSimulation* physics,const vice::presentation::System* presentation) {
+    void service_debug_request(const vice::rigid_body::AuthoredSimulation *physics,
+                               const vice::presentation::System *presentation,
+                               const vice::runtime::RuntimeSceneRenderer *renderer) {
         const auto request = vice::runtime::read_runtime_debug_request(session_);
         if (!request || request.request_id == last_debug_request_id_) return;
 
@@ -62,7 +64,7 @@ private:
             if (!diagnostics.empty()) std::cerr << "VICE checkpoint: " << diagnostics << '\n';
         } else {
             const auto snapshot = vice::runtime::sample_runtime_debug_entity(
-                *project_->world, request.entity_id, physics, presentation);
+                *project_->world, request.entity_id, physics, presentation, renderer);
             payload = vice::runtime::serialize_runtime_debug_entity_snapshot(snapshot, session_.id);
         }
         if (vice::runtime::publish_runtime_debug_response(
@@ -129,7 +131,8 @@ private:
             )) {
             generation_ = next_generation;
             publication_error_reported_ = false;
-            service_debug_request(observation.physics,observation.presentation);
+            service_debug_request(observation.physics, observation.presentation,
+                                  observation.scene_renderer);
             return;
         }
 

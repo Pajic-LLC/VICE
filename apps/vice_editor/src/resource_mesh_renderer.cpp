@@ -1,4 +1,5 @@
 #include "resource_mesh_renderer.hpp"
+#include <vice/runtime/skinning.hpp>
 
 #include <vice/core/log.hpp>
 #include <vice/editor/mesh_picking.hpp>
@@ -378,9 +379,15 @@ struct ResourceMeshRenderer::State {
         std::unique_ptr<render::Buffer> indices;
         std::uint32_t index_count = 0;
         std::uint64_t source_fingerprint = 0;
+        std::optional<render::MeshAsset> cpu;
     };
 
     render::Device* device = nullptr;
+    runtime::RuntimeSkinningCache skinning;
+    std::vector<MeshPickGeometry> skin_pick_geometry;
+    std::filesystem::path skin_root;
+    std::uint64_t skin_generation = 0;
+    std::unordered_map<world::ResourceId, MeshGpu, world::ResourceIdHash> skinned_meshes;
     std::unique_ptr<render::ShaderModule> vertex_shader;
     std::unique_ptr<render::ShaderModule> fragment_shader;
     std::unique_ptr<render::GraphicsPipeline> pipeline;
@@ -615,7 +622,8 @@ void ResourceMeshRenderer::handle_event(
                     !pointer_near_previous_gizmo(payload.x, payload.y)) {
                     const auto ray = camera_ray(payload.x, payload.y);
                     if (ray.has_value()) {
-                        const auto picked = pick_render_mesh(world, assets, ray->first, ray->second);
+                        const auto picked = pick_render_mesh(world, assets, ray->first, ray->second,
+                                                             state_->skin_pick_geometry);
                         if (picked.has_value() && picked->distance <= nearest_legacy_hit(ray->first, ray->second)) {
                             selection.select(picked->persistent_id);
                         }
@@ -813,11 +821,30 @@ bool ResourceMeshRenderer::render(
         );
         gpu.index_count = static_cast<std::uint32_t>(loaded.asset->indices.size());
         gpu.source_fingerprint = loaded.asset->source_fingerprint;
+        gpu.cpu = std::move(*loaded.asset);
         if (!gpu.vertices || !gpu.indices || gpu.index_count == 0U) return nullptr;
         state_->meshes.insert_or_assign(resource_id, std::move(gpu));
         return &state_->meshes.find(resource_id)->second;
     };
 
+    std::uint64_t generation = 14695981039346656037ULL;
+    for (const auto &a : assets.assets())
+        if (a.kind == AssetKind::rig) {
+            generation ^= a.source_fingerprint;
+            generation *= 1099511628211ULL;
+        }
+    if (state_->skin_root != assets.cooked_root() || state_->skin_generation != generation) {
+        std::string diagnostics;
+        if (!state_->skinning.reset(assets.cooked_root(), &diagnostics)) {
+            core::log(core::LogLevel::error, diagnostics);
+            return false;
+        }
+        state_->skin_root = assets.cooked_root();
+        state_->skin_generation = generation;
+        state_->skinned_meshes.clear();
+    }
+    state_->skinning.begin_frame();
+    state_->skin_pick_geometry.clear();
     for (const auto& entity : world.snapshot(world::ComponentPayloadSnapshot::render).entities) {
         if (!entity.spatial_state.has_value()) continue;
 
@@ -832,6 +859,47 @@ bool ResourceMeshRenderer::render(
 
         State::MeshGpu* mesh = ensure_mesh(*mesh_resource);
         if (mesh == nullptr) continue;
+        auto spatial = *entity.spatial_state;
+        auto authored = entity.authored_transform;
+        if (entity.rig_part && mesh->cpu) {
+            runtime::SkinningMeshView view;
+            std::string diagnostics;
+            if (!state_->skinning.evaluate(world, entity.persistent_id, *mesh->cpu, view,
+                                           &diagnostics)) {
+                core::log(core::LogLevel::error, diagnostics);
+                return false;
+            }
+            if (view.asset) {
+                auto &skin = state_->skinned_meshes[view.resource];
+                if (!skin.vertices ||
+                    skin.vertices->size() !=
+                        view.asset->vertices.size() * sizeof(render::MeshVertex) ||
+                    skin.indices->size() != view.asset->indices.size() * sizeof(std::uint32_t)) {
+                    skin.vertices =
+                        create_buffer_with_data(*state_->device, render::BufferUsage::vertex,
+                                                std::as_bytes(std::span{view.asset->vertices}),
+                                                "VICE Editor skinned vertices");
+                    skin.indices = create_buffer_with_data(
+                        *state_->device, render::BufferUsage::index,
+                        std::as_bytes(std::span{view.asset->indices}), "VICE Editor skin indices");
+                    skin.index_count = static_cast<std::uint32_t>(view.asset->indices.size());
+                    if (!skin.vertices || !skin.indices)
+                        return false;
+                } else if (view.changed &&
+                           (!skin.vertices->write(0,
+                                                  std::as_bytes(std::span{view.asset->vertices})) ||
+                            !skin.indices->write(0, std::as_bytes(std::span{view.asset->indices}))))
+                    return false;
+                mesh = &skin;
+                const auto root = world.find(entity.rig_part->root);
+                if (!root || !world.spatial_state(*root))
+                    return false;
+                spatial = *world.spatial_state(*root);
+                authored = world.authored_transform(*root);
+                state_->skin_pick_geometry.push_back(
+                    {entity.persistent_id, {view.minimum, view.maximum}, spatial, authored});
+            }
+        }
 
         auto& constants_buffer = state_->constants[entity.persistent_id];
         if (!constants_buffer) constants_buffer = create_constant_buffer(*state_->device);
@@ -840,7 +908,7 @@ bool ResourceMeshRenderer::render(
         const bool highlighted = selected.has_value() && *selected == entity.persistent_id;
         const MeshConstants constants{
             .view_projection = view_projection,
-            .model = model_matrix(*entity.spatial_state, entity.authored_transform),
+            .model = model_matrix(spatial, authored),
             .accent = {0.12F, 0.75F, 1.0F, highlighted ? 0.50F : 0.0F},
         };
         if (!constants_buffer->write(0, std::as_bytes(std::span{&constants, 1U})) ||
@@ -852,6 +920,9 @@ bool ResourceMeshRenderer::render(
         }
     }
 
+    state_->skinning.end_frame();
+    std::erase_if(state_->skinned_meshes,
+                  [&](const auto &item) { return !state_->skinning.find(item.first); });
     return true;
 }
 

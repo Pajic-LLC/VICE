@@ -11,6 +11,7 @@
 #include <memory>
 #include <sstream>
 #include <unordered_map>
+#include <unordered_set>
 #include <vice/tools/presentation_cooker.hpp>
 namespace vice::tools {
 namespace {
@@ -76,10 +77,10 @@ bool import_rig(const std::filesystem::path &source, const std::filesystem::path
     if (cgltf_parse_file(&options, source.string().c_str(), &parsed) != cgltf_result_success)
         return fail(d, "Could not parse glTF 2.0.");
     std::unique_ptr<cgltf_data, decltype(&cgltf_free)> data(parsed, &cgltf_free);
-    if (data->nodes_count == 0 || data->nodes_count > 128 || data->skins_count ||
+    if (data->nodes_count == 0 || data->nodes_count > 128 || data->skins_count > 128 ||
         data->animations_count == 0 || data->animations_count > 64 || data->scenes_count != 1)
-        return fail(d, "Import supports one scene, 1-128 rigid nodes and 1-64 animations; skins "
-                       "are not yet supported.");
+        return fail(d,
+                    "Import supports one scene, 1-128 nodes, up to 128 skins and 1-64 animations.");
     std::size_t buffer_bytes = 0;
     for (std::size_t i = 0; i < data->buffers_count; ++i) {
         const auto &b = data->buffers[i];
@@ -114,15 +115,29 @@ bool import_rig(const std::filesystem::path &source, const std::filesystem::path
         visit(scene.nodes[i]);
     if (!graph_ok || nodes.size() != data->nodes_count)
         return fail(d, "Rig graph must be a tree/forest fully reachable from its one scene.");
+    for (std::size_t i = 0; i < data->skins_count; ++i) {
+        const auto &s = data->skins[i];
+        if (!s.joints_count || s.joints_count > 128)
+            return fail(d, "Invalid skin joint count, including unused skin declarations.");
+        std::unordered_set<const cgltf_node *> unique;
+        for (std::size_t j = 0; j < s.joints_count; ++j)
+            if (!indices.contains(s.joints[j]) || !unique.insert(s.joints[j]).second)
+                return fail(d, "Invalid or duplicate skin joint.");
+        const auto *bind = s.inverse_bind_matrices;
+        if (bind &&
+            (bind->type != cgltf_type_mat4 || bind->component_type != cgltf_component_type_r_32f ||
+             bind->count < s.joints_count))
+            return fail(d, "Invalid inverse-bind accessor.");
+    }
     presentation::Rig rig;
     rig.id = id;
     std::map<std::uint32_t, std::string> mesh_files;
     std::size_t imported_vertices = 0, imported_indices = 0, imported_keys = 0;
     for (std::size_t i = 0; i < nodes.size(); ++i) {
         const auto *n = nodes[i];
-        if (n->has_matrix || n->skin || n->weights_count ||
+        if (n->has_matrix || n->weights_count ||
             (n->has_scale && (n->scale[0] != n->scale[1] || n->scale[0] != n->scale[2])))
-            return fail(d, "Rig nodes require uniform TRS; matrices, skins and morph weights are "
+            return fail(d, "Rig nodes require uniform TRS; matrices and morph weights are "
                            "not supported.");
         presentation::Node node;
         node.name = n->name && *n->name ? n->name : ("node_" + std::to_string(i));
@@ -137,6 +152,28 @@ bool import_rig(const std::filesystem::path &source, const std::filesystem::path
             node.mesh = {derived(id.value, 0x40, static_cast<std::uint32_t>(i) + 1)};
             std::vector<Vertex> vertices;
             std::vector<std::uint32_t> triangles;
+            presentation::Skin skin;
+            skin.node = static_cast<std::uint32_t>(i);
+            if (n->skin) {
+                const auto &source_skin = *n->skin;
+                if (!source_skin.joints_count || source_skin.joints_count > 128)
+                    return fail(d, "Skin joint capacity exceeded.");
+                const auto *bind = source_skin.inverse_bind_matrices;
+                if (bind && (bind->type != cgltf_type_mat4 ||
+                             bind->component_type != cgltf_component_type_r_32f ||
+                             bind->count < source_skin.joints_count))
+                    return fail(d, "Invalid inverse-bind accessor.");
+                for (std::size_t j = 0; j < source_skin.joints_count; ++j) {
+                    if (!indices.contains(source_skin.joints[j]))
+                        return fail(d, "Skin joint is outside the imported scene.");
+                    presentation::SkinJoint joint;
+                    joint.node = indices.at(source_skin.joints[j]);
+                    if (bind &&
+                        !cgltf_accessor_read_float(bind, j, joint.inverse_bind.values.data(), 16))
+                        return fail(d, "Unreadable inverse bind matrix.");
+                    skin.joints.push_back(joint);
+                }
+            }
             for (std::size_t p = 0; p < n->mesh->primitives_count; ++p) {
                 const auto &primitive = n->mesh->primitives[p];
                 if (primitive.type != cgltf_primitive_type_triangles || primitive.targets_count ||
@@ -145,6 +182,7 @@ bool import_rig(const std::filesystem::path &source, const std::filesystem::path
                         d, "Rig geometry requires uncompressed triangles without morph targets.");
                 const cgltf_accessor *positions = nullptr, *normals = nullptr, *colors = nullptr,
                                      *uv = nullptr;
+                const cgltf_accessor *joints[2]{}, *weights[2]{};
                 for (std::size_t a = 0; a < primitive.attributes_count; ++a) {
                     const auto &attr = primitive.attributes[a];
                     if (attr.type == cgltf_attribute_type_position)
@@ -156,8 +194,16 @@ bool import_rig(const std::filesystem::path &source, const std::filesystem::path
                     else if (attr.type == cgltf_attribute_type_texcoord && attr.index == 0)
                         uv = attr.data;
                     else if (attr.type == cgltf_attribute_type_joints ||
-                             attr.type == cgltf_attribute_type_weights)
-                        return fail(d, "Weighted geometry requires a future skinning importer.");
+                             attr.type == cgltf_attribute_type_weights) {
+                        if (!n->skin || attr.index < 0 || attr.index > 1)
+                            return fail(d, "Weighted geometry supports JOINTS/WEIGHTS sets 0 and "
+                                           "1; extra influences are not truncated.");
+                        auto &slot = attr.type == cgltf_attribute_type_joints ? joints[attr.index]
+                                                                              : weights[attr.index];
+                        if (slot)
+                            return fail(d, "Duplicate skin vertex attribute.");
+                        slot = attr.data;
+                    }
                 }
                 if (!normals)
                     return fail(d, "Rig geometry requires authored normals.");
@@ -167,6 +213,28 @@ bool import_rig(const std::filesystem::path &source, const std::filesystem::path
                 if (positions->count > 200000 - imported_vertices)
                     return fail(d, "Total imported vertex budget exceeded.");
                 imported_vertices += positions->count;
+                if (n->skin) {
+                    if (!joints[0] || !weights[0] ||
+                        ((joints[1] != nullptr) != (weights[1] != nullptr)) ||
+                        positions->count > presentation::max_skin_vertices - skin.vertices.size())
+                        return fail(
+                            d, "Missing/mismatched skin attributes or vertex budget exceeded.");
+                    for (unsigned set = 0; set < 2; ++set)
+                        if (joints[set]) {
+                            const auto *j = joints[set], *w = weights[set];
+                            if (j->type != cgltf_type_vec4 || w->type != cgltf_type_vec4 ||
+                                j->count != positions->count || w->count != positions->count ||
+                                j->normalized ||
+                                (j->component_type != cgltf_component_type_r_8u &&
+                                 j->component_type != cgltf_component_type_r_16u) ||
+                                !((w->component_type == cgltf_component_type_r_32f &&
+                                   !w->normalized) ||
+                                  ((w->component_type == cgltf_component_type_r_8u ||
+                                    w->component_type == cgltf_component_type_r_16u) &&
+                                   w->normalized)))
+                                return fail(d, "Invalid skin accessor types/counts/normalization.");
+                        }
+                }
                 float tint[4]{0.65F, 0.72F, 0.82F, 1};
                 if (primitive.material) {
                     const auto &m = *primitive.material;
@@ -197,9 +265,46 @@ bool import_rig(const std::filesystem::path &source, const std::filesystem::path
                     for (float x : vertex.n)
                         if (!std::isfinite(x))
                             return fail(d, "Nonfinite normal.");
+                    for (float x : vertex.uv)
+                        if (!std::isfinite(x))
+                            return fail(d, "Nonfinite vertex UV.");
+                    const double length = std::sqrt(static_cast<double>(vertex.n[0]) * vertex.n[0] +
+                                                    static_cast<double>(vertex.n[1]) * vertex.n[1] +
+                                                    static_cast<double>(vertex.n[2]) * vertex.n[2]);
+                    if (!std::isfinite(length) || length < 1e-12)
+                        return fail(d, "Vertex normal must be nonzero.");
+                    for (auto &x : vertex.n)
+                        x = static_cast<float>(x / length);
                     for (float x : vertex.color)
                         if (!std::isfinite(x) || x < 0 || x > 1)
                             return fail(d, "Invalid vertex color range.");
+                    if (n->skin) {
+                        presentation::SkinWeights influence;
+                        double total = 0;
+                        for (unsigned set = 0; set < 2; ++set)
+                            if (joints[set]) {
+                                cgltf_uint j[4]{};
+                                float w[4]{};
+                                if (!cgltf_accessor_read_uint(joints[set], v, j, 4) ||
+                                    !cgltf_accessor_read_float(weights[set], v, w, 4))
+                                    return fail(d, "Unreadable joint weights.");
+                                for (unsigned k = 0; k < 4; ++k) {
+                                    if (j[k] >= skin.joints.size() || !std::isfinite(w[k]) ||
+                                        w[k] < 0 || w[k] > 1)
+                                        return fail(d, "Invalid joint index or weight.");
+                                    influence.joints[set * 4 + k] =
+                                        static_cast<std::uint16_t>(j[k]);
+                                    influence.weights[set * 4 + k] = w[k];
+                                    total += w[k];
+                                }
+                            }
+                        if (!std::isfinite(total) || std::abs(total - 1) > 0.02)
+                            return fail(
+                                d, "Skin weights do not sum to one within quantization tolerance.");
+                        for (auto &w : influence.weights)
+                            w = static_cast<float>(w / total);
+                        skin.vertices.push_back(influence);
+                    }
                     vertices.push_back(vertex);
                 }
                 const std::size_t count =
@@ -231,6 +336,8 @@ bool import_rig(const std::filesystem::path &source, const std::filesystem::path
                 mesh << "triangle " << triangles[t] << ' ' << triangles[t + 1] << ' '
                      << triangles[t + 2] << '\n';
             mesh_files.emplace(static_cast<std::uint32_t>(i), mesh.str());
+            if (n->skin)
+                rig.skins.push_back(std::move(skin));
         }
         rig.nodes.push_back(std::move(node));
     }
@@ -247,7 +354,10 @@ bool import_rig(const std::filesystem::path &source, const std::filesystem::path
                 return fail(d, "Invalid animation target.");
             const auto &sampler = *channel.sampler;
             if (!sampler.input || !sampler.output || sampler.input->count == 0 ||
-                sampler.input->count > 4096 || sampler.input->count != sampler.output->count ||
+                sampler.input->count > 4096 ||
+                sampler.output->count !=
+                    sampler.input->count *
+                        (sampler.interpolation == cgltf_interpolation_type_cubic_spline ? 3 : 1) ||
                 sampler.input->type != cgltf_type_scalar)
                 return fail(d, "Invalid animation accessors.");
             if (sampler.input->count > 262144 - imported_keys)
@@ -257,8 +367,10 @@ bool import_rig(const std::filesystem::path &source, const std::filesystem::path
             track.node = indices.at(channel.target_node);
             if (sampler.interpolation == cgltf_interpolation_type_step)
                 track.interpolation = presentation::Interpolation::step;
+            else if (sampler.interpolation == cgltf_interpolation_type_cubic_spline)
+                track.interpolation = presentation::Interpolation::cubic_spline;
             else if (sampler.interpolation != cgltf_interpolation_type_linear)
-                return fail(d, "Only LINEAR and STEP animation interpolation are supported.");
+                return fail(d, "Unknown animation interpolation.");
             unsigned components = 3;
             if (channel.target_path == cgltf_animation_path_type_rotation) {
                 track.path = presentation::Path::rotation;
@@ -275,11 +387,25 @@ bool import_rig(const std::filesystem::path &source, const std::filesystem::path
                 float time = 0;
                 presentation::Key key;
                 if (!cgltf_accessor_read_float(sampler.input, k, &time, 1) ||
-                    !cgltf_accessor_read_float(sampler.output, k, key.value.data(), components))
+                    !cgltf_accessor_read_float(
+                        sampler.output,
+                        track.interpolation == presentation::Interpolation::cubic_spline ? 3 * k + 1
+                                                                                         : k,
+                        key.value.data(), components))
                     return fail(d, "Could not read animation key.");
+                if (track.interpolation == presentation::Interpolation::cubic_spline &&
+                    (!cgltf_accessor_read_float(sampler.output, 3 * k, key.in_tangent.data(),
+                                                components) ||
+                     !cgltf_accessor_read_float(sampler.output, 3 * k + 2, key.out_tangent.data(),
+                                                components)))
+                    return fail(d, "Unreadable cubic spline tangents.");
                 key.time = time;
                 if (track.path == presentation::Path::scale &&
-                    (key.value[0] != key.value[1] || key.value[0] != key.value[2]))
+                    (key.value[0] != key.value[1] || key.value[0] != key.value[2] ||
+                     key.in_tangent[0] != key.in_tangent[1] ||
+                     key.in_tangent[0] != key.in_tangent[2] ||
+                     key.out_tangent[0] != key.out_tangent[1] ||
+                     key.out_tangent[0] != key.out_tangent[2]))
                     return fail(d, "Animated rig scale must stay uniform.");
                 clip.duration = std::max(clip.duration, key.time);
                 track.keys.push_back(key);
@@ -290,6 +416,9 @@ bool import_rig(const std::filesystem::path &source, const std::filesystem::path
     }
     if (!presentation::valid(rig, d))
         return false;
+    const auto serialized = presentation::serialize_rig(rig);
+    if (serialized.empty())
+        return fail(d, "Serialized rig exceeds the supported asset budget.");
     const auto temporary =
         output.parent_path() / (".vice-rig-import-" + world::PersistentId::random().to_string());
     std::filesystem::create_directories(temporary, ec);
@@ -303,7 +432,7 @@ bool import_rig(const std::filesystem::path &source, const std::filesystem::path
         }
     } cleanup{temporary};
     std::ofstream rig_file(temporary / "character.vrig");
-    rig_file << presentation::serialize_rig(rig);
+    rig_file << serialized;
     if (!rig_file)
         return fail(d, "Could not stage imported rig.");
     rig_file.close();

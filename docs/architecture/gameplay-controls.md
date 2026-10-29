@@ -103,3 +103,7 @@ Receipt events are readable through the existing event API and structured schema
 `read_rule_info` reports count/enabled/pending/capacity/budget. `remove_rule` cancels pending work and releases definition dependencies. `set_rule_enabled` takes 0/1, with disable cancelling pending wakeups. `dispatch_rules` accepts 1–64 and returns evaluated/applied/rejected/backlog; it never recurses into newly produced events in the same pump. Ordinary World clock advancement pumps schedules then rules. Write/thread/read-only-frame/stop guards and old-host `unavailable` behavior follow the other append-only operations. Malformed calls leave outputs untouched.
 
 The first retained event remains pending while repeated matching events increment a coalesced counter. This is explicit state-reconciliation behavior, not guaranteed per-event effect delivery. Each rule has one effect through an atomic World operation; there is no multi-effect transaction promise. See [World rules](world-rules.md) and [ADR 0031](../adr/0031-declarative-world-rules.md).
+
+## Weighted animation assets
+
+The existing animation read/control callbacks also operate on weighted rig v2 assets. DTO sizes and ABI 1 remain unchanged: games retain stable rig/root/part identities and control the clip clock; they do not access renderer palettes or generated mesh handles. [Weighted skeletal presentation](weighted-skeletal-presentation.md) documents import, diagnostics, fidelity and persistence. The skinning playground exercises these same callbacks through physical walk/drive and saved continuation.

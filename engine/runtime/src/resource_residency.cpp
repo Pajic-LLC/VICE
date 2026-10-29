@@ -150,7 +150,9 @@ RuntimeRenderResourceResidencyBuildResult build_runtime_render_resource_residenc
         std::uint64_t index_bytes = static_cast<std::uint64_t>(mesh->asset.indices.size()) *
             static_cast<std::uint64_t>(sizeof(std::uint32_t));
         std::uint64_t total_bytes = 0U;
-        if (!add_size(vertex_bytes, index_bytes, total_bytes) || total_bytes == 0U) {
+        if (!add_size(vertex_bytes, index_bytes, total_bytes) ||
+            !add_size(total_bytes, mesh->additional_resident_geometry_bytes, total_bytes) ||
+            total_bytes == 0U) {
             result.diagnostics = "Runtime cooked mesh has invalid residency byte size `" +
                 instance.mesh.value.to_string() + "`.";
             return result;

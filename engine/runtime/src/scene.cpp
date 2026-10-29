@@ -3,13 +3,14 @@
 #include <vice/runtime/gpu_virtual_geometry.hpp>
 #include <vice/runtime/gpu_virtual_geometry_feedback.hpp>
 #include <vice/runtime/gpu_virtual_geometry_feedback_ring.hpp>
+#include <vice/runtime/post_process.hpp>
 #include <vice/runtime/ray_ambient_occlusion.hpp>
 #include <vice/runtime/ray_ambient_occlusion_denoise.hpp>
 #include <vice/runtime/ray_ambient_occlusion_temporal.hpp>
-#include <vice/runtime/post_process.hpp>
 #include <vice/runtime/ray_tracing_scene_executor.hpp>
 #include <vice/runtime/render_streaming.hpp>
 #include <vice/runtime/scene.hpp>
+#include <vice/runtime/skinning.hpp>
 #include <vice/runtime/virtual_geometry.hpp>
 #include <vice/runtime/virtual_geometry_gpu_arena.hpp>
 #include <vice/runtime/virtual_geometry_streaming.hpp>
@@ -763,6 +764,7 @@ struct RuntimeVirtualGeometrySceneContext {
     render::Device* device = nullptr;
     CookedMeshCatalog* catalog = nullptr;
     RuntimeGpuMeshletTablePlan* gpu_meshlet_plan = nullptr;
+    RuntimeSkinningCache *skinning = nullptr;
     RuntimeRenderResourceBudgets resource_budgets{};
     platform::WindowMetrics metrics{};
     void* renderer_state = nullptr;
@@ -1191,6 +1193,11 @@ thread_local RuntimeRayAmbientOcclusionTemporalSceneState ray_ambient_occlusion_
 
 } // namespace
 
+bool CookedMeshCatalog::erase_runtime_record(world::ResourceId resource) noexcept {
+    return std::erase_if(records_, [&](const auto &r) {
+               return r.resource_id == resource && r.runtime_generated;
+           }) != 0;
+}
 bool CookedMeshCatalog::upsert_runtime_record(
     CookedMeshRecord record,
     std::string* const diagnostics
@@ -1226,6 +1233,21 @@ RuntimeRenderResidentSceneBuildResult build_runtime_render_resident_scene_with_v
     const world::World& world
 ) {
     auto result = ::vice::runtime::build_runtime_render_resident_scene(world);
+    if (result && active_virtual_geometry_context && active_virtual_geometry_context->skinning) {
+        auto &context = *active_virtual_geometry_context;
+        if (!context.skinning->apply(world, *context.catalog, result.scene.meshes,
+                                     &result.diagnostics)) {
+            result.scene = {};
+            return result;
+        }
+        for (const auto &instance : result.scene.meshes)
+            if (context.skinning->find(instance.mesh) &&
+                !ensure_runtime_virtual_geometry_meshlet_alias(
+                    *context.gpu_meshlet_plan, instance.mesh, &result.diagnostics)) {
+                result.scene = {};
+                return result;
+            }
+    }
     if (!result || active_virtual_geometry_context == nullptr ||
         active_virtual_geometry_context->device == nullptr ||
         active_virtual_geometry_context->catalog == nullptr ||
@@ -1446,6 +1468,20 @@ RuntimeRenderResidentSceneBuildResult build_runtime_render_resident_scene_with_v
 
 } // namespace detail
 
+SkinningInfo RuntimeSceneRenderer::skinning_info() const noexcept {
+    return state_ ? state_->skinning.info() : SkinningInfo{};
+}
+std::vector<SkinningObservation>
+RuntimeSceneRenderer::skinning_observations(world::PersistentId endpoint) const {
+    if (!state_)
+        return {};
+    auto result = state_->skinning.observations(endpoint);
+    for (auto &o : result) {
+        const auto i = state_->meshes.find(o.resource);
+        o.gpu_uploaded = i != state_->meshes.end() && i->second.source_fingerprint == o.fingerprint;
+    }
+    return result;
+}
 void RuntimeSceneRenderer::set_directional_shadow_mode(
     const RuntimeDirectionalShadowMode mode
 ) noexcept {
@@ -1533,6 +1569,7 @@ bool RuntimeSceneRenderer::render(
         .device = state_->device,
         .catalog = &state_->catalog,
         .gpu_meshlet_plan = &state_->gpu_meshlet_plan,
+        .skinning = &state_->skinning,
         .resource_budgets = state_->resource_budgets,
         .metrics = metrics,
         .renderer_state = state_.get(),

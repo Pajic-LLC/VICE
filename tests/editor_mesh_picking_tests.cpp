@@ -185,6 +185,14 @@ int main() {
 
     assert(!editor::pick_render_mesh(world, assets, {}, {}).has_value());
 
+    const std::array displayed{
+        editor::MeshPickGeometry{transformed_id, {{-1, -1, -1}, {1, 1, 1}}, {{30, 0, 5}, {1}}, {}}};
+    const auto deformed_hit =
+        editor::pick_render_mesh(world, assets, {30, 0, 0}, {0, 0, 1}, displayed);
+    assert(deformed_hit && deformed_hit->persistent_id == transformed_id &&
+           std::abs(deformed_hit->distance - 4) < 0.001F);
+    assert(!editor::pick_render_mesh(world, assets, {30, 0, 0}, {0, 0, 1}));
+
     std::filesystem::remove_all(root, error);
     return 0;
 }

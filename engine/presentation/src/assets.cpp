@@ -91,7 +91,8 @@ bool valid(const Rig &r, std::string *d) {
                 (t.path != Path::translation && t.path != Path::rotation &&
                  t.path != Path::scale) ||
                 (t.interpolation != Interpolation::linear &&
-                 t.interpolation != Interpolation::step) ||
+                 t.interpolation != Interpolation::step &&
+                 t.interpolation != Interpolation::cubic_spline) ||
                 t.keys.empty() || t.keys.size() > 4096 ||
                 !channels.insert(t.node * 3 + static_cast<unsigned>(t.path)).second)
                 return fail(d, "Invalid or duplicate animation track.");
@@ -107,6 +108,12 @@ bool valid(const Rig &r, std::string *d) {
                 for (float v : k.value)
                     if (!std::isfinite(v))
                         return fail(d, "Nonfinite animation key.");
+                for (float v : k.in_tangent)
+                    if (!std::isfinite(v))
+                        return fail(d, "Nonfinite incoming tangent.");
+                for (float v : k.out_tangent)
+                    if (!std::isfinite(v))
+                        return fail(d, "Nonfinite outgoing tangent.");
                 if (t.path == Path::rotation &&
                     !unit({k.value[0], k.value[1], k.value[2], k.value[3]}))
                     return fail(d, "Animation rotation must be a unit quaternion.");
@@ -114,6 +121,17 @@ bool valid(const Rig &r, std::string *d) {
                     return fail(d, "Invalid animation scale.");
             }
         }
+    }
+    if (r.skins.size() > 128)
+        return fail(d, "Skin binding capacity exceeded.");
+    std::unordered_set<std::uint32_t> skin_nodes;
+    std::size_t skin_vertices = 0;
+    for (const auto &skin : r.skins) {
+        if (!skin_nodes.insert(skin.node).second || !valid_skin(r, skin, d))
+            return false;
+        skin_vertices += skin.vertices.size();
+        if (skin_vertices > max_skin_vertices)
+            return fail(d, "Skin vertex budget exceeded.");
     }
     return true;
 }
@@ -132,8 +150,8 @@ std::optional<Rig> read_rig(const std::filesystem::path &path, std::string *d) {
     std::string word, id;
     unsigned version = 0;
     Rig r;
-    if (!(in >> word >> version) || word != "vice-rig" || version != 1 || !(in >> word >> id) ||
-        word != "id")
+    if (!(in >> word >> version) || word != "vice-rig" || (version != 1 && version != 2) ||
+        !(in >> word >> id) || word != "id")
         return invalid();
     auto parsed = world::PersistentId::parse(id);
     if (!parsed)
@@ -158,6 +176,34 @@ std::optional<Rig> read_rig(const std::filesystem::path &path, std::string *d) {
                 n.mesh = {*parsed};
             }
             r.nodes.push_back(n);
+        } else if (word == "skin" && version >= 2) {
+            Skin skin;
+            std::size_t joints = 0, vertices = 0;
+            if (r.skins.size() >= 128 || !(in >> skin.node >> joints >> vertices) || !joints ||
+                joints > 128 || !vertices || vertices > max_skin_vertices)
+                return invalid();
+            std::size_t total = vertices;
+            for (const auto &s : r.skins)
+                total += s.vertices.size();
+            if (total > max_skin_vertices)
+                return invalid();
+            skin.joints.resize(joints);
+            skin.vertices.resize(vertices);
+            for (auto &j : skin.joints) {
+                if (!(in >> j.node))
+                    return invalid();
+                for (auto &v : j.inverse_bind.values)
+                    if (!(in >> v))
+                        return invalid();
+            }
+            for (auto &v : skin.vertices)
+                for (std::size_t i = 0; i < max_skin_influences; ++i) {
+                    unsigned joint = 0;
+                    if (!(in >> joint >> v.weights[i]) || joint >= joints)
+                        return invalid();
+                    v.joints[i] = static_cast<std::uint16_t>(joint);
+                }
+            r.skins.push_back(std::move(skin));
         } else if (word == "clip") {
             Clip c;
             if (r.clips.size() >= 64 || !(in >> std::quoted(c.name) >> c.duration))
@@ -175,9 +221,20 @@ std::optional<Rig> read_rig(const std::filesystem::path &path, std::string *d) {
             t.path = static_cast<Path>(path_value);
             t.interpolation = static_cast<Interpolation>(interpolation);
             t.keys.resize(count);
-            for (auto &k : t.keys)
+            for (auto &k : t.keys) {
                 if (!(in >> k.time >> k.value[0] >> k.value[1] >> k.value[2] >> k.value[3]))
                     return invalid();
+                if (t.interpolation == Interpolation::cubic_spline) {
+                    if (version < 2)
+                        return invalid();
+                    for (auto &v : k.in_tangent)
+                        if (!(in >> v))
+                            return invalid();
+                    for (auto &v : k.out_tangent)
+                        if (!(in >> v))
+                            return invalid();
+                }
+            }
             clip->tracks.push_back(std::move(t));
         } else
             return invalid();
@@ -191,24 +248,49 @@ std::string serialize_rig(const Rig &r) {
         return {};
     std::ostringstream o;
     o.imbue(std::locale::classic());
-    o << std::setprecision(17) << "vice-rig 1\nid " << r.id.value.to_string() << '\n';
+    bool extended = !r.skins.empty();
+    for (const auto &c : r.clips)
+        for (const auto &t : c.tracks)
+            extended |= t.interpolation == Interpolation::cubic_spline;
+    o << std::setprecision(17) << "vice-rig " << (extended ? 2 : 1) << "\nid "
+      << r.id.value.to_string() << '\n';
     for (const auto &n : r.nodes)
         o << "node " << std::quoted(n.name) << ' ' << n.parent << ' ' << n.rest.translation.x << ' '
           << n.rest.translation.y << ' ' << n.rest.translation.z << ' ' << n.rest.rotation.x << ' '
           << n.rest.rotation.y << ' ' << n.rest.rotation.z << ' ' << n.rest.rotation.w << ' '
           << n.rest.scale << ' ' << (n.mesh.valid() ? n.mesh.value.to_string() : "none") << '\n';
+    for (const auto &skin : r.skins) {
+        o << "skin " << skin.node << ' ' << skin.joints.size() << ' ' << skin.vertices.size();
+        for (const auto &j : skin.joints) {
+            o << ' ' << j.node;
+            for (float v : j.inverse_bind.values)
+                o << ' ' << (v == 0 ? 0 : v);
+        }
+        for (const auto &v : skin.vertices)
+            for (std::size_t i = 0; i < max_skin_influences; ++i)
+                o << ' ' << v.joints[i] << ' ' << (v.weights[i] == 0 ? 0 : v.weights[i]);
+        o << '\n';
+    }
     for (const auto &c : r.clips) {
         o << "clip " << std::quoted(c.name) << ' ' << c.duration << '\n';
         for (const auto &t : c.tracks) {
             o << "track " << t.node << ' ' << static_cast<unsigned>(t.path) << ' '
               << static_cast<unsigned>(t.interpolation) << ' ' << t.keys.size();
-            for (const auto &k : t.keys)
+            for (const auto &k : t.keys) {
                 o << ' ' << k.time << ' ' << k.value[0] << ' ' << k.value[1] << ' ' << k.value[2]
                   << ' ' << k.value[3];
+                if (t.interpolation == Interpolation::cubic_spline) {
+                    for (auto v : k.in_tangent)
+                        o << ' ' << v;
+                    for (auto v : k.out_tangent)
+                        o << ' ' << v;
+                }
+            }
             o << '\n';
         }
     }
-    return o.str();
+    auto text = o.str();
+    return text.size() <= 16 * 1024 * 1024 ? text : std::string{};
 }
 bool sample_pose(const Rig &r, std::uint32_t index, double time, std::vector<Pose> &out) {
     if (index >= r.clips.size() || !std::isfinite(time))
@@ -231,8 +313,30 @@ bool sample_pose(const Rig &r, std::uint32_t index, double time, std::vector<Pos
         auto v = a.value;
         for (unsigned i = 0; i < 4; ++i)
             v[i] = (1 - f) * a.value[i] + f * b.value[i];
+        if (t.interpolation == Interpolation::cubic_spline && b.time > a.time) {
+            const float dt = static_cast<float>(b.time - a.time), f2 = f * f, f3 = f2 * f;
+            for (unsigned i = 0; i < 4; ++i)
+                v[i] = (2 * f3 - 3 * f2 + 1) * a.value[i] +
+                       (f3 - 2 * f2 + f) * dt * a.out_tangent[i] + (-2 * f3 + 3 * f2) * b.value[i] +
+                       (f3 - f2) * dt * b.in_tangent[i];
+        }
+        const bool constant =
+            a.value == b.value && (t.interpolation != Interpolation::cubic_spline ||
+                                   (std::all_of(a.out_tangent.begin(), a.out_tangent.end(),
+                                                [](float x) { return x == 0; }) &&
+                                    std::all_of(b.in_tangent.begin(), b.in_tangent.end(),
+                                                [](float x) { return x == 0; })));
+        if (constant)
+            v = a.value;
         auto &p = out[t.node];
-        if (t.path == Path::rotation)
+        if (t.path == Path::rotation && constant)
+            p.rotation = normalize({v[0], v[1], v[2], v[3]});
+        else if (t.path == Path::rotation && t.interpolation == Interpolation::cubic_spline) {
+            const auto len = v[0] * v[0] + v[1] * v[1] + v[2] * v[2] + v[3] * v[3];
+            if (!std::isfinite(len) || len < 1e-20F)
+                return false;
+            p.rotation = normalize({v[0], v[1], v[2], v[3]});
+        } else if (t.path == Path::rotation)
             p.rotation = slerp(a.value, b.value, f);
         else if (t.path == Path::translation)
             p.translation = {v[0], v[1], v[2]};

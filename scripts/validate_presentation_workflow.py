@@ -10,7 +10,7 @@ import tempfile
 import time
 
 
-def validate(vice, native):
+def validate(vice, native, example=None):
     passed, observed = [], {}
     def command(*args, expected=0):
         result = subprocess.run([str(vice), *map(str, args)], capture_output=True, text=True, timeout=180)
@@ -22,7 +22,7 @@ def validate(vice, native):
     with tempfile.TemporaryDirectory(prefix="vice-presentation-workflow-") as directory:
         root = Path(directory)
         project_root = root / "project"
-        shutil.copytree(Path(__file__).resolve().parent.parent / "examples/presentation-playground", project_root,
+        shutil.copytree(example or Path(__file__).resolve().parent.parent / "examples/presentation-playground", project_root,
                         ignore=shutil.ignore_patterns(".vice"))
         project = project_root / "presentation.viceproj"
         world = project_root / "assets/worlds/presentation.vworld"

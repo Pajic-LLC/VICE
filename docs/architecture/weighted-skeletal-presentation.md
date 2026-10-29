@@ -1,0 +1,13 @@
+# Weighted skeletal presentation
+
+VICE imports a bounded glTF 2.0 skeletal profile into version 2 rig assets. This extends the existing AnimationPlayer/RigPart contracts, so games control clip, clock, rate and play/loop flags through the same size-checked game module API. There is no new game-specific character type or ABI requirement.
+
+Import with `vice rig import SOURCE OUTPUT RIG_UUID ROOT_UUID`, attach the generated binding source to the project World and register the rig/mesh assets. The importer accepts embedded glTF/GLB, up to eight normalized joint influences, inverse-bind matrices and LINEAR/STEP/CUBICSPLINE clips. The current material profile uses opaque vertex/base colors. Unsupported transforms, morph targets, excess influences and unsupported material features fail explicitly. Existing rigid assets continue to work unchanged.
+
+`examples/skinning-playground/presentation.viceproj` demonstrates one weighted eleven-joint mesh with idle/walk/ride clips, physical character and vehicle interaction, spatial audio, rules and checkpoint continuation. Its neutral mannequin and district are validation geometry. Reproduce the source with `scripts/create_skinning_example.py`; run the integration gate with `scripts/validate_skinning_workflow.py --vice PATH --run-runtime`.
+
+World owns stable identities and playback intent. Renderer and Editor derive posed vertices, current/previous streams, deformed bounds and temporary resource aliases from that state. Save/restore and Play reset reconstruct the pose instead of persisting a GPU cache. Shared bind assets are never mutated. World root motion comes from simulation/gameplay; this slice does not extract animation root motion.
+
+Runtime entity inspection includes `animation_state` skin counts and `skin_render` cache decisions, sample time, geometry fingerprints and upload confirmation. The Editor renders the same weighted pose and picks using displayed bounds. Color, depth, shadows, motion and ray geometry use the same deformed mesh. Motion has a previous-position stream; bind-pose meshlets and simplified geometry are excluded until animation-aware equivalents exist.
+
+CPU linear blend skinning is the current reference and live implementation. Full regions sample normally, reduced regions at 15 Hz, static palettes reuse geometry, and inactive/nonresident caches are evicted. CPU throughput, memory and upload costs must be profiled before population scaling. This is the first weighted foundation; blending, IK, retargeting and GPU skinning remain future work. See [ADR 0032](../adr/0032-weighted-skeletal-presentation.md) for contracts, limits, alternatives and persistence semantics.

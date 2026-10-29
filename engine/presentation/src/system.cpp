@@ -245,7 +245,9 @@ bool System::advance(double seconds, std::string *d) {
                     impl_->world->resource_reference(part.entity, world::ResourceRole::render_mesh);
                 if (mesh.valid() ? bound != mesh : bound.has_value())
                     return fail(d, "Rig-part mesh changed.");
-                const auto global = compose(transform, pose[part.binding.node]);
+                const auto global = find_skin(rig->second, part.binding.node)
+                                        ? transform
+                                        : compose(transform, pose[part.binding.node]);
                 world::SpatialState location{{spatial->global_position.x + global.translation.x,
                                               spatial->global_position.y + global.translation.y,
                                               spatial->global_position.z + global.translation.z},
@@ -341,8 +343,15 @@ std::optional<AnimationObservation> System::animation(world::PersistentId id) co
         return std::nullopt;
     const auto count = std::count_if(impl_->parts.begin(), impl_->parts.end(),
                                      [&](const auto &part) { return part.binding.root == id; });
-    return AnimationObservation{r->second.clips[p->clip].name, r->second.clips[p->clip].duration,
-                                r->second.nodes.size(), static_cast<std::size_t>(count)};
+    AnimationObservation observation{r->second.clips[p->clip].name,
+                                     r->second.clips[p->clip].duration, r->second.nodes.size(),
+                                     static_cast<std::size_t>(count)};
+    observation.skin_count = r->second.skins.size();
+    for (const auto &skin : r->second.skins) {
+        observation.joint_count += skin.joints.size();
+        observation.weighted_vertices += skin.vertices.size();
+    }
+    return observation;
 }
 std::optional<AudioObservation> System::audio(world::PersistentId id) const {
     if (!impl_->current())
