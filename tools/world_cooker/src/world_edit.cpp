@@ -164,6 +164,17 @@ std::optional<Operation> read_operation(const std::string& name, std::istream& i
             op.dependency = d;
         }
         return op;
+    } else if (name == "set_powered_hinge" || name == "clear_powered_hinge") {
+        SetPoweredHinge op;
+        if (!read_id(input, op.entity))
+            return std::nullopt;
+        if (name == "set_powered_hinge") {
+            world::PoweredHinge h;
+            if (!world::read_powered_hinge(input, h))
+                return std::nullopt;
+            op.joint = h;
+        }
+        return op;
     } else if (name == "set_distance_link" || name == "clear_distance_link") {
         SetDistanceLink op;
         if (!read_id(input, op.entity)) return std::nullopt;
@@ -287,6 +298,25 @@ void affected(FileEditResult& result, const Transaction& transaction, const worl
                 if (value.dependency) add(*value.dependency);
                 const auto old = std::find_if(before.entities.begin(), before.entities.end(), [&](const auto& e) { return e.persistent_id == value.entity; });
                 if (old != before.entities.end() && old->dependency) add(*old->dependency);
+            } else if constexpr (std::is_same_v<T, SetPoweredHinge>) {
+                result.affected_entities.push_back(value.entity);
+                const auto add = [&](const world::PoweredHinge &h) {
+                    for (auto id : {h.first, h.second}) {
+                        result.affected_entities.push_back(id);
+                        const auto e =
+                            std::find_if(before.entities.begin(), before.entities.end(),
+                                         [&](const auto &e) { return e.persistent_id == id; });
+                        if (e != before.entities.end() && e->spatial_state)
+                            result.affected_regions.push_back(e->spatial_state->region);
+                    }
+                };
+                if (value.joint)
+                    add(*value.joint);
+                const auto e =
+                    std::find_if(before.entities.begin(), before.entities.end(),
+                                 [&](const auto &e) { return e.persistent_id == value.entity; });
+                if (e != before.entities.end() && e->powered_hinge)
+                    add(*e->powered_hinge);
             } else if constexpr (std::is_same_v<T, SetDistanceLink>) {
                 result.affected_entities.push_back(value.entity);
                 const auto add_endpoints = [&](const world::DistanceLink& link) {

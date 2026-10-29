@@ -78,6 +78,16 @@ struct AuthoredSimulation::State {
         world::RegionId region;
         ConstraintId native_id;
     };
+    struct Joint {
+        world::PersistentId owner;
+        world::EntityId entity;
+        world::PoweredHinge expected;
+        world::RegionId region;
+        ConstraintId native_id;
+    };
+    std::uint64_t joint_revision = 0;
+    std::vector<Joint> joints;
+    std::unordered_map<world::PersistentId, std::size_t, world::PersistentIdHash> joint_lookup;
     std::vector<Link> links;
     std::unordered_map<std::uint64_t, std::size_t> link_ids;
     std::uint64_t link_revision = 0;
@@ -260,6 +270,43 @@ bool AuthoredSimulation::reset(world::World& world, jobs::Scheduler& jobs, std::
         next->link_ids.emplace(record.native_id.value, next->links.size());
         next->links.push_back(record);
     }
+    for (const auto &e : snapshot.entities)
+        if (e.powered_hinge) {
+            const auto &h = *e.powered_hinge;
+            const auto a = next->body_lookup.find(h.first), b = next->body_lookup.find(h.second);
+            if (a == next->body_lookup.end() || b == next->body_lookup.end())
+                return fail(diagnostics, "Powered hinge endpoints require authored bodies.");
+            const auto &first = next->bodies[a->second];
+            const auto &second = next->bodies[b->second];
+            if (first.expected_spatial.region != second.expected_spatial.region)
+                return fail(diagnostics, "Powered hinge endpoints require one region.");
+            State::Joint joint{
+                e.persistent_id,
+                *world.find(e.persistent_id),
+                h,
+                first.expected_spatial.region,
+                {static_cast<std::uint64_t>(next->links.size() + next->joints.size() + 1)}};
+            HingeConstraintDesc d;
+            d.collide_connected = false;
+            d.id = joint.native_id;
+            d.first = first.desc.participant;
+            d.second = second.desc.participant;
+            d.min_angle = h.min_angle;
+            d.max_angle = h.max_angle;
+            d.enabled = h.enabled;
+            d.local_frames = std::array{
+                HingeLocalFrame{h.first_frame.anchor, h.first_frame.axis, h.first_frame.normal},
+                HingeLocalFrame{h.second_frame.anchor, h.second_frame.axis, h.second_frame.normal}};
+            d.motor = {static_cast<ConstraintMotorMode>(h.drive.mode),
+                       h.drive.target_velocity,
+                       h.drive.target_angle,
+                       {h.drive.frequency_hz, h.drive.damping_ratio},
+                       h.drive.max_torque};
+            if (!next->domain_lookup.at(joint.region)->create_constraint(d))
+                return fail(diagnostics, "Could not instantiate powered hinge.");
+            next->joint_lookup.emplace(e.persistent_id, next->joints.size());
+            next->joints.push_back(joint);
+        }
     for (const auto& entity : snapshot.entities) {
         if (!entity.character) continue;
         const auto owner = world.find(entity.persistent_id);
@@ -291,6 +338,7 @@ bool AuthoredSimulation::reset(world::World& world, jobs::Scheduler& jobs, std::
     next->attachment_revision=world.attachment_revision();
     next->vehicle_revision=world.vehicle_revision();
     next->character_revision = world.character_revision();
+    next->joint_revision = world.powered_hinge_revision();
     next->link_revision = world.distance_link_revision();
     if(!world.begin_causal_recording(true)) return fail(diagnostics,"Causal event sequence is exhausted.");
     state_ = std::move(next);
@@ -317,6 +365,36 @@ bool AuthoredSimulation::step(std::string* diagnostics) {
     for (const auto& record : state_->bodies) {
         if (!state_->matches(record)) {
             return fail(diagnostics, "Authored body state was edited externally; reset the simulation.");
+        }
+    }
+    if (state_->world->powered_hinge_revision() != state_->joint_revision)
+        return fail(diagnostics, "Joint topology changed; reset simulation.");
+    // Validate every joint before mutating any native actuator. Structural changes require reset.
+    for (const auto &j : state_->joints) {
+        const auto id = state_->world->find(j.owner);
+        const auto h = id ? state_->world->powered_hinge(*id) : std::nullopt;
+        if (!id || *id != j.entity || !h)
+            return fail(diagnostics, "Powered hinge changed externally; reset simulation.");
+        auto config = *h;
+        config.drive = j.expected.drive;
+        config.enabled = j.expected.enabled;
+        if (config != j.expected)
+            return fail(diagnostics,
+                        "Powered hinge reference frames/endpoints changed; reset simulation.");
+    }
+    for (auto &j : state_->joints) {
+        const auto h = *state_->world->powered_hinge(j.entity);
+        if (h != j.expected) {
+            auto *domain = state_->domain_lookup.at(j.region);
+            const auto &v = h.drive;
+            if (!domain->set_hinge_motor(j.native_id, {static_cast<ConstraintMotorMode>(v.mode),
+                                                       v.target_velocity,
+                                                       v.target_angle,
+                                                       {v.frequency_hz, v.damping_ratio},
+                                                       v.max_torque}) ||
+                !domain->set_constraint_enabled(j.native_id, h.enabled))
+                return fail(diagnostics, "Could not apply joint drive.");
+            j.expected = h;
         }
     }
     // Apply explicit World fidelity changes before the next solver step.
@@ -497,5 +575,69 @@ std::optional<BodySupport> AuthoredSimulation::body_support(const world::Persist
         best = alignment;
     }
     return result;
+}
+} // namespace vice::rigid_body
+
+namespace vice::rigid_body {
+std::optional<PoweredHingeObservation>
+AuthoredSimulation::powered_hinge(world::PersistentId owner) const noexcept {
+    if (!state_->world || state_->unpublished_step ||
+        state_->world->powered_hinge_revision() != state_->joint_revision)
+        return {};
+    const auto i = state_->joint_lookup.find(owner);
+    if (i == state_->joint_lookup.end())
+        return {};
+    const auto &j = state_->joints[i->second];
+    const auto id = state_->world->find(owner);
+    const auto h = id ? state_->world->powered_hinge(*id) : std::nullopt;
+    if (!h || *id != j.entity)
+        return {};
+    auto config = *h;
+    config.drive = j.expected.drive;
+    config.enabled = j.expected.enabled;
+    if (config != j.expected)
+        return {};
+    const auto a = state_->body_lookup.find(j.expected.first),
+               b = state_->body_lookup.find(j.expected.second);
+    if (a == state_->body_lookup.end() || b == state_->body_lookup.end() ||
+        !state_->matches(state_->bodies[a->second]) || !state_->matches(state_->bodies[b->second]))
+        return {};
+    const auto s = state_->domain(j.region)->constraint_state(j.native_id);
+    if (!s || !s->coordinate)
+        return {};
+    const auto region = state_->world->region(j.region);
+    return PoweredHingeObservation{*h,
+                                   *s->coordinate,
+                                   h->drive.target_angle - *s->coordinate,
+                                   s->motor_impulse,
+                                   s->limit_impulse,
+                                   s->linear_impulse,
+                                   region && region->fidelity != world::RegionFidelity::inactive &&
+                                       s->enabled};
+}
+BodyControlResult AuthoredSimulation::control_powered_hinge(world::PersistentId owner,
+                                                            const world::JointDrive &d,
+                                                            bool enabled) {
+    if (!world::valid(d))
+        return BodyControlResult::invalid_argument;
+    const auto i = state_->joint_lookup.find(owner);
+    if (!state_->world || i == state_->joint_lookup.end())
+        return BodyControlResult::not_found;
+    const auto observed = powered_hinge(owner);
+    if (!observed)
+        return BodyControlResult::reset_required;
+    const auto &j = state_->joints[i->second];
+    const auto region = state_->world->region(j.region);
+    if (!region)
+        return BodyControlResult::reset_required;
+    if (region->fidelity == world::RegionFidelity::inactive)
+        return BodyControlResult::inactive_region;
+    auto h = observed->intent;
+    h.drive = d;
+    h.enabled = enabled;
+    if (!world::valid(h))
+        return BodyControlResult::invalid_argument;
+    return state_->world->set_powered_hinge(j.entity, h) ? BodyControlResult::applied
+                                                         : BodyControlResult::reset_required;
 }
 } // namespace vice::rigid_body

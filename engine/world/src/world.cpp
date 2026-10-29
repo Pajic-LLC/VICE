@@ -1,3 +1,4 @@
+#include <atomic>
 #include <vice/world/world.hpp>
 
 #include <algorithm>
@@ -57,8 +58,11 @@ EntityId World::allocate(const PersistentId persistent_id) {
 
 bool World::destroy_entity(const EntityId entity) {
     if (has_attached_characters(entity) || has_rig_parts(entity)) return false;
-    if (alive(entity) && (distance_link_users_.contains(slots_[entity.index].persistent_id) ||
-        dependency_provider_users_.contains(slots_[entity.index].persistent_id) || dependency_gate_users_.contains(slots_[entity.index].persistent_id))) return false;
+    if (alive(entity) && (powered_hinge_users_.contains(slots_[entity.index].persistent_id) ||
+                          distance_link_users_.contains(slots_[entity.index].persistent_id) ||
+                          dependency_provider_users_.contains(slots_[entity.index].persistent_id) ||
+                          dependency_gate_users_.contains(slots_[entity.index].persistent_id)))
+        return false;
     if (!alive(entity)) {
         return false;
     }
@@ -75,6 +79,8 @@ bool World::destroy_entity(const EntityId entity) {
     (void)clear_character(entity);
     (void)clear_dependency(entity);
     (void)clear_distance_link(entity);
+    if (!clear_powered_hinge(entity))
+        return false;
     if(!remove_entity_relations(slot.persistent_id))return false;
     clear_components(entity);
     for (const auto &a : accounts)
@@ -354,6 +360,18 @@ std::optional<RigidBox> World::rigid_box(const EntityId entity) const noexcept {
 bool World::link_endpoint_change_allowed(const EntityId entity, const std::optional<RegionId> region_id,
     const std::optional<RigidMotion> motion) const {
     const auto owner = slots_[entity.index].persistent_id;
+    if (const auto joints = powered_hinge_users_.find(owner);
+        joints != powered_hinge_users_.end()) {
+        for (auto user : joints->second) {
+            const auto &h = powered_hinges_.at(slots_[user.index].persistent_id);
+            const auto other = find(h.first == owner ? h.second : h.first);
+            const auto p = other ? spatial_state(*other) : std::nullopt;
+            const auto b = other ? rigid_box(*other) : std::nullopt;
+            if (!region_id || !motion || !p || !b || p->region != *region_id ||
+                (*motion != RigidMotion::dynamic_body && b->motion != RigidMotion::dynamic_body))
+                return false;
+        }
+    }
     const auto users = distance_link_users_.find(owner);
     if (users == distance_link_users_.end()) return true;
     for (const auto user : users->second) {
@@ -601,4 +619,87 @@ std::optional<StreamingCellId> World::streaming_cell(const EntityId entity) cons
     return found->second.streaming_cell;
 }
 
+} // namespace vice::world
+
+namespace vice::world {
+bool World::advance_powered_hinge_revision() noexcept {
+    static std::atomic<std::uint64_t> next{1};
+    auto v = next.load(std::memory_order_relaxed);
+    for (;;) {
+        if (v == std::numeric_limits<std::uint64_t>::max())
+            return false;
+        if (next.compare_exchange_weak(v, v + 1, std::memory_order_relaxed)) {
+            powered_hinge_revision_ = v;
+            return true;
+        }
+    }
+}
+bool World::set_powered_hinge(EntityId entity, const PoweredHinge &h) {
+    if (!alive(entity) || !valid(h))
+        return false;
+    const auto owner = *persistent_id(entity);
+    const auto a = find(h.first), b = find(h.second);
+    if (!a || !b || owner == h.first || owner == h.second)
+        return false;
+    const auto pa = spatial_state(*a), pb = spatial_state(*b);
+    const auto ba = rigid_box(*a), bb = rigid_box(*b);
+    if (!pa || !pb || !ba || !bb || pa->region != pb->region ||
+        (ba->motion != RigidMotion::dynamic_body && bb->motion != RigidMotion::dynamic_body))
+        return false;
+    auto old = powered_hinge(entity);
+    if (!old && powered_hinges_.size() >= 4096)
+        return false;
+    if (old == h)
+        return true;
+    if (old) {
+        auto config = h;
+        config.drive = old->drive;
+        config.enabled = old->enabled;
+        if (config == *old) {
+            powered_hinges_.at(owner) = h;
+            return true;
+        }
+    }
+    if (!advance_powered_hinge_revision())
+        return false;
+    if (old) {
+        for (auto id : {old->first, old->second}) {
+            auto i = powered_hinge_users_.find(id);
+            if (i != powered_hinge_users_.end()) {
+                std::erase(i->second, entity);
+                if (i->second.empty())
+                    powered_hinge_users_.erase(i);
+            }
+        }
+    }
+    powered_hinges_.insert_or_assign(owner, h);
+    powered_hinge_users_[h.first].push_back(entity);
+    powered_hinge_users_[h.second].push_back(entity);
+    return true;
+}
+bool World::clear_powered_hinge(EntityId entity) {
+    if (!alive(entity))
+        return false;
+    const auto h = powered_hinge(entity);
+    if (!h)
+        return true;
+    if (!advance_powered_hinge_revision())
+        return false;
+    for (auto id : {h->first, h->second}) {
+        auto i = powered_hinge_users_.find(id);
+        if (i == powered_hinge_users_.end())
+            continue;
+        std::erase(i->second, entity);
+        if (i->second.empty())
+            powered_hinge_users_.erase(i);
+    }
+    powered_hinges_.erase(*persistent_id(entity));
+    return true;
+}
+std::optional<PoweredHinge> World::powered_hinge(EntityId entity) const noexcept {
+    if (!alive(entity))
+        return std::nullopt;
+    const auto i = powered_hinges_.find(*persistent_id(entity));
+    return i == powered_hinges_.end() ? std::nullopt : std::optional{i->second};
+}
 } // namespace vice::world

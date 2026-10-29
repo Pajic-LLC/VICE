@@ -117,6 +117,12 @@ public:
     bool set_rigid_box(EntityId entity, const RigidBox& box);
     bool clear_rigid_box(EntityId entity);
     [[nodiscard]] std::optional<RigidBox> rigid_box(EntityId entity) const noexcept;
+    [[nodiscard]] std::uint64_t powered_hinge_revision() const noexcept {
+        return powered_hinge_revision_;
+    }
+    bool set_powered_hinge(EntityId entity, const PoweredHinge &joint);
+    bool clear_powered_hinge(EntityId entity);
+    [[nodiscard]] std::optional<PoweredHinge> powered_hinge(EntityId entity) const noexcept;
     bool set_distance_link(EntityId entity, const DistanceLink& link);
     bool clear_distance_link(EntityId entity);
     [[nodiscard]] std::optional<DistanceLink> distance_link(EntityId entity) const noexcept;
@@ -325,6 +331,10 @@ private:
     bool has_attached_characters(EntityId carrier) const noexcept;
     std::uint64_t vehicle_revision_ = 0;
     bool advance_vehicle_revision() noexcept;
+    bool advance_powered_hinge_revision() noexcept;
+    std::uint64_t powered_hinge_revision_ = 0;
+    std::unordered_map<PersistentId, PoweredHinge, PersistentIdHash> powered_hinges_;
+    std::unordered_map<PersistentId, std::vector<EntityId>, PersistentIdHash> powered_hinge_users_;
     std::uint64_t distance_link_revision_ = 0;
     std::unordered_map<PersistentId, std::vector<EntityId>, PersistentIdHash> distance_link_users_;
     std::vector<Slot> slots_;

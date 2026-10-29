@@ -10,12 +10,13 @@
 #include <vice/world/light.hpp>
 #include <vice/world/material.hpp>
 #include <vice/world/persistent_id.hpp>
+#include <vice/world/powered_hinge.hpp>
 #include <vice/world/presentation.hpp>
 #include <vice/world/quantity.hpp>
 #include <vice/world/reflection_probe.hpp>
 #include <vice/world/resource.hpp>
-#include <vice/world/rule.hpp>
 #include <vice/world/rigid_box.hpp>
+#include <vice/world/rule.hpp>
 #include <vice/world/schedule.hpp>
 #include <vice/world/spatial.hpp>
 #include <vice/world/vehicle.hpp>
@@ -35,6 +36,7 @@ struct SnapshotEntity {
     std::optional<ReflectionProbe> reflection_probe;
     std::optional<RigidBox> rigid_box;
     std::optional<DistanceLink> distance_link;
+    std::optional<PoweredHinge> powered_hinge;
     std::optional<Dependency> dependency;
     std::optional<Character> character;
     std::optional<Vehicle> vehicle;
@@ -86,6 +88,9 @@ struct WorldSnapshot {
 [[nodiscard]] bool validate_characters(const WorldSnapshot& snapshot, std::string* diagnostics = nullptr);
 
 [[nodiscard]] bool validate_dependencies(const WorldSnapshot& snapshot, std::string* diagnostics = nullptr);
+
+[[nodiscard]] bool validate_powered_hinges(const WorldSnapshot &snapshot,
+                                           std::string *diagnostics = nullptr);
 
 [[nodiscard]] bool validate_distance_links(const WorldSnapshot& snapshot, std::string* diagnostics = nullptr);
 

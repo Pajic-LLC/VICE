@@ -409,6 +409,18 @@ WorldSnapshotEncodeResult encode_world_snapshot(const WorldSnapshot& snapshot_da
     }
     append_u32(payload, static_cast<std::uint32_t>(snapshot.rules.size()));
     for (const auto &rule : snapshot.rules) { std::ostringstream text; write_world_rule(text, rule); append_string(payload, text.str()); }
+    const auto hinges = std::count_if(snapshot.entities.begin(), snapshot.entities.end(),
+                                      [](const auto &e) { return e.powered_hinge.has_value(); });
+    append_u32(payload, static_cast<std::uint32_t>(hinges));
+    for (const auto &e : snapshot.entities)
+        if (e.powered_hinge) {
+            append_id(payload, e.persistent_id);
+            std::ostringstream text;
+            text.imbue(std::locale::classic());
+            text.precision(std::numeric_limits<float>::max_digits10);
+            write_powered_hinge(text, *e.powered_hinge);
+            append_string(payload, text.str());
+        }
     const auto& clock=snapshot.clock;append_u64(payload,clock.ticks);append_u32(payload,clock.rate_milli);append_u32(payload,clock.rate_remainder);append_f64(payload,clock.input_fraction);append_u8(payload,clock.paused?1U:0U);append_u8(payload,clock.automatic?1U:0U);
     result.bytes.reserve(header_size + payload.size());
     result.bytes.insert(result.bytes.end(), world_magic.begin(), world_magic.end());
@@ -975,6 +987,35 @@ WorldSnapshotDecodeResult decode_world_snapshot(const std::span<const std::byte>
             std::istringstream in(text);
             if (!read_world_rule(in, rule) || (in >> std::ws, !in.eof())) { result.diagnostics = "Invalid rule record."; return result; }
             snapshot.rules.push_back(std::move(rule));
+        }
+    }
+    if (version >= 23U) {
+        std::uint32_t count = 0;
+        if (!reader.read_u32(count) || count > 4096) {
+            result.diagnostics = "Unsafe powered hinge count.";
+            return result;
+        }
+        std::unordered_set<PersistentId, PersistentIdHash> seen;
+        std::unordered_map<PersistentId, std::size_t, PersistentIdHash> owners;
+        owners.reserve(snapshot.entities.size());
+        for (std::size_t i = 0; i < snapshot.entities.size(); ++i)
+            owners.emplace(snapshot.entities[i].persistent_id, i);
+        for (std::uint32_t i = 0; i < count; ++i) {
+            PersistentId id;
+            std::string text;
+            PoweredHinge h;
+            if (!reader.read_id(id) || !seen.insert(id).second || !reader.read_string(text, 4096)) {
+                result.diagnostics = "Truncated/duplicate powered hinge.";
+                return result;
+            }
+            std::istringstream in(text);
+            in.imbue(std::locale::classic());
+            auto e = owners.find(id);
+            if (e == owners.end() || !read_powered_hinge(in, h) || (in >> std::ws, !in.eof())) {
+                result.diagnostics = "Invalid powered hinge.";
+                return result;
+            }
+            snapshot.entities[e->second].powered_hinge = h;
         }
     }
     if(version>=18U){std::uint8_t paused=0,automatic=0;auto& c=snapshot.clock;if(!reader.read_u64(c.ticks)||!reader.read_u32(c.rate_milli)||!reader.read_u32(c.rate_remainder)||!reader.read_f64(c.input_fraction)||!reader.read_u8(paused)||paused>1||!reader.read_u8(automatic)||automatic>1){result.diagnostics="Invalid/truncated World clock.";return result;}c.paused=paused!=0;c.automatic=automatic!=0;if(!valid(c)){result.diagnostics="Invalid World clock state.";return result;}}

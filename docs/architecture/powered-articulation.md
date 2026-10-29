@@ -1,0 +1,13 @@
+# Powered articulation foundation
+
+VICE now owns persistent one-axis joints and bounded pose drives in the authoritative World. `PoweredHinge` is generic physics state between two body UUIDs; games assign meaning. Its logical owner has its own stable entity identity. The adapter reconstructs native constraints from body-local reference frames, retaining the angular zero across save/restore.
+
+Author a `powered_hinge` version-1 record on an entity, or use revision-safe `set_powered_hinge OWNER RECORD` / `clear_powered_hinge OWNER` World edits. The record contains endpoint UUIDs; first and second anchor/axis/normal vectors; minimum and maximum angles; drive mode, target angle, angular velocity, frequency, damping and torque cap; and enabled flag. Frame anchors use body-local COM metres after authored scale. Read an existing record through `vice world inspect` to avoid hand-copying field order.
+
+Game modules use append-only `read_powered_hinge` and `control_powered_hinge`. Reads expose copied persistent intent and optional actual solver state. `simulated` distinguishes an available physics observation from authoring-only state; `active` reflects domain residency and joint enablement. Writes are validated on the lifecycle owner thread, reject frame callbacks, and apply intent at the next fixed simulation step. Structural edits require simulation reset. Missing joint components report `no_link`, missing entities `not_found`, absent physics `unavailable`, inactive domains `inactive_region`, and stale topology `reset_required`.
+
+Inspect the logical joint UUID with Runtime debug for actual angle/error, motor impulse, limit impulse and linear constraint impulse. Motor impulse has angular-impulse units; a torque cap is a per-second limit, not the value to compare directly to an impulse. Adjacent connected bodies have pair collision excluded while the joint exists. Environmental collisions and nonadjacent pairs remain active.
+
+`examples/powered-articulation` is a primitive mechanical lab, not finished character art or a balanced biped. Space disturbs the link, E changes its target, and R switches actuation off/on. `scripts/validate_articulation_workflow.py --vice PATH --run-runtime` validates source edits, staging and fresh-process checkpoint reconstruction.
+
+Snapshot v23 reads prior versions and persists the local frames, limits, drive and body state. Editor Play/reset uses the same contracts. Solver caches and native handles are disposable; cold solver continuity is coherent, not guaranteed bit-identical. See [ADR 0033](../adr/0033-persistent-powered-hinges.md) for invariants, failure behavior, fidelity, cost and next gates.

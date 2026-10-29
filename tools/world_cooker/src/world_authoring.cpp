@@ -254,6 +254,18 @@ namespace {
                 if (!entity) { diagnostics = "Dependency entity does not exist."; return false; }
                 entity->dependency = value.dependency;
                 return true;
+            } else if constexpr (std::is_same_v<Value, SetPoweredHinge>) {
+                auto *e = find_entity(candidate, value.entity);
+                if (!e) {
+                    diagnostics = "Powered hinge owner is missing.";
+                    return false;
+                }
+                if (value.joint && !world::valid(*value.joint)) {
+                    diagnostics = "Invalid powered hinge.";
+                    return false;
+                }
+                e->powered_hinge = value.joint;
+                return true;
             } else if constexpr (std::is_same_v<Value, SetDistanceLink>) {
                 auto* entity = find_entity(candidate, value.entity);
                 if (!entity) { diagnostics = "Entity does not exist: " + value.entity.to_string(); return false; }

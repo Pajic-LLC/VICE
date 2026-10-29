@@ -121,8 +121,8 @@ int main(){using namespace vice;
 #endif
  // Version 11 marker fixture predates material IDs and catalog tails.
  world::World old;require(old.begin_causal_recording(),"old capture fixture");auto legacy=world::encode_world_snapshot(old.snapshot()).bytes;
- require(legacy.size() == 334, "known v12 empty capture layout");
- legacy.resize(legacy.size() - 70);
+ require(legacy.size() == 338, "known v12 empty capture layout");
+ legacy.resize(legacy.size() - 74);
  legacy.erase(legacy.begin() + 255, legacy.begin() + 264);
  legacy.erase(legacy.begin() + 223, legacy.begin() + 255);
  legacy[8] = std::byte{11};

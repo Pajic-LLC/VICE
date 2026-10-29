@@ -18,6 +18,7 @@ namespace vice::rigid_body {
 struct Domain::ConstraintRuntimeState {
     std::unordered_map<std::uint64_t, ConstraintBreakThresholds> break_thresholds;
     std::vector<ConstraintBreakEvent> break_events;
+    std::unordered_map<std::uint64_t, std::array<JPH::BodyID, 2>> excluded_pairs;
 };
 
 namespace {
@@ -389,6 +390,10 @@ bool Domain::create_constraint(const HingeConstraintDesc& desc) {
         !valid_break_thresholds(desc.break_thresholds)) {
         return false;
     }
+    if (desc.local_frames)
+        for (const auto &f : *desc.local_frames)
+            if (!finite(f.anchor) || !perpendicular_axes(f.axis, f.normal))
+                return false;
     if (!constraint_runtime_) {
         constraint_runtime_ = std::make_shared<ConstraintRuntimeState>();
     }
@@ -401,6 +406,17 @@ bool Domain::create_constraint(const HingeConstraintDesc& desc) {
     settings.mHingeAxis2 = settings.mHingeAxis1;
     settings.mNormalAxis1 = normalized_jolt_vector(desc.normal);
     settings.mNormalAxis2 = settings.mNormalAxis1;
+    if (desc.local_frames) {
+        const auto &a = (*desc.local_frames)[0];
+        const auto &b = (*desc.local_frames)[1];
+        settings.mSpace = JPH::EConstraintSpace::LocalToBodyCOM;
+        settings.mPoint1 = jolt_position(a.anchor);
+        settings.mPoint2 = jolt_position(b.anchor);
+        settings.mHingeAxis1 = normalized_jolt_vector(a.axis);
+        settings.mHingeAxis2 = normalized_jolt_vector(b.axis);
+        settings.mNormalAxis1 = normalized_jolt_vector(a.normal);
+        settings.mNormalAxis2 = normalized_jolt_vector(b.normal);
+    }
     settings.mLimitsMin = desc.min_angle;
     settings.mLimitsMax = desc.max_angle;
     settings.mLimitsSpringSettings = jolt_spring(desc.limits_spring);
@@ -414,6 +430,14 @@ bool Domain::create_constraint(const HingeConstraintDesc& desc) {
     auto* constraint = static_cast<JPH::HingeConstraint*>(find_constraint(*impl_, desc.id));
     if (constraint == nullptr) {
         return false;
+    }
+    if (!desc.collide_connected) {
+        const auto a = impl_->find(desc.first)->body_id, b = impl_->find(desc.second)->body_id;
+        ++impl_->excluded_contact_pairs_[Impl::contact_pair(a, b)];
+        constraint_runtime_->excluded_pairs.emplace(desc.id.value, std::array{a, b});
+        auto &bi = impl_->physics_system_.GetBodyInterface();
+        bi.InvalidateContactCache(a);
+        bi.InvalidateContactCache(b);
     }
     configure_hinge_motor(*constraint, desc.motor);
     constraint_runtime_->break_thresholds[desc.id.value] = desc.break_thresholds;
@@ -545,6 +569,18 @@ bool Domain::destroy_constraint(const ConstraintId id) {
     impl_->physics_system_.RemoveConstraint(constraint);
     if (constraint_runtime_) {
         constraint_runtime_->break_thresholds.erase(id.value);
+        if (const auto pair = constraint_runtime_->excluded_pairs.find(id.value);
+            pair != constraint_runtime_->excluded_pairs.end()) {
+            const auto a = pair->second[0], b = pair->second[1];
+            const auto key = Impl::contact_pair(a, b);
+            if (auto i = impl_->excluded_contact_pairs_.find(key);
+                i != impl_->excluded_contact_pairs_.end() && !--i->second)
+                impl_->excluded_contact_pairs_.erase(i);
+            auto &bi = impl_->physics_system_.GetBodyInterface();
+            bi.InvalidateContactCache(a);
+            bi.InvalidateContactCache(b);
+            constraint_runtime_->excluded_pairs.erase(pair);
+        }
     }
 
     auto& body_interface = impl_->physics_system_.GetBodyInterface();

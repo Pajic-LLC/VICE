@@ -575,21 +575,45 @@ void append_entities(std::string& data, const world::WorldSnapshot& snapshot) {
             data += '}';
         }
 
-    data += ",\"distance_link\":";
-    if (!value.distance_link) data += "null";
-    else {
-        const auto& link = *value.distance_link;
-        data += "{\"first\":"; append_json_string(data, link.first.to_string());
-        data += ",\"second\":"; append_json_string(data, link.second.to_string());
-        data += ",\"min_distance\":"; append_double(data, link.min_distance);
-        data += ",\"max_distance\":"; append_double(data, link.max_distance);
-        data += ",\"frequency_hz\":"; append_double(data, link.frequency_hz);
-        data += ",\"damping_ratio\":"; append_double(data, link.damping_ratio);
-        data += ",\"break_threshold\":"; append_double(data, link.break_threshold);
-        data += ",\"broken\":"; data += link.broken ? "true" : "false";
-        data += ",\"last_break_impulse\":"; append_double(data, link.last_break_impulse);
-        data += ",\"break_step\":" + std::to_string(link.break_step) + "}";
-    }
+        data += ",\"powered_hinge\":";
+        if (value.powered_hinge) {
+            std::ostringstream text;
+            text.precision(9);
+            world::write_powered_hinge(text, *value.powered_hinge);
+            data += "{\"record\":";
+            append_json_string(data, text.str());
+            data += ",\"first\":";
+            append_json_string(data, value.powered_hinge->first.to_string());
+            data += ",\"second\":";
+            append_json_string(data, value.powered_hinge->second.to_string());
+            data += "}";
+        } else
+            data += "null";
+        data += ",\"distance_link\":";
+        if (!value.distance_link)
+            data += "null";
+        else {
+            const auto &link = *value.distance_link;
+            data += "{\"first\":";
+            append_json_string(data, link.first.to_string());
+            data += ",\"second\":";
+            append_json_string(data, link.second.to_string());
+            data += ",\"min_distance\":";
+            append_double(data, link.min_distance);
+            data += ",\"max_distance\":";
+            append_double(data, link.max_distance);
+            data += ",\"frequency_hz\":";
+            append_double(data, link.frequency_hz);
+            data += ",\"damping_ratio\":";
+            append_double(data, link.damping_ratio);
+            data += ",\"break_threshold\":";
+            append_double(data, link.break_threshold);
+            data += ",\"broken\":";
+            data += link.broken ? "true" : "false";
+            data += ",\"last_break_impulse\":";
+            append_double(data, link.last_break_impulse);
+            data += ",\"break_step\":" + std::to_string(link.break_step) + "}";
+        }
 
         const auto owner = observed.find(value.persistent_id);
         data += ",\"dependency\":" + world::serialize_dependency_state(owner ? observed.dependency_state(*owner) : std::nullopt);

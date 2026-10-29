@@ -179,6 +179,7 @@ struct InspectorData {
     std::optional<world::MaterialSurface> material;
     std::optional<world::RigidBox> rigid_box;
     std::optional<world::DistanceLink> distance_link;
+    std::optional<world::PoweredHinge> powered_hinge;
     std::optional<world::Dependency> dependency;
     std::optional<world::Character> character;
     std::optional<world::Vehicle> vehicle;

@@ -39,8 +39,8 @@ int main() {
     require(decoded.snapshot && decoded.snapshot->entities.back().distance_link == parsed.snapshot->entities.back().distance_link, "v8 link round trip");
     world::World legacy; require(legacy.create_entity(payload_id).has_value(), "legacy fixture");
     auto bytes = world::encode_world_snapshot(legacy.snapshot()).bytes;
-    require(bytes.size() == 140, "minimal current layout");
-    bytes.resize(bytes.size() - 70U);
+    require(bytes.size() == 144, "minimal current layout");
+    bytes.resize(bytes.size() - 74U);
     bytes.pop_back();
     bytes.erase(bytes.begin() + 64);
     bytes.erase(bytes.begin() + 63);

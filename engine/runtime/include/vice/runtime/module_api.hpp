@@ -300,6 +300,22 @@ struct CameraPose {
     double position[3]{};
     float rotation[4]{0,0,0,1};
 };
+enum class JointDriveMode : std::uint32_t { off, velocity, position, position_and_velocity };
+struct JointDrive {
+    std::uint32_t size = sizeof(JointDrive);
+    JointDriveMode mode = JointDriveMode::position;
+    float target_angle = 0, target_velocity = 0, frequency_hz = 4, damping_ratio = 1,
+          max_torque = 100;
+};
+struct PoweredHingeSnapshot {
+    std::uint32_t size = sizeof(PoweredHingeSnapshot);
+    EntityId first{}, second{};
+    JointDrive drive{};
+    std::uint32_t enabled = 0, simulated = 0, active = 0;
+    float min_angle = 0, max_angle = 0, angle = 0, error = 0, motor_impulse = 0, limit_impulse = 0,
+          linear_impulse = 0;
+};
+
 struct AnimationSnapshot {
     std::uint32_t size=sizeof(AnimationSnapshot),clip=0,playing=0,looping=0,node_count=0,part_count=0;
     float rate=1;double time=0,duration=0;char clip_name[129]{};
@@ -616,6 +632,9 @@ struct HostApi {
     Result (*read_rules)(void *, RulePageSnapshot *) noexcept = nullptr;
     Result (*read_rule_info)(void *, RuleInfoSnapshot *) noexcept = nullptr;
     Result (*dispatch_rules)(void *, std::uint32_t, RuleDispatchSnapshot *) noexcept = nullptr;
+    Result (*read_powered_hinge)(void *, EntityId, PoweredHingeSnapshot *) noexcept = nullptr;
+    Result (*control_powered_hinge)(void *, EntityId, const JointDrive *,
+                                    std::uint32_t) noexcept = nullptr;
 };
 
 inline constexpr std::size_t host_api_v1_size = offsetof(HostApi, read_entity);
@@ -741,6 +760,23 @@ public:
     [[nodiscard]] Result set_camera_pose(EntityId id,const CameraPose& pose) const noexcept {
         if(!host_ || host_->size<offsetof(HostApi,set_camera_pose)+sizeof(host_->set_camera_pose)||!host_->set_camera_pose)return Result::unavailable;
         return host_->set_camera_pose(host_->context,id,&pose);
+    }
+    [[nodiscard]] Result read_powered_hinge(EntityId id, PoweredHingeSnapshot &out) const noexcept {
+        if (!host_ ||
+            host_->size <
+                offsetof(HostApi, read_powered_hinge) + sizeof(host_->read_powered_hinge) ||
+            !host_->read_powered_hinge)
+            return Result::unavailable;
+        return host_->read_powered_hinge(host_->context, id, &out);
+    }
+    [[nodiscard]] Result control_powered_hinge(EntityId id, const JointDrive &drive,
+                                               bool enabled = true) const noexcept {
+        if (!host_ ||
+            host_->size <
+                offsetof(HostApi, control_powered_hinge) + sizeof(host_->control_powered_hinge) ||
+            !host_->control_powered_hinge)
+            return Result::unavailable;
+        return host_->control_powered_hinge(host_->context, id, &drive, enabled ? 1U : 0U);
     }
     [[nodiscard]] Result read_animation(EntityId id,AnimationSnapshot& output)const noexcept {
         if(!host_||host_->size<offsetof(HostApi,read_animation)+sizeof(host_->read_animation)||!host_->read_animation)return Result::unavailable;

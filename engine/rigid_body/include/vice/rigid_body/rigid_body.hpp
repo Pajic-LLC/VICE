@@ -3,6 +3,7 @@
 #include <vice/math/math.hpp>
 #include <vice/simulation/simulation.hpp>
 
+#include <array>
 #include <compare>
 #include <cstddef>
 #include <cstdint>
@@ -148,6 +149,10 @@ struct FixedConstraintDesc {
     bool enabled = true;
 };
 
+// Local COM frames preserve the angular zero across reconstruction/checkpoints.
+struct HingeLocalFrame {
+    math::Vec3 anchor{}, axis{0, 0, 1}, normal{1, 0, 0};
+};
 struct HingeConstraintDesc {
     ConstraintId id{};
     simulation::ParticipantId first{};
@@ -162,6 +167,8 @@ struct HingeConstraintDesc {
     HingeMotorDesc motor{};
     ConstraintBreakThresholds break_thresholds{};
     bool enabled = true;
+    std::optional<std::array<HingeLocalFrame, 2>> local_frames;
+    bool collide_connected = true;
 };
 
 struct SliderConstraintDesc {

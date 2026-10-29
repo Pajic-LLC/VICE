@@ -1,0 +1,7 @@
+vice-project 1
+id d7000000-0000-4000-8000-000000000100
+name "Powered Articulation Lab"
+game_name "Powered Articulation Lab"
+game_target "powered-articulation"
+assets "assets"
+startup_world "worlds/articulation.vworld"

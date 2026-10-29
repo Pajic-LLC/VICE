@@ -49,7 +49,14 @@ std::string serialize_source_manifest(
     const world::WorldSnapshot& snapshot,
     std::string* const diagnostics
 ) {
-    if (!world::validate_distance_links(snapshot, diagnostics) || !world::validate_dependencies(snapshot, diagnostics) || !world::validate_character_attachments(snapshot, diagnostics) || !world::validate_presentation(snapshot, diagnostics) || !world::validate_vehicles(snapshot, diagnostics) || !world::validate_characters(snapshot, diagnostics)) return {};
+    if (!world::validate_powered_hinges(snapshot, diagnostics) ||
+        !world::validate_distance_links(snapshot, diagnostics) ||
+        !world::validate_dependencies(snapshot, diagnostics) ||
+        !world::validate_character_attachments(snapshot, diagnostics) ||
+        !world::validate_presentation(snapshot, diagnostics) ||
+        !world::validate_vehicles(snapshot, diagnostics) ||
+        !world::validate_characters(snapshot, diagnostics))
+        return {};
     if(!world::validate_causal_history(snapshot.causal_history,diagnostics))return {};
     world::World canonical;
     if (!canonical.restore(snapshot)) {
@@ -164,6 +171,10 @@ std::string serialize_source_manifest(
         if (entity.character) { output << " character "; write_character(output,*entity.character); }
         if (entity.dependency) {
             output << " dependency "; write_dependency(output, *entity.dependency);
+        }
+        if (entity.powered_hinge) {
+            output << " powered_hinge ";
+            world::write_powered_hinge(output, *entity.powered_hinge);
         }
         if (entity.distance_link) {
             output << " distance_link ";

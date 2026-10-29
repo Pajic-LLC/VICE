@@ -90,6 +90,11 @@ namespace {
     }
     if (command.entity.character && !world.set_character(*entity,*command.entity.character)) { rollback_entity(); return false; }
     if (command.entity.dependency && !world.set_dependency(*entity, *command.entity.dependency)) { rollback_entity(); return false; }
+    if (command.entity.powered_hinge &&
+        !world.set_powered_hinge(*entity, *command.entity.powered_hinge)) {
+        rollback_entity();
+        return false;
+    }
     if (command.entity.distance_link && !world.set_distance_link(*entity, *command.entity.distance_link)) {
         rollback_entity(); return false;
     }
@@ -554,6 +559,7 @@ std::optional<InspectorData> project_inspector(
     inspector.material = world.material_surface(*entity);
     inspector.rigid_box = world.rigid_box(*entity);
     inspector.distance_link = world.distance_link(*entity);
+    inspector.powered_hinge = world.powered_hinge(*entity);
     inspector.dependency = world.dependency(*entity);
     inspector.character = world.character(*entity);
     inspector.vehicle = world.vehicle(*entity);
