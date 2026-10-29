@@ -164,6 +164,17 @@ std::optional<Operation> read_operation(const std::string& name, std::istream& i
             op.dependency = d;
         }
         return op;
+    } else if (name == "set_swing_twist_joint" || name == "clear_swing_twist_joint") {
+        SetSwingTwistJoint op;
+        if (!read_id(input, op.entity))
+            return std::nullopt;
+        if (name == "set_swing_twist_joint") {
+            world::PoweredSwingTwist j;
+            if (!world::read_swing_twist(input, j))
+                return std::nullopt;
+            op.joint = j;
+        }
+        return op;
     } else if (name == "set_powered_hinge" || name == "clear_powered_hinge") {
         SetPoweredHinge op;
         if (!read_id(input, op.entity))
@@ -298,6 +309,25 @@ void affected(FileEditResult& result, const Transaction& transaction, const worl
                 if (value.dependency) add(*value.dependency);
                 const auto old = std::find_if(before.entities.begin(), before.entities.end(), [&](const auto& e) { return e.persistent_id == value.entity; });
                 if (old != before.entities.end() && old->dependency) add(*old->dependency);
+            } else if constexpr (std::is_same_v<T, SetSwingTwistJoint>) {
+                result.affected_entities.push_back(value.entity);
+                const auto add = [&](const auto &joint) {
+                    for (const auto id : {joint.first, joint.second}) {
+                        result.affected_entities.push_back(id);
+                        for (const auto *snapshot : {&before, &after}) {
+                            const auto e =
+                                std::find_if(snapshot->entities.begin(), snapshot->entities.end(),
+                                             [&](const auto &e) { return e.persistent_id == id; });
+                            if (e != snapshot->entities.end() && e->spatial_state)
+                                result.affected_regions.push_back(e->spatial_state->region);
+                        }
+                    }
+                };
+                if (value.joint)
+                    add(*value.joint);
+                for (const auto &r : before.swing_twist_joints)
+                    if (r.owner == value.entity)
+                        add(r.joint);
             } else if constexpr (std::is_same_v<T, SetPoweredHinge>) {
                 result.affected_entities.push_back(value.entity);
                 const auto add = [&](const world::PoweredHinge &h) {

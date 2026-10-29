@@ -254,6 +254,18 @@ ParseResult parse_source_manifest(const std::string_view source) {
                     if (entity.dependency || !read_dependency(values, d)) { fail("invalid or duplicate dependency record."); return result; }
                     entity.dependency = d; continue;
                 }
+                if (metadata == "swing_twist_joint") {
+                    world::PoweredSwingTwist joint;
+                    if (!world::read_swing_twist(values, joint) ||
+                        std::any_of(
+                            parsed.swing_twist_joints.begin(), parsed.swing_twist_joints.end(),
+                            [&](const auto &r) { return r.owner == entity.persistent_id; })) {
+                        fail("invalid or duplicate swing_twist_joint.");
+                        return result;
+                    }
+                    parsed.swing_twist_joints.push_back({entity.persistent_id, joint});
+                    continue;
+                }
                 if (metadata == "powered_hinge") {
                     world::PoweredHinge h;
                     if (entity.powered_hinge || !world::read_powered_hinge(values, h)) {
@@ -485,7 +497,8 @@ ParseResult parse_source_manifest(const std::string_view source) {
     if(!world::validate_materials(parsed,&result.diagnostics))return result;
     std::sort(parsed.causal_history.events.begin(),parsed.causal_history.events.end(),[](const auto& a,const auto& b){return a.sequence<b.sequence;});
     if(!world::validate_causal_history(parsed.causal_history,&result.diagnostics))return result;
-    if (!world::validate_powered_hinges(parsed, &result.diagnostics) ||
+    if (!world::validate_swing_twist_joints(parsed, &result.diagnostics) ||
+        !world::validate_powered_hinges(parsed, &result.diagnostics) ||
         !world::validate_distance_links(parsed, &result.diagnostics) ||
         !world::validate_dependencies(parsed, &result.diagnostics) ||
         !world::validate_character_attachments(parsed, &result.diagnostics) ||

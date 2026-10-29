@@ -49,7 +49,8 @@ std::string serialize_source_manifest(
     const world::WorldSnapshot& snapshot,
     std::string* const diagnostics
 ) {
-    if (!world::validate_powered_hinges(snapshot, diagnostics) ||
+    if (!world::validate_swing_twist_joints(snapshot, diagnostics) ||
+        !world::validate_powered_hinges(snapshot, diagnostics) ||
         !world::validate_distance_links(snapshot, diagnostics) ||
         !world::validate_dependencies(snapshot, diagnostics) ||
         !world::validate_character_attachments(snapshot, diagnostics) ||
@@ -171,6 +172,13 @@ std::string serialize_source_manifest(
         if (entity.character) { output << " character "; write_character(output,*entity.character); }
         if (entity.dependency) {
             output << " dependency "; write_dependency(output, *entity.dependency);
+        }
+        const auto swing = std::lower_bound(
+            value.swing_twist_joints.begin(), value.swing_twist_joints.end(), entity.persistent_id,
+            [](const auto &r, const auto &id) { return r.owner.bytes() < id.bytes(); });
+        if (swing != value.swing_twist_joints.end() && swing->owner == entity.persistent_id) {
+            output << " swing_twist_joint ";
+            world::write_swing_twist(output, swing->joint);
         }
         if (entity.powered_hinge) {
             output << " powered_hinge ";

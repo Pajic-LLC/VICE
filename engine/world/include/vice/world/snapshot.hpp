@@ -11,6 +11,7 @@
 #include <vice/world/material.hpp>
 #include <vice/world/persistent_id.hpp>
 #include <vice/world/powered_hinge.hpp>
+#include <vice/world/powered_swing_twist.hpp>
 #include <vice/world/presentation.hpp>
 #include <vice/world/quantity.hpp>
 #include <vice/world/reflection_probe.hpp>
@@ -77,6 +78,7 @@ struct WorldSnapshot {
     std::vector<QuantityTypeDesc> quantity_types;
     std::vector<QuantityAccount> quantity_accounts;
     std::vector<MaterialDefinition> materials;
+    std::vector<OwnedSwingTwist> swing_twist_joints;
 };
 
 [[nodiscard]] bool validate_character_attachments(const WorldSnapshot& snapshot, std::string* diagnostics = nullptr);
@@ -88,6 +90,9 @@ struct WorldSnapshot {
 [[nodiscard]] bool validate_characters(const WorldSnapshot& snapshot, std::string* diagnostics = nullptr);
 
 [[nodiscard]] bool validate_dependencies(const WorldSnapshot& snapshot, std::string* diagnostics = nullptr);
+
+[[nodiscard]] bool validate_swing_twist_joints(const WorldSnapshot &,
+                                               std::string *diagnostics = nullptr);
 
 [[nodiscard]] bool validate_powered_hinges(const WorldSnapshot &snapshot,
                                            std::string *diagnostics = nullptr);

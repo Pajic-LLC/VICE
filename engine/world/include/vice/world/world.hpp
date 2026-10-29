@@ -121,6 +121,9 @@ public:
         return powered_hinge_revision_;
     }
     bool set_powered_hinge(EntityId entity, const PoweredHinge &joint);
+    bool set_swing_twist_joint(EntityId, const PoweredSwingTwist &);
+    bool clear_swing_twist_joint(EntityId);
+    [[nodiscard]] std::optional<PoweredSwingTwist> swing_twist_joint(EntityId) const noexcept;
     bool clear_powered_hinge(EntityId entity);
     [[nodiscard]] std::optional<PoweredHinge> powered_hinge(EntityId entity) const noexcept;
     bool set_distance_link(EntityId entity, const DistanceLink& link);
@@ -334,6 +337,7 @@ private:
     bool advance_powered_hinge_revision() noexcept;
     std::uint64_t powered_hinge_revision_ = 0;
     std::unordered_map<PersistentId, PoweredHinge, PersistentIdHash> powered_hinges_;
+    std::unordered_map<PersistentId, PoweredSwingTwist, PersistentIdHash> swing_twist_joints_;
     std::unordered_map<PersistentId, std::vector<EntityId>, PersistentIdHash> powered_hinge_users_;
     std::uint64_t distance_link_revision_ = 0;
     std::unordered_map<PersistentId, std::vector<EntityId>, PersistentIdHash> distance_link_users_;
