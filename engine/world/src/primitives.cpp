@@ -21,6 +21,43 @@ namespace {
 
 } // namespace
 
+bool validate_swing_twist_joints(const WorldSnapshot &snapshot, std::string *d) {
+    if (d)
+        d->clear();
+    if (snapshot.swing_twist_joints.empty())
+        return true;
+    std::unordered_map<PersistentId, const SnapshotEntity *, PersistentIdHash> entities;
+    for (const auto &e : snapshot.entities)
+        entities.emplace(e.persistent_id, &e);
+    std::unordered_set<PersistentId, PersistentIdHash> owners;
+    std::size_t count = snapshot.swing_twist_joints.size();
+    for (const auto &e : snapshot.entities)
+        if (e.powered_hinge)
+            ++count;
+    if (count > 4096) {
+        if (d)
+            *d = "Joint capacity exceeded.";
+        return false;
+    }
+    for (const auto &r : snapshot.swing_twist_joints) {
+        const auto &h = r.joint;
+        const auto o = entities.find(r.owner), a = entities.find(h.first),
+                   b = entities.find(h.second);
+        if (!valid(h) || !owners.insert(r.owner).second || o == entities.end() ||
+            o->second->powered_hinge || r.owner == h.first || r.owner == h.second ||
+            a == entities.end() || b == entities.end() || !a->second->rigid_box ||
+            !b->second->rigid_box || !a->second->spatial_state || !b->second->spatial_state ||
+            a->second->spatial_state->region != b->second->spatial_state->region ||
+            (a->second->rigid_box->motion != RigidMotion::dynamic_body &&
+             b->second->rigid_box->motion != RigidMotion::dynamic_body)) {
+            if (d)
+                *d = "Invalid swing/twist owner, frames, drive or endpoints.";
+            return false;
+        }
+    }
+    return true;
+}
+
 bool validate_powered_hinges(const WorldSnapshot &snapshot, std::string *d) {
     if (d)
         d->clear();
@@ -356,6 +393,10 @@ WorldSnapshot World::snapshot(ComponentPayloadSnapshot payloads) const {
     std::sort(output.materials.begin(),output.materials.end(),[](const auto& a,const auto& b){return a.id.bytes()<b.id.bytes();});
     if (payloads != ComponentPayloadSnapshot::render)
         output.causal_history = causal_snapshot();
+    for (const auto &[owner, joint] : swing_twist_joints_)
+        output.swing_twist_joints.push_back({owner, joint});
+    std::sort(output.swing_twist_joints.begin(), output.swing_twist_joints.end(),
+              [](const auto &a, const auto &b) { return a.owner.bytes() < b.owner.bytes(); });
     output.clock=clock_;
     if (payloads == ComponentPayloadSnapshot::include) {
         for (const auto &[id, r] : rules_) { (void)id; output.rules.push_back(r); }
@@ -381,8 +422,9 @@ bool World::restore(const WorldSnapshot& snapshot_data) {
     if (!validate_presentation(snapshot_data))return false;
     if (!validate_character_attachments(snapshot_data)) return false;
     if (!validate_vehicles(snapshot_data)) return false;
-    if (!validate_powered_hinges(snapshot_data) || !validate_distance_links(snapshot_data) ||
-        !validate_dependencies(snapshot_data) || !validate_characters(snapshot_data) ||
+    if (!validate_swing_twist_joints(snapshot_data) || !validate_powered_hinges(snapshot_data) ||
+        !validate_distance_links(snapshot_data) || !validate_dependencies(snapshot_data) ||
+        !validate_characters(snapshot_data) ||
         !validate_causal_history(snapshot_data.causal_history))
         return false;
     if(!validate_materials(snapshot_data)) return false;
@@ -471,6 +513,9 @@ bool World::restore(const WorldSnapshot& snapshot_data) {
             !restored.set_powered_hinge(*restored.find(e.persistent_id), *e.powered_hinge))
             return false;
 
+    for (const auto &r : snapshot_data.swing_twist_joints)
+        if (!restored.set_swing_twist_joint(*restored.find(r.owner), r.joint))
+            return false;
     for (const auto& e : snapshot_data.entities) {
         if (e.dependency) restored.install_dependency(*restored.find(e.persistent_id), *e.dependency);
     }

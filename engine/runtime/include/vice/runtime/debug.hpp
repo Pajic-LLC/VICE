@@ -79,6 +79,8 @@ struct RuntimeDebugEntitySnapshot {
     std::optional<world::DistanceLink> distance_link;
     std::optional<world::PoweredHinge> powered_hinge;
     std::string powered_hinge_state = "null";
+    std::optional<world::PoweredSwingTwist> swing_twist_joint;
+    std::string swing_twist_state = "null";
     std::optional<world::DependencyState> dependency;
     std::optional<RuntimeDebugRegionSnapshot> region;
     bool camera = false;

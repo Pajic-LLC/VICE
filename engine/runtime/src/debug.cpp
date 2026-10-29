@@ -231,6 +231,24 @@ sample_runtime_debug_entity(const world::World &world, const world::PersistentId
 #endif
     result.distance_link = entity->distance_link;
     result.powered_hinge = entity->powered_hinge;
+    result.swing_twist_joint = world.swing_twist_joint(*handle);
+#if defined(VICE_RUNTIME_AUTHORED_PHYSICS)
+    if (physics)
+        if (const auto h = physics->swing_twist_joint(persistent_id)) {
+            const auto vector = [](auto v) {
+                return "[" + std::to_string(v.x) + "," + std::to_string(v.y) + "," +
+                       std::to_string(v.z) + "]";
+            };
+            result.swing_twist_state = "{\"orientation\":" + vector(h->orientation);
+            result.swing_twist_state.pop_back();
+            result.swing_twist_state += "," + std::to_string(h->orientation.w) +
+                                        "],\"angular_error\":" + std::to_string(h->angular_error) +
+                                        ",\"motor_impulses\":" + vector(h->motor_impulses) +
+                                        ",\"limit_impulses\":" + vector(h->limit_impulses) +
+                                        ",\"linear_impulse\":" + std::to_string(h->linear_impulse) +
+                                        ",\"active\":" + (h->active ? "true" : "false") + "}";
+        }
+#endif
 #if defined(VICE_RUNTIME_AUTHORED_PHYSICS)
     if (physics)
         if (const auto h = physics->powered_hinge(persistent_id)) {
@@ -426,6 +444,17 @@ std::string serialize_runtime_debug_entity_snapshot(
     } else
         output += "null";
     output += ",\"powered_hinge_state\":" + snapshot.powered_hinge_state;
+    output += ",\"swing_twist_joint\":";
+    if (snapshot.swing_twist_joint) {
+        std::ostringstream text;
+        text.precision(9);
+        world::write_swing_twist(text, *snapshot.swing_twist_joint);
+        output += "{\"record\":";
+        append_json_string(output, text.str());
+        output += "}";
+    } else
+        output += "null";
+    output += ",\"swing_twist_state\":" + snapshot.swing_twist_state;
     output += ",\"distance_link\":";
     if (!snapshot.distance_link) output += "null";
     else {

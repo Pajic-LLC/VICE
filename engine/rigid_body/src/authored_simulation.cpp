@@ -27,6 +27,16 @@ bool same_body(const world::RigidBox& a, const world::RigidBox& b) {
         same_vector(a.linear_velocity, b.linear_velocity) && same_vector(a.angular_velocity, b.angular_velocity) &&
         a.friction == b.friction && a.restitution == b.restitution && a.continuous == b.continuous && a.trigger == b.trigger;
 }
+SwingTwistMotorDesc swing_motor(const world::SwingTwistDrive &d) {
+    return {static_cast<ConstraintMotorMode>(d.swing_mode),
+            static_cast<ConstraintMotorMode>(d.twist_mode),
+            {d.target_orientation[0], d.target_orientation[1], d.target_orientation[2],
+             d.target_orientation[3]},
+            {d.target_velocity[0], d.target_velocity[1], d.target_velocity[2]},
+            {d.frequency_hz, d.damping_ratio},
+            d.max_swing_axis_torque,
+            d.max_twist_torque};
+}
 MotionType motion(world::RigidMotion value) {
     switch (value) {
     case world::RigidMotion::static_body: return MotionType::static_body;
@@ -86,6 +96,15 @@ struct AuthoredSimulation::State {
         ConstraintId native_id;
     };
     std::uint64_t joint_revision = 0;
+    struct SwingJoint {
+        world::PersistentId owner;
+        world::EntityId entity;
+        world::PoweredSwingTwist expected;
+        world::RegionId region;
+        ConstraintId native_id;
+    };
+    std::vector<SwingJoint> swing_joints;
+    std::unordered_map<world::PersistentId, std::size_t, world::PersistentIdHash> swing_lookup;
     std::vector<Joint> joints;
     std::unordered_map<world::PersistentId, std::size_t, world::PersistentIdHash> joint_lookup;
     std::vector<Link> links;
@@ -307,6 +326,38 @@ bool AuthoredSimulation::reset(world::World& world, jobs::Scheduler& jobs, std::
             next->joint_lookup.emplace(e.persistent_id, next->joints.size());
             next->joints.push_back(joint);
         }
+    for (const auto &e : snapshot.swing_twist_joints) {
+        const auto &h = e.joint;
+        const auto a = next->body_lookup.find(h.first), b = next->body_lookup.find(h.second);
+        if (a == next->body_lookup.end() || b == next->body_lookup.end())
+            return fail(diagnostics, "Swing/twist body is missing.");
+        const auto &first = next->bodies[a->second];
+        const auto &second = next->bodies[b->second];
+        if (first.expected_spatial.region != second.expected_spatial.region)
+            return fail(diagnostics, "Swing/twist bodies require a common region.");
+        State::SwingJoint j{e.owner,
+                            *world.find(e.owner),
+                            h,
+                            first.expected_spatial.region,
+                            {static_cast<std::uint64_t>(next->links.size() + next->joints.size() +
+                                                        next->swing_joints.size() + 1)}};
+        SwingTwistConstraintDesc d;
+        d.id = j.native_id;
+        d.first = first.desc.participant;
+        d.second = second.desc.participant;
+        d.enabled = h.enabled;
+        d.local_frames = {
+            HingeLocalFrame{h.first_frame.anchor, h.first_frame.axis, h.first_frame.normal},
+            HingeLocalFrame{h.second_frame.anchor, h.second_frame.axis, h.second_frame.normal}};
+        d.swing_half_angle = h.configuration.swing_half_angle;
+        d.twist_min = h.configuration.twist_min;
+        d.twist_max = h.configuration.twist_max;
+        d.motor = swing_motor(h.configuration.drive);
+        if (!next->domain_lookup.at(j.region)->create_constraint(d))
+            return fail(diagnostics, "Could not instantiate swing/twist joint.");
+        next->swing_lookup.emplace(e.owner, next->swing_joints.size());
+        next->swing_joints.push_back(j);
+    }
     for (const auto& entity : snapshot.entities) {
         if (!entity.character) continue;
         const auto owner = world.find(entity.persistent_id);
@@ -382,6 +433,17 @@ bool AuthoredSimulation::step(std::string* diagnostics) {
             return fail(diagnostics,
                         "Powered hinge reference frames/endpoints changed; reset simulation.");
     }
+    for (const auto &j : state_->swing_joints) {
+        const auto id = state_->world->find(j.owner);
+        const auto h = id ? state_->world->swing_twist_joint(*id) : std::nullopt;
+        if (!id || *id != j.entity || !h)
+            return fail(diagnostics, "Swing/twist topology changed; reset simulation.");
+        auto config = *h;
+        config.configuration.drive = j.expected.configuration.drive;
+        config.enabled = j.expected.enabled;
+        if (config != j.expected)
+            return fail(diagnostics, "Swing/twist frames or limits changed; reset simulation.");
+    }
     for (auto &j : state_->joints) {
         const auto h = *state_->world->powered_hinge(j.entity);
         if (h != j.expected) {
@@ -396,6 +458,18 @@ bool AuthoredSimulation::step(std::string* diagnostics) {
                 return fail(diagnostics, "Could not apply joint drive.");
             j.expected = h;
         }
+    }
+    for (auto &j : state_->swing_joints) {
+        const auto h = *state_->world->swing_twist_joint(j.entity);
+        if (h == j.expected)
+            continue;
+        auto *d = state_->domain_lookup.at(j.region);
+        if (!d->set_swing_twist_motor(j.native_id, swing_motor(h.configuration.drive)) ||
+            !d->set_constraint_enabled(j.native_id, h.enabled)) {
+            state_->unpublished_step = true;
+            return fail(diagnostics, "Could not apply swing/twist drive; reset simulation.");
+        }
+        j.expected = h;
     }
     // Apply explicit World fidelity changes before the next solver step.
     for (auto& region : state_->regions) {
@@ -639,5 +713,77 @@ BodyControlResult AuthoredSimulation::control_powered_hinge(world::PersistentId 
         return BodyControlResult::invalid_argument;
     return state_->world->set_powered_hinge(j.entity, h) ? BodyControlResult::applied
                                                          : BodyControlResult::reset_required;
+}
+} // namespace vice::rigid_body
+
+namespace vice::rigid_body {
+std::optional<SwingTwistObservation>
+AuthoredSimulation::swing_twist_joint(world::PersistentId owner) const noexcept {
+    if (!state_->world || state_->unpublished_step ||
+        state_->world->powered_hinge_revision() != state_->joint_revision)
+        return {};
+    const auto i = state_->swing_lookup.find(owner);
+    if (i == state_->swing_lookup.end())
+        return {};
+    const auto &j = state_->swing_joints[i->second];
+    const auto id = state_->world->find(owner);
+    const auto h = id ? state_->world->swing_twist_joint(*id) : std::nullopt;
+    if (!h || *id != j.entity)
+        return {};
+    auto config = *h;
+    config.configuration.drive = j.expected.configuration.drive;
+    config.enabled = j.expected.enabled;
+    if (config != j.expected)
+        return {};
+    const auto a = state_->body_lookup.find(h->first), b = state_->body_lookup.find(h->second);
+    if (a == state_->body_lookup.end() || b == state_->body_lookup.end() ||
+        !state_->matches(state_->bodies[a->second]) || !state_->matches(state_->bodies[b->second]))
+        return {};
+    const auto s = state_->domain(j.region)->constraint_state(j.native_id);
+    if (!s || !s->relative_orientation)
+        return {};
+    const auto q = *s->relative_orientation;
+    const auto &t = h->configuration.drive.target_orientation;
+    double dot = q.x * t[0] + q.y * t[1] + q.z * t[2] + q.w * t[3];
+    double norm = 0;
+    for (auto v : t)
+        norm += double(v) * v;
+    const float error =
+        static_cast<float>(2 * std::acos(std::clamp(std::abs(dot) / std::sqrt(norm), 0.0, 1.0)));
+    const auto region = state_->world->region(j.region);
+    return SwingTwistObservation{*h,
+                                 q,
+                                 error,
+                                 s->motor_impulses,
+                                 s->limit_impulses,
+                                 s->linear_impulse,
+                                 region && region->fidelity != world::RegionFidelity::inactive &&
+                                     s->enabled};
+}
+BodyControlResult AuthoredSimulation::control_swing_twist_joint(world::PersistentId owner,
+                                                                const world::SwingTwistDrive &drive,
+                                                                bool enabled) {
+    if (!world::valid(drive))
+        return BodyControlResult::invalid_argument;
+    if (!state_->world)
+        return BodyControlResult::not_found;
+    if (!state_->swing_lookup.contains(owner))
+        return BodyControlResult::not_found;
+    const auto o = swing_twist_joint(owner);
+    if (!o)
+        return BodyControlResult::reset_required;
+    const auto &j = state_->swing_joints[state_->swing_lookup.at(owner)];
+    const auto region = state_->world->region(j.region);
+    if (!region)
+        return BodyControlResult::reset_required;
+    if (region->fidelity == world::RegionFidelity::inactive)
+        return BodyControlResult::inactive_region;
+    auto h = o->intent;
+    h.configuration.drive = drive;
+    h.enabled = enabled;
+    if (!world::valid(h))
+        return BodyControlResult::invalid_argument;
+    return state_->world->set_swing_twist_joint(j.entity, h) ? BodyControlResult::applied
+                                                             : BodyControlResult::reset_required;
 }
 } // namespace vice::rigid_body

@@ -505,6 +505,102 @@ module::Result host_read_dependency(void* value, module::EntityId id, module::De
     *output = result; return module::Result::success;
 }
 
+module::Result host_read_swing_twist_joint(void *value, module::EntityId id,
+                                           module::SwingTwistSnapshot *out) noexcept {
+    const auto *b = current_bridge(value);
+    if (!b || !b->context)
+        return module::Result::wrong_phase;
+    if (!out || out->size < sizeof(*out) || persistent_id(id).is_nil())
+        return module::Result::invalid_argument;
+    const auto e = b->context->world.find(persistent_id(id));
+    if (!e)
+        return module::Result::not_found;
+    const auto h = b->context->world.swing_twist_joint(*e);
+    if (!h)
+        return module::Result::no_link;
+    module::SwingTwistSnapshot result;
+    std::copy(h->first.bytes().begin(), h->first.bytes().end(), result.first.bytes);
+    std::copy(h->second.bytes().begin(), h->second.bytes().end(), result.second.bytes);
+    const auto &d = h->configuration.drive;
+    result.drive.swing_mode = static_cast<module::JointDriveMode>(d.swing_mode);
+    result.drive.twist_mode = static_cast<module::JointDriveMode>(d.twist_mode);
+    std::copy(d.target_orientation.begin(), d.target_orientation.end(),
+              result.drive.target_orientation);
+    std::copy(d.target_velocity.begin(), d.target_velocity.end(), result.drive.target_velocity);
+    result.drive.frequency_hz = d.frequency_hz;
+    result.drive.damping_ratio = d.damping_ratio;
+    result.drive.max_swing_axis_torque = d.max_swing_axis_torque;
+    result.drive.max_twist_torque = d.max_twist_torque;
+    result.enabled = h->enabled;
+    result.swing_half_angle = h->configuration.swing_half_angle;
+    result.twist_min = h->configuration.twist_min;
+    result.twist_max = h->configuration.twist_max;
+#if defined(VICE_RUNTIME_AUTHORED_PHYSICS)
+    if (b->context->physics) {
+        const auto o = b->context->physics->swing_twist_joint(persistent_id(id));
+        if (!o)
+            return module::Result::reset_required;
+        result.simulated = 1;
+        result.active = o->active;
+        result.orientation[0] = o->orientation.x;
+        result.orientation[1] = o->orientation.y;
+        result.orientation[2] = o->orientation.z;
+        result.orientation[3] = o->orientation.w;
+        result.angular_error = o->angular_error;
+        result.linear_impulse = o->linear_impulse;
+        result.motor_impulses[0] = o->motor_impulses.x;
+        result.motor_impulses[1] = o->motor_impulses.y;
+        result.motor_impulses[2] = o->motor_impulses.z;
+        result.limit_impulses[0] = o->limit_impulses.x;
+        result.limit_impulses[1] = o->limit_impulses.y;
+        result.limit_impulses[2] = o->limit_impulses.z;
+    }
+#endif
+    *out = result;
+    return module::Result::success;
+}
+module::Result host_control_swing_twist_joint(void *value, module::EntityId id,
+                                              const module::SwingTwistDrive *d,
+                                              std::uint32_t enabled) noexcept {
+    const auto *b = current_bridge(value);
+    if (!b || !b->context || !b->writable)
+        return module::Result::wrong_phase;
+    if (!d || d->size < sizeof(*d) || persistent_id(id).is_nil() || enabled > 1)
+        return module::Result::invalid_argument;
+    world::SwingTwistDrive drive;
+    drive.swing_mode = static_cast<world::JointDriveMode>(d->swing_mode);
+    drive.twist_mode = static_cast<world::JointDriveMode>(d->twist_mode);
+    std::copy_n(d->target_orientation, 4, drive.target_orientation.begin());
+    std::copy_n(d->target_velocity, 3, drive.target_velocity.begin());
+    drive.frequency_hz = d->frequency_hz;
+    drive.damping_ratio = d->damping_ratio;
+    drive.max_swing_axis_torque = d->max_swing_axis_torque;
+    drive.max_twist_torque = d->max_twist_torque;
+    if (!world::valid(drive))
+        return module::Result::invalid_argument;
+    const auto e = b->context->world.find(persistent_id(id));
+    if (!e)
+        return module::Result::not_found;
+    if (!b->context->world.swing_twist_joint(*e))
+        return module::Result::no_link;
+#if defined(VICE_RUNTIME_AUTHORED_PHYSICS)
+    if (b->context->physics) {
+        using R = rigid_body::BodyControlResult;
+        switch (b->context->physics->control_swing_twist_joint(persistent_id(id), drive,
+                                                               enabled != 0)) {
+        case R::applied:
+            return module::Result::success;
+        case R::invalid_argument:
+            return module::Result::invalid_argument;
+        case R::inactive_region:
+            return module::Result::inactive_region;
+        default:
+            return module::Result::reset_required;
+        }
+    }
+#endif
+    return module::Result::unavailable;
+}
 module::Result host_read_powered_hinge(void *value, module::EntityId id,
                                        module::PoweredHingeSnapshot *out) noexcept {
     const auto *b = current_bridge(value);
@@ -1586,6 +1682,8 @@ public:
         host_.read_world_clock=&host_read_world_clock;host_.configure_world_clock=&host_configure_world_clock;host_.step_world_clock=&host_step_world_clock;
         host_.read_relation=&host_read_relation;host_.read_relations=&host_read_relations;host_.add_relation=&host_add_relation;host_.remove_relation=&host_remove_relation;host_.read_relation_component=&host_read_relation_component;host_.set_relation_component=&host_set_relation_component;host_.remove_relation_component=&host_remove_relation_component;
         host_.register_component_schema=&host_register_component_schema;host_.read_component_schema=&host_read_component_schema;host_.read_component=&host_read_component;host_.set_component=&host_set_component;host_.remove_component=&host_remove_component;
+        host_.read_swing_twist_joint = &host_read_swing_twist_joint;
+        host_.control_swing_twist_joint = &host_control_swing_twist_joint;
         host_.read_powered_hinge = &host_read_powered_hinge;
         host_.control_powered_hinge = &host_control_powered_hinge;
         host_.read_animation=&host_read_animation;host_.control_animation=&host_control_animation;

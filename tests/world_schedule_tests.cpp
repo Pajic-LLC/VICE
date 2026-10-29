@@ -229,7 +229,7 @@ int main() {
             "due event resolves current large-world region");
     world::World legacy;
     auto old = bytes(legacy);
-    old.erase(old.end() - 46, old.end() - 26);
+    old.erase(old.end() - 50, old.end() - 26);
     old[8] = std::byte{19};
     rehash(old);
     const auto v19 = world::decode_world_snapshot(old);

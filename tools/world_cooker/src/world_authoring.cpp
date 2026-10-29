@@ -254,6 +254,17 @@ namespace {
                 if (!entity) { diagnostics = "Dependency entity does not exist."; return false; }
                 entity->dependency = value.dependency;
                 return true;
+            } else if constexpr (std::is_same_v<Value, SetSwingTwistJoint>) {
+                if (!find_entity(candidate, value.entity) ||
+                    (value.joint && !world::valid(*value.joint))) {
+                    diagnostics = "Invalid swing/twist joint or missing owner.";
+                    return false;
+                }
+                std::erase_if(candidate.swing_twist_joints,
+                              [&](const auto &r) { return r.owner == value.entity; });
+                if (value.joint)
+                    candidate.swing_twist_joints.push_back({value.entity, *value.joint});
+                return true;
             } else if constexpr (std::is_same_v<Value, SetPoweredHinge>) {
                 auto *e = find_entity(candidate, value.entity);
                 if (!e) {

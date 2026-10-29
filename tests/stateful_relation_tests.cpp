@@ -171,7 +171,7 @@ int main() {
     const auto legacy_owner = old.create_entity();
     require(old.set_component(legacy_owner, payload()), "legacy component");
     auto legacy = bytes(old);
-    legacy.resize(legacy.size() - 50);
+    legacy.resize(legacy.size() - 54);
     legacy[8] = std::byte{16};
     rehash(legacy);
     const auto v16 = world::decode_world_snapshot(legacy);

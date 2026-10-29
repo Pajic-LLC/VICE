@@ -110,10 +110,10 @@ def validate(vice, native):
                 # documented tail here; the engine validates the full file on restart.
                 raw = saved.read_bytes()
                 version = struct.unpack_from("<I", raw, 8)[0]
-                if version not in (22, 23):
+                if version not in (22, 23, 24):
                     raise RuntimeError(f"Unsupported checkpoint fixture version: {version}")
                 # v23 adds an empty powered-joint table before the World clock.
-                tail = len(raw) - 4 - 3 * 84 - (62 if version == 23 else 58)
+                tail = len(raw) - 4 - 3 * 84 - ({22: 58, 23: 62, 24: 66}[version])
                 if struct.unpack_from("<I", raw, tail)[0] != 3:
                     raise RuntimeError("Checkpoint vehicle table missing")
                 saved_vehicles = {}
