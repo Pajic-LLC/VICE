@@ -20,6 +20,21 @@ See [authored vehicles](docs/architecture/authored-vehicles.md) for the engine c
 The [interaction playground](examples/interaction-playground/README.md) adds walking,
 carrier attachment, safe exit, gameplay camera controls and mounted restart.
 
+## Current production driver
+
+CRASHOUT is now exercising VICE as an external production consumer. The immediate
+presentation target is documented in
+[`docs/crashout-first-believable-minute.md`](docs/crashout-first-believable-minute.md).
+
+That milestone is deliberately small: a character seated naturally in a car,
+convincing interior rendering and cabin audio, a polished camera, then one short
+drive around a dense authored block. Until that sequence is visually and
+interactionally convincing, prefer generic engine work that removes blockers for
+that experience over speculative expansion that has no current consumer.
+
+The engine remains game-agnostic. CRASHOUT defines requirements; VICE supplies
+reusable capabilities and keeps regression coverage.
+
 ## Build
 
 VICE requires CMake 3.28 or newer and a C++23 compiler.
