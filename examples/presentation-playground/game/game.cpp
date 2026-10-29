@@ -119,6 +119,58 @@ bool lifecycle_fact(Context &c) {
     EventRef signal;
     return c.emit_world_event(request, signal) == Result::success;
 }
+constexpr EntityId pulse_type() {
+    auto id = lifecycle_type();
+    id.bytes[14] = 7;
+    return id;
+}
+constexpr EntityId pulse_schedule() {
+    auto id = lifecycle_type();
+    id.bytes[14] = 8;
+    return id;
+}
+bool start_pulse(Context &c) {
+    ComponentSchema schema;
+    schema.type = pulse_type();
+    std::strcpy(schema.name, "PulseFact");
+    if (c.register_component_schema(schema) != Result::success)
+        return false;
+    ScheduleSnapshot existing;
+    const auto prior = c.read_schedule(pulse_schedule(), existing);
+    if (prior == Result::success)
+        return true;
+    if (prior != Result::no_schedule)
+        return false;
+    WorldClockSnapshot clock;
+    if (c.read_world_clock(clock) != Result::success ||
+        clock.ticks > std::numeric_limits<std::uint64_t>::max() - 1'000'000)
+        return false;
+    ScheduleRequest request;
+    request.id = pulse_schedule();
+    request.due_ticks = clock.ticks + 1'000'000;
+    request.interval_ticks = 3'000'000;
+    request.catch_up = ScheduleCatchUp::coalesce;
+    request.event.subject = entity(2);
+    request.event.target = entity(3);
+    request.event.payload.type = pulse_type();
+    CausalHistorySnapshot history;
+    if (c.read_causal_history(history) != Result::success)
+        return false;
+    for (auto seq = history.next_sequence; seq > history.first_sequence;) {
+        WorldEventSnapshot fact;
+        --seq;
+        if (c.read_world_event(history.history_id, seq, fact) != Result::success)
+            return false;
+        if (fact.has_payload &&
+            std::memcmp(fact.payload.type.bytes, lifecycle_type().bytes, 16) == 0) {
+            request.event.parent_count = 1;
+            request.event.parents[0] = fact.ref;
+            break;
+        }
+    }
+    EntityId id;
+    return c.schedule_event(request, id) == Result::success;
+}
 class InteractionGame final : public Game {
     bool automatic_ = false, up_ = false, down_ = false, left_ = false, right_ = false,
          brake_ = false;
@@ -194,7 +246,7 @@ class InteractionGame final : public Game {
         edge_schema.type = connection_type();
         std::strcpy(edge_schema.name, "ConnectionState");
         if (c.register_component_schema(edge_schema) != Result::success ||
-            !relation_session(c, true) || !lifecycle_fact(c))
+            !relation_session(c, true) || !lifecycle_fact(c) || !start_pulse(c))
             return false;
         CharacterSnapshot character;
         CharacterAttachmentSnapshot a;

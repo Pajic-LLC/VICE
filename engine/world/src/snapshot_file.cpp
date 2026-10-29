@@ -389,6 +389,12 @@ WorldSnapshotEncodeResult encode_world_snapshot(const WorldSnapshot& snapshot_da
     for(const auto& e:snapshot.entities)for(const auto& c:e.components){append_id(payload,e.persistent_id);std::ostringstream data;data.imbue(std::locale::classic());write_component_payload(data,c);append_string(payload,data.str());}
     std::size_t relation_payloads=0;for(const auto& edge:snapshot.relations)relation_payloads+=edge.components.size();append_u32(payload,static_cast<std::uint32_t>(relation_payloads));
     for(const auto& edge:snapshot.relations)for(const auto& c:edge.components){append_id(payload,edge.subject);append_id(payload,edge.kind);append_id(payload,edge.object);std::ostringstream data;write_component_payload(data,c);append_string(payload,data.str());}
+    append_u32(payload, static_cast<std::uint32_t>(snapshot.schedules.size()));
+    for (const auto &schedule : snapshot.schedules) {
+        std::ostringstream text;
+        write_world_schedule(text, schedule);
+        append_string(payload, text.str());
+    }
     const auto& clock=snapshot.clock;append_u64(payload,clock.ticks);append_u32(payload,clock.rate_milli);append_u32(payload,clock.rate_remainder);append_f64(payload,clock.input_fraction);append_u8(payload,clock.paused?1U:0U);append_u8(payload,clock.automatic?1U:0U);
     result.bytes.reserve(header_size + payload.size());
     result.bytes.insert(result.bytes.end(), world_magic.begin(), world_magic.end());
@@ -884,6 +890,27 @@ WorldSnapshotDecodeResult decode_world_snapshot(const std::span<const std::byte>
             if(!reader.read_id(key.subject)||!reader.read_id(key.kind)||!reader.read_id(key.object)||!reader.read_string(data,8192)){result.diagnostics="Truncated relation state.";return result;}
             const auto edge=edges.find(key);std::istringstream input{data};if(edge==edges.end()||!read_component_payload(input,p)||(input>>std::ws,!input.eof())){result.diagnostics="Invalid relation state/key.";return result;}
             auto& state=snapshot.relations[edge->second].components;if(state.size()>=max_entity_components){result.diagnostics="Relation state capacity exceeded.";return result;}state.push_back(std::move(p));
+        }
+    }
+    if (version >= 20U) {
+        std::uint32_t count = 0;
+        if (!reader.read_u32(count) || count > world_schedule_capacity) {
+            result.diagnostics = "Invalid scheduler count.";
+            return result;
+        }
+        for (std::uint32_t i = 0; i < count; ++i) {
+            std::string text;
+            WorldSchedule schedule;
+            if (!reader.read_string(text, 8192)) {
+                result.diagnostics = "Truncated schedule.";
+                return result;
+            }
+            std::istringstream input{text};
+            if (!read_world_schedule(input, schedule) || (input >> std::ws, !input.eof())) {
+                result.diagnostics = "Invalid schedule record.";
+                return result;
+            }
+            snapshot.schedules.push_back(std::move(schedule));
         }
     }
     if(version>=18U){std::uint8_t paused=0,automatic=0;auto& c=snapshot.clock;if(!reader.read_u64(c.ticks)||!reader.read_u32(c.rate_milli)||!reader.read_u32(c.rate_remainder)||!reader.read_f64(c.input_fraction)||!reader.read_u8(paused)||paused>1||!reader.read_u8(automatic)||automatic>1){result.diagnostics="Invalid/truncated World clock.";return result;}c.paused=paused!=0;c.automatic=automatic!=0;if(!valid(c)){result.diagnostics="Invalid World clock state.";return result;}}

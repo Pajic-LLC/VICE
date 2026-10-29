@@ -98,14 +98,27 @@ ParseResult parse_source_manifest(const std::string_view source) {
             continue;
         }
 
-        if(keyword=="world_clock") {if(clock_seen||!world::read_world_clock(values,parsed.clock)){fail("invalid/duplicate World clock.");return result;}clock_seen=true;
-        } else if(keyword=="material") {
+        if (keyword == "world_schedule") {
+            world::WorldSchedule schedule;
+            if (parsed.schedules.size() >= world::world_schedule_capacity ||
+                !world::read_world_schedule(values, schedule)) {
+                fail("invalid or oversized World scheduler.");
+                return result;
+            }
+            parsed.schedules.push_back(std::move(schedule));
+        } else if (keyword == "world_clock") {
+            if (clock_seen || !world::read_world_clock(values, parsed.clock)) {
+                fail("invalid/duplicate World clock.");
+                return result;
+            }
+            clock_seen = true;
+        } else if (keyword == "material") {
             world::MaterialDefinition m;
             if(parsed.materials.size()>=world::max_world_materials || !read_material(values,m)) {fail("invalid or oversized material catalog.");return result;}
             parsed.materials.push_back(std::move(m));
-        } else if(keyword=="causal_history") {
+        } else if (keyword == "causal_history") {
             if(!parsed.causal_history.id.is_nil() || !read_causal_id(values,parsed.causal_history.id) || parsed.causal_history.id.is_nil() || !read_causal_u64(values,parsed.causal_history.next_sequence)) {fail("invalid or duplicate causal history header.");return result;}
-        } else if(keyword=="causal_event") {
+        } else if (keyword == "causal_event") {
             world::CausalEvent e;
             if(parsed.causal_history.events.size()>=world::causal_history_capacity || !read_causal_event(values,e)){fail("invalid or oversized causal event history.");return result;}
             parsed.causal_history.events.push_back(e);

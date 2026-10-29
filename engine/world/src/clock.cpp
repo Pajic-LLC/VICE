@@ -24,6 +24,7 @@ bool World::step_world_clock(std::uint64_t ticks) {
         return false;
     clock_.ticks += ticks;
     prune_world_signals();
+    (void)dispatch_schedules();
     return true;
 }
 bool World::advance_world_clock_ticks(std::uint64_t input) {
@@ -40,6 +41,7 @@ bool World::advance_world_clock_ticks(std::uint64_t input) {
         return false;
     clock_.ticks += whole + extra;
     prune_world_signals();
+    (void)dispatch_schedules();
     clock_.rate_remainder = static_cast<std::uint32_t>(fraction % 1000);
     return true;
 }

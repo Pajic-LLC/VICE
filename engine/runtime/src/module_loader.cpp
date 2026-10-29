@@ -849,6 +849,217 @@ module::Result host_read_world_signal(void *value, module::EntityId stream, std:
     *output = encode_world_event(w, *e, info.stream, false);
     return module::Result::success;
 }
+std::optional<world::WorldEventRequest>
+decode_event_request(const module::WorldEventRequest *input) {
+    if (!input || input->size < sizeof(*input) || input->retained > 1 ||
+        input->parent_count > world::world_event_parent_capacity)
+        return {};
+    const auto payload = decode_component_data(&input->payload);
+    if (!payload)
+        return {};
+    world::WorldEventRequest out;
+    out.subject = persistent_id(input->subject);
+    out.target = persistent_id(input->target);
+    out.object = persistent_id(input->object);
+    out.region = {input->region};
+    out.retained = input->retained != 0;
+    out.data.payload = *payload;
+    for (std::uint32_t i = 0; i < input->parent_count; ++i) {
+        const auto &p = input->parents[i];
+        out.data.parents.push_back({persistent_id(p.history), persistent_id(p.id), p.sequence});
+    }
+    return out;
+}
+module::WorldEventRequest encode_event_request(const world::WorldEventRequest &e) {
+    module::WorldEventRequest out;
+    out.subject = module_id(e.subject);
+    out.target = module_id(e.target);
+    out.object = module_id(e.object);
+    out.region = e.region.value;
+    out.retained = e.retained ? 1U : 0U;
+    out.payload = encode_component_data(e.data.payload);
+    out.parent_count = static_cast<std::uint32_t>(e.data.parents.size());
+    for (std::size_t i = 0; i < e.data.parents.size(); ++i)
+        out.parents[i] = encode_event_ref(e.data.parents[i]);
+    return out;
+}
+module::Result event_result(world::WorldEventResult r) {
+    using R = world::WorldEventResult;
+    switch (r) {
+    case R::success:
+        return module::Result::success;
+    case R::invalid_argument:
+        return module::Result::invalid_argument;
+    case R::missing_entity:
+    case R::missing_schema:
+        return module::Result::not_found;
+    case R::schema_conflict:
+        return module::Result::schema_conflict;
+    case R::history_mismatch:
+        return module::Result::history_mismatch;
+    case R::parent_pruned:
+        return module::Result::event_pruned;
+    case R::invalid_parent:
+        return module::Result::invalid_parent;
+    case R::sequence_exhausted:
+        return module::Result::sequence_exhausted;
+    }
+    return module::Result::invalid_argument;
+}
+module::ScheduleSummary encode_schedule_summary(const world::WorldSchedule &s) {
+    module::ScheduleSummary out;
+    out.id = module_id(s.id);
+    out.subject = module_id(s.event.subject);
+    out.target = module_id(s.event.target);
+    out.object = module_id(s.event.object);
+    out.type = module_id(s.event.data.payload.type.value);
+    out.region = s.event.region.value;
+    out.due_ticks = s.due_ticks;
+    out.interval_ticks = s.interval_ticks;
+    out.occurrence = s.occurrence;
+    out.catch_up = static_cast<module::ScheduleCatchUp>(s.catch_up);
+    out.failure = static_cast<module::ScheduleFailure>(s.failure);
+    out.event_result = event_result(s.event_result);
+    out.retained = s.event.retained ? 1U : 0U;
+    return out;
+}
+module::Result host_schedule_event(void *value, const module::ScheduleRequest *input,
+                                   module::EntityId *output) noexcept {
+    const auto *b = current_bridge(value);
+    if (!b || !b->context || !b->writable)
+        return module::Result::wrong_phase;
+    if (!input || input->size < sizeof(*input) || !output ||
+        static_cast<unsigned>(input->catch_up) > 1)
+        return module::Result::invalid_argument;
+    const auto e = decode_event_request(&input->event);
+    if (!e)
+        return module::Result::invalid_argument;
+    const auto result = b->context->world.schedule_event(
+        *e, input->due_ticks, input->interval_ticks,
+        static_cast<world::ScheduleCatchUp>(input->catch_up), persistent_id(input->id));
+    using R = world::ScheduleResult;
+    switch (result.result) {
+    case R::success:
+        *output = module_id(result.id);
+        return module::Result::success;
+    case R::event_rejected:
+        return event_result(result.event_result);
+    case R::duplicate_id:
+        return module::Result::duplicate_id;
+    case R::capacity_exceeded:
+        return module::Result::capacity_exceeded;
+    case R::not_found:
+        return module::Result::no_schedule;
+    case R::invalid_argument:
+        return module::Result::invalid_argument;
+    }
+    return module::Result::invalid_argument;
+}
+module::Result host_cancel_schedule(void *value, module::EntityId id) noexcept {
+    const auto *b = current_bridge(value);
+    if (!b || !b->context || !b->writable)
+        return module::Result::wrong_phase;
+    if (persistent_id(id).is_nil())
+        return module::Result::invalid_argument;
+    return b->context->world.cancel_schedule(persistent_id(id)) ? module::Result::success
+                                                                : module::Result::no_schedule;
+}
+module::Result host_read_schedule(void *value, module::EntityId id,
+                                  module::ScheduleSnapshot *output) noexcept {
+    const auto *b = current_bridge(value);
+    if (!b || !b->context)
+        return module::Result::wrong_phase;
+    if (!output || output->size < sizeof(*output) || persistent_id(id).is_nil())
+        return module::Result::invalid_argument;
+    const auto s = b->context->world.schedule(persistent_id(id));
+    if (!s)
+        return module::Result::no_schedule;
+    module::ScheduleSnapshot out;
+    out.summary = encode_schedule_summary(*s);
+    out.event = encode_event_request(s->event);
+    *output = out;
+    return module::Result::success;
+}
+module::Result host_read_schedules(void *value, module::SchedulePageSnapshot *output) noexcept {
+    const auto *b = current_bridge(value);
+    if (!b || !b->context)
+        return module::Result::wrong_phase;
+    if (!output || output->size < sizeof(*output))
+        return module::Result::invalid_argument;
+    const auto page = b->context->world.schedule_page(persistent_id(output->after));
+    module::SchedulePageSnapshot out;
+    out.after = output->after;
+    out.count = static_cast<std::uint32_t>(page.entries.size());
+    out.has_more = page.has_more ? 1U : 0U;
+    for (std::size_t i = 0; i < page.entries.size(); ++i)
+        out.entries[i] = encode_schedule_summary(page.entries[i]);
+    if (out.count)
+        out.after = out.entries[out.count - 1].id;
+    *output = out;
+    return module::Result::success;
+}
+module::Result host_read_scheduler(void *value, module::SchedulerSnapshot *output) noexcept {
+    const auto *b = current_bridge(value);
+    if (!b || !b->context)
+        return module::Result::wrong_phase;
+    if (!output || output->size < sizeof(*output))
+        return module::Result::invalid_argument;
+    const auto info = b->context->world.scheduler_info();
+    module::SchedulerSnapshot out;
+    out.count = static_cast<std::uint32_t>(info.count);
+    out.pending = static_cast<std::uint32_t>(info.pending);
+    out.failed = static_cast<std::uint32_t>(info.failed);
+    out.has_next = info.next_due ? 1U : 0U;
+    out.next_due_ticks = info.next_due.value_or(0);
+    out.due_remaining = info.due_remaining ? 1U : 0U;
+    *output = out;
+    return module::Result::success;
+}
+module::Result host_dispatch_schedules(void *value, std::uint32_t budget,
+                                       module::ScheduleDispatchSnapshot *output) noexcept {
+    const auto *b = current_bridge(value);
+    if (!b || !b->context || !b->writable)
+        return module::Result::wrong_phase;
+    if (!output || output->size < sizeof(*output) || !budget ||
+        budget > world::world_schedule_dispatch_budget)
+        return module::Result::invalid_argument;
+    const auto result = b->context->world.dispatch_schedules(budget);
+    module::ScheduleDispatchSnapshot out;
+    out.processed = static_cast<std::uint32_t>(result.processed);
+    out.fired = static_cast<std::uint32_t>(result.fired);
+    out.failed = static_cast<std::uint32_t>(result.failed);
+    out.due_remaining = result.due_remaining ? 1U : 0U;
+    *output = out;
+    return module::Result::success;
+}
+module::Result host_read_event_schedule(void *value, module::EventRef ref, std::uint32_t retained,
+                                        module::EventScheduleSnapshot *output) noexcept {
+    const auto *b = current_bridge(value);
+    if (!b || !b->context)
+        return module::Result::wrong_phase;
+    if (!output || output->size < sizeof(*output) || retained > 1 || persistent_id(ref.id).is_nil())
+        return module::Result::invalid_argument;
+    module::WorldEventSnapshot check;
+    const auto result = retained ? host_read_world_event(value, ref.history, ref.sequence, &check)
+                                 : host_read_world_signal(value, ref.history, ref.sequence, &check);
+    if (result != module::Result::success)
+        return result;
+    if (persistent_id(check.ref.id) != persistent_id(ref.id))
+        return module::Result::invalid_parent;
+    const auto e = retained ? b->context->world.causal_event(ref.sequence)
+                            : b->context->world.world_signal(ref.sequence);
+    module::EventScheduleSnapshot out;
+    if (e->data && e->data->schedule) {
+        const auto &s = *e->data->schedule;
+        out.has_schedule = 1;
+        out.id = module_id(s.id);
+        out.due_ticks = s.due_ticks;
+        out.occurrence = s.occurrence;
+        out.count = s.count;
+    }
+    *output = out;
+    return module::Result::success;
+}
 module::Result host_read_material(void* value,module::EntityId id,module::MaterialSnapshot* output) noexcept {
     const auto* b=current_bridge(value);if(!b || !b->context)return module::Result::wrong_phase;
     if(!output || output->size<sizeof(module::MaterialSnapshot) || persistent_id(id).is_nil())return module::Result::invalid_argument;
@@ -1069,6 +1280,13 @@ public:
         host_.read_world_event = &host_read_world_event;
         host_.read_signal_window = &host_read_signal_window;
         host_.read_world_signal = &host_read_world_signal;
+        host_.schedule_event = &host_schedule_event;
+        host_.cancel_schedule = &host_cancel_schedule;
+        host_.read_schedule = &host_read_schedule;
+        host_.read_schedules = &host_read_schedules;
+        host_.read_scheduler = &host_read_scheduler;
+        host_.dispatch_schedules = &host_dispatch_schedules;
+        host_.read_event_schedule = &host_read_event_schedule;
         host_.read_world_clock=&host_read_world_clock;host_.configure_world_clock=&host_configure_world_clock;host_.step_world_clock=&host_step_world_clock;
         host_.read_relation=&host_read_relation;host_.read_relations=&host_read_relations;host_.add_relation=&host_add_relation;host_.remove_relation=&host_remove_relation;host_.read_relation_component=&host_read_relation_component;host_.set_relation_component=&host_set_relation_component;host_.remove_relation_component=&host_remove_relation_component;
         host_.register_component_schema=&host_register_component_schema;host_.read_component_schema=&host_read_component_schema;host_.read_component=&host_read_component;host_.set_component=&host_set_component;host_.remove_component=&host_remove_component;

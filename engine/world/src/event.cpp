@@ -37,6 +37,16 @@ bool read_world_event_data(std::istream &in, WorldEventData &data) {
             return false;
         next.parents.push_back(ref);
     }
+    in >> std::ws;
+    if (in.peek() == 's') {
+        std::string marker;
+        ScheduleProvenance schedule;
+        if (!(in >> marker) || marker != "scheduled" || !read_id(in, schedule.id) ||
+            !number(in, schedule.due_ticks) || !number(in, schedule.occurrence) ||
+            !number(in, schedule.count))
+            return false;
+        next.schedule = schedule;
+    }
     data = std::move(next);
     return true;
 }
@@ -45,6 +55,11 @@ void write_world_event_data(std::ostream &out, const WorldEventData &data) {
     out << ' ' << data.parents.size();
     for (const auto &p : data.parents)
         out << ' ' << p.history.to_string() << ' ' << p.id.to_string() << ' ' << p.sequence;
+    if (data.schedule) {
+        const auto &s = *data.schedule;
+        out << " scheduled " << s.id.to_string() << ' ' << s.due_ticks << ' ' << s.occurrence << ' '
+            << s.count;
+    }
 }
 void World::release_event_schema(const CausalEvent &e) {
     if (e.data) {
@@ -94,23 +109,58 @@ SignalContext World::signal_context(PersistentId subject, std::size_t budget) co
     std::reverse(out.events.begin(), out.events.end());
     return out;
 }
-WorldEventEmission World::emit_world_event(WorldEventRequest r, CausalOrigin origin) {
-    const auto fail = [](WorldEventResult code) { return WorldEventEmission{code, {}}; };
-    if (static_cast<unsigned>(origin) > 4 || r.subject.is_nil() ||
-        r.data.parents.size() > world_event_parent_capacity)
-        return fail(WorldEventResult::invalid_argument);
-    if (!find(r.subject) || (!r.target.is_nil() && !find(r.target)) ||
-        (!r.object.is_nil() && !find(r.object)))
-        return fail(WorldEventResult::missing_entity);
-    if (r.region.valid() && !region(r.region))
-        return fail(WorldEventResult::invalid_argument);
+WorldEventResult World::validate_event_request(const WorldEventRequest &r, bool live,
+                                               bool allow_pruned) const {
+    using R = WorldEventResult;
+    if (r.subject.is_nil() || r.data.parents.size() > world_event_parent_capacity)
+        return R::invalid_argument;
+    if (live && (!find(r.subject) || (!r.target.is_nil() && !find(r.target)) ||
+                 (!r.object.is_nil() && !find(r.object))))
+        return R::missing_entity;
+    if (live && r.region.valid() && !region(r.region))
+        return R::invalid_argument;
     const auto type = component_types_.find(r.data.payload.type);
     if (type == component_types_.end())
-        return fail(WorldEventResult::missing_schema);
+        return R::missing_schema;
     if (type->second.version != r.data.payload.version)
-        return fail(WorldEventResult::schema_conflict);
+        return R::schema_conflict;
     if (!valid_component_payload(r.data.payload, type->second))
+        return R::invalid_argument;
+    const auto info = causal_info();
+    auto parents = r.data.parents;
+    std::sort(parents.begin(), parents.end(),
+              [](const auto &a, const auto &b) { return a.sequence < b.sequence; });
+    std::unordered_set<PersistentId, PersistentIdHash> seen;
+    std::uint64_t previous = 0;
+    for (const auto &p : parents) {
+        if (p.history != info.id || info.id.is_nil())
+            return R::history_mismatch;
+        if (!p.sequence || p.id.is_nil() || p.sequence <= previous ||
+            p.sequence >= info.next_sequence || !seen.insert(p.id).second)
+            return R::invalid_parent;
+        previous = p.sequence;
+        if (p.sequence < info.first_sequence) {
+            if (!allow_pruned)
+                return R::parent_pruned;
+            continue;
+        }
+        const auto e = causal_event(p.sequence);
+        if (!e || e->id != p.id)
+            return R::invalid_parent;
+    }
+    return R::success;
+}
+WorldEventEmission World::emit_world_event(WorldEventRequest r, CausalOrigin origin) {
+    return emit_world_event_impl(std::move(r), origin, false);
+}
+WorldEventEmission World::emit_world_event_impl(WorldEventRequest r, CausalOrigin origin,
+                                                bool scheduled) {
+    const auto fail = [](WorldEventResult code) { return WorldEventEmission{code, {}}; };
+    if (static_cast<unsigned>(origin) > 4 || (!scheduled && r.data.schedule))
         return fail(WorldEventResult::invalid_argument);
+    const auto validation = validate_event_request(r, true, scheduled);
+    if (validation != WorldEventResult::success)
+        return fail(validation);
     std::sort(r.data.payload.fields.begin(), r.data.payload.fields.end(),
               [](const auto &a, const auto &b) { return a.id < b.id; });
     for (auto &f : r.data.payload.fields)
@@ -118,22 +168,6 @@ WorldEventEmission World::emit_world_event(WorldEventRequest r, CausalOrigin ori
             *n = 0;
     std::sort(r.data.parents.begin(), r.data.parents.end(),
               [](const auto &a, const auto &b) { return a.sequence < b.sequence; });
-    std::unordered_set<PersistentId, PersistentIdHash> seen;
-    std::uint64_t previous = 0;
-    const auto info = causal_info();
-    for (const auto &parent : r.data.parents) {
-        if (parent.history != causal_id_ || causal_id_.is_nil())
-            return fail(WorldEventResult::history_mismatch);
-        if (!parent.sequence || parent.id.is_nil() || parent.sequence <= previous ||
-            !seen.insert(parent.id).second)
-            return fail(WorldEventResult::invalid_parent);
-        previous = parent.sequence;
-        if (parent.sequence < info.first_sequence)
-            return fail(WorldEventResult::parent_pruned);
-        const auto e = causal_event(parent.sequence);
-        if (!e || e->id != parent.id)
-            return fail(WorldEventResult::invalid_parent);
-    }
     const auto maximum = std::numeric_limits<std::uint64_t>::max();
     if (r.retained) {
         const auto needed = capturing_causality_ ? 1U : 2U;
@@ -204,7 +238,15 @@ std::string serialize_signal_context(const SignalContext &c) {
                 << "\",\"sequence\":" << p.sequence << ",\"state\":\""
                 << (p.sequence < c.causal_first_sequence ? "pruned" : "retained") << "\"}";
         }
-        out << "]}";
+        out << "]";
+        if (e.data->schedule) {
+            const auto &s = *e.data->schedule;
+            out << ",\"schedule\":{\"id\":\"" << s.id.to_string() << "\",\"due_ticks\":\""
+                << s.due_ticks << "\",\"occurrence\":\"" << s.occurrence << "\",\"count\":\""
+                << s.count << "\"}";
+        } else
+            out << ",\"schedule\":null";
+        out << "}";
     }
     out << "]}";
     return out.str();

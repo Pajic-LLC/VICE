@@ -57,7 +57,7 @@ causal_event {fact} {marker} {marker} 2 1 world_event gameplay {subject} {target
         cold = data["observed"]["driving"]["vehicle"]
         resumed = data["observed"]["after_resume"]
         def facts(state):
-            return [e for e in state["causal_history"]["events"] if e["kind"] == "world_event"]
+            return [e for e in state["causal_history"]["events"] if e["kind"] == "world_event" and e["payload"][0]["type"] == "a4000000-0000-4000-8000-000000000600"]
         first, continuation = facts(cold)[-1], facts(resumed)[-1]
         if continuation["id"] == first["id"] or continuation["parents"][0]["id"] != first["id"]:
             raise RuntimeError("Fresh native Runtime lost previous startup fact as cause")

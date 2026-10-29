@@ -92,20 +92,34 @@ std::optional<Operation> read_operation(const std::string& name, std::istream& i
     } else if (name == "clear_transform") {
         SetEntityTransform op;
         if (read_id(input, op.entity)) return op;
-    } else if(name=="set_world_clock"){SetWorldClock op;if(!world::read_world_clock(input,op.clock))return std::nullopt;return op;
-    } else if(name=="register_component"){
+    } else if (name == "schedule_event") {
+        CreateSchedule op;
+        if (!world::read_world_schedule(input, op.schedule))
+            return std::nullopt;
+        return op;
+    } else if (name == "cancel_schedule") {
+        CancelSchedule op;
+        if (!read_id(input, op.id))
+            return std::nullopt;
+        return op;
+    } else if (name == "set_world_clock") {
+        SetWorldClock op;
+        if (!world::read_world_clock(input, op.clock))
+            return std::nullopt;
+        return op;
+    } else if (name == "register_component") {
         RegisterComponentType op;world::PersistentId id;if(!read_id(input,id)||!(input>>op.schema.version>>std::quoted(op.schema.name))||!world::read_component_fields(input,op.schema.fields))return std::nullopt;op.schema.id={id};return op;
-    } else if(name=="set_component"){
+    } else if (name == "set_component") {
         SetComponent op;if(!read_id(input,op.entity)||!world::read_component_payload(input,op.payload))return std::nullopt;return op;
-    } else if(name=="remove_component"){
+    } else if (name == "remove_component") {
         RemoveComponent op;world::PersistentId id;if(!read_id(input,op.entity)||!read_id(input,id))return std::nullopt;op.type={id};return op;
-    } else if(name=="set_animation"||name=="clear_animation"){
+    } else if (name == "set_animation" || name == "clear_animation") {
         SetAnimation op;if(!read_id(input,op.entity))return std::nullopt;if(name=="set_animation"){world::AnimationPlayer p;if(!world::read_animation(input,p))return std::nullopt;op.value=p;}return op;
-    } else if(name=="set_rig_part"||name=="clear_rig_part"){
+    } else if (name == "set_rig_part" || name == "clear_rig_part") {
         SetRigPart op;if(!read_id(input,op.entity))return std::nullopt;if(name=="set_rig_part"){world::RigPart p;if(!world::read_rig_part(input,p))return std::nullopt;op.value=p;}return op;
-    } else if(name=="set_audio_emitter"||name=="clear_audio_emitter"){
+    } else if (name == "set_audio_emitter" || name == "clear_audio_emitter") {
         SetAudioEmitter op;if(!read_id(input,op.entity))return std::nullopt;if(name=="set_audio_emitter"){world::AudioEmitter p;if(!world::read_audio_emitter(input,p))return std::nullopt;op.value=p;}return op;
-    } else if(name=="set_character_attachment" || name=="clear_character_attachment") {
+    } else if (name == "set_character_attachment" || name == "clear_character_attachment") {
         SetCharacterAttachment op;if(!read_id(input,op.entity))return std::nullopt;
         if(name=="set_character_attachment"){world::CharacterAttachment a;if(!read_id(input,a.carrier) || !(input>>a.offset.x>>a.offset.y>>a.offset.z) || !world::valid(a))return std::nullopt;op.attachment=a;}return op;
     } else if (name == "set_vehicle" || name == "clear_vehicle") {
@@ -148,7 +162,7 @@ std::optional<Operation> read_operation(const std::string& name, std::istream& i
     } else if (name == "set_fidelity") {
         SetRegionFidelity op;
         if (read_unsigned(input, op.region.value) && read_fidelity(input, op.fidelity)) return op;
-    } else if(name=="set_relation_component"||name=="remove_relation_component"){
+    } else if (name == "set_relation_component" || name == "remove_relation_component") {
         world::RelationKey key;if(!read_id(input,key.subject)||!read_id(input,key.kind)||!read_id(input,key.object))return std::nullopt;
         if(name=="set_relation_component"){world::ComponentPayload p;if(!world::read_component_payload(input,p))return std::nullopt;return SetRelationComponent{key,p};}
         world::PersistentId type;if(!read_id(input,type))return std::nullopt;return RemoveRelationComponent{key,{type}};
@@ -173,7 +187,31 @@ void affected(FileEditResult& result, const Transaction& transaction, const worl
     for (const auto& op : transaction.operations) {
         std::visit([&](const auto& value) {
             using T = std::decay_t<decltype(value)>;
-            if constexpr (std::is_same_v<T,SetWorldClock>||std::is_same_v<T, RegisterComponentType>) {
+            if constexpr (std::is_same_v<T, CreateSchedule> || std::is_same_v<T, CancelSchedule>) {
+                const auto add = [&](const world::WorldSchedule &s) {
+                    for (const auto id : {s.event.subject, s.event.target, s.event.object}) {
+                        if (id.is_nil())
+                            continue;
+                        result.affected_entities.push_back(id);
+                        for (const auto *snapshot : {&before, &after}) {
+                            const auto found =
+                                std::find_if(snapshot->entities.begin(), snapshot->entities.end(),
+                                             [&](const auto &e) { return e.persistent_id == id; });
+                            if (found != snapshot->entities.end() && found->spatial_state)
+                                result.affected_regions.push_back(found->spatial_state->region);
+                        }
+                    }
+                    if (s.event.region.valid())
+                        result.affected_regions.push_back(s.event.region);
+                };
+                if constexpr (std::is_same_v<T, CreateSchedule>)
+                    add(value.schedule);
+                else
+                    for (const auto &s : before.schedules)
+                        if (s.id == value.id)
+                            add(s);
+            } else if constexpr (std::is_same_v<T, SetWorldClock> ||
+                                 std::is_same_v<T, RegisterComponentType>) {
                 // Schema registration has no entity/region owner.
             } else if constexpr (std::is_same_v<T, SetWorldMaterial>) {
                 const auto add=[&](const world::WorldSnapshot& s) {
@@ -184,7 +222,10 @@ void affected(FileEditResult& result, const Transaction& transaction, const worl
                 };add(before);add(after);
             } else if constexpr (std::is_same_v<T, SetRegionFidelity>) {
                 result.affected_regions.push_back(value.region);
-            } else if constexpr (std::is_same_v<T,SetRelationComponent> || std::is_same_v<T,RemoveRelationComponent> || std::is_same_v<T, AddRelation> || std::is_same_v<T, RemoveRelation>) {
+            } else if constexpr (std::is_same_v<T, SetRelationComponent> ||
+                                 std::is_same_v<T, RemoveRelationComponent> ||
+                                 std::is_same_v<T, AddRelation> ||
+                                 std::is_same_v<T, RemoveRelation>) {
                 result.affected_entities.push_back(value.relation.subject);
                 result.affected_entities.push_back(value.relation.object);
                 for(const auto endpoint:{value.relation.subject,value.relation.object})for(const auto* snapshot:{&before,&after}){const auto e=std::find_if(snapshot->entities.begin(),snapshot->entities.end(),[&](const auto& item){return item.persistent_id==endpoint;});if(e!=snapshot->entities.end()&&e->spatial_state)result.affected_regions.push_back(e->spatial_state->region);}

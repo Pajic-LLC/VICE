@@ -1,21 +1,22 @@
 #pragma once
 
 #include <vice/world/camera.hpp>
-#include <vice/world/material.hpp>
 #include <vice/world/causal.hpp>
 #include <vice/world/character.hpp>
-#include <vice/world/presentation.hpp>
-#include <vice/world/vehicle.hpp>
-#include <vice/world/distance_link.hpp>
-#include <vice/world/dependency.hpp>
-#include <vice/world/component.hpp>
 #include <vice/world/clock.hpp>
+#include <vice/world/component.hpp>
+#include <vice/world/dependency.hpp>
+#include <vice/world/distance_link.hpp>
 #include <vice/world/light.hpp>
+#include <vice/world/material.hpp>
 #include <vice/world/persistent_id.hpp>
+#include <vice/world/presentation.hpp>
 #include <vice/world/reflection_probe.hpp>
-#include <vice/world/rigid_box.hpp>
 #include <vice/world/resource.hpp>
+#include <vice/world/rigid_box.hpp>
+#include <vice/world/schedule.hpp>
 #include <vice/world/spatial.hpp>
+#include <vice/world/vehicle.hpp>
 
 #include <optional>
 #include <string>
@@ -67,6 +68,7 @@ struct WorldSnapshot {
     std::vector<SnapshotRelation> relations;
     CausalHistory causal_history;
     WorldClock clock;
+    std::vector<WorldSchedule> schedules;
     std::vector<MaterialDefinition> materials;
 };
 

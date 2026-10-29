@@ -71,7 +71,52 @@ namespace {
         [&](const auto& value) -> bool {
             using Value = std::decay_t<decltype(value)>;
 
-            if constexpr(std::is_same_v<Value,SetWorldClock>){if(!world::valid(value.clock)){diagnostics="Invalid World clock.";return false;}candidate.clock=value.clock;return true;
+            if constexpr (std::is_same_v<Value, CreateSchedule>) {
+                const auto &s = value.schedule;
+                if (s.id.is_nil() || s.occurrence || s.failure != world::ScheduleFailure::none ||
+                    s.event_result != world::WorldEventResult::success || s.event.data.schedule ||
+                    (s.event.region.valid() && !find_region(candidate, s.event.region)) ||
+                    !has_entity(candidate, s.event.subject) ||
+                    (!s.event.target.is_nil() && !has_entity(candidate, s.event.target)) ||
+                    (!s.event.object.is_nil() && !has_entity(candidate, s.event.object))) {
+                    diagnostics = "Invalid fresh schedule or missing endpoint.";
+                    return false;
+                }
+                if (std::any_of(candidate.schedules.begin(), candidate.schedules.end(),
+                                [&](const auto &old) { return old.id == s.id; })) {
+                    diagnostics = "Schedule ID already exists.";
+                    return false;
+                }
+                for (const auto &parent : s.event.data.parents) {
+                    const auto &h = candidate.causal_history;
+                    const auto first = h.next_sequence - h.events.size();
+                    if (parent.history != h.id || parent.sequence < first ||
+                        parent.sequence >= h.next_sequence ||
+                        h.events[static_cast<std::size_t>(parent.sequence - first)].id !=
+                            parent.id) {
+                        diagnostics = "Schedule creation requires retained causal parents.";
+                        return false;
+                    }
+                }
+                candidate.schedules.push_back(s);
+                return true;
+            } else if constexpr (std::is_same_v<Value, CancelSchedule>) {
+                const auto found =
+                    std::find_if(candidate.schedules.begin(), candidate.schedules.end(),
+                                 [&](const auto &s) { return s.id == value.id; });
+                if (found == candidate.schedules.end()) {
+                    diagnostics = "Schedule does not exist.";
+                    return false;
+                }
+                candidate.schedules.erase(found);
+                return true;
+            } else if constexpr (std::is_same_v<Value, SetWorldClock>) {
+                if (!world::valid(value.clock)) {
+                    diagnostics = "Invalid World clock.";
+                    return false;
+                }
+                candidate.clock = value.clock;
+                return true;
             } else if constexpr (std::is_same_v<Value, SetWorldMaterial>) {
                 if(value.id.is_nil() || (value.definition && (value.definition->id!=value.id || !world::valid(*value.definition)))) {
                     diagnostics="Invalid World material definition.";return false;
@@ -123,9 +168,10 @@ namespace {
                 }
                 entity->authored_transform = value.transform;
                 return true;
-            } else if constexpr(std::is_same_v<Value,RegisterComponentType>){
+            } else if constexpr (std::is_same_v<Value, RegisterComponentType>) {
                 if(std::any_of(candidate.component_types.begin(),candidate.component_types.end(),[&](const auto& s){return s.id==value.schema.id;})){diagnostics="Component schema already exists.";return false;}candidate.component_types.push_back(value.schema);return true;
-            } else if constexpr(std::is_same_v<Value,SetComponent>||std::is_same_v<Value,RemoveComponent>){
+            } else if constexpr (std::is_same_v<Value, SetComponent> ||
+                                 std::is_same_v<Value, RemoveComponent>) {
                 auto* e=find_entity(candidate,value.entity);if(!e){diagnostics="Component owner is missing.";return false;}
                 const auto type=[&]{if constexpr(std::is_same_v<Value,SetComponent>)return value.payload.type;else return value.type;}();
                 auto found=std::find_if(e->components.begin(),e->components.end(),[&](const auto& c){return c.type==type;});
@@ -135,7 +181,9 @@ namespace {
                 auto* entity=find_entity(candidate,value.entity);
                 if(!entity || (value.attachment && !world::valid(*value.attachment))){diagnostics="Invalid character attachment.";return false;}
                 entity->character_attachment=value.attachment;return true;
-            } else if constexpr (std::is_same_v<Value,SetAnimation>||std::is_same_v<Value,SetRigPart>||std::is_same_v<Value,SetAudioEmitter>){
+            } else if constexpr (std::is_same_v<Value, SetAnimation> ||
+                                 std::is_same_v<Value, SetRigPart> ||
+                                 std::is_same_v<Value, SetAudioEmitter>) {
                 auto* e=find_entity(candidate,value.entity);if(!e || (value.value&&!world::valid(*value.value))){diagnostics="Invalid presentation edit.";return false;}
                 if constexpr(std::is_same_v<Value,SetAnimation>)e->animation=value.value;
                 else if constexpr(std::is_same_v<Value,SetRigPart>)e->rig_part=value.value;
@@ -189,7 +237,8 @@ namespace {
                 }
                 region->fidelity = value.fidelity;
                 return true;
-            } else if constexpr(std::is_same_v<Value,SetRelationComponent>||std::is_same_v<Value,RemoveRelationComponent>){
+            } else if constexpr (std::is_same_v<Value, SetRelationComponent> ||
+                                 std::is_same_v<Value, RemoveRelationComponent>) {
                 const auto edge=std::find_if(candidate.relations.begin(),candidate.relations.end(),[&](const auto& r){return r.subject==value.relation.subject&&r.kind==value.relation.kind&&r.object==value.relation.object;});
                 if(edge==candidate.relations.end()){diagnostics="Relation does not exist.";return false;}
                 const auto type=[&]{if constexpr(std::is_same_v<Value,SetRelationComponent>)return value.payload.type;else return value.type;}();

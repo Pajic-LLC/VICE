@@ -164,6 +164,9 @@ enum class Result : std::uint32_t {
     schema_conflict,
     no_relation,
     invalid_parent,
+    no_schedule,
+    capacity_exceeded,
+    duplicate_id,
 };
 enum class Motion : std::uint32_t { static_body, kinematic_body, dynamic_body };
 struct EntitySnapshot {
@@ -375,6 +378,52 @@ struct SignalWindowSnapshot {
     EntityId stream{};
     std::uint64_t first_sequence = 1, next_sequence = 1, lifetime_ticks = 1'000'000;
 };
+enum class ScheduleCatchUp : std::uint32_t { replay, coalesce };
+enum class ScheduleFailure : std::uint32_t {
+    none,
+    event_rejected,
+    time_overflow,
+    occurrence_overflow
+};
+struct ScheduleRequest {
+    std::uint32_t size = sizeof(ScheduleRequest);
+    ScheduleCatchUp catch_up = ScheduleCatchUp::coalesce;
+    EntityId id{};
+    std::uint64_t due_ticks = 0, interval_ticks = 0;
+    WorldEventRequest event;
+};
+struct ScheduleSummary {
+    EntityId id{}, subject{}, target{}, object{}, type{};
+    std::uint64_t due_ticks = 0, interval_ticks = 0, occurrence = 0, region = 0;
+    ScheduleCatchUp catch_up = ScheduleCatchUp::coalesce;
+    ScheduleFailure failure = ScheduleFailure::none;
+    Result event_result = Result::success;
+    std::uint32_t retained = 1;
+};
+struct ScheduleSnapshot {
+    std::uint32_t size = sizeof(ScheduleSnapshot);
+    ScheduleSummary summary;
+    WorldEventRequest event;
+};
+struct SchedulePageSnapshot {
+    std::uint32_t size = sizeof(SchedulePageSnapshot), count = 0, has_more = 0;
+    EntityId after{};
+    ScheduleSummary entries[64]{};
+};
+struct SchedulerSnapshot {
+    std::uint32_t size = sizeof(SchedulerSnapshot), count = 0, pending = 0, failed = 0,
+                  capacity = 16384, dispatch_budget = 256, has_next = 0, due_remaining = 0;
+    std::uint64_t next_due_ticks = 0;
+};
+struct ScheduleDispatchSnapshot {
+    std::uint32_t size = sizeof(ScheduleDispatchSnapshot), processed = 0, fired = 0, failed = 0,
+                  due_remaining = 0;
+};
+struct EventScheduleSnapshot {
+    std::uint32_t size = sizeof(EventScheduleSnapshot), has_schedule = 0;
+    EntityId id{};
+    std::uint64_t due_ticks = 0, occurrence = 0, count = 0;
+};
 struct HostApi {
     std::uint32_t abi_version = module::abi_version;
     std::uint32_t size = sizeof(HostApi);
@@ -431,6 +480,15 @@ struct HostApi {
     Result (*read_signal_window)(void *, SignalWindowSnapshot *) noexcept = nullptr;
     Result (*read_world_signal)(void *, EntityId stream, std::uint64_t sequence,
                                 WorldEventSnapshot *) noexcept = nullptr;
+    Result (*schedule_event)(void *, const ScheduleRequest *, EntityId *) noexcept = nullptr;
+    Result (*cancel_schedule)(void *, EntityId) noexcept = nullptr;
+    Result (*read_schedule)(void *, EntityId, ScheduleSnapshot *) noexcept = nullptr;
+    Result (*read_schedules)(void *, SchedulePageSnapshot *) noexcept = nullptr;
+    Result (*read_scheduler)(void *, SchedulerSnapshot *) noexcept = nullptr;
+    Result (*dispatch_schedules)(void *, std::uint32_t,
+                                 ScheduleDispatchSnapshot *) noexcept = nullptr;
+    Result (*read_event_schedule)(void *, EventRef, std::uint32_t,
+                                  EventScheduleSnapshot *) noexcept = nullptr;
 };
 
 inline constexpr std::size_t host_api_v1_size = offsetof(HostApi, read_entity);
@@ -673,6 +731,60 @@ public:
     [[nodiscard]] Result read_world_clock(WorldClockSnapshot& output)const noexcept {if(!host_||host_->size<offsetof(HostApi,read_world_clock)+sizeof(host_->read_world_clock)||!host_->read_world_clock)return Result::unavailable;return host_->read_world_clock(host_->context,&output);}
     [[nodiscard]] Result configure_world_clock(bool paused,std::uint32_t rate_milli=1000,bool automatic=true)const noexcept {if(!host_||host_->size<offsetof(HostApi,configure_world_clock)+sizeof(host_->configure_world_clock)||!host_->configure_world_clock)return Result::unavailable;return host_->configure_world_clock(host_->context,paused?1U:0U,rate_milli,automatic?1U:0U);}
     [[nodiscard]] Result step_world_clock(std::uint64_t ticks)const noexcept {if(!host_||host_->size<offsetof(HostApi,step_world_clock)+sizeof(host_->step_world_clock)||!host_->step_world_clock)return Result::unavailable;return host_->step_world_clock(host_->context,ticks);}
+    [[nodiscard]] Result schedule_event(const ScheduleRequest &request,
+                                        EntityId &output) const noexcept {
+        if (!host_ ||
+            host_->size < offsetof(HostApi, schedule_event) + sizeof(host_->schedule_event) ||
+            !host_->schedule_event)
+            return Result::unavailable;
+        return host_->schedule_event(host_->context, &request, &output);
+    }
+    [[nodiscard]] Result cancel_schedule(EntityId id) const noexcept {
+        if (!host_ ||
+            host_->size < offsetof(HostApi, cancel_schedule) + sizeof(host_->cancel_schedule) ||
+            !host_->cancel_schedule)
+            return Result::unavailable;
+        return host_->cancel_schedule(host_->context, id);
+    }
+    [[nodiscard]] Result read_schedule(EntityId id, ScheduleSnapshot &output) const noexcept {
+        if (!host_ ||
+            host_->size < offsetof(HostApi, read_schedule) + sizeof(host_->read_schedule) ||
+            !host_->read_schedule)
+            return Result::unavailable;
+        return host_->read_schedule(host_->context, id, &output);
+    }
+    [[nodiscard]] Result read_schedules(SchedulePageSnapshot &output) const noexcept {
+        if (!host_ ||
+            host_->size < offsetof(HostApi, read_schedules) + sizeof(host_->read_schedules) ||
+            !host_->read_schedules)
+            return Result::unavailable;
+        return host_->read_schedules(host_->context, &output);
+    }
+    [[nodiscard]] Result read_scheduler(SchedulerSnapshot &output) const noexcept {
+        if (!host_ ||
+            host_->size < offsetof(HostApi, read_scheduler) + sizeof(host_->read_scheduler) ||
+            !host_->read_scheduler)
+            return Result::unavailable;
+        return host_->read_scheduler(host_->context, &output);
+    }
+    [[nodiscard]] Result dispatch_schedules(std::uint32_t budget,
+                                            ScheduleDispatchSnapshot &output) const noexcept {
+        if (!host_ ||
+            host_->size <
+                offsetof(HostApi, dispatch_schedules) + sizeof(host_->dispatch_schedules) ||
+            !host_->dispatch_schedules)
+            return Result::unavailable;
+        return host_->dispatch_schedules(host_->context, budget, &output);
+    }
+    [[nodiscard]] Result read_event_schedule(EventRef ref, std::uint32_t retained,
+                                             EventScheduleSnapshot &output) const noexcept {
+        if (!host_ ||
+            host_->size <
+                offsetof(HostApi, read_event_schedule) + sizeof(host_->read_event_schedule) ||
+            !host_->read_event_schedule)
+            return Result::unavailable;
+        return host_->read_event_schedule(host_->context, ref, retained, &output);
+    }
     [[nodiscard]] Result emit_world_event(const WorldEventRequest &request,
                                           EventRef &output) const noexcept {
         if (!host_ ||

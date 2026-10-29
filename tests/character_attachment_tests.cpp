@@ -47,7 +47,13 @@ int main(){
     const auto saved=world::encode_world_snapshot(w.snapshot());const auto decoded=world::decode_world_snapshot(saved.bytes);world::World restored;
     require(decoded.snapshot && restored.restore(*decoded.snapshot) && restored.character_attachment(*restored.find(id(3)))==w.character_attachment(actor),"binary carrier round trip");
     auto invalid=w.snapshot();invalid.entities[1].rigid_box.reset();require(!w.restore(invalid) && w.character_attachment(actor).has_value(),"invalid parent restore is atomic");
-    auto old=world::encode_world_snapshot(load().snapshot()).bytes;old.resize(old.size()-42);old[8]=std::byte{13};rehash(old);const auto v13=world::decode_world_snapshot(old);require(v13.snapshot && !v13.snapshot->entities[2].character_attachment,"v13 remains readable");
+    auto old = world::encode_world_snapshot(load().snapshot()).bytes;
+    old.resize(old.size() - 46);
+    old[8] = std::byte{13};
+    rehash(old);
+    const auto v13 = world::decode_world_snapshot(old);
+    require(v13.snapshot && !v13.snapshot->entities[2].character_attachment,
+            "v13 remains readable");
     auto truncated=saved.bytes;truncated.pop_back();rehash(truncated);require(!world::decode_world_snapshot(truncated),"truncated attachment rejected");
     tools::world_authoring::Transaction tx;tx.operations={tools::world_authoring::SetCharacterAttachment{id(3),std::nullopt}};require(bool(tools::world_authoring::apply(w.snapshot(),tx)),"typed detach authoring");
     require(w.clear_character(actor) && !w.character_attachment(actor) && w.destroy_entity(car),"removing character releases carrier reference");

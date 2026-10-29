@@ -46,6 +46,11 @@ bool valid_event(const CausalEvent& e) {
             e.root_reason != DependencyReason::available ||
             e.quantity_kind != CausalQuantity::none || e.quantity != 0 || e.solver_step)
             return false;
+        if (e.data->schedule) {
+            const auto &s = *e.data->schedule;
+            if (s.id.is_nil() || !s.count || s.occurrence < s.count || s.due_ticks > e.world_ticks)
+                return false;
+        }
         const auto &ps = e.data->parents;
         if (ps.empty())
             return e.parent_id.is_nil() && !e.parent_sequence;
@@ -313,7 +318,15 @@ std::string serialize_causal_context(const CausalContext& c) {
                             : "retained")
                     << "\"}";
             }
-        out << "]}";
+        out << "]";
+        if (e.data && e.data->schedule) {
+            const auto &s = *e.data->schedule;
+            out << ",\"schedule\":{\"id\":\"" << s.id.to_string() << "\",\"due_ticks\":\""
+                << s.due_ticks << "\",\"occurrence\":\"" << s.occurrence << "\",\"count\":\""
+                << s.count << "\"}";
+        } else
+            out << ",\"schedule\":null";
+        out << "}";
     } out<<"]}";return out.str();
 }
 }

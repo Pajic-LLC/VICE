@@ -13,6 +13,12 @@ namespace vice::tools::world_authoring {
 
 inline constexpr std::size_t max_transaction_operations = 256U;
 
+struct CreateSchedule {
+    world::WorldSchedule schedule;
+};
+struct CancelSchedule {
+    world::PersistentId id;
+};
 struct SetWorldClock {world::WorldClock clock;};
 
 struct SetEntitySpatial {
@@ -88,27 +94,13 @@ struct RemoveResourceReference {
     world::ResourceReference reference{};
 };
 
-using Operation = std::variant<
-    SetWorldClock,
-    SetEntitySpatial,
-    SetEntityTransform,
-    SetRegionFidelity,
-    SetRigidBox,
-    SetWorldMaterial,
-    SetEntityMaterial,
-    SetDistanceLink,
-    SetDependency,
-    SetCharacter,
-    SetVehicle,
-    RegisterComponentType,SetComponent,RemoveComponent,
-    SetAnimation,SetRigPart,SetAudioEmitter,
-    SetCharacterAttachment,
-    SetRelationComponent,RemoveRelationComponent,
-    AddRelation,
-    RemoveRelation,
-    AddResourceReference,
-    RemoveResourceReference
->;
+using Operation = std::variant<SetWorldClock, CreateSchedule, CancelSchedule, SetEntitySpatial,
+                               SetEntityTransform, SetRegionFidelity, SetRigidBox, SetWorldMaterial,
+                               SetEntityMaterial, SetDistanceLink, SetDependency, SetCharacter,
+                               SetVehicle, RegisterComponentType, SetComponent, RemoveComponent,
+                               SetAnimation, SetRigPart, SetAudioEmitter, SetCharacterAttachment,
+                               SetRelationComponent, RemoveRelationComponent, AddRelation,
+                               RemoveRelation, AddResourceReference, RemoveResourceReference>;
 
 struct Transaction {
     std::vector<Operation> operations;
