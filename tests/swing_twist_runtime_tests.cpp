@@ -101,6 +101,31 @@ int main() {
             require(driven.step(), "oriented pose");
         const auto observed = *driven.swing_twist_joint(joint_id(3));
         require(observed.angular_error < .08F, "orientation-independent target");
+        const auto &frame = joint.first_frame;
+        const auto z = math::cross(frame.axis, frame.normal);
+        auto basis = math::identity();
+        const std::array columns{frame.axis, frame.normal, z};
+        for (unsigned c = 0; c < 3; ++c) {
+            basis(0, c) = columns[c].x;
+            basis(1, c) = columns[c].y;
+            basis(2, c) = columns[c].z;
+        }
+        auto inverse = math::identity();
+        for (unsigned row = 0; row < 3; ++row)
+            for (unsigned column = 0; column < 3; ++column)
+                inverse(row, column) = basis(column, row);
+        const auto &q = joint.configuration.drive.target_orientation;
+        const auto expected = math::multiply(
+            math::multiply(basis, math::rotation({q[0], q[1], q[2], q[3]})), inverse);
+        const auto rotation = oriented.authored_transform(*oriented.find(joint_id(2)))->rotation;
+        const auto actual = math::rotation({rotation.x, rotation.y, rotation.z, rotation.w});
+        float axis_error = 0;
+        for (unsigned row = 0; row < 3; ++row)
+            for (unsigned column = 0; column < 3; ++column)
+                axis_error =
+                    std::max(axis_error, std::abs(actual(row, column) - expected(row, column)));
+        require(axis_error < .08F, "actual World rotation follows VICE twist X / normal Y basis");
+
         world::World restored;
         require(restored.restore(oriented.snapshot()), "oriented restore");
         rigid_body::AuthoredSimulation cold;
