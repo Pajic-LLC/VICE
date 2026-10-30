@@ -326,7 +326,7 @@ bool import_rig(const std::filesystem::path &source, const std::filesystem::path
                 return fail(d, "Rig mesh is empty.");
             std::ostringstream mesh;
             mesh.imbue(std::locale::classic());
-            mesh << std::setprecision(9) << "vice-mesh-source 2\nname node_" << i << "\nid "
+            mesh << std::setprecision(9) << "vice-mesh-source 2\nvirtual_geometry dense\nname node_" << i << "\nid "
                  << node.mesh.value.to_string() << '\n';
             for (const auto &v : vertices)
                 mesh << "vertex " << v.p[0] << ' ' << v.p[1] << ' ' << v.p[2] << ' ' << v.color[0]

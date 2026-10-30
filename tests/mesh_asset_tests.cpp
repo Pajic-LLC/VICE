@@ -162,6 +162,24 @@ void assert_meshlet_bounds_contain_vertices(
 } // namespace
 
 int main() {
+    {
+        const auto parsed = vice::tools::mesh_cooker::parse_source_manifest(
+            "vice-mesh-source 2\nvirtual_geometry dense\nname deforming\n"
+            "id 84000000-0000-4000-8000-000000000021\n"
+            "vertex 0 0 0 1 1 1 0 0 1 0 0\n"
+            "vertex 1 0 0 1 1 1 0 0 1 1 0\n"
+            "vertex 0 1 0 1 1 1 0 0 1 0 1\ntriangle 0 1 2\n");
+        assert(parsed.source && !parsed.source->build_virtual_geometry_proxies);
+        const auto cooked = vice::tools::mesh_cooker::cook(*parsed.source);
+        assert(cooked.success);
+        const auto decoded = vice::render::decode_mesh_asset(cooked.bytes);
+        assert(decoded.asset && decoded.asset->vertices.size() == 3);
+        assert(decoded.asset->indices == parsed.source->indices);
+        assert(decoded.asset->virtual_geometry_proxies.proxies.empty());
+        assert(!vice::tools::mesh_cooker::parse_source_manifest(
+            "vice-mesh-source 2\nvirtual_geometry invented\n").source);
+    }
+
     using namespace vice;
 
     constexpr std::string_view source_v1 = R"(

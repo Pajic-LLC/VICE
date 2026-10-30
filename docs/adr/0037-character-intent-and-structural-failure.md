@@ -46,3 +46,15 @@ Regression coverage includes local-space length preservation, blended clocks,
 old-host and thread/phase guards, checkpoint continuity, solver failure and cold
 wreck reconstruction, and owner-specific equipment exclusion. Native appearance
 and physical feel remain separate acceptance requirements.
+
+## Deforming asset cook policy
+
+Imported rig meshes explicitly request `virtual_geometry dense` in the existing
+mesh source format. The default stays `streamed`. Dense cooking uses the supported
+v5 archive, retaining exact vertices, indices, clusters and page metadata while
+skipping static proxy simplification. A static simplified surface is not an
+equivalent representation of a weighted animated mesh. This policy also prevents
+pathological simplification cost for disconnected hair clumps. It is not a polygon
+reduction or a substitute for animated LODs and GPU skinning. Unknown policy values
+fail parsing. Regression coverage decodes the dense archive and checks exact
+geometry retention; existing v6/v7 streaming regressions continue to run.

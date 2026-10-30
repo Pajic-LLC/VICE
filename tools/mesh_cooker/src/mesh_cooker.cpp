@@ -218,6 +218,13 @@ ParseResult parse_source_manifest(const std::string_view source) {
                 fail("unknown collision mode.");
                 return result;
             }
+        } else if (keyword == "virtual_geometry") {
+            std::string mode;
+            if (!(values >> mode) || (mode != "streamed" && mode != "dense")) {
+                fail("virtual_geometry requires streamed or dense.");
+                return result;
+            }
+            parsed.build_virtual_geometry_proxies = mode == "streamed";
         } else if (keyword == "vertex") {
             render::MeshVertex vertex;
             const bool base = static_cast<bool>(values >>
