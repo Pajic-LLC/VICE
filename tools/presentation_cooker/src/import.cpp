@@ -235,7 +235,7 @@ bool import_rig(const std::filesystem::path &source, const std::filesystem::path
                                 return fail(d, "Invalid skin accessor types/counts/normalization.");
                         }
                 }
-                float tint[4]{0.65F, 0.72F, 0.82F, 1};
+                float tint[4]{1, 1, 1, 1};
                 if (primitive.material) {
                     const auto &m = *primitive.material;
                     if (m.pbr_metallic_roughness.base_color_texture.texture ||

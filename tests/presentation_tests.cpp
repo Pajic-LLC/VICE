@@ -1,6 +1,8 @@
 #include "presentation_fixture.hpp"
 #include <algorithm>
 #include <limits>
+#include <regex>
+#include <vice/tools/mesh_cooker.hpp>
 #include <vice/tools/world_edit.hpp>
 int main() {
     using namespace fixture;
@@ -81,6 +83,20 @@ int main() {
     require(text(imported / "character.vrig") ==
                 text(f.workspace.asset_root / "character/character.vrig"),
             "import is deterministic against committed rig output");
+    {
+        const auto neutral_source = std::regex_replace(
+            text(std::filesystem::path{VICE_PRESENTATION_EXAMPLE} / "sources/humanoid.gltf"),
+            std::regex{R"(,"material":[0-9]+)"}, "");
+        { std::ofstream out(f.path / "neutral.gltf"); out << neutral_source; }
+        require(tools::import_rig(f.path / "neutral.gltf", f.path / "neutral", {rig}, actor, &d),
+                "material-free glTF import");
+        const auto mesh = tools::mesh_cooker::parse_source_manifest(text(f.path / "neutral/node_0.vmesh"));
+        require(mesh.source && !mesh.source->build_virtual_geometry_proxies,
+                "rig import selects exact dense geometry");
+        for (const auto &v : mesh.source->vertices)
+            require(v.color[0] == 1 && v.color[1] == 1 && v.color[2] == 1,
+                    "absent glTF material must not add a blue debug tint");
+    }
     require(!tools::import_rig(std::filesystem::path{VICE_PRESENTATION_EXAMPLE} /
                                    "sources/humanoid.gltf",
                                imported, {rig}, actor, &d),

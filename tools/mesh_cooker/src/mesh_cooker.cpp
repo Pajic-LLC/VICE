@@ -400,7 +400,7 @@ CookResult cook(const MeshSource& source) {
     result.bytes.reserve(v5_header_bytes + payload.size());
     constexpr std::string_view magic = "VICEMESH";
     for (const char value : magic) result.bytes.push_back(static_cast<std::byte>(value));
-    append_u32(result.bytes, render::mesh_asset_format_version);
+    append_u32(result.bytes, render::mesh_asset_format_version_v5);
     append_u32(result.bytes, static_cast<std::uint32_t>(source.vertices.size()));
     append_u32(result.bytes, static_cast<std::uint32_t>(source.indices.size()));
     append_u64(result.bytes, result.source_fingerprint);
