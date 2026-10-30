@@ -27,3 +27,7 @@ Check animation local-space length preservation, invalid-input transactionality,
 ## Equipment/controller collision relationships
 
 A symmetric World relation with kind `e8000000-0000-4000-8000-000000000001` excludes a rigid body from one character controller's collision queries. Other bodies and characters still collide with it. The authored bridge derives native participant exclusions from persistent identities at reset and rejects live structural edits before solver advance. Reconstructed controllers and exit overlap/sweep preflights preserve the exclusions. This prevents a moving piece of physical equipment from feeding back into its wearer's coarse capsule without disabling its road contacts. The regression checks an overlapping equipment body, grounded stability, cold reconstruction and stale-filter rejection.
+
+## Camera depth agreement
+
+Direct project materials now create a camera-depth pipeline using their exact cooked vertex module. A separate GPU batch assignment omits those instances from the generic native depth kernel; GPU-scene materials and fallback meshes keep their batched path. This prevents cross-compiler rounding or legal project vertex transforms from rejecting fragments against a different prepass. The GPU regression compares the full color target with and without a prepass, including an intentional vertex-depth offset that the old generic prepass could not reproduce.

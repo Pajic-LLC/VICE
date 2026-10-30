@@ -412,3 +412,28 @@ target_compile_definitions(vice_animation_mix_tests PRIVATE VICE_PRESENTATION_EX
 target_compile_features(vice_animation_mix_tests PRIVATE cxx_std_23)
 vice_enable_warnings(vice_animation_mix_tests)
 add_test(NAME vice_animation_mix_tests COMMAND vice_animation_mix_tests)
+
+if(_vice_runtime_ray_shadow_target)
+  foreach(_stage IN ITEMS vertex fragment)
+    if(_stage STREQUAL "vertex")
+      set(_entry depth_test_vs)
+    else()
+      set(_entry depth_test_fs)
+    endif()
+    set(_out "${CMAKE_BINARY_DIR}/cooked/vice_material_depth_test_${_stage}")
+    vice_add_cooked_shader(NAME vice_material_depth_test_${_stage}_shader
+      INPUT "${CMAKE_CURRENT_SOURCE_DIR}/material_depth_fixture.hlsl" OUTPUT "${_out}"
+      ENTRY "${_entry}" STAGE "${_stage}" TARGET "${_vice_runtime_ray_shadow_target}"
+      SHADER_MODEL 6.0 DXC "${_vice_runtime_ray_shadow_dxc}"
+      METAL_SHADER_CONVERTER "${_vice_runtime_ray_shadow_metal_converter}")
+  endforeach()
+  add_executable(vice_runtime_material_depth_tests runtime_material_depth_tests.cpp)
+  target_link_libraries(vice_runtime_material_depth_tests PRIVATE VICE::Runtime)
+  target_compile_features(vice_runtime_material_depth_tests PRIVATE cxx_std_23)
+  target_compile_definitions(vice_runtime_material_depth_tests PRIVATE
+    VICE_DEPTH_TEST_VS="${CMAKE_BINARY_DIR}/cooked/vice_material_depth_test_vertex/shader.vice.json"
+    VICE_DEPTH_TEST_FS="${CMAKE_BINARY_DIR}/cooked/vice_material_depth_test_fragment/shader.vice.json")
+  add_dependencies(vice_runtime_material_depth_tests vice_material_depth_test_vertex_shader vice_material_depth_test_fragment_shader)
+  vice_enable_warnings(vice_runtime_material_depth_tests)
+  add_test(NAME vice_runtime_material_depth_tests COMMAND vice_runtime_material_depth_tests)
+endif()

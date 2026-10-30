@@ -359,7 +359,7 @@ struct RuntimeMaterialLibrary::State {
     struct MaterialGpu {
         std::unique_ptr<render::ShaderModule> vertex_shader;
         std::unique_ptr<render::ShaderModule> fragment_shader;
-        std::unique_ptr<render::GraphicsPipeline> pipeline;
+        std::unique_ptr<render::GraphicsPipeline> pipeline, depth_pipeline;
         std::unique_ptr<render::Buffer> constants;
         world::ResourceId base_color_texture{};
         world::ResourceId normal_texture{};
@@ -530,6 +530,14 @@ bool RuntimeMaterialLibrary::initialize(
                 record.resource_id.value.to_string() + "`.");
             return false;
         }
+        // Share the exact cooked vertex program with the camera depth pass. Native and
+        // converted shaders can round positions differently even with equivalent source.
+        auto depth_desc=pipeline_desc;
+        depth_desc.fragment_shader=nullptr;
+        depth_desc.color_format=render::TextureFormat::undefined;
+        depth_desc.debug_name="VICE Runtime project material camera depth pipeline";
+        auto depth_pipeline=device.create_graphics_pipeline(depth_desc);
+        if(!depth_pipeline) {set_diagnostics(diagnostics,"Could not create material camera depth pipeline.");return false;}
         auto constants = create_material_constants(device, record.asset);
         if (!constants) {
             set_diagnostics(diagnostics, "Could not create constants for render material `" +
@@ -541,6 +549,7 @@ bool RuntimeMaterialLibrary::initialize(
             .vertex_shader = std::move(vertex.module),
             .fragment_shader = std::move(fragment.module),
             .pipeline = std::move(pipeline),
+            .depth_pipeline = std::move(depth_pipeline),
             .constants = std::move(constants),
             .base_color_texture = base_color_texture,
             .normal_texture = normal_texture,
@@ -570,6 +579,7 @@ RuntimeMaterialBinding RuntimeMaterialLibrary::find(
     };
     return RuntimeMaterialBinding{
         .pipeline = found->second.pipeline.get(),
+        .depth_pipeline = found->second.depth_pipeline.get(),
         .constants = found->second.constants.get(),
         .base_color_texture = resolve(found->second.base_color_texture, RuntimeMaterialTextureChannel::base_color),
         .normal_texture = resolve(found->second.normal_texture, RuntimeMaterialTextureChannel::normal),

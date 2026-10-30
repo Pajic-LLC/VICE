@@ -1981,7 +1981,7 @@ struct RuntimeSceneRenderer::State {
     RuntimeGpuDrawBatcher gpu_cluster_default_draw_batches;
     RuntimeGpuDrawBatcher gpu_cluster_pbr_draw_batches;
     RuntimeGpuDrawBatcher gpu_shadow_draw_batches;
-    RuntimeGpuDrawBatcher gpu_motion_draw_batches;
+    RuntimeGpuDrawBatcher gpu_motion_draw_batches, gpu_camera_depth_draw_batches;
     RuntimeGpuClusterInstanceRemap gpu_cluster_default_instances;
     RuntimeGpuClusterInstanceRemap gpu_cluster_pbr_instances;
     RuntimeGpuInstanceTable gpu_instances;
@@ -2141,6 +2141,7 @@ bool RuntimeSceneRenderer::initialize(
         !state_->gpu_cluster_pbr_draw_batches.initialize(device, diagnostics) ||
         !state_->gpu_shadow_draw_batches.initialize(device, diagnostics) ||
         !state_->gpu_motion_draw_batches.initialize(device, diagnostics) ||
+        !state_->gpu_camera_depth_draw_batches.initialize(device, diagnostics) ||
         !state_->gpu_cluster_default_instances.initialize(device, diagnostics) ||
         !state_->gpu_cluster_pbr_instances.initialize(device, diagnostics) ||
         !state_->gpu_instances.initialize(device, diagnostics) ||
@@ -3399,7 +3400,7 @@ bool RuntimeSceneRenderer::render(
     RuntimeGpuDrawBatchResult gpu_cluster_default_batch_result{};
     RuntimeGpuDrawBatchResult gpu_cluster_pbr_batch_result{};
     RuntimeGpuDrawBatchResult gpu_shadow_batch_result{};
-    RuntimeGpuDrawBatchResult gpu_motion_batch_result{};
+    RuntimeGpuDrawBatchResult gpu_motion_batch_result{}, gpu_camera_depth_batch_result{};
     RuntimeGpuClusterVisibilityResult gpu_cluster_visibility_result{};
     if (!instances.empty()) {
         if (!state_->gpu_instances.upload(*commands, gpu_instance_models, diagnostics) ||
@@ -3455,6 +3456,15 @@ bool RuntimeSceneRenderer::render(
             return false;
         }
         gpu_motion_batch_result = state_->gpu_motion_draw_batches.result();
+    }
+    if(use_camera_depth_prepass && !gpu_shadow_plan.batches.empty()) {
+        auto assignments=gpu_shadow_plan.instance_batches;
+        for(std::size_t i=0;i<instances.size();++i) if(instances[i].material) {
+            const auto *material=state_->materials.catalog().find(*instances[i].material);
+            if(material && !render::render_material_uses_gpu_scene_pbr(material->asset.version)) assignments[i]=runtime_gpu_draw_batch_unassigned;
+        }
+        if(!state_->gpu_camera_depth_draw_batches.build(*commands,camera_visibility,assignments,gpu_shadow_plan.batches,diagnostics)) return false;
+        gpu_camera_depth_batch_result=state_->gpu_camera_depth_draw_batches.result();
     }
     if (!gpu_default_batches.empty()) {
         if (!state_->gpu_draw_batches.build(
@@ -3864,8 +3874,8 @@ bool RuntimeSceneRenderer::render(
         if (!gpu_shadow_plan.batches.empty()) {
             const auto instance_table = state_->gpu_instances.result();
             if (state_->gpu_shadow_pipeline == nullptr || instance_table.models == nullptr ||
-                gpu_motion_batch_result.compacted_instance_indices == nullptr ||
-                gpu_motion_batch_result.indirect_arguments == nullptr) {
+                gpu_camera_depth_batch_result.compacted_instance_indices == nullptr ||
+                gpu_camera_depth_batch_result.indirect_arguments == nullptr) {
                 set_diagnostics(diagnostics, "VICE Runtime camera depth-prepass resources are unavailable.");
                 return false;
             }
@@ -3886,7 +3896,7 @@ bool RuntimeSceneRenderer::render(
                     gpu_model_table_binding, *instance_table.models, model_view
                 ) || !commands->set_graphics_buffer(
                     gpu_compacted_instance_binding,
-                    *gpu_motion_batch_result.compacted_instance_indices,
+                    *gpu_camera_depth_batch_result.compacted_instance_indices,
                     compacted_view
                 )) {
                 set_diagnostics(diagnostics, "VICE Runtime could not bind camera depth-prepass resources.");
@@ -3899,11 +3909,35 @@ bool RuntimeSceneRenderer::render(
                 if (!commands->set_vertex_buffer(0U, *mesh.vertices) ||
                     !commands->set_index_buffer(*mesh.indices, render::IndexFormat::uint32) ||
                     !commands->draw_indexed_indirect(
-                        *gpu_motion_batch_result.indirect_arguments, argument_offset
+                        *gpu_camera_depth_batch_result.indirect_arguments, argument_offset
                     )) {
                     set_diagnostics(diagnostics, "VICE Runtime could not encode a camera depth-prepass batch.");
                     return false;
                 }
+            }
+        }
+        // Direct project materials use their own vertex program for both depth and color.
+        for(const auto &instance:instances) {
+            if(!instance.material) continue;
+            const auto *record=state_->materials.catalog().find(*instance.material);
+            if(!record || render::render_material_uses_gpu_scene_pbr(record->asset.version)) continue;
+            const auto binding=state_->materials.find(*instance.material);
+            if(!binding.depth_pipeline) {set_diagnostics(diagnostics,"Material camera depth pipeline is unavailable.");return false;}
+            auto found=state_->constants.find(instance.entity);
+            if(found==state_->constants.end()) {
+                auto buffer=create_constant_buffer(*state_->device);
+                if(!buffer) return false;
+                found=state_->constants.emplace(instance.entity,std::move(buffer)).first;
+            }
+            const SceneConstants constants{.view_projection=view_projection,.model=runtime_model_matrix(instance)};
+            auto &mesh=state_->meshes.at(instance.mesh);
+            if(!found->second->write(0,std::as_bytes(std::span{&constants,1})) ||
+               !commands->set_graphics_pipeline(*binding.depth_pipeline) ||
+               !commands->set_graphics_constant_buffer(frame_binding,*found->second,0,sizeof(SceneConstants)) ||
+               !commands->set_vertex_buffer(0,*mesh.vertices) ||
+               !commands->set_index_buffer(*mesh.indices,render::IndexFormat::uint32) ||
+               !commands->draw_indexed(mesh.index_count)) {
+                set_diagnostics(diagnostics,"Could not encode project material camera depth.");return false;
             }
         }
         if (!commands->end_render_pass()) {
