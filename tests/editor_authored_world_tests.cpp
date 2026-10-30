@@ -301,6 +301,7 @@ int main() {
     require(session->manifest().startup_world == std::filesystem::path{"worlds/saved-as.vworld"}, "startup World updated");
 
     const auto built = editor::build_project(*session);
+    if (!built) std::cerr << built.diagnostics << '\n';
     require(static_cast<bool>(built), "project builds selected authored World");
     require(built.region_count == 2U, "Build Project follows selected authored source");
     require(built.cooked_startup_world.filename() == "saved-as.vworldc", "Build Project cooks selected source path");
