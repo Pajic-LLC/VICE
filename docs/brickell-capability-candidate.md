@@ -31,3 +31,5 @@ A symmetric World relation with kind `e8000000-0000-4000-8000-000000000001` excl
 ## Camera depth agreement
 
 Direct project materials now create a camera-depth pipeline using their exact cooked vertex module. A separate GPU batch assignment omits those instances from the generic native depth kernel; GPU-scene materials and fallback meshes keep their batched path. This prevents cross-compiler rounding or legal project vertex transforms from rejecting fragments against a different prepass. The GPU regression compares the full color target with and without a prepass, including an intentional vertex-depth offset that the old generic prepass could not reproduce.
+
+Built-in shader package directories use a stable 16-digit content-name hash rather than the long development target name. The loader and packager share this mapping. This keeps generated kernel paths short enough for Windows staging under long temporary project roots; manifest artifact paths remain relative.

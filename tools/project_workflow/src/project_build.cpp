@@ -5,6 +5,7 @@
 #include <vice/project/project.hpp>
 #include <vice/runtime/dade.hpp>
 #include <vice/runtime/package_metadata.hpp>
+#include <vice/runtime/detail/builtin_shader_package.hpp>
 
 #include <filesystem>
 #include <string>
@@ -475,7 +476,7 @@ ProjectBuildResult build_project(
     if(std::filesystem::is_directory(kernel_root,error)) {
         for(const auto &entry:std::filesystem::directory_iterator(kernel_root,error)) {
             if(!entry.is_directory() || !entry.path().filename().string().starts_with("vice_runtime_")) continue;
-            const auto destination=staged_project_content_root/"runtime-shaders"/entry.path().filename();
+            const auto destination=staged_project_content_root/"runtime-shaders"/runtime::detail::builtin_shader_package_directory(entry.path().filename().string());
             std::filesystem::create_directories(destination,error);
             if(error) break;
             for(const auto name:{"shader.vice.json","shader.dxil","shader.metallib"}) {
