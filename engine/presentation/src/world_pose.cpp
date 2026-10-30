@@ -26,11 +26,21 @@ bool finite(const Pose &p) {
 } // namespace
 bool sample_world_pose(const world::World &w, world::EntityId root, const Rig &rig,
                        std::uint32_t clip, double time, std::vector<Pose> &out) {
-    const auto player = w.animation(root);
-    if (!player || player->rig != rig.id)
-        return false;
+    auto player=w.animation(root);
+    if(!player) return false;
+    player->clip=clip;player->time=time;
+    return sample_world_pose(w,root,rig,*player,out);
+}
+bool sample_world_pose(const world::World &w, world::EntityId root, const Rig &rig,
+                       const world::AnimationPlayer &intent, std::vector<Pose> &out) {
+    if(intent.rig!=rig.id) return false;
+    const auto *player=&intent;
+    const auto clip=intent.clip;const auto time=intent.time;
     std::vector<Pose> sampled;
-    if (!sample_pose(rig, clip, time, sampled))
+    if (!(player->blend_weight > 0
+          ? sample_blended_pose(rig, clip, time, player->blend_clip, player->blend_time,
+                                 player->blend_weight, sampled)
+          : sample_pose(rig, clip, time, sampled)))
         return false;
     const auto id = w.persistent_id(root);
     if (!id)

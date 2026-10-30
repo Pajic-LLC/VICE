@@ -21,6 +21,12 @@ inline void write_animation(std::ostream &o, const AnimationPlayer &p) {
     o << p.rig.value.to_string() << ' ' << p.clip << ' ' << p.time << ' ' << p.rate << ' '
       << p.playing << ' ' << p.looping;
 }
+inline bool read_animation_mix(std::istream &in, AnimationPlayer &p) {
+    return bool(in >> p.blend_clip >> p.blend_time >> p.blend_weight) && valid(p);
+}
+inline void write_animation_mix(std::ostream &out, const AnimationPlayer &p) {
+    out << p.blend_clip << ' ' << p.blend_time << ' ' << p.blend_weight;
+}
 inline bool read_rig_part(std::istream &in, RigPart &p) {
     std::string id;
     if (!(in >> id >> p.node))

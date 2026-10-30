@@ -1954,6 +1954,7 @@ std::optional<RuntimeCameraView> primary_camera_view(
 }
 
 struct RuntimeSceneRenderer::State {
+    std::filesystem::path builtin_shader_root;
     struct MeshGpu {
         std::unique_ptr<render::Buffer> vertices;
         std::unique_ptr<render::Buffer> indices;
@@ -2082,6 +2083,10 @@ bool RuntimeSceneRenderer::initialize(
         set_diagnostics(diagnostics, "Runtime scene renderer state is unavailable.");
         return false;
     }
+    state_->builtin_shader_root=content_root/"runtime-shaders";
+    std::error_code shader_path_error;
+    if(!std::filesystem::is_directory(state_->builtin_shader_root,shader_path_error)) state_->builtin_shader_root.clear();
+    detail::packaged_shader_root=state_->builtin_shader_root;
     state_->device = &device;
     if (!state_->catalog.load(content_root)) {
         set_diagnostics(diagnostics, state_->catalog.diagnostics());

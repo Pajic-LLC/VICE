@@ -415,3 +415,7 @@ if(VICE_BUILD_TESTS)
     CONTENT "set(VICE_EXPECTED_TESTS \"${_vice_expected_tests}\")\n"
   )
 endif()
+
+if(TARGET vice_project_workflow)
+  target_compile_definitions(vice_project_workflow PRIVATE VICE_BUILTIN_SHADER_ROOT="${CMAKE_BINARY_DIR}/cooked")
+endif()

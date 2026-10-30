@@ -1,3 +1,4 @@
+#include "builtin_shader_paths.hpp"
 #include <vice/runtime/reflection_surface_guide.hpp>
 
 #include <vice/render/mesh_asset.hpp>
@@ -497,8 +498,8 @@ thread_local RuntimeReflectionSurfaceGuideSceneState reflection_surface_guide_sc
 #ifdef VICE_RUNTIME_REFLECTION_SURFACE_GUIDE_FRAGMENT_MANIFEST
     return state.pass->initialize(
         device,
-        VICE_RUNTIME_REFLECTION_SURFACE_GUIDE_VERTEX_MANIFEST,
-        VICE_RUNTIME_REFLECTION_SURFACE_GUIDE_FRAGMENT_MANIFEST,
+        ::vice::runtime::detail::builtin_shader_manifest(VICE_RUNTIME_REFLECTION_SURFACE_GUIDE_VERTEX_MANIFEST),
+        ::vice::runtime::detail::builtin_shader_manifest(VICE_RUNTIME_REFLECTION_SURFACE_GUIDE_FRAGMENT_MANIFEST),
         diagnostics
     );
 #else

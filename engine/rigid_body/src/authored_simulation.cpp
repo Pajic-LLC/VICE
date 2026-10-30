@@ -349,6 +349,7 @@ bool AuthoredSimulation::reset(world::World& world, jobs::Scheduler& jobs, std::
         d.local_frames = {
             HingeLocalFrame{h.first_frame.anchor, h.first_frame.axis, h.first_frame.normal},
             HingeLocalFrame{h.second_frame.anchor, h.second_frame.axis, h.second_frame.normal}};
+        if(h.break_threshold > 0) d.break_thresholds.linear_impulse=h.break_threshold;
         d.swing_half_angle = h.configuration.swing_half_angle;
         d.twist_min = h.configuration.twist_min;
         d.twist_max = h.configuration.twist_max;
@@ -484,7 +485,14 @@ bool AuthoredSimulation::step(std::string* diagnostics) {
     for (const auto& region : state_->regions) {
         for (const auto& event : region.domain->constraint_break_events()) {
             const auto found = state_->link_ids.find(event.id.value);
-            if (found == state_->link_ids.end()) continue;
+            if (found == state_->link_ids.end()) {
+                for(auto &j:state_->swing_joints) if(j.native_id==event.id && j.region==region.id && !j.expected.broken) {
+                    if(!state_->world->publish_swing_twist_break(j.entity,event.linear_impulse,state_->coordinator.step_index()))
+                        return fail(diagnostics,"Could not publish structural joint failure.");
+                    j.expected=*state_->world->swing_twist_joint(j.entity);
+                }
+                continue;
+            }
             auto& link = state_->links[found->second];
             if (link.region != region.id || link.expected.broken) continue;
             auto broken = link.expected;

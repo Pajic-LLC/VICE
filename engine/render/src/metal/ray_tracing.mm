@@ -270,6 +270,22 @@ AccelerationStructureResources allocate_acceleration_structure_resources(
         result.scratch = nil;
         result.instance_buffer = nil;
     }
+    if(result.result != nil && plan.type==AccelerationStructureType::top_level) {
+        // Metal Shader Converter IRRaytracingAccelerationStructureGPUHeader is a GPU buffer,
+        // not the native resource ID itself. Keep it beside the TLAS for its entire lifetime.
+        const NSUInteger count=plan.instance_buffer.length/sizeof(MTLAccelerationStructureUserIDInstanceDescriptor);
+        result.instance_contributions=[device newBufferWithLength:std::max<NSUInteger>(4,count*4) options:MTLResourceStorageModeShared];
+        result.converter_header=[device newBufferWithLength:64 options:MTLResourceStorageModeShared];
+        if(result.instance_contributions==nil || result.converter_header==nil) {
+            result.diagnostics="Metal could not allocate the converter acceleration-structure header.";
+            result.result=nil;return result;
+        }
+        std::memset(result.instance_contributions.contents,0,result.instance_contributions.length);
+        std::array<std::uint64_t,8> header{};
+        header[0]=result.result.gpuResourceID._impl;
+        header[1]=result.instance_contributions.gpuAddress;
+        std::memcpy(result.converter_header.contents,header.data(),sizeof(header));
+    }
     return result;
 }
 

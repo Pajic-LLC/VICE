@@ -165,7 +165,7 @@ std::string serialize_source_manifest(
             write_rigid_box(output, *entity.rigid_box);
         }
         for(const auto& p:entity.components){output<<" state ";world::write_component_payload(output,p);}
-        if(entity.animation){output<<" animation ";world::write_animation(output,*entity.animation);}
+        if(entity.animation){output<<" animation ";world::write_animation(output,*entity.animation);output<<" animation_mix ";world::write_animation_mix(output,*entity.animation);}
         if(entity.rig_part){output<<" rig_part ";world::write_rig_part(output,*entity.rig_part);}
         if(entity.audio_emitter){output<<" audio_emitter ";world::write_audio_emitter(output,*entity.audio_emitter);}
         if(entity.character_attachment){const auto& a=*entity.character_attachment;output<<" character_attachment "<<a.carrier.to_string()<<' '<<a.offset.x<<' '<<a.offset.y<<' '<<a.offset.z;}

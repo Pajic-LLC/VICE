@@ -1,3 +1,4 @@
+#include <vice/jobs/jobs.hpp>
 #include "physical_rig_fixture.hpp"
 #include <fstream>
 #include <thread>

@@ -1,3 +1,4 @@
+#include "builtin_shader_paths.hpp"
 #pragma once
 
 #include <vice/runtime/gpu_cluster_instance_remap.hpp>

@@ -716,6 +716,36 @@ module::Result host_control_animation(void* value,module::EntityId id,std::uint3
     if(!b->context->presentation->animation(persistent_id(id)))return module::Result::reset_required;
     return b->context->presentation->control_animation(persistent_id(id),clip,rate,playing!=0,looping!=0,restart!=0)?module::Result::success:module::Result::invalid_argument;
 }
+module::Result host_read_rig_node(void *value,module::EntityId id,std::uint32_t node,std::uint32_t physical,module::RigNodeSnapshot *out) noexcept {
+    const auto *b=current_bridge(value);
+    if(!b||!b->context)return module::Result::wrong_phase;
+    if(!out||out->size<sizeof(module::RigNodeSnapshot)||persistent_id(id).is_nil()||node>=128||physical>1)return module::Result::invalid_argument;
+    const auto entity=b->context->world.find(persistent_id(id));if(!entity)return module::Result::not_found;
+    if(!b->context->world.animation(*entity))return module::Result::no_animation;
+    if(!b->context->presentation)return module::Result::unavailable;
+    const auto pose=b->context->presentation->node_pose(persistent_id(id),node,physical!=0);
+    const auto spatial=b->context->world.spatial_state(*entity);
+    if(!pose||!spatial)return module::Result::invalid_argument;
+    const auto t=b->context->world.authored_transform(*entity).value_or(world::AuthoredTransform{});
+    if(t.scale.x!=t.scale.y||t.scale.y!=t.scale.z)return module::Result::invalid_argument;
+    const auto global=presentation::compose({{}, {t.rotation.x,t.rotation.y,t.rotation.z,t.rotation.w},t.scale.x},*pose);
+    module::RigNodeSnapshot result;result.node=node;result.physical=physical;
+    result.position[0]=spatial->global_position.x+global.translation.x;
+    result.position[1]=spatial->global_position.y+global.translation.y;
+    result.position[2]=spatial->global_position.z+global.translation.z;
+    result.rotation[0]=global.rotation.x;result.rotation[1]=global.rotation.y;result.rotation[2]=global.rotation.z;result.rotation[3]=global.rotation.w;result.scale=global.scale;
+    *out=result;return module::Result::success;
+}
+module::Result host_control_animation_mix(void *value,module::EntityId id,std::uint32_t base,std::uint32_t other,float weight,float rate) noexcept {
+    const auto *b=current_bridge(value);
+    if(!b||!b->context||!b->writable)return module::Result::wrong_phase;
+    if(persistent_id(id).is_nil()||base>=64||other>=64||!std::isfinite(weight)||weight<0||weight>1||!std::isfinite(rate)||rate<0||rate>8)return module::Result::invalid_argument;
+    const auto e=b->context->world.find(persistent_id(id));if(!e)return module::Result::not_found;
+    if(!b->context->world.animation(*e))return module::Result::no_animation;
+    if(!b->context->presentation)return module::Result::unavailable;
+    if(!b->context->presentation->animation(persistent_id(id)))return module::Result::reset_required;
+    return b->context->presentation->control_animation_mix(persistent_id(id),base,other,weight,rate)?module::Result::success:module::Result::invalid_argument;
+}
 module::Result host_read_audio(void* value,module::EntityId id,module::AudioSnapshot* output) noexcept {
     const auto* b=current_bridge(value);if(!b||!b->context)return module::Result::wrong_phase;if(!output||output->size<sizeof(module::AudioSnapshot)||persistent_id(id).is_nil())return module::Result::invalid_argument;
     const auto e=b->context->world.find(persistent_id(id));if(!e)return module::Result::not_found;const auto p=b->context->world.audio_emitter(*e);if(!p)return module::Result::no_audio;if(!b->context->presentation)return module::Result::unavailable;const auto o=b->context->presentation->audio(persistent_id(id));if(!o)return module::Result::reset_required;
@@ -1708,7 +1738,7 @@ public:
         host_.control_swing_twist_joint = &host_control_swing_twist_joint;
         host_.read_powered_hinge = &host_read_powered_hinge;
         host_.control_powered_hinge = &host_control_powered_hinge;
-        host_.read_animation=&host_read_animation;host_.control_animation=&host_control_animation;
+        host_.read_rig_node=&host_read_rig_node;host_.control_animation_mix=&host_control_animation_mix;host_.read_animation=&host_read_animation;host_.control_animation=&host_control_animation;
         host_.read_audio=&host_read_audio;host_.control_audio=&host_control_audio;host_.set_character_facing=&host_set_character_facing;
     }
 

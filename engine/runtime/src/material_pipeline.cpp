@@ -82,6 +82,8 @@ struct FragmentResourceContract {
             } else if (resource.binding >= 5U && resource.binding <
                 5U + runtime_point_shadow_light_count * runtime_point_shadow_face_count) {
                 point_shadow_textures[resource.binding - 5U] = true;
+            } else if (resource.binding == 17U) {
+                // Optional direct-material ambient-occlusion visibility.
             } else {
                 return {};
             }
@@ -157,6 +159,8 @@ struct FragmentResourceContract {
                 shadow_textures[resource.binding - 4U] = true;
             } else if (resource.binding >= 8U && resource.binding <= 16U) {
                 environment_textures[resource.binding - 8U] = true;
+            } else if (resource.binding == 17U) {
+                // Optional direct-material ambient-occlusion visibility.
             } else {
                 return {};
             }

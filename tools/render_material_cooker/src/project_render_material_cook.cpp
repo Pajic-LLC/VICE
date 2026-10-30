@@ -145,7 +145,7 @@ namespace {
         if (resource.register_class == shader_cooker::ShaderRegisterClass::constant_buffer) {
             if (resource.binding != 0U && resource.binding != 1U) return false;
         } else if (resource.register_class == shader_cooker::ShaderRegisterClass::shader_resource) {
-            if (resource.binding < material_texture_count) continue;
+            if (resource.binding < material_texture_count || resource.binding == 17U) continue;
             if (resource.binding >= shadow_texture_base &&
                 resource.binding < shadow_texture_base + static_cast<std::uint32_t>(shadows.size())) {
                 shadows[resource.binding - shadow_texture_base] = true;

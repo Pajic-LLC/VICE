@@ -1,3 +1,4 @@
+#include "builtin_shader_paths.hpp"
 #include "ray_diffuse_gi_pipeline.hpp"
 #include "reflection_surface_guide_bridge.hpp"
 
@@ -39,16 +40,16 @@ void prepare_runtime_ray_diffuse_gi_scene_state(
 [[nodiscard]] RuntimeRayDiffuseGiPipelineManifests runtime_ray_diffuse_gi_manifests() {
     RuntimeRayDiffuseGiPipelineManifests manifests{};
 #ifdef VICE_RUNTIME_RAY_DIFFUSE_GI_MANIFEST
-    manifests.trace = VICE_RUNTIME_RAY_DIFFUSE_GI_MANIFEST;
+    manifests.trace = ::vice::runtime::detail::builtin_shader_manifest(VICE_RUNTIME_RAY_DIFFUSE_GI_MANIFEST);
 #endif
 #ifdef VICE_RUNTIME_RAY_DIFFUSE_GI_HISTORY_MANIFEST
-    manifests.hit_history = VICE_RUNTIME_RAY_DIFFUSE_GI_HISTORY_MANIFEST;
+    manifests.hit_history = ::vice::runtime::detail::builtin_shader_manifest(VICE_RUNTIME_RAY_DIFFUSE_GI_HISTORY_MANIFEST);
 #endif
 #ifdef VICE_RUNTIME_RAY_DIFFUSE_GI_DENOISE_MANIFEST
-    manifests.denoise = VICE_RUNTIME_RAY_DIFFUSE_GI_DENOISE_MANIFEST;
+    manifests.denoise = ::vice::runtime::detail::builtin_shader_manifest(VICE_RUNTIME_RAY_DIFFUSE_GI_DENOISE_MANIFEST);
 #endif
 #ifdef VICE_RUNTIME_RAY_DIFFUSE_GI_TEMPORAL_MANIFEST
-    manifests.temporal = VICE_RUNTIME_RAY_DIFFUSE_GI_TEMPORAL_MANIFEST;
+    manifests.temporal = ::vice::runtime::detail::builtin_shader_manifest(VICE_RUNTIME_RAY_DIFFUSE_GI_TEMPORAL_MANIFEST);
 #endif
     return manifests;
 }

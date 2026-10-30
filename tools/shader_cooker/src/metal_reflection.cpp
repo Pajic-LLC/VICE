@@ -195,7 +195,7 @@ struct JsonObjectView {
     if (type == "CBV") return ShaderRegisterClass::constant_buffer;
     if (type == "SRV") return ShaderRegisterClass::shader_resource;
     if (type == "UAV") return ShaderRegisterClass::unordered_access;
-    if (type == "SMP") return ShaderRegisterClass::sampler;
+    if (type == "SMP" || type == "Sampler") return ShaderRegisterClass::sampler;
     return std::nullopt;
 }
 

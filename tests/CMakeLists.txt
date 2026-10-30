@@ -405,3 +405,10 @@ target_link_libraries(vice_runtime_fallback_lighting_tests PRIVATE VICE::Render 
 target_compile_features(vice_runtime_fallback_lighting_tests PRIVATE cxx_std_23)
 vice_enable_warnings(vice_runtime_fallback_lighting_tests)
 add_test(NAME vice_runtime_fallback_lighting_tests COMMAND vice_runtime_fallback_lighting_tests)
+
+add_executable(vice_animation_mix_tests animation_mix_tests.cpp)
+target_link_libraries(vice_animation_mix_tests PRIVATE VICE::Presentation VICE::PresentationCooker VICE::MeshCooker VICE::WorldCooker)
+target_compile_definitions(vice_animation_mix_tests PRIVATE VICE_PRESENTATION_EXAMPLE="${PROJECT_SOURCE_DIR}/examples/presentation-playground")
+target_compile_features(vice_animation_mix_tests PRIVATE cxx_std_23)
+vice_enable_warnings(vice_animation_mix_tests)
+add_test(NAME vice_animation_mix_tests COMMAND vice_animation_mix_tests)

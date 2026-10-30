@@ -2446,7 +2446,13 @@ private:
                 bound.acceleration_structure->native() == nil) {
                 return false;
             }
-            entry.gpu_address = bound.acceleration_structure->native().gpuResourceID._impl;
+            {
+                const auto &resources=bound.acceleration_structure->resources();
+                if(resources.converter_header==nil || resources.instance_contributions==nil) return false;
+                entry.gpu_address=resources.converter_header.gpuAddress;
+                [encoder useResource:resources.converter_header usage:MTLResourceUsageRead];
+                [encoder useResource:resources.instance_contributions usage:MTLResourceUsageRead];
+            }
             [encoder useResource:bound.acceleration_structure->native() usage:MTLResourceUsageRead];
             return true;
         }

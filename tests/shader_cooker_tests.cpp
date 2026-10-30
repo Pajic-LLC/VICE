@@ -174,6 +174,11 @@ int main() {
         metal_json,
         bounded_reflection
     );
+    std::string converter3_json{metal_json};
+    converter3_json.replace(converter3_json.find("SMP"),3,"Sampler");
+    const auto converter3=parse_metal_shader_converter_reflection(converter3_json,bounded_reflection);
+    CHECK(converter3.valid);
+    CHECK(converter3.locations.size()==3U);
     CHECK(metal.valid);
     CHECK(metal.diagnostics.empty());
     CHECK(metal.locations.size() == 3U);

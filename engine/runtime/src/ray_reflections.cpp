@@ -1,3 +1,4 @@
+#include "builtin_shader_paths.hpp"
 #include <vice/runtime/ray_reflections.hpp>
 
 #include <vice/render/shader_asset.hpp>
@@ -545,7 +546,7 @@ thread_local RuntimeRayReflectionsSceneState ray_reflections_scene_state;
 #ifdef VICE_RUNTIME_RAY_REFLECTIONS_MANIFEST
     pass_initialized = state.pass->initialize(
         device,
-        VICE_RUNTIME_RAY_REFLECTIONS_MANIFEST,
+        ::vice::runtime::detail::builtin_shader_manifest(VICE_RUNTIME_RAY_REFLECTIONS_MANIFEST),
         diagnostics
     );
 #else
