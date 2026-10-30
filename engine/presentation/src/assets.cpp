@@ -137,8 +137,8 @@ bool valid(const Rig &r, std::string *d) {
 }
 std::optional<Rig> read_rig(const std::filesystem::path &path, std::string *d) {
     std::error_code ec;
-    if (std::filesystem::file_size(path, ec) > 16 * 1024 * 1024 || ec) {
-        fail(d, "Rig is missing or exceeds 16 MiB.");
+    if (std::filesystem::file_size(path, ec) > max_rig_asset_bytes || ec) {
+        fail(d, "Rig is missing or exceeds 64 MiB.");
         return std::nullopt;
     }
     const auto invalid = [&]() -> std::optional<Rig> {
@@ -290,7 +290,7 @@ std::string serialize_rig(const Rig &r) {
         }
     }
     auto text = o.str();
-    return text.size() <= 16 * 1024 * 1024 ? text : std::string{};
+    return text.size() <= max_rig_asset_bytes ? text : std::string{};
 }
 static bool sample_local_pose(const Rig &r, std::uint32_t index, double time, std::vector<Pose> &out) {
     if (index >= r.clips.size() || !std::isfinite(time))

@@ -36,7 +36,8 @@ struct Clip {
     double duration = 0;
     std::vector<Track> tracks;
 };
-inline constexpr std::size_t max_skin_influences = 8, max_skin_vertices = 100000;
+inline constexpr std::size_t max_skin_influences = 8, max_skin_vertices = 250000;
+inline constexpr std::size_t max_rig_asset_bytes = 64ULL * 1024 * 1024;
 struct SkinWeights {
     std::array<std::uint16_t, max_skin_influences> joints{};
     std::array<float, max_skin_influences> weights{};

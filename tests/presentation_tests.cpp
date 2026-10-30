@@ -74,6 +74,22 @@ int main() {
     invalid = *asset;
     invalid.clips[1].tracks[0].keys[1].time = 0;
     require(!presentation::valid(invalid), "nonmonotonic animation keys rejected");
+    {
+        auto dense = *asset;
+        const auto mesh_node = static_cast<std::uint32_t>(std::find_if(dense.nodes.begin(), dense.nodes.end(),
+            [](const auto &node) { return node.mesh.valid(); }) - dense.nodes.begin());
+        presentation::Skin skin; skin.node = mesh_node; skin.joints = {{mesh_node, math::identity()}};
+        presentation::SkinWeights weight; weight.weights[0] = 1;
+        skin.vertices.assign(100001, weight); dense.skins = {skin};
+        require(presentation::valid(dense), "dense weighted surface above former aggregate limit");
+        const auto encoded = presentation::serialize_rig(dense);
+        { std::ofstream out(f.path / "dense-skin.vrig"); out << encoded; }
+        const auto decoded = presentation::read_rig(f.path / "dense-skin.vrig");
+        require(decoded && decoded->skins[0].vertices.size() == 100001,
+                "dense skin source/cooked encoding round trip");
+        dense.skins[0].vertices.resize(presentation::max_skin_vertices + 1, weight);
+        require(!presentation::valid(dense), "aggregate skin capacity remains bounded");
+    }
     const auto imported = f.path / "imported";
     std::string d;
     require(tools::import_rig(std::filesystem::path{VICE_PRESENTATION_EXAMPLE} /
@@ -96,6 +112,20 @@ int main() {
         for (const auto &v : mesh.source->vertices)
             require(v.color[0] == 1 && v.color[1] == 1 && v.color[2] == 1,
                     "absent glTF material must not add a blue debug tint");
+    }
+    {
+        auto padded = text(std::filesystem::path{VICE_PRESENTATION_EXAMPLE} / "sources/humanoid.gltf");
+        padded.resize(17ULL * 1024 * 1024, ' ');
+        { std::ofstream out(f.path / "dense-capacity.gltf"); out << padded; }
+        require(tools::import_rig(f.path / "dense-capacity.gltf", f.path / "dense-capacity", {rig}, actor, &d),
+                "valid authoring input above the former 16 MiB limit");
+        require(text(f.path / "dense-capacity/character.vrig") == text(imported / "character.vrig"),
+                "expanded input budget preserves deterministic import");
+        { std::ofstream out(f.path / "over-capacity.gltf", std::ios::binary);
+          out.seekp(static_cast<std::streamoff>(tools::rig_import_source_bytes)); out.put(' '); }
+        require(!tools::import_rig(f.path / "over-capacity.gltf", f.path / "over-capacity", {rig}, actor, &d) &&
+                    !std::filesystem::exists(f.path / "over-capacity"),
+                "oversized authoring input rejected before publication");
     }
     require(!tools::import_rig(std::filesystem::path{VICE_PRESENTATION_EXAMPLE} /
                                    "sources/humanoid.gltf",

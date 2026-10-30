@@ -34,8 +34,8 @@ struct Budget {
     };
     static void *allocate(void *user, cgltf_size count) {
         auto &self = *static_cast<Budget *>(user);
-        if (count > 64 * 1024 * 1024 - sizeof(Header) ||
-            self.used > 64 * 1024 * 1024 - count - sizeof(Header))
+        if (count > rig_import_parser_bytes - sizeof(Header) ||
+            self.used > rig_import_parser_bytes - count - sizeof(Header))
             return nullptr;
         const auto total = count + sizeof(Header);
         auto *h = static_cast<Header *>(std::malloc(total));
@@ -64,8 +64,8 @@ bool import_rig(const std::filesystem::path &source, const std::filesystem::path
         return fail(d, "Rig and root UUIDs must be non-nil.");
     std::error_code ec;
     const auto bytes = std::filesystem::file_size(source, ec);
-    if (ec || bytes > 16 * 1024 * 1024)
-        return fail(d, "glTF source is missing or exceeds 16 MiB.");
+    if (ec || bytes > rig_import_source_bytes)
+        return fail(d, "glTF source is missing or exceeds 64 MiB.");
     if (std::filesystem::exists(output, ec) || ec)
         return fail(d, "Import destination must be a new directory.");
     Budget budget;
@@ -84,7 +84,7 @@ bool import_rig(const std::filesystem::path &source, const std::filesystem::path
     std::size_t buffer_bytes = 0;
     for (std::size_t i = 0; i < data->buffers_count; ++i) {
         const auto &b = data->buffers[i];
-        if (b.size > 16 * 1024 * 1024 || buffer_bytes > 32 * 1024 * 1024 - b.size)
+        if (b.size > rig_import_source_bytes || buffer_bytes > rig_import_source_bytes - b.size)
             return fail(d, "glTF buffer capacity exceeded.");
         buffer_bytes += b.size;
         if (b.uri && std::string_view(b.uri).rfind("data:", 0) != 0)
@@ -207,10 +207,10 @@ bool import_rig(const std::filesystem::path &source, const std::filesystem::path
                 }
                 if (!normals)
                     return fail(d, "Rig geometry requires authored normals.");
-                if (!positions || positions->type != cgltf_type_vec3 || positions->count > 100000 ||
-                    vertices.size() + positions->count > 100000)
+                if (!positions || positions->type != cgltf_type_vec3 || positions->count > rig_import_mesh_vertices ||
+                    vertices.size() + positions->count > rig_import_mesh_vertices)
                     return fail(d, "Invalid/excessive rig vertex accessor.");
-                if (positions->count > 200000 - imported_vertices)
+                if (positions->count > rig_import_total_vertices - imported_vertices)
                     return fail(d, "Total imported vertex budget exceeded.");
                 imported_vertices += positions->count;
                 if (n->skin) {
@@ -309,9 +309,9 @@ bool import_rig(const std::filesystem::path &source, const std::filesystem::path
                 }
                 const std::size_t count =
                     primitive.indices ? primitive.indices->count : positions->count;
-                if (count % 3 || count > 300000 || triangles.size() + count > 300000)
+                if (count % 3 || count > rig_import_mesh_indices || triangles.size() + count > rig_import_mesh_indices)
                     return fail(d, "Invalid triangle index count.");
-                if (count > 600000 - imported_indices)
+                if (count > rig_import_total_indices - imported_indices)
                     return fail(d, "Total imported index budget exceeded.");
                 imported_indices += count;
                 for (std::size_t k = 0; k < count; ++k) {
