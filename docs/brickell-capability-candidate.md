@@ -23,3 +23,7 @@ Native game packages copy cooked renderer kernels under their project content's 
 ## Required validation
 
 Check animation local-space length preservation, invalid-input transactionality, clock/checkpoint round trips, old-host and frame/thread guards, solver-driven structural break, dependency propagation and cold wreck reconstruction. Run the existing engine suite and the game's actual walk/drive/contact/save/restart scenario. Native screenshots and measured frame telemetry must be evaluated separately from headless acceptance.
+
+## Equipment/controller collision relationships
+
+A symmetric World relation with kind `e8000000-0000-4000-8000-000000000001` excludes a rigid body from one character controller's collision queries. Other bodies and characters still collide with it. The authored bridge derives native participant exclusions from persistent identities at reset and rejects live structural edits before solver advance. Reconstructed controllers and exit overlap/sweep preflights preserve the exclusions. This prevents a moving piece of physical equipment from feeding back into its wearer's coarse capsule without disabling its road contacts. The regression checks an overlapping equipment body, grounded stability, cold reconstruction and stale-filter rejection.

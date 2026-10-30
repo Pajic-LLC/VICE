@@ -63,6 +63,7 @@ struct AuthoredSimulation::State {
         world::Character expected;
         world::SpatialState expected_spatial;
         std::optional<world::CharacterAttachment> attachment;
+        CharacterCollisionFilter collision;
     };
     struct VehicleRecord {
         world::PersistentId owner;
@@ -135,7 +136,23 @@ struct AuthoredSimulation::State {
             world->authored_transform(*entity) == record.expected_transform;
     }
 
+    std::optional<CharacterCollisionFilter> collision_filter(world::EntityId actor) const {
+        CharacterCollisionFilter filter;
+        for(const auto &relation:world->relations()) {
+            if(relation.kind!=character_collision_exclusion_kind || (relation.subject!=actor && relation.object!=actor)) continue;
+            const auto other=relation.subject==actor ? relation.object:relation.subject;
+            const auto owner=world->persistent_id(other);
+            const auto body=owner ? body_lookup.find(*owner):body_lookup.end();
+            if(body==body_lookup.end()) return std::nullopt;
+            filter.excluded_participants.push_back(bodies[body->second].desc.participant);
+        }
+        std::sort(filter.excluded_participants.begin(),filter.excluded_participants.end(),[](auto a,auto b){return a.value<b.value;});
+        filter.excluded_participants.erase(std::unique(filter.excluded_participants.begin(),filter.excluded_participants.end()),filter.excluded_participants.end());
+        return filter;
+    }
     bool matches(const Controller& record) const {
+        const auto filter=collision_filter(record.entity);
+        if(!filter || *filter!=record.collision) return false;
         if(record.attachment) {
             const auto parent=body_lookup.find(record.attachment->carrier);
             if(parent==body_lookup.end() || !matches(bodies[parent->second]))return false;
@@ -365,10 +382,13 @@ bool AuthoredSimulation::reset(world::World& world, jobs::Scheduler& jobs, std::
         const auto& c = *entity.character;
         if (!owner || !entity.spatial_state || !world::valid(c) || next->characters.size() >= std::numeric_limits<std::uint32_t>::max()-1U)
             return fail(diagnostics,"Invalid authored character: " + entity.persistent_id.to_string());
+        const auto filter=next->collision_filter(*owner);
+        if(!filter) return fail(diagnostics,"Character collision exclusion requires a rigid-body endpoint.");
         if(!entity.character_attachment) {
         auto* target = next->domain_lookup.at(entity.spatial_state->region);
         CharacterDesc desc;
         desc.id = CharacterId{static_cast<std::uint32_t>(next->characters.size()+1U)};
+        desc.collision=*filter;
         desc.height=c.height; desc.radius=c.radius; desc.mass=c.mass; desc.max_strength=c.max_strength;
         desc.max_slope_angle=c.max_slope_angle; desc.step_height=c.step_height; desc.stick_to_floor_distance=c.stick_to_floor_distance;
         if (!next->bridge.create_character(world,next->coordinator,*owner,desc)) return fail(diagnostics,"Could not instantiate authored character.");
@@ -379,7 +399,7 @@ bool AuthoredSimulation::reset(world::World& world, jobs::Scheduler& jobs, std::
             (c.pending_jump_speed && !target->request_character_jump(*native,*c.pending_jump_speed))) return fail(diagnostics,"Could not restore authored character motion.");
         }
         next->character_lookup.emplace(entity.persistent_id,next->characters.size());
-        next->characters.push_back({entity.persistent_id,*owner,c,*entity.spatial_state,entity.character_attachment});
+        next->characters.push_back({entity.persistent_id,*owner,c,*entity.spatial_state,entity.character_attachment,*filter});
     }
     for(const auto& entity:snapshot.entities) if(entity.vehicle) {
         const auto owner=world.find(entity.persistent_id);
