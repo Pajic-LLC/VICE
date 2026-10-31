@@ -68,3 +68,9 @@ the full-scene disagreement. Tests reproduce a nearer early-depth surface and
 verify exact color recovery after clearing forward depth. Overall appearance and
 performance still fail visual acceptance.
 These measurements are development evidence, not a production fidelity claim.
+
+Skinned surfaces use their refreshed whole-mesh visibility bounds. The runtime
+does not submit them through static bind-pose meshlet bounds until deformation
+updates those bounds. This avoids treating a rest-pose cluster sphere as valid
+for a moved limb. A native movement check remained coherent; the measured
+all-v4 median render time stayed about 0.10 s, with no material speedup.

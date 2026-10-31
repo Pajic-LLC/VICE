@@ -3307,6 +3307,10 @@ bool RuntimeSceneRenderer::render(
     std::vector<std::uint8_t> gpu_cluster_pbr_eligible(instances.size(), 0U);
     for (std::size_t instance_index = 0U; instance_index < instances.size(); ++instance_index) {
         const auto& instance = instances[instance_index];
+        // Meshlet bounds are authored in the bind pose. Whole-mesh bounds are
+        // refreshed by CPU skinning above; static per-cluster spheres are not.
+        // Use current whole-mesh visibility until deformed cluster bounds exist.
+        if (state_->skinning.find(instance.mesh)) continue;
         const auto mesh_index = state_->gpu_meshlet_plan.mesh_index(instance.mesh);
         if (!mesh_index.has_value() || *mesh_index >= state_->gpu_meshlet_plan.meshes.size()) {
             set_diagnostics(diagnostics, "Runtime cluster submission could not resolve a mesh table index.");
