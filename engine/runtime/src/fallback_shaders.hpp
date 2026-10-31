@@ -12,6 +12,7 @@ inline constexpr std::array fallback_fragment_resources{
     render::ShaderResourceBindingDesc{.register_class=render::ShaderRegisterClass::sampler, .binding=1, .space=0, .count=1, .unbounded=false},
 };
 inline constexpr std::string_view fallback_hlsl_source=R"(
+#pragma pack_matrix(column_major)
 struct Light { float4 position_or_direction; float4 color_intensity; float4 parameters; };
 cbuffer SceneFrame : register(b0) {
     column_major float4x4 view_projection;

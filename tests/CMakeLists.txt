@@ -427,13 +427,20 @@ if(_vice_runtime_ray_shadow_target)
       SHADER_MODEL 6.0 DXC "${_vice_runtime_ray_shadow_dxc}"
       METAL_SHADER_CONVERTER "${_vice_runtime_ray_shadow_metal_converter}")
   endforeach()
+  vice_add_cooked_shader(NAME vice_model_layout_test_vertex_shader
+    INPUT "${PROJECT_SOURCE_DIR}/assets/shaders/vice_gpu_pbr_surface.hlsl"
+    OUTPUT "${CMAKE_BINARY_DIR}/cooked/vice_model_layout_test_vertex"
+    ENTRY vice_gpu_pbr_vs STAGE vertex TARGET "${_vice_runtime_ray_shadow_target}"
+    SHADER_MODEL 6.0 DXC "${_vice_runtime_ray_shadow_dxc}"
+    METAL_SHADER_CONVERTER "${_vice_runtime_ray_shadow_metal_converter}")
   add_executable(vice_runtime_material_depth_tests runtime_material_depth_tests.cpp)
   target_link_libraries(vice_runtime_material_depth_tests PRIVATE VICE::Runtime)
   target_compile_features(vice_runtime_material_depth_tests PRIVATE cxx_std_23)
   target_compile_definitions(vice_runtime_material_depth_tests PRIVATE
+    VICE_MODEL_TEST_VS="${CMAKE_BINARY_DIR}/cooked/vice_model_layout_test_vertex/shader.vice.json"
     VICE_DEPTH_TEST_VS="${CMAKE_BINARY_DIR}/cooked/vice_material_depth_test_vertex/shader.vice.json"
     VICE_DEPTH_TEST_FS="${CMAKE_BINARY_DIR}/cooked/vice_material_depth_test_fragment/shader.vice.json")
-  add_dependencies(vice_runtime_material_depth_tests vice_material_depth_test_vertex_shader vice_material_depth_test_fragment_shader)
+  add_dependencies(vice_runtime_material_depth_tests vice_material_depth_test_vertex_shader vice_material_depth_test_fragment_shader vice_model_layout_test_vertex_shader)
   vice_enable_warnings(vice_runtime_material_depth_tests)
   add_test(NAME vice_runtime_material_depth_tests COMMAND vice_runtime_material_depth_tests)
 endif()

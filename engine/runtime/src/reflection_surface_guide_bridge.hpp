@@ -273,11 +273,11 @@ inline void runtime_ray_diffuse_gi_publish_gpu_pbr(
 #undef runtime_directional_shadow_requires_depth_prepass
 #endif
 #define runtime_directional_shadow_requires_depth_prepass(path) \
-    ::vice::runtime::runtime_directional_shadow_requires_depth_prepass((path)) || \
+    (::vice::runtime::runtime_directional_shadow_requires_depth_prepass((path)) || \
         ::vice::runtime::detail::runtime_ray_ambient_occlusion_needs_camera_depth_prepass() || \
         ::vice::runtime::detail::runtime_reflection_surface_guide_needs_camera_depth_prepass( \
             state_->device \
-        )
+        ))
 
 #ifdef encode_motion_vectors
 #undef encode_motion_vectors

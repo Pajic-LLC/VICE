@@ -122,6 +122,7 @@ inline constexpr render::ShaderBindingKey cluster_visibility_output_indices_bind
 };
 
 inline constexpr std::string_view cluster_visibility_hlsl_source = R"(
+#pragma pack_matrix(column_major)
 cbuffer ClusterVisibilityFrame : register(b0) {
     float4 frustum_planes[6];
     uint candidate_count;

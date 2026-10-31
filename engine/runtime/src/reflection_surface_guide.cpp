@@ -417,7 +417,6 @@ bool RuntimeReflectionSurfaceGuidePass::encode(
             );
     }
 
-    render::Buffer* bound_visible = nullptr;
     for (const auto& draw : frame.draws) {
         if (!encoded) break;
         if (draw.vertices == nullptr || draw.indices == nullptr ||
@@ -425,19 +424,14 @@ bool RuntimeReflectionSurfaceGuidePass::encode(
             encoded = false;
             break;
         }
-        if (bound_visible != draw.visible_scene_instances) {
-            const render::BufferViewDesc visible_view{
-                .offset = 0U,
-                .size = draw.visible_scene_instances->size(),
-                .structure_stride = sizeof(std::uint32_t),
-            };
-            encoded = commands.set_graphics_buffer(
-                visible_instance_binding,
-                *draw.visible_scene_instances,
-                visible_view
-            );
-            bound_visible = draw.visible_scene_instances;
+        auto visible_view = draw.visible_instance_view;
+        if (visible_view.size == 0U && visible_view.offset <= draw.visible_scene_instances->size()) {
+            visible_view.size = draw.visible_scene_instances->size() - visible_view.offset;
         }
+        if (visible_view.structure_stride == 0U) visible_view.structure_stride = sizeof(std::uint32_t);
+        encoded = commands.set_graphics_buffer(
+            visible_instance_binding, *draw.visible_scene_instances, visible_view
+        );
         if (encoded) {
             encoded = commands.set_vertex_buffer_resolved(0U, *draw.vertices) &&
                 commands.set_index_buffer_resolved(*draw.indices, render::IndexFormat::uint32) &&
@@ -564,16 +558,23 @@ bool runtime_reflection_surface_guide_after_motion_vectors(
     draws.reserve(direct_meshes.size() + cluster_meshes.size());
     if (!direct_meshes.empty()) {
         if (direct_batches.compacted_instance_indices == nullptr ||
-            direct_batches.indirect_arguments == nullptr) {
+            direct_batches.indirect_arguments == nullptr || direct_batches.ranges.size() != direct_meshes.size()) {
             set_diagnostics(diagnostics, "Runtime reflection surface-guide direct batches are unavailable.");
             return false;
         }
         for (std::size_t index = 0U; index < direct_meshes.size(); ++index) {
+            const auto range = direct_batches.ranges[index];
+            if (range.capacity == 0U) continue;
             const auto mesh = resolve_mesh(direct_meshes[index]);
             draws.push_back(RuntimeReflectionSurfaceGuideDraw{
                 .vertices = mesh.vertices,
                 .indices = mesh.indices,
                 .visible_scene_instances = direct_batches.compacted_instance_indices,
+                .visible_instance_view = {
+                    .offset = static_cast<std::uint64_t>(range.offset) * sizeof(std::uint32_t),
+                    .size = static_cast<std::uint64_t>(range.capacity) * sizeof(std::uint32_t),
+                    .structure_stride = sizeof(std::uint32_t),
+                },
                 .indirect_arguments = direct_batches.indirect_arguments,
                 .indirect_argument_offset = static_cast<std::uint64_t>(index) *
                     sizeof(render::IndexedIndirectDrawArguments),
@@ -582,16 +583,23 @@ bool runtime_reflection_surface_guide_after_motion_vectors(
     }
     if (!cluster_meshes.empty()) {
         if (cluster_instances.scene_instance_indices == nullptr ||
-            cluster_batches.indirect_arguments == nullptr) {
+            cluster_batches.indirect_arguments == nullptr || cluster_batches.ranges.size() != cluster_meshes.size()) {
             set_diagnostics(diagnostics, "Runtime reflection surface-guide cluster batches are unavailable.");
             return false;
         }
         for (std::size_t index = 0U; index < cluster_meshes.size(); ++index) {
+            const auto range = cluster_batches.ranges[index];
+            if (range.capacity == 0U) continue;
             const auto mesh = resolve_mesh(cluster_meshes[index]);
             draws.push_back(RuntimeReflectionSurfaceGuideDraw{
                 .vertices = mesh.vertices,
                 .indices = mesh.indices,
                 .visible_scene_instances = cluster_instances.scene_instance_indices,
+                .visible_instance_view = {
+                    .offset = static_cast<std::uint64_t>(range.offset) * sizeof(std::uint32_t),
+                    .size = static_cast<std::uint64_t>(range.capacity) * sizeof(std::uint32_t),
+                    .structure_stride = sizeof(std::uint32_t),
+                },
                 .indirect_arguments = cluster_batches.indirect_arguments,
                 .indirect_argument_offset = static_cast<std::uint64_t>(index) *
                     sizeof(render::IndexedIndirectDrawArguments),

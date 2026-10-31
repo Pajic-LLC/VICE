@@ -30,7 +30,7 @@ A symmetric World relation with kind `e8000000-0000-4000-8000-000000000001` excl
 
 ## Camera depth agreement
 
-Direct project materials now create a camera-depth pipeline using their exact cooked vertex module. A separate GPU batch assignment omits those instances from the generic native depth kernel; GPU-scene materials and fallback meshes keep their batched path. This prevents cross-compiler rounding or legal project vertex transforms from rejecting fragments against a different prepass. The GPU regression compares the full color target with and without a prepass, including an intentional vertex-depth offset that the old generic prepass could not reproduce.
+Direct project materials now create a camera-depth pipeline using their exact cooked vertex module. A separate GPU batch assignment omits those instances from the generic native depth kernel; GPU-scene PBR materials use their exact shared vertex module and selected color meshlet batches; fallback meshes keep their generic batched path. This prevents cross-compiler rounding or legal project vertex transforms from rejecting fragments against a different prepass. The GPU regression compares the full color target with and without a prepass, including an intentional vertex-depth offset that the old generic prepass could not reproduce.
 
 Built-in shader package directories use a stable 16-digit content-name hash rather than the long development target name. The loader and packager share this mapping. This keeps generated kernel paths short enough for Windows staging under long temporary project roots; manifest artifact paths remain relative.
 
@@ -49,3 +49,22 @@ The shipped direct v3 environment shader now applies albedo once to diffuse IBL,
 Project material v4 validation now admits the runtime's optional t25-t27 ray-lighting textures in space2 and u0 VT feedback in space3. The Windows project-cook regression cooks the actual shipped shader and rejects an unsupported feedback slot; the minimal t0-t24 contract remains compatible. Local macOS project cooking of the production shader succeeds.
 
 An all-v4 CRASHOUT material experiment built but did not produce a responsive native review window. A process sample found the render thread waiting for Metal submission completion, with approximately 15 GiB process footprint. The precise cause is unresolved. Do not treat v4 production-content integration as accepted or infer that RT capability/AS creation proves visible GI/reflections. CRASHOUT retains the verified direct-material path pending diagnosis.
+
+## GPU PBR submission integration
+
+Cooked matrix payloads explicitly match CPU column-major storage. Compacted draws
+use zero first-instance and per-batch index subviews across color, depth, shadows,
+motion and reflection guides; see ADR 0038 for the public result-span lifetime.
+Metal converted arguments use immutable command-owned arena slices and cache
+unchanged descriptor arrays. Native encoding operations drain autoreleased
+temporary handles so completed command resources can be reclaimed.
+
+The October 31 internal all-v4 scene diagnostic passed 177 local engine tests.
+A draw-pool soak reached frame 1268 with observed physical footprint 1.6–2.0 GB;
+the prior diagnostic grew to 65.5 GB. Typical render time remained about 0.1 s.
+The native scene subsequently stopped showing facade coverage gaps when forward
+visibility rebuilt depth after ray consumers. Invariance alone did not resolve
+the full-scene disagreement. Tests reproduce a nearer early-depth surface and
+verify exact color recovery after clearing forward depth. Overall appearance and
+performance still fail visual acceptance.
+These measurements are development evidence, not a production fidelity claim.

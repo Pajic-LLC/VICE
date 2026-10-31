@@ -415,80 +415,82 @@ public:
         const std::uint64_t bytes_per_row,
         const std::uint32_t mip_level
     ) override {
-        if (device_ == nil || command_queue_ == nil || texture_ == nil ||
-            desc_.dimension != TextureDimension::d2 || desc_.depth != 1U ||
-            desc_.array_layers != 1U || desc_.sample_count != 1U ||
-            mip_level >= desc_.mip_levels ||
-            !has_usage(desc_.usage, TextureUsage::copy_destination) ||
-            desc_.format == TextureFormat::depth32_float) {
-            return false;
-        }
+        @autoreleasepool {
+            if (device_ == nil || command_queue_ == nil || texture_ == nil ||
+                desc_.dimension != TextureDimension::d2 || desc_.depth != 1U ||
+                desc_.array_layers != 1U || desc_.sample_count != 1U ||
+                mip_level >= desc_.mip_levels ||
+                !has_usage(desc_.usage, TextureUsage::copy_destination) ||
+                desc_.format == TextureFormat::depth32_float) {
+                return false;
+            }
 
-        const std::uint32_t mip_width = std::max(1U, desc_.width >> mip_level);
-        const std::uint32_t mip_height = std::max(1U, desc_.height >> mip_level);
-        const std::uint64_t bytes_per_pixel = texture_format_bytes_per_pixel(desc_.format);
-        if (bytes_per_pixel == 0U ||
-            mip_width > std::numeric_limits<std::uint64_t>::max() / bytes_per_pixel) {
-            return false;
-        }
-        const std::uint64_t minimum_row = static_cast<std::uint64_t>(mip_width) * bytes_per_pixel;
-        if (bytes_per_row < minimum_row ||
-            mip_height > 0U && bytes_per_row >
+            const std::uint32_t mip_width = std::max(1U, desc_.width >> mip_level);
+            const std::uint32_t mip_height = std::max(1U, desc_.height >> mip_level);
+            const std::uint64_t bytes_per_pixel = texture_format_bytes_per_pixel(desc_.format);
+            if (bytes_per_pixel == 0U ||
+                mip_width > std::numeric_limits<std::uint64_t>::max() / bytes_per_pixel) {
+                return false;
+            }
+            const std::uint64_t minimum_row = static_cast<std::uint64_t>(mip_width) * bytes_per_pixel;
+            if (bytes_per_row < minimum_row ||
+                mip_height > 0U && bytes_per_row >
+                    std::numeric_limits<std::uint64_t>::max() / mip_height) {
+                return false;
+            }
+            const std::uint64_t required_source = bytes_per_row * mip_height;
+            if (required_source > data.size()) {
+                return false;
+            }
+
+            constexpr std::uint64_t row_alignment = 256U;
+            if (minimum_row > std::numeric_limits<std::uint64_t>::max() - (row_alignment - 1U)) {
+                return false;
+            }
+            const std::uint64_t staging_row =
+                (minimum_row + row_alignment - 1U) / row_alignment * row_alignment;
+            if (mip_height > 0U && staging_row >
                 std::numeric_limits<std::uint64_t>::max() / mip_height) {
-            return false;
-        }
-        const std::uint64_t required_source = bytes_per_row * mip_height;
-        if (required_source > data.size()) {
-            return false;
-        }
+                return false;
+            }
+            const std::uint64_t staging_size = staging_row * mip_height;
+            if (staging_size == 0U || staging_size > std::numeric_limits<NSUInteger>::max()) {
+                return false;
+            }
 
-        constexpr std::uint64_t row_alignment = 256U;
-        if (minimum_row > std::numeric_limits<std::uint64_t>::max() - (row_alignment - 1U)) {
-            return false;
-        }
-        const std::uint64_t staging_row =
-            (minimum_row + row_alignment - 1U) / row_alignment * row_alignment;
-        if (mip_height > 0U && staging_row >
-            std::numeric_limits<std::uint64_t>::max() / mip_height) {
-            return false;
-        }
-        const std::uint64_t staging_size = staging_row * mip_height;
-        if (staging_size == 0U || staging_size > std::numeric_limits<NSUInteger>::max()) {
-            return false;
-        }
+            id<MTLBuffer> staging = [device_ newBufferWithLength:static_cast<NSUInteger>(staging_size)
+                                                        options:MTLResourceStorageModeShared];
+            if (staging == nil || [staging contents] == nullptr) {
+                return false;
+            }
+            auto* destination = static_cast<std::byte*>([staging contents]);
+            for (std::uint32_t row = 0U; row < mip_height; ++row) {
+                std::memcpy(
+                    destination + static_cast<std::size_t>(row) * static_cast<std::size_t>(staging_row),
+                    data.data() + static_cast<std::size_t>(row) * static_cast<std::size_t>(bytes_per_row),
+                    static_cast<std::size_t>(minimum_row)
+                );
+            }
 
-        id<MTLBuffer> staging = [device_ newBufferWithLength:static_cast<NSUInteger>(staging_size)
-                                                    options:MTLResourceStorageModeShared];
-        if (staging == nil || [staging contents] == nullptr) {
-            return false;
+            id<MTLCommandBuffer> command_buffer = [command_queue_ commandBuffer];
+            id<MTLBlitCommandEncoder> blit = [command_buffer blitCommandEncoder];
+            if (command_buffer == nil || blit == nil) {
+                return false;
+            }
+            [blit copyFromBuffer:staging
+                    sourceOffset:0U
+               sourceBytesPerRow:static_cast<NSUInteger>(staging_row)
+             sourceBytesPerImage:static_cast<NSUInteger>(staging_size)
+                      sourceSize:MTLSizeMake(mip_width, mip_height, 1U)
+                       toTexture:texture_
+                destinationSlice:0U
+                destinationLevel:static_cast<NSUInteger>(mip_level)
+               destinationOrigin:MTLOriginMake(0U, 0U, 0U)];
+            [blit endEncoding];
+            [command_buffer commit];
+            [command_buffer waitUntilCompleted];
+            return [command_buffer status] == MTLCommandBufferStatusCompleted;
         }
-        auto* destination = static_cast<std::byte*>([staging contents]);
-        for (std::uint32_t row = 0U; row < mip_height; ++row) {
-            std::memcpy(
-                destination + static_cast<std::size_t>(row) * static_cast<std::size_t>(staging_row),
-                data.data() + static_cast<std::size_t>(row) * static_cast<std::size_t>(bytes_per_row),
-                static_cast<std::size_t>(minimum_row)
-            );
-        }
-
-        id<MTLCommandBuffer> command_buffer = [command_queue_ commandBuffer];
-        id<MTLBlitCommandEncoder> blit = [command_buffer blitCommandEncoder];
-        if (command_buffer == nil || blit == nil) {
-            return false;
-        }
-        [blit copyFromBuffer:staging
-                sourceOffset:0U
-           sourceBytesPerRow:static_cast<NSUInteger>(staging_row)
-         sourceBytesPerImage:static_cast<NSUInteger>(staging_size)
-                  sourceSize:MTLSizeMake(mip_width, mip_height, 1U)
-                   toTexture:texture_
-            destinationSlice:0U
-            destinationLevel:static_cast<NSUInteger>(mip_level)
-           destinationOrigin:MTLOriginMake(0U, 0U, 0U)];
-        [blit endEncoding];
-        [command_buffer commit];
-        [command_buffer waitUntilCompleted];
-        return [command_buffer status] == MTLCommandBufferStatusCompleted;
     }
 
     [[nodiscard]] id<MTLTexture> native() const noexcept { return texture_; }
@@ -789,6 +791,9 @@ struct MetalBoundResource {
     std::uint64_t size = 0;
 };
 
+// The host loop is C++, so native encoding operations own their autorelease
+// scopes. Temporary handle returns must not retain completed command resources
+// until application exit. Encoders and command-owned arenas retain GPU inputs.
 class MetalCommandList final : public CommandList, public RayTracingCommandList {
 public:
     MetalCommandList(id<MTLDevice> device, id<MTLCommandBuffer> command_buffer)
@@ -811,57 +816,60 @@ public:
         const std::uint64_t destination_offset,
         const std::uint64_t size
     ) override {
-        if (render_encoder_ != nil) {
-            return false;
-        }
-        auto* source_buffer = dynamic_cast<MetalBuffer*>(&source);
-        auto* destination_buffer = dynamic_cast<MetalBuffer*>(&destination);
-        if (source_buffer == nullptr || destination_buffer == nullptr || command_buffer_ == nil ||
-            !has_usage(source.usage(), BufferUsage::copy_source) ||
-            !has_usage(destination.usage(), BufferUsage::copy_destination) ||
-            source_offset > source.size() || size > source.size() - source_offset ||
-            destination_offset > destination.size() || size > destination.size() - destination_offset) {
-            return false;
-        }
-        if (size == 0) {
+        @autoreleasepool {
+            if (render_encoder_ != nil) {
+                return false;
+            }
+            auto* source_buffer = dynamic_cast<MetalBuffer*>(&source);
+            auto* destination_buffer = dynamic_cast<MetalBuffer*>(&destination);
+            if (source_buffer == nullptr || destination_buffer == nullptr || command_buffer_ == nil ||
+                !has_usage(source.usage(), BufferUsage::copy_source) ||
+                !has_usage(destination.usage(), BufferUsage::copy_destination) ||
+                source_offset > source.size() || size > source.size() - source_offset ||
+                destination_offset > destination.size() || size > destination.size() - destination_offset) {
+                return false;
+            }
+            if (size == 0) {
+                return true;
+            }
+            id<MTLBlitCommandEncoder> encoder = [command_buffer_ blitCommandEncoder];
+            if (encoder == nil) {
+                return false;
+            }
+            [encoder copyFromBuffer:source_buffer->native()
+                       sourceOffset:static_cast<NSUInteger>(source_offset)
+                           toBuffer:destination_buffer->native()
+                  destinationOffset:static_cast<NSUInteger>(destination_offset)
+                               size:static_cast<NSUInteger>(size)];
+            [encoder endEncoding];
             return true;
         }
-        id<MTLBlitCommandEncoder> encoder = [command_buffer_ blitCommandEncoder];
-        if (encoder == nil) {
-            return false;
-        }
-        [encoder copyFromBuffer:source_buffer->native()
-                   sourceOffset:static_cast<NSUInteger>(source_offset)
-                       toBuffer:destination_buffer->native()
-              destinationOffset:static_cast<NSUInteger>(destination_offset)
-                           size:static_cast<NSUInteger>(size)];
-        [encoder endEncoding];
-        return true;
     }
 
     bool begin_render_pass(Swapchain& swapchain, const RenderPassDesc& desc) override {
-        if (render_encoder_ != nil || drawable_ != nil || command_buffer_ == nil) {
-            return false;
-        }
-        auto* metal_swapchain = dynamic_cast<MetalSwapchain*>(&swapchain);
-        if (metal_swapchain == nullptr) {
-            return false;
-        }
-        drawable_ = metal_swapchain->acquire_drawable();
-        if (drawable_ == nil) {
-            return false;
-        }
-
-        MetalTexture* depth_texture = nullptr;
-        if (desc.depth_attachment != nullptr) {
-            depth_texture = dynamic_cast<MetalTexture*>(desc.depth_attachment);
-            if (depth_texture == nullptr || depth_texture->native() == nil ||
-                depth_texture->format() != TextureFormat::depth32_float ||
-                !has_usage(depth_texture->usage(), TextureUsage::depth_attachment) ||
-                depth_texture->width() != drawable_.texture.width ||
-                depth_texture->height() != drawable_.texture.height) {
+        @autoreleasepool {
+            if (render_encoder_ != nil || drawable_ != nil || command_buffer_ == nil) {
                 return false;
             }
+            auto* metal_swapchain = dynamic_cast<MetalSwapchain*>(&swapchain);
+            if (metal_swapchain == nullptr) {
+                return false;
+            }
+            drawable_ = metal_swapchain->acquire_drawable();
+            if (drawable_ == nil) {
+                return false;
+            }
+
+            MetalTexture* depth_texture = nullptr;
+            if (desc.depth_attachment != nullptr) {
+                depth_texture = dynamic_cast<MetalTexture*>(desc.depth_attachment);
+                if (depth_texture == nullptr || depth_texture->native() == nil ||
+                    depth_texture->format() != TextureFormat::depth32_float ||
+                    !has_usage(depth_texture->usage(), TextureUsage::depth_attachment) ||
+                    depth_texture->width() != drawable_.texture.width ||
+                    depth_texture->height() != drawable_.texture.height) {
+                    return false;
+        }
         }
 
         MTLRenderPassDescriptor* pass = [MTLRenderPassDescriptor renderPassDescriptor];
@@ -894,31 +902,33 @@ public:
         bound_resources_.clear();
         pipeline_bound_ = false;
         return render_encoder_ != nil;
+            }
     }
 
     bool begin_render_pass(Texture& color_attachment, const RenderPassDesc& desc) override {
-        if (render_encoder_ != nil || drawable_ != nil || command_buffer_ == nil ||
-            desc.clear_depth < 0.0F || desc.clear_depth > 1.0F) {
-            return false;
-        }
-        auto* color_texture = dynamic_cast<MetalTexture*>(&color_attachment);
-        if (color_texture == nullptr || color_texture->native() == nil ||
-            color_texture->format() == TextureFormat::depth32_float ||
-            color_texture->dimension() != TextureDimension::d2 ||
-            !has_usage(color_texture->usage(), TextureUsage::color_attachment)) {
-            return false;
-        }
-
-        MetalTexture* depth_texture = nullptr;
-        if (desc.depth_attachment != nullptr) {
-            depth_texture = dynamic_cast<MetalTexture*>(desc.depth_attachment);
-            if (depth_texture == nullptr || depth_texture->native() == nil ||
-                depth_texture->format() != TextureFormat::depth32_float ||
-                !has_usage(depth_texture->usage(), TextureUsage::depth_attachment) ||
-                depth_texture->width() != color_texture->width() ||
-                depth_texture->height() != color_texture->height()) {
+        @autoreleasepool {
+            if (render_encoder_ != nil || drawable_ != nil || command_buffer_ == nil ||
+                desc.clear_depth < 0.0F || desc.clear_depth > 1.0F) {
                 return false;
             }
+            auto* color_texture = dynamic_cast<MetalTexture*>(&color_attachment);
+            if (color_texture == nullptr || color_texture->native() == nil ||
+                color_texture->format() == TextureFormat::depth32_float ||
+                color_texture->dimension() != TextureDimension::d2 ||
+                !has_usage(color_texture->usage(), TextureUsage::color_attachment)) {
+                return false;
+            }
+
+            MetalTexture* depth_texture = nullptr;
+            if (desc.depth_attachment != nullptr) {
+                depth_texture = dynamic_cast<MetalTexture*>(desc.depth_attachment);
+                if (depth_texture == nullptr || depth_texture->native() == nil ||
+                    depth_texture->format() != TextureFormat::depth32_float ||
+                    !has_usage(depth_texture->usage(), TextureUsage::depth_attachment) ||
+                    depth_texture->width() != color_texture->width() ||
+                    depth_texture->height() != color_texture->height()) {
+                    return false;
+        }
         }
 
         MTLRenderPassDescriptor* pass = [MTLRenderPassDescriptor renderPassDescriptor];
@@ -970,6 +980,7 @@ public:
         bound_resources_.clear();
         pipeline_bound_ = false;
         return true;
+            }
     }
 
     bool begin_depth_render_pass(
@@ -977,33 +988,35 @@ public:
         const float clear_depth,
         const bool clear_depth_attachment
     ) override {
-        if (render_encoder_ != nil || drawable_ != nil || command_buffer_ == nil ||
-            clear_depth < 0.0F || clear_depth > 1.0F) {
-            return false;
-        }
-        auto* depth_texture = dynamic_cast<MetalTexture*>(&depth_attachment);
-        if (depth_texture == nullptr || depth_texture->native() == nil ||
-            depth_texture->format() != TextureFormat::depth32_float ||
-            !has_usage(depth_texture->usage(), TextureUsage::depth_attachment)) {
-            return false;
-        }
+        @autoreleasepool {
+            if (render_encoder_ != nil || drawable_ != nil || command_buffer_ == nil ||
+                clear_depth < 0.0F || clear_depth > 1.0F) {
+                return false;
+            }
+            auto* depth_texture = dynamic_cast<MetalTexture*>(&depth_attachment);
+            if (depth_texture == nullptr || depth_texture->native() == nil ||
+                depth_texture->format() != TextureFormat::depth32_float ||
+                !has_usage(depth_texture->usage(), TextureUsage::depth_attachment)) {
+                return false;
+            }
 
-        MTLRenderPassDescriptor* pass = [MTLRenderPassDescriptor renderPassDescriptor];
-        pass.depthAttachment.texture = depth_texture->native();
-        pass.depthAttachment.loadAction = clear_depth_attachment
-            ? MTLLoadActionClear
-            : MTLLoadActionLoad;
-        pass.depthAttachment.storeAction = MTLStoreActionStore;
-        pass.depthAttachment.clearDepth = clear_depth;
-        render_encoder_ = [command_buffer_ renderCommandEncoderWithDescriptor:pass];
-        active_swapchain_ = nullptr;
-        active_color_texture_ = nullptr;
-        active_depth_texture_ = depth_texture;
-        reset_mesh_state();
-        active_pipeline_ = nullptr;
-        bound_resources_.clear();
-        pipeline_bound_ = false;
-        return render_encoder_ != nil;
+            MTLRenderPassDescriptor* pass = [MTLRenderPassDescriptor renderPassDescriptor];
+            pass.depthAttachment.texture = depth_texture->native();
+            pass.depthAttachment.loadAction = clear_depth_attachment
+                ? MTLLoadActionClear
+                : MTLLoadActionLoad;
+            pass.depthAttachment.storeAction = MTLStoreActionStore;
+            pass.depthAttachment.clearDepth = clear_depth;
+            render_encoder_ = [command_buffer_ renderCommandEncoderWithDescriptor:pass];
+            active_swapchain_ = nullptr;
+            active_color_texture_ = nullptr;
+            active_depth_texture_ = depth_texture;
+            reset_mesh_state();
+            active_pipeline_ = nullptr;
+            bound_resources_.clear();
+            pipeline_bound_ = false;
+            return render_encoder_ != nil;
+        }
     }
 
     bool set_viewport(const Viewport& viewport) override {
@@ -1045,37 +1058,39 @@ public:
     }
 
     bool set_graphics_pipeline(GraphicsPipeline& pipeline) override {
-        if (render_encoder_ == nil) {
-            return false;
+        @autoreleasepool {
+            if (render_encoder_ == nil) {
+                return false;
+            }
+            auto* metal_pipeline = dynamic_cast<MetalGraphicsPipeline*>(&pipeline);
+            if (metal_pipeline == nullptr || metal_pipeline->native() == nil) {
+                return false;
+            }
+            const TextureFormat active_color_format = active_color_texture_ != nullptr
+                ? active_color_texture_->format()
+                : (active_swapchain_ != nullptr
+                    ? active_swapchain_->color_format()
+                    : TextureFormat::undefined);
+            if (metal_pipeline->color_format() != active_color_format) {
+                return false;
+            }
+            const auto& depth = metal_pipeline->depth();
+            if (depth.format != TextureFormat::undefined &&
+                (active_depth_texture_ == nullptr || active_depth_texture_->format() != depth.format)) {
+                return false;
+            }
+            [render_encoder_ setRenderPipelineState:metal_pipeline->native()];
+            if (metal_pipeline->depth_state() != nil) {
+                [render_encoder_ setDepthStencilState:metal_pipeline->depth_state()];
+            }
+            [render_encoder_ setCullMode:cull_mode(metal_pipeline->cull())];
+            [render_encoder_ setFrontFacingWinding:front_winding(metal_pipeline->front())];
+            active_pipeline_ = metal_pipeline;
+            bound_resources_.clear();
+            reset_mesh_state();
+            pipeline_bound_ = true;
+            return true;
         }
-        auto* metal_pipeline = dynamic_cast<MetalGraphicsPipeline*>(&pipeline);
-        if (metal_pipeline == nullptr || metal_pipeline->native() == nil) {
-            return false;
-        }
-        const TextureFormat active_color_format = active_color_texture_ != nullptr
-            ? active_color_texture_->format()
-            : (active_swapchain_ != nullptr
-                ? active_swapchain_->color_format()
-                : TextureFormat::undefined);
-        if (metal_pipeline->color_format() != active_color_format) {
-            return false;
-        }
-        const auto& depth = metal_pipeline->depth();
-        if (depth.format != TextureFormat::undefined &&
-            (active_depth_texture_ == nullptr || active_depth_texture_->format() != depth.format)) {
-            return false;
-        }
-        [render_encoder_ setRenderPipelineState:metal_pipeline->native()];
-        if (metal_pipeline->depth_state() != nil) {
-            [render_encoder_ setDepthStencilState:metal_pipeline->depth_state()];
-        }
-        [render_encoder_ setCullMode:cull_mode(metal_pipeline->cull())];
-        [render_encoder_ setFrontFacingWinding:front_winding(metal_pipeline->front())];
-        active_pipeline_ = metal_pipeline;
-        bound_resources_.clear();
-        reset_mesh_state();
-        pipeline_bound_ = true;
-        return true;
     }
 
     bool set_vertex_buffer(
@@ -1083,27 +1098,29 @@ public:
         Buffer& buffer,
         const std::uint64_t offset
     ) override {
-        auto* metal_buffer = dynamic_cast<MetalBuffer*>(&buffer);
-        if (render_encoder_ == nil || !pipeline_bound_ || active_pipeline_ == nullptr ||
-            metal_buffer == nullptr || !has_usage(buffer.usage(), BufferUsage::vertex) ||
-            offset > buffer.size()) {
-            return false;
+        @autoreleasepool {
+            auto* metal_buffer = dynamic_cast<MetalBuffer*>(&buffer);
+            if (render_encoder_ == nil || !pipeline_bound_ || active_pipeline_ == nullptr ||
+                metal_buffer == nullptr || !has_usage(buffer.usage(), BufferUsage::vertex) ||
+                offset > buffer.size()) {
+                return false;
+            }
+            const MetalVertexStreamInfo* stream = active_pipeline_->vertex_stream(slot);
+            if (stream == nullptr || stream->stride == 0U) {
+                return false;
+            }
+            const std::uint64_t remaining = buffer.size() - offset;
+            if (remaining < stream->stride ||
+                metal_shader_converter_vertex_buffer_base + slot >= 31U) {
+                return false;
+            }
+            [render_encoder_ setVertexBuffer:metal_buffer->native()
+                                      offset:static_cast<NSUInteger>(offset)
+                                     atIndex:metal_shader_converter_vertex_buffer_base + slot];
+            vertex_buffers_bound_[slot] = true;
+            vertex_capacities_[slot] = remaining / stream->stride;
+            return true;
         }
-        const MetalVertexStreamInfo* stream = active_pipeline_->vertex_stream(slot);
-        if (stream == nullptr || stream->stride == 0U) {
-            return false;
-        }
-        const std::uint64_t remaining = buffer.size() - offset;
-        if (remaining < stream->stride ||
-            metal_shader_converter_vertex_buffer_base + slot >= 31U) {
-            return false;
-        }
-        [render_encoder_ setVertexBuffer:metal_buffer->native()
-                                  offset:static_cast<NSUInteger>(offset)
-                                 atIndex:metal_shader_converter_vertex_buffer_base + slot];
-        vertex_buffers_bound_[slot] = true;
-        vertex_capacities_[slot] = remaining / stream->stride;
-        return true;
     }
 
     bool set_index_buffer(
@@ -1399,30 +1416,32 @@ public:
     }
 
     bool dispatch(const ComputeDispatchDesc& dispatch_desc) override {
-        if (!valid() || render_encoder_ != nil || !compute_pipeline_bound_ ||
-            active_compute_pipeline_ == nullptr || !is_valid(dispatch_desc)) {
-            return false;
-        }
-        id<MTLComputeCommandEncoder> encoder = [command_buffer_ computeCommandEncoder];
-        if (encoder == nil) {
-            return false;
-        }
-        [encoder setComputePipelineState:active_compute_pipeline_->native()];
-        if (!prepare_compute_resources(encoder)) {
+        @autoreleasepool {
+            if (!valid() || render_encoder_ != nil || !compute_pipeline_bound_ ||
+                active_compute_pipeline_ == nullptr || !is_valid(dispatch_desc)) {
+                return false;
+            }
+            id<MTLComputeCommandEncoder> encoder = [command_buffer_ computeCommandEncoder];
+            if (encoder == nil) {
+                return false;
+            }
+            [encoder setComputePipelineState:active_compute_pipeline_->native()];
+            if (!prepare_compute_resources(encoder)) {
+                [encoder endEncoding];
+                return false;
+            }
+            const ComputeThreadGroupSize group_size = active_compute_pipeline_->thread_group_size();
+            [encoder dispatchThreadgroups:MTLSizeMake(
+                    static_cast<NSUInteger>(dispatch_desc.group_count_x),
+                    static_cast<NSUInteger>(dispatch_desc.group_count_y),
+                    static_cast<NSUInteger>(dispatch_desc.group_count_z))
+                  threadsPerThreadgroup:MTLSizeMake(
+                    static_cast<NSUInteger>(group_size.x),
+                    static_cast<NSUInteger>(group_size.y),
+                    static_cast<NSUInteger>(group_size.z))];
             [encoder endEncoding];
-            return false;
+            return true;
         }
-        const ComputeThreadGroupSize group_size = active_compute_pipeline_->thread_group_size();
-        [encoder dispatchThreadgroups:MTLSizeMake(
-                static_cast<NSUInteger>(dispatch_desc.group_count_x),
-                static_cast<NSUInteger>(dispatch_desc.group_count_y),
-                static_cast<NSUInteger>(dispatch_desc.group_count_z))
-              threadsPerThreadgroup:MTLSizeMake(
-                static_cast<NSUInteger>(group_size.x),
-                static_cast<NSUInteger>(group_size.y),
-                static_cast<NSUInteger>(group_size.z))];
-        [encoder endEncoding];
-        return true;
     }
 
     bool draw(
@@ -1431,20 +1450,22 @@ public:
         const std::uint32_t first_vertex,
         const std::uint32_t first_instance
     ) override {
-        if (render_encoder_ == nil || !pipeline_bound_ || active_pipeline_ == nullptr ||
-            vertex_count == 0 || instance_count == 0 ||
-            !vertex_streams_cover_draw(vertex_count, instance_count, first_vertex, first_instance)) {
-            return false;
+        @autoreleasepool {
+            if (render_encoder_ == nil || !pipeline_bound_ || active_pipeline_ == nullptr ||
+                vertex_count == 0 || instance_count == 0 ||
+                !vertex_streams_cover_draw(vertex_count, instance_count, first_vertex, first_instance)) {
+                return false;
+            }
+            if (!prepare_draw_resources()) {
+                return false;
+            }
+            [render_encoder_ drawPrimitives:MTLPrimitiveTypeTriangle
+                                vertexStart:first_vertex
+                                vertexCount:vertex_count
+                              instanceCount:instance_count
+                               baseInstance:first_instance];
+            return true;
         }
-        if (!prepare_draw_resources()) {
-            return false;
-        }
-        [render_encoder_ drawPrimitives:MTLPrimitiveTypeTriangle
-                            vertexStart:first_vertex
-                            vertexCount:vertex_count
-                          instanceCount:instance_count
-                           baseInstance:first_instance];
-        return true;
     }
 
     bool draw_indexed(
@@ -1454,72 +1475,78 @@ public:
         const std::int32_t vertex_offset,
         const std::uint32_t first_instance
     ) override {
-        if (render_encoder_ == nil || !pipeline_bound_ || active_pipeline_ == nullptr ||
-            !index_buffer_bound_ || index_buffer_ == nullptr || index_buffer_->native() == nil ||
-            index_count == 0U || instance_count == 0U ||
-            first_index > index_capacity_ || index_count > index_capacity_ - first_index ||
-            !vertex_streams_cover_instances(instance_count, first_instance)) {
-            return false;
+        @autoreleasepool {
+            if (render_encoder_ == nil || !pipeline_bound_ || active_pipeline_ == nullptr ||
+                !index_buffer_bound_ || index_buffer_ == nullptr || index_buffer_->native() == nil ||
+                index_count == 0U || instance_count == 0U ||
+                first_index > index_capacity_ || index_count > index_capacity_ - first_index ||
+                !vertex_streams_cover_instances(instance_count, first_instance)) {
+                return false;
+            }
+            if (!prepare_draw_resources()) {
+                return false;
+            }
+            const std::uint64_t byte_offset = index_offset_ +
+                static_cast<std::uint64_t>(first_index) * index_format_size(index_format_);
+            if (byte_offset > static_cast<std::uint64_t>(std::numeric_limits<NSUInteger>::max())) {
+                return false;
+            }
+            [render_encoder_ drawIndexedPrimitives:MTLPrimitiveTypeTriangle
+                                        indexCount:index_count
+                                         indexType:index_type(index_format_)
+                                       indexBuffer:index_buffer_->native()
+                                 indexBufferOffset:static_cast<NSUInteger>(byte_offset)
+                                     instanceCount:instance_count
+                                        baseVertex:vertex_offset
+                                      baseInstance:first_instance];
+            return true;
         }
-        if (!prepare_draw_resources()) {
-            return false;
-        }
-        const std::uint64_t byte_offset = index_offset_ +
-            static_cast<std::uint64_t>(first_index) * index_format_size(index_format_);
-        if (byte_offset > static_cast<std::uint64_t>(std::numeric_limits<NSUInteger>::max())) {
-            return false;
-        }
-        [render_encoder_ drawIndexedPrimitives:MTLPrimitiveTypeTriangle
-                                    indexCount:index_count
-                                     indexType:index_type(index_format_)
-                                   indexBuffer:index_buffer_->native()
-                             indexBufferOffset:static_cast<NSUInteger>(byte_offset)
-                                 instanceCount:instance_count
-                                    baseVertex:vertex_offset
-                                  baseInstance:first_instance];
-        return true;
     }
 
     bool draw_indexed_indirect(
         Buffer& arguments,
         const std::uint64_t offset
     ) override {
-        auto* metal_arguments = dynamic_cast<MetalBuffer*>(&arguments);
-        if (render_encoder_ == nil || !pipeline_bound_ || active_pipeline_ == nullptr ||
-            !index_buffer_bound_ || index_buffer_ == nullptr || index_buffer_->native() == nil ||
-            metal_arguments == nullptr || metal_arguments->native() == nil ||
-            !has_usage(arguments.usage(), BufferUsage::indirect) ||
-            offset % alignof(std::uint32_t) != 0U || offset > arguments.size() ||
-            sizeof(IndexedIndirectDrawArguments) > arguments.size() - offset ||
-            offset > static_cast<std::uint64_t>(std::numeric_limits<NSUInteger>::max()) ||
-            index_offset_ > static_cast<std::uint64_t>(std::numeric_limits<NSUInteger>::max())) {
-            return false;
+        @autoreleasepool {
+            auto* metal_arguments = dynamic_cast<MetalBuffer*>(&arguments);
+            if (render_encoder_ == nil || !pipeline_bound_ || active_pipeline_ == nullptr ||
+                !index_buffer_bound_ || index_buffer_ == nullptr || index_buffer_->native() == nil ||
+                metal_arguments == nullptr || metal_arguments->native() == nil ||
+                !has_usage(arguments.usage(), BufferUsage::indirect) ||
+                offset % alignof(std::uint32_t) != 0U || offset > arguments.size() ||
+                sizeof(IndexedIndirectDrawArguments) > arguments.size() - offset ||
+                offset > static_cast<std::uint64_t>(std::numeric_limits<NSUInteger>::max()) ||
+                index_offset_ > static_cast<std::uint64_t>(std::numeric_limits<NSUInteger>::max())) {
+                return false;
+            }
+            if (!prepare_draw_resources()) {
+                return false;
+            }
+            [render_encoder_ drawIndexedPrimitives:MTLPrimitiveTypeTriangle
+                                         indexType:index_type(index_format_)
+                                       indexBuffer:index_buffer_->native()
+                                 indexBufferOffset:static_cast<NSUInteger>(index_offset_)
+                                    indirectBuffer:metal_arguments->native()
+                              indirectBufferOffset:static_cast<NSUInteger>(offset)];
+            return true;
         }
-        if (!prepare_draw_resources()) {
-            return false;
-        }
-        [render_encoder_ drawIndexedPrimitives:MTLPrimitiveTypeTriangle
-                                     indexType:index_type(index_format_)
-                                   indexBuffer:index_buffer_->native()
-                             indexBufferOffset:static_cast<NSUInteger>(index_offset_)
-                                indirectBuffer:metal_arguments->native()
-                          indirectBufferOffset:static_cast<NSUInteger>(offset)];
-        return true;
     }
 
     bool end_render_pass() override {
-        if (render_encoder_ == nil) {
-            return false;
+        @autoreleasepool {
+            if (render_encoder_ == nil) {
+                return false;
+            }
+            [render_encoder_ endEncoding];
+            render_encoder_ = nil;
+            active_pipeline_ = nullptr;
+            active_color_texture_ = nullptr;
+            active_depth_texture_ = nullptr;
+            bound_resources_.clear();
+            reset_mesh_state();
+            pipeline_bound_ = false;
+            return true;
         }
-        [render_encoder_ endEncoding];
-        render_encoder_ = nil;
-        active_pipeline_ = nullptr;
-        active_color_texture_ = nullptr;
-        active_depth_texture_ = nullptr;
-        bound_resources_.clear();
-        reset_mesh_state();
-        pipeline_bound_ = false;
-        return true;
     }
 
 
@@ -1528,33 +1555,34 @@ public:
         const AccelerationStructureBuildDesc& desc,
         AccelerationStructure* source
     ) override {
-        if (render_encoder_ != nil || command_buffer_ == nil || present_scheduled_ ||
-            !is_valid(desc)) {
-            return false;
-        }
-        auto* destination_native = dynamic_cast<MetalAccelerationStructure*>(&destination);
-        auto* source_native = source != nullptr
-            ? dynamic_cast<MetalAccelerationStructure*>(source)
-            : nullptr;
-        if (destination_native == nullptr || destination_native->type() != desc.type ||
-            (source != nullptr && source_native == nullptr) ||
-            (source != nullptr && !has_flag(
-                destination_native->resources().flags,
-                AccelerationStructureBuildFlags::allow_update
-            ))) {
-            return false;
-        }
-
-        auto plan = metal::build_acceleration_structure_plan(
-            device_,
-            desc,
-            resolve_metal_buffer_binding,
-            resolve_metal_acceleration_structure
-        );
-        if (!plan) {
-            if (!plan.diagnostics.empty()) {
-                core::log(core::LogLevel::error, plan.diagnostics);
+        @autoreleasepool {
+            if (render_encoder_ != nil || command_buffer_ == nil || present_scheduled_ ||
+                !is_valid(desc)) {
+                return false;
             }
+            auto* destination_native = dynamic_cast<MetalAccelerationStructure*>(&destination);
+            auto* source_native = source != nullptr
+                ? dynamic_cast<MetalAccelerationStructure*>(source)
+                : nullptr;
+            if (destination_native == nullptr || destination_native->type() != desc.type ||
+                (source != nullptr && source_native == nullptr) ||
+                (source != nullptr && !has_flag(
+                    destination_native->resources().flags,
+                    AccelerationStructureBuildFlags::allow_update
+                ))) {
+                return false;
+            }
+
+            auto plan = metal::build_acceleration_structure_plan(
+                device_,
+                desc,
+                resolve_metal_buffer_binding,
+                resolve_metal_acceleration_structure
+            );
+            if (!plan) {
+                if (!plan.diagnostics.empty()) {
+                    core::log(core::LogLevel::error, plan.diagnostics);
+        }
             return false;
         }
 
@@ -1572,17 +1600,20 @@ public:
             core::log(core::LogLevel::error, diagnostics);
         }
         return encoded;
+            }
     }
 
     bool present(Swapchain& swapchain) override {
-        auto* metal_swapchain = dynamic_cast<MetalSwapchain*>(&swapchain);
-        if (render_encoder_ != nil || drawable_ == nil || metal_swapchain == nullptr ||
-            metal_swapchain != active_swapchain_ || present_scheduled_) {
-            return false;
+        @autoreleasepool {
+            auto* metal_swapchain = dynamic_cast<MetalSwapchain*>(&swapchain);
+            if (render_encoder_ != nil || drawable_ == nil || metal_swapchain == nullptr ||
+                metal_swapchain != active_swapchain_ || present_scheduled_) {
+                return false;
+            }
+            [command_buffer_ presentDrawable:drawable_];
+            present_scheduled_ = true;
+            return true;
         }
-        [command_buffer_ presentDrawable:drawable_];
-        present_scheduled_ = true;
-        return true;
     }
 
     [[nodiscard]] id<MTLCommandBuffer> native() const noexcept { return command_buffer_; }
@@ -1682,6 +1713,11 @@ private:
     }
 
     void upsert_bound(MetalBoundResource resource) {
+        encoded_graphics_arguments_.fill(false);
+        std::erase_if(graphics_descriptor_tables_, [&](const auto& table) {
+            return table.register_class == resource.key.register_class &&
+                table.binding == resource.key.binding && table.space == resource.key.space;
+        });
         const auto found = std::find_if(
             bound_resources_.begin(),
             bound_resources_.end(),
@@ -1690,6 +1726,7 @@ private:
             }
         );
         if (found == bound_resources_.end()) {
+            graphics_resources_validated_ = false;
             bound_resources_.push_back(std::move(resource));
         } else {
             *found = std::move(resource);
@@ -1777,12 +1814,13 @@ private:
     }
 
     [[nodiscard]] bool prepare_draw_resources() {
-        if (!all_required_resources_bound()) {
+        if (!graphics_resources_validated_ && !all_required_resources_bound()) {
             if (active_pipeline_ != nullptr && !active_pipeline_->layout().resources.empty()) {
                 core::log(core::LogLevel::error, "Metal draw is missing a reflected shader resource.");
                 return false;
             }
         }
+        graphics_resources_validated_ = true;
         return bind_stage_resources(ShaderStage::vertex) &&
             bind_stage_resources(ShaderStage::fragment);
     }
@@ -1904,10 +1942,40 @@ private:
         return false;
     }
 
+    struct ArgumentSlice {
+        id<MTLBuffer> buffer = nil;
+        std::byte* bytes = nullptr;
+        NSUInteger offset = 0U;
+        NSUInteger retained_index = 0U;
+    };
+
+    [[nodiscard]] ArgumentSlice allocate_argument_bytes(const std::uint64_t size) {
+        constexpr NSUInteger alignment = 256U;
+        constexpr NSUInteger block_size = 1024U * 1024U;
+        if (size == 0U || size > std::numeric_limits<NSUInteger>::max() - alignment) return {};
+        const auto aligned = (static_cast<NSUInteger>(size) + alignment - 1U) / alignment * alignment;
+        if (argument_arena_ == nil || argument_arena_offset_ > argument_arena_.length ||
+            aligned > argument_arena_.length - argument_arena_offset_) {
+            argument_arena_ = [device_ newBufferWithLength:std::max(block_size, aligned)
+                                                 options:MTLResourceStorageModeShared];
+            if (argument_arena_ == nil || argument_arena_.contents == nullptr) return {};
+            argument_arena_offset_ = 0U;
+            argument_arena_index_ = retained_argument_buffers_.count;
+            [retained_argument_buffers_ addObject:argument_arena_];
+        }
+        auto* bytes = static_cast<std::byte*>(argument_arena_.contents) + argument_arena_offset_;
+        const ArgumentSlice result{argument_arena_, bytes, argument_arena_offset_, argument_arena_index_};
+        std::memset(bytes, 0, static_cast<std::size_t>(size));
+        argument_arena_offset_ += aligned;
+        return result;
+    }
+
     [[nodiscard]] bool encode_stage_argument_buffer(const ShaderStage stage) {
         if (active_pipeline_ == nullptr || device_ == nil || render_encoder_ == nil) {
             return false;
         }
+        const std::size_t stage_index = stage == ShaderStage::vertex ? 0U : 1U;
+        if (encoded_graphics_arguments_[stage_index]) return true;
         const auto locations = active_pipeline_->locations(stage);
         if (locations.empty()) {
             return true;
@@ -1924,15 +1992,13 @@ private:
             return false;
         }
 
-        id<MTLBuffer> argument_buffer = [device_
-            newBufferWithLength:static_cast<NSUInteger>(argument_buffer_size)
-            options:MTLResourceStorageModeShared];
+        const auto arguments = allocate_argument_bytes(argument_buffer_size);
+        id<MTLBuffer> argument_buffer = arguments.buffer;
         if (argument_buffer == nil || argument_buffer.contents == nullptr) {
             core::log(core::LogLevel::error, "Metal could not allocate the converted shader argument buffer.");
             return false;
         }
-        std::memset(argument_buffer.contents, 0, static_cast<std::size_t>(argument_buffer_size));
-        auto* bytes = static_cast<std::byte*>(argument_buffer.contents);
+        auto* bytes = arguments.bytes;
 
         const MTLRenderStages render_stage = stage == ShaderStage::vertex
             ? MTLRenderStageVertex
@@ -1943,6 +2009,17 @@ private:
             if (logical == nullptr) return false;
 
             if (location.model == MetalShaderResourceBindingModel::descriptor_table) {
+                const auto cached = std::find_if(graphics_descriptor_tables_.begin(), graphics_descriptor_tables_.end(), [&](const auto& table) {
+                    return table.stage == stage && table.register_class == logical->register_class &&
+                        table.binding == logical->binding && table.space == logical->space;
+                });
+                if (cached != graphics_descriptor_tables_.end()) {
+                    if (static_cast<std::uint64_t>(location.argument_buffer_offset) + sizeof(std::uint64_t) > argument_buffer_size) return false;
+                    id<MTLBuffer> table = retained_argument_buffers_[cached->retained_index];
+                    const std::uint64_t address = table.gpuAddress + cached->offset;
+                    std::memcpy(bytes + static_cast<std::size_t>(location.argument_buffer_offset), &address, sizeof(address));
+                    continue;
+                }
                 const std::uint32_t descriptor_count = logical->unbounded
                     ? bound_prefix_count(*logical)
                     : logical->count;
@@ -1955,12 +2032,10 @@ private:
                 }
                 const std::uint64_t table_size =
                     static_cast<std::uint64_t>(descriptor_count) * metal_descriptor_entry_size;
-                id<MTLBuffer> descriptor_table = [device_
-                    newBufferWithLength:static_cast<NSUInteger>(table_size)
-                    options:MTLResourceStorageModeShared];
-                if (descriptor_table == nil || descriptor_table.contents == nullptr) return false;
-                std::memset(descriptor_table.contents, 0, static_cast<std::size_t>(table_size));
-                auto* table_entries = static_cast<MetalDescriptorTableEntry*>(descriptor_table.contents);
+                const auto table_slice = allocate_argument_bytes(table_size);
+                id<MTLBuffer> descriptor_table = table_slice.buffer;
+                if (descriptor_table == nil || table_slice.bytes == nullptr) return false;
+                auto* table_entries = reinterpret_cast<MetalDescriptorTableEntry*>(table_slice.bytes);
                 for (std::uint32_t element = 0U; element < descriptor_count; ++element) {
                     const ShaderBindingKey key{
                         .register_class = logical->register_class,
@@ -1974,7 +2049,7 @@ private:
                         return false;
                     }
                 }
-                const std::uint64_t table_address = descriptor_table.gpuAddress;
+                const std::uint64_t table_address = descriptor_table.gpuAddress + table_slice.offset;
                 std::memcpy(
                     bytes + static_cast<std::size_t>(location.argument_buffer_offset),
                     &table_address,
@@ -1983,7 +2058,14 @@ private:
                 [render_encoder_ useResource:descriptor_table
                                        usage:MTLResourceUsageRead
                                       stages:render_stage];
-                [retained_argument_buffers_ addObject:descriptor_table];
+                graphics_descriptor_tables_.push_back(CachedGraphicsDescriptorTable{
+                    .stage = stage,
+                    .register_class = logical->register_class,
+                    .binding = logical->binding,
+                    .space = logical->space,
+                    .retained_index = table_slice.retained_index,
+                    .offset = table_slice.offset,
+                });
                 continue;
             }
 
@@ -2013,14 +2095,17 @@ private:
 
         if (stage == ShaderStage::vertex) {
             [render_encoder_ setVertexBuffer:argument_buffer
-                                      offset:0
+                                      offset:arguments.offset
                                      atIndex:metal_shader_converter_argument_buffer_bind_point];
         } else {
             [render_encoder_ setFragmentBuffer:argument_buffer
-                                        offset:0
+                                        offset:arguments.offset
                                        atIndex:metal_shader_converter_argument_buffer_bind_point];
         }
-        [retained_argument_buffers_ addObject:argument_buffer];
+        // Vertex/index stream changes do not change shader resource bindings.
+        // Keep this table bound across a meshlet batch rather than allocating
+        // and retaining identical descriptor arrays for every indirect draw.
+        encoded_graphics_arguments_[stage_index] = true;
         return true;
     }
 
@@ -2303,9 +2388,8 @@ private:
             return false;
         }
 
-        id<MTLBuffer> argument_buffer = [device_
-            newBufferWithLength:static_cast<NSUInteger>(argument_buffer_size)
-            options:MTLResourceStorageModeShared];
+        const auto arguments = allocate_argument_bytes(argument_buffer_size);
+        id<MTLBuffer> argument_buffer = arguments.buffer;
         if (argument_buffer == nil || argument_buffer.contents == nullptr) {
             core::log(
                 core::LogLevel::error,
@@ -2313,8 +2397,7 @@ private:
             );
             return false;
         }
-        std::memset(argument_buffer.contents, 0, static_cast<std::size_t>(argument_buffer_size));
-        auto* bytes = static_cast<std::byte*>(argument_buffer.contents);
+        auto* bytes = arguments.bytes;
 
         for (const auto& location : locations) {
             const PipelineResourceBinding* logical = compute_logical_binding(location);
@@ -2333,12 +2416,10 @@ private:
                 }
                 const std::uint64_t table_size =
                     static_cast<std::uint64_t>(descriptor_count) * metal_descriptor_entry_size;
-                id<MTLBuffer> descriptor_table = [device_
-                    newBufferWithLength:static_cast<NSUInteger>(table_size)
-                    options:MTLResourceStorageModeShared];
-                if (descriptor_table == nil || descriptor_table.contents == nullptr) return false;
-                std::memset(descriptor_table.contents, 0, static_cast<std::size_t>(table_size));
-                auto* table_entries = static_cast<MetalDescriptorTableEntry*>(descriptor_table.contents);
+                const auto table_slice = allocate_argument_bytes(table_size);
+                id<MTLBuffer> descriptor_table = table_slice.buffer;
+                if (descriptor_table == nil || table_slice.bytes == nullptr) return false;
+                auto* table_entries = reinterpret_cast<MetalDescriptorTableEntry*>(table_slice.bytes);
                 for (std::uint32_t element = 0U; element < descriptor_count; ++element) {
                     const ShaderBindingKey key{
                         .register_class = logical->register_class,
@@ -2352,14 +2433,13 @@ private:
                         return false;
                     }
                 }
-                const std::uint64_t table_address = descriptor_table.gpuAddress;
+                const std::uint64_t table_address = descriptor_table.gpuAddress + table_slice.offset;
                 std::memcpy(
                     bytes + static_cast<std::size_t>(location.argument_buffer_offset),
                     &table_address,
                     sizeof(table_address)
                 );
                 [encoder useResource:descriptor_table usage:MTLResourceUsageRead];
-                [retained_argument_buffers_ addObject:descriptor_table];
                 continue;
             }
 
@@ -2388,10 +2468,9 @@ private:
         }
 
         [encoder setBuffer:argument_buffer
-                    offset:0U
+                    offset:arguments.offset
                    atIndex:metal_shader_converter_argument_buffer_bind_point];
         [encoder useResource:argument_buffer usage:MTLResourceUsageRead];
-        [retained_argument_buffers_ addObject:argument_buffer];
         return true;
     }
 
@@ -2460,6 +2539,9 @@ private:
     }
 
     void reset_mesh_state() noexcept {
+        encoded_graphics_arguments_.fill(false);
+        graphics_resources_validated_ = false;
+        graphics_descriptor_tables_.clear();
         vertex_buffers_bound_.fill(false);
         vertex_capacities_.fill(0U);
         index_buffer_ = nullptr;
@@ -2478,6 +2560,18 @@ private:
     MetalSwapchain* active_swapchain_ = nullptr;
     MetalTexture* active_color_texture_ = nullptr;
     MetalTexture* active_depth_texture_ = nullptr;
+    // Valid only for the current encoder/pipeline and unchanged bindings.
+    struct CachedGraphicsDescriptorTable {
+        ShaderStage stage{};
+        ShaderRegisterClass register_class{};
+        std::uint32_t binding = 0U;
+        std::uint32_t space = 0U;
+        NSUInteger retained_index = 0U;
+        NSUInteger offset = 0U;
+    };
+    std::vector<CachedGraphicsDescriptorTable> graphics_descriptor_tables_;
+    std::array<bool, 2U> encoded_graphics_arguments_{};
+    bool graphics_resources_validated_ = false;
     std::vector<MetalBoundResource> bound_resources_;
     std::vector<MetalBoundResource> bound_compute_resources_;
     std::array<bool, max_vertex_buffers> vertex_buffers_bound_{};
@@ -2486,6 +2580,9 @@ private:
     IndexFormat index_format_ = IndexFormat::uint16;
     std::uint64_t index_offset_ = 0U;
     std::uint64_t index_capacity_ = 0U;
+    id<MTLBuffer> argument_arena_ = nil;
+    NSUInteger argument_arena_offset_ = 0U;
+    NSUInteger argument_arena_index_ = 0U;
     NSMutableArray<id<MTLBuffer>>* retained_argument_buffers_ = nil;
     NSMutableArray<id<MTLSamplerState>>* retained_samplers_ = nil;
     bool index_buffer_bound_ = false;
@@ -2889,20 +2986,21 @@ public:
         const AccelerationStructureBuildDesc& desc,
         AccelerationStructureBuildSizes& sizes
     ) override {
-        sizes = {};
-        if (!capabilities_.ray_tracing || !is_valid(desc)) {
-            return false;
-        }
-        auto plan = metal::build_acceleration_structure_plan(
-            device_,
-            desc,
-            resolve_metal_buffer_binding,
-            resolve_metal_acceleration_structure
-        );
-        if (!plan) {
-            if (!plan.diagnostics.empty()) {
-                core::log(core::LogLevel::error, plan.diagnostics);
+        @autoreleasepool {
+            sizes = {};
+            if (!capabilities_.ray_tracing || !is_valid(desc)) {
+                return false;
             }
+            auto plan = metal::build_acceleration_structure_plan(
+                device_,
+                desc,
+                resolve_metal_buffer_binding,
+                resolve_metal_acceleration_structure
+            );
+            if (!plan) {
+                if (!plan.diagnostics.empty()) {
+                    core::log(core::LogLevel::error, plan.diagnostics);
+        }
             return false;
         }
         auto result = metal::query_acceleration_structure_build_sizes(device_, plan);
@@ -2914,25 +3012,27 @@ public:
         }
         sizes = result.sizes;
         return true;
+            }
     }
 
     [[nodiscard]] std::unique_ptr<AccelerationStructure> create_acceleration_structure(
         const AccelerationStructureBuildDesc& desc,
         const AccelerationStructureBuildSizes& sizes
     ) override {
-        if (!capabilities_.ray_tracing || !is_valid(desc) || !is_valid(sizes)) {
-            return nullptr;
-        }
-        auto plan = metal::build_acceleration_structure_plan(
-            device_,
-            desc,
-            resolve_metal_buffer_binding,
-            resolve_metal_acceleration_structure
-        );
-        if (!plan) {
-            if (!plan.diagnostics.empty()) {
-                core::log(core::LogLevel::error, plan.diagnostics);
+        @autoreleasepool {
+            if (!capabilities_.ray_tracing || !is_valid(desc) || !is_valid(sizes)) {
+                return nullptr;
             }
+            auto plan = metal::build_acceleration_structure_plan(
+                device_,
+                desc,
+                resolve_metal_buffer_binding,
+                resolve_metal_acceleration_structure
+            );
+            if (!plan) {
+                if (!plan.diagnostics.empty()) {
+                    core::log(core::LogLevel::error, plan.diagnostics);
+        }
             return nullptr;
         }
         auto resources = metal::allocate_acceleration_structure_resources(
@@ -2947,31 +3047,36 @@ public:
             return nullptr;
         }
         return std::make_unique<MetalAccelerationStructure>(std::move(resources));
+            }
     }
 
     [[nodiscard]] std::unique_ptr<CommandList> create_command_list() override {
-        id<MTLCommandBuffer> command_buffer = [command_queue_ commandBuffer];
-        if (command_buffer == nil) {
-            core::log(core::LogLevel::error, "Metal could not create a VICE command buffer.");
-            return nullptr;
+        @autoreleasepool {
+            id<MTLCommandBuffer> command_buffer = [command_queue_ commandBuffer];
+            if (command_buffer == nil) {
+                core::log(core::LogLevel::error, "Metal could not create a VICE command buffer.");
+                return nullptr;
+            }
+            return std::make_unique<MetalCommandList>(device_, command_buffer);
         }
-        return std::make_unique<MetalCommandList>(device_, command_buffer);
     }
 
     SubmissionId submit(std::unique_ptr<CommandList> command_list) override {
-        auto* metal_commands = dynamic_cast<MetalCommandList*>(command_list.get());
-        if (metal_commands == nullptr || !metal_commands->valid()) {
-            return invalid_submission;
+        @autoreleasepool {
+            auto* metal_commands = dynamic_cast<MetalCommandList*>(command_list.get());
+            if (metal_commands == nullptr || !metal_commands->valid()) {
+                return invalid_submission;
+            }
+            id<MTLCommandBuffer> command_buffer = metal_commands->native();
+            [command_buffer commit];
+            [command_buffer waitUntilCompleted];
+            if ([command_buffer status] == MTLCommandBufferStatusError) {
+                core::log(core::LogLevel::error, "Metal command submission failed.");
+                return invalid_submission;
+            }
+            completed_submission_ = ++submitted_submission_;
+            return completed_submission_;
         }
-        id<MTLCommandBuffer> command_buffer = metal_commands->native();
-        [command_buffer commit];
-        [command_buffer waitUntilCompleted];
-        if ([command_buffer status] == MTLCommandBufferStatusError) {
-            core::log(core::LogLevel::error, "Metal command submission failed.");
-            return invalid_submission;
-        }
-        completed_submission_ = ++submitted_submission_;
-        return completed_submission_;
     }
 
     [[nodiscard]] SubmissionId completed_submission() const noexcept override {
@@ -2983,13 +3088,15 @@ public:
     }
 
     bool wait_idle() override {
-        id<MTLCommandBuffer> command_buffer = [command_queue_ commandBuffer];
-        if (command_buffer == nil) {
-            return false;
+        @autoreleasepool {
+            id<MTLCommandBuffer> command_buffer = [command_queue_ commandBuffer];
+            if (command_buffer == nil) {
+                return false;
+            }
+            [command_buffer commit];
+            [command_buffer waitUntilCompleted];
+            return [command_buffer status] == MTLCommandBufferStatusCompleted;
         }
-        [command_buffer commit];
-        [command_buffer waitUntilCompleted];
-        return [command_buffer status] == MTLCommandBufferStatusCompleted;
     }
 
     [[nodiscard]] std::unique_ptr<Swapchain> create_swapchain(platform::Window& window) override {
