@@ -24,9 +24,18 @@ struct RuntimeGpuDrawBatch {
     return batch.index_count > 0U;
 }
 
+struct RuntimeGpuDrawBatchRange {
+    std::uint32_t offset = 0U;
+    std::uint32_t capacity = 0U;
+};
+
 struct RuntimeGpuDrawBatchResult {
     render::Buffer* compacted_instance_indices = nullptr;
     render::Buffer* indirect_arguments = nullptr;
+    // Offsets/capacities count uint32 indices. Indirect first_instance is zero;
+    // bind this subview before each draw and skip zero-capacity ranges.
+    // The span belongs to the batcher until its next build/initialize or destruction.
+    std::span<const RuntimeGpuDrawBatchRange> ranges;
     std::uint32_t batch_count = 0U;
     std::uint32_t instance_capacity = 0U;
 };

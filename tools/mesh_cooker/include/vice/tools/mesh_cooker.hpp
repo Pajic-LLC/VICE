@@ -28,6 +28,7 @@ struct MeshSource {
     std::string name;
     render::MeshStableId stable_id{};
     CollisionMode collision = CollisionMode::none;
+    bool build_virtual_geometry_proxies = true;
     std::vector<render::MeshVertex> vertices;
     std::vector<std::uint32_t> indices;
 };

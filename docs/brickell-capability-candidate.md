@@ -1,0 +1,76 @@
+# Character and structural capability candidate
+
+This integration builds on the headless playback, lit fallback, multi-axis joint and physical-rig candidates. It does not replace their existing World ownership or physics interfaces.
+
+## Animation intent
+
+`AnimationPlayer` now stores a secondary clip, its clock and a blend weight. Snapshot format 26 and source `animation_mix` preserve these values; older snapshots default to an unmixed player. The two clips are sampled into local TRS poses, blended with shortest-arc quaternion interpolation, then composed through the hierarchy. Physical rig bindings still override the resulting intent. CPU skinning caches include both clocks, clips and weight.
+
+The append-only module host callbacks `control_animation_mix` and `read_rig_node` retain ABI version 1 and guard host size, thread, phase, IDs, ranges and output layout. The query can sample animation intent or the physically overridden pose and returns a world-space node transform. It enables game-owned actuator targets without maintaining another pose database. It does not itself supply balance, terrain IK or a locomotion planner.
+
+## Structural failure
+
+`PoweredSwingTwist` source record version 2 adds an optional linear impulse threshold and persistent broken/impulse/solver-step state. The reader retains version 1. The native solver's existing constraint break event publishes the failure into World, disables the connection and records a `constraint_broken` causal fact. Cold reconstruction leaves the connection disabled. No collision name, distance trigger or game-specific damage counter causes the break.
+
+A dependency gate may reference a distance link or a swing/twist connection. Its derived failure state carries the same measured impulse and solver step. An attached dependent prevents removing the connection identity. This supports circuits and other generic supplies through physical connections; it is not a deformable material or plastic strain model. Thresholds remain authored effective connection properties rather than automatic derivation from a full finite-element material model.
+
+## Surface and package integration
+
+`vice_surface_v3.hlsl` combines normal/ORM/emissive material inputs, the existing environment/probe path, direct GGX lighting, directional cascaded shadows and atmospheric aerial perspective. Vertex normals use an inverse-transpose basis under nonuniform scale. Stock material contracts also accept the runtime's optional AO bridge binding. Metal Shader Converter's `Sampler` resource spelling is normalized alongside `SMP`. Converted inline ray queries now bind the GPU address of a converter acceleration-structure header, containing the native resource ID and instance-contribution pointer. Binding the resource ID directly produced missed hits in the existing inline-query and reflection execution tests; those tests cover the corrected path. The header and contribution buffer share the TLAS lifetime and are explicitly resident during dispatch. Native MSL acceleration-structure binding is unchanged.
+
+Native game packages copy cooked renderer kernels under their project content's `runtime-shaders` directory. Render-thread pass initialization selects these packaged kernels before development build paths. This avoids requiring a packaged executable to open the developer's checkout and preserves the development fallback for tests without a packaged kernel directory.
+
+## Required validation
+
+Check animation local-space length preservation, invalid-input transactionality, clock/checkpoint round trips, old-host and frame/thread guards, solver-driven structural break, dependency propagation and cold wreck reconstruction. Run the existing engine suite and the game's actual walk/drive/contact/save/restart scenario. Native screenshots and measured frame telemetry must be evaluated separately from headless acceptance.
+
+## Equipment/controller collision relationships
+
+A symmetric World relation with kind `e8000000-0000-4000-8000-000000000001` excludes a rigid body from one character controller's collision queries. Other bodies and characters still collide with it. The authored bridge derives native participant exclusions from persistent identities at reset and rejects live structural edits before solver advance. Reconstructed controllers and exit overlap/sweep preflights preserve the exclusions. This prevents a moving piece of physical equipment from feeding back into its wearer's coarse capsule without disabling its road contacts. The regression checks an overlapping equipment body, grounded stability, cold reconstruction and stale-filter rejection.
+
+## Camera depth agreement
+
+Direct project materials now create a camera-depth pipeline using their exact cooked vertex module. A separate GPU batch assignment omits those instances from the generic native depth kernel; GPU-scene PBR materials use their exact shared vertex module and selected color meshlet batches; fallback meshes keep their generic batched path. This prevents cross-compiler rounding or legal project vertex transforms from rejecting fragments against a different prepass. The GPU regression compares the full color target with and without a prepass, including an intentional vertex-depth offset that the old generic prepass could not reproduce.
+
+Built-in shader package directories use a stable 16-digit content-name hash rather than the long development target name. The loader and packager share this mapping. This keeps generated kernel paths short enough for Windows staging under long temporary project roots; manifest artifact paths remain relative.
+
+## Dense geometry for imported rigs
+
+Mesh sources can request `virtual_geometry dense` instead of the default `streamed` path. Dense cooking retains exact surface vertices, indices, clusters and page metadata in the supported v5 archive and skips static proxy simplification. Rig import selects dense explicitly: deforming skin surfaces cannot use a static simplified proxy as an equivalent animated surface. This also avoids expensive simplification of thousands of disconnected hair clumps. Geometry is retained; this is not an automatic quality reduction. Source readers reject unknown policy values. Existing streamed sources retain v7 cooking. GPU skinning, animated LODs and acceleration-structure refit remain separate work.
+
+Material-free glTF primitives now retain neutral white vertex tint instead of a debug blue-grey multiplier. Authored vertex colors and explicit material base colors remain multiplicative. The import regression covers a material-free source and verifies both neutral tint and the explicit dense policy. Dense archives stamp version 5 explicitly; the regression exercises the production v7 dispatcher rather than the historical v5 test wrapper.
+
+Dense character authoring inputs now use bounded 64 MiB embedded sources, 192 MiB parser allocation, 200,000 vertices/1.2M indices per mesh, 1M vertices/6M indices total, and a separate 250,000 weighted-vertex/64 MiB rig-asset cap. External paths remain rejected. Formats and deterministic import output remain unchanged. Local regression tests exercise expanded input/skin round trips and rejection above the bounds. These are import capacities, not a real-time performance guarantee.
+
+## Final-frame integration audit (2026-10-31)
+
+The shipped direct v3 environment shader now applies albedo once to diffuse IBL, suppresses metallic diffuse, and leaves specular radiance untinted after its Fresnel evaluation. The same contract used by the GPU PBR shader is checked alongside numerical dielectric/metal reference cases. Direct v3 also declares the complete SceneConstants tail and consumes optional AO visibility at t17; its disabled fallback remains unity. This is a shading correction, not evidence of production character or environment quality.
+
+Project material v4 validation now admits the runtime's optional t25-t27 ray-lighting textures in space2 and u0 VT feedback in space3. The Windows project-cook regression cooks the actual shipped shader and rejects an unsupported feedback slot; the minimal t0-t24 contract remains compatible. Local macOS project cooking of the production shader succeeds.
+
+An all-v4 CRASHOUT material experiment built but did not produce a responsive native review window. A process sample found the render thread waiting for Metal submission completion, with approximately 15 GiB process footprint. The precise cause is unresolved. Do not treat v4 production-content integration as accepted or infer that RT capability/AS creation proves visible GI/reflections. CRASHOUT retains the verified direct-material path pending diagnosis.
+
+## GPU PBR submission integration
+
+Cooked matrix payloads explicitly match CPU column-major storage. Compacted draws
+use zero first-instance and per-batch index subviews across color, depth, shadows,
+motion and reflection guides; see ADR 0038 for the public result-span lifetime.
+Metal converted arguments use immutable command-owned arena slices and cache
+unchanged descriptor arrays. Native encoding operations drain autoreleased
+temporary handles so completed command resources can be reclaimed.
+
+The October 31 internal all-v4 scene diagnostic passed 177 local engine tests.
+A draw-pool soak reached frame 1268 with observed physical footprint 1.6–2.0 GB;
+the prior diagnostic grew to 65.5 GB. Typical render time remained about 0.1 s.
+The native scene subsequently stopped showing facade coverage gaps when forward
+visibility rebuilt depth after ray consumers. Invariance alone did not resolve
+the full-scene disagreement. Tests reproduce a nearer early-depth surface and
+verify exact color recovery after clearing forward depth. Overall appearance and
+performance still fail visual acceptance.
+These measurements are development evidence, not a production fidelity claim.
+
+Skinned surfaces use their refreshed whole-mesh visibility bounds. The runtime
+does not submit them through static bind-pose meshlet bounds until deformation
+updates those bounds. This avoids treating a rest-pose cluster sphere as valid
+for a moved limb. A native movement check remained coherent; the measured
+all-v4 median render time stayed about 0.10 s, with no material speedup.

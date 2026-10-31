@@ -26,8 +26,10 @@ class System {
     bool advance(double seconds, std::string *diagnostics = nullptr);
     bool control_animation(world::PersistentId entity, std::uint32_t clip, float rate, bool playing,
                            bool looping, bool restart);
+    bool control_animation_mix(world::PersistentId, std::uint32_t, std::uint32_t, float, float);
     bool control_audio(world::PersistentId entity, float gain, float pitch, bool playing,
                        bool restart);
+    [[nodiscard]] std::optional<Pose> node_pose(world::PersistentId, std::uint32_t, bool physical) const;
     [[nodiscard]] std::optional<AnimationObservation> animation(world::PersistentId entity) const;
     [[nodiscard]] std::optional<AudioObservation> audio(world::PersistentId entity) const;
     // Deterministic stereo mixer, no device required; does not advance World time.

@@ -8,6 +8,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <iterator>
 #include <string>
 #include <string_view>
 
@@ -342,6 +343,29 @@ float4 vice_gpu_pbr_fs(VertexOut input) : SV_Target0 {
         }
     }
     require(gpu_material_found, "GPU PBR v4 cooked material found");
+
+    // Cook the shipped shader as well as the minimal ABI fixture. This catches
+    // resource additions in the renderer that project cooking has not admitted.
+    const auto production_shader = std::filesystem::path{__FILE__}.parent_path().parent_path() /
+        "assets" / "shaders" / "vice_gpu_pbr_surface.hlsl";
+    std::ifstream production_input{production_shader, std::ios::binary};
+    require(static_cast<bool>(production_input), "production GPU PBR shader opens");
+    const std::string production_source{
+        std::istreambuf_iterator<char>{production_input}, std::istreambuf_iterator<char>{}
+    };
+    write_text(gpu_shader_path, production_source);
+    const auto production_cooked = editor::cook_project_render_materials(*session, texture_ids);
+    if (!production_cooked.success) std::cerr << production_cooked.diagnostics << '\n';
+    require(production_cooked.success, "shipped GPU PBR shader cooks with ray lighting and VT feedback");
+
+    std::string invalid_feedback = production_source;
+    const std::string feedback_binding = "register(u0, space3)";
+    const auto feedback_position = invalid_feedback.find(feedback_binding);
+    require(feedback_position != std::string::npos, "production VT feedback binding exists");
+    invalid_feedback.replace(feedback_position, feedback_binding.size(), "register(u1, space3)");
+    write_text(gpu_shader_path, invalid_feedback);
+    require(!editor::cook_project_render_materials(*session, texture_ids).success,
+        "GPU PBR rejects unsupported feedback slots");
 
     const std::string old_binding = "register(t24, space2)";
     const auto binding_position = gpu_shader.find(old_binding);

@@ -1,0 +1,7 @@
+vice-project 1
+id da000000-0000-4000-8000-000000000100
+name "Physical Rig Bridge Lab"
+game_name "Physical Rig Bridge Lab"
+game_target "physical-rig"
+assets "assets"
+startup_world "worlds/physical-rig.vworld"

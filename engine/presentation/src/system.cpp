@@ -138,8 +138,18 @@ bool System::reset(world::World &w, const std::filesystem::path &root, std::stri
         for (const auto &r : next->roots) {
             const auto p = *w.animation(r.entity);
             const auto rig = next->rigs.find(p.rig);
-            if (rig == next->rigs.end() || p.clip >= rig->second.clips.size())
+            if (rig == next->rigs.end() || (p.clip >= rig->second.clips.size() || (p.blend_weight > 0 && p.blend_clip >= rig->second.clips.size())))
                 return fail(d, "Animation references a missing rig or clip.");
+            std::vector<Pose> checked;
+            if (!sample_world_pose(w, r.entity, rig->second, p.clip, p.time, checked))
+                return fail(d, "Invalid physical/animated rig pose.");
+        }
+        for (const auto &record : snapshot.physical_rig_bindings) {
+            const auto root = w.find(record.binding.root);
+            const auto animation = root ? w.animation(*root) : std::nullopt;
+            const auto rig = animation ? next->rigs.find(animation->rig) : next->rigs.end();
+            if (rig == next->rigs.end() || record.binding.node >= rig->second.nodes.size())
+                return fail(d, "Physical rig node is out of range.");
         }
         for (const auto &e : next->emitters)
             if (!next->sounds.contains(w.audio_emitter(e.entity)->sound))
@@ -228,8 +238,15 @@ bool System::advance(double seconds, std::string *d) {
                 p->playing = false;
             }
         }
+        if (p->blend_weight > 0) {
+            if (p->blend_clip >= rig->second.clips.size()) return fail(d, "Invalid blend clip.");
+            const auto duration = rig->second.clips[p->blend_clip].duration;
+            if (p->playing) p->blend_time += seconds * p->rate;
+            p->blend_time = p->looping ? std::fmod(p->blend_time, duration)
+                                     : std::min(p->blend_time, duration);
+        }
         std::vector<Pose> pose;
-        if (!sample_pose(rig->second, p->clip, p->time, pose))
+        if (!sample_world_pose(*impl_->world, root.entity, rig->second, *p, pose))
             return fail(d, "Invalid evaluated rig pose.");
         const auto spatial = impl_->world->spatial_state(root.entity);
         const auto transform = root_pose(*impl_->world, root.entity);
@@ -311,9 +328,41 @@ bool System::control_animation(world::PersistentId id, std::uint32_t clip, float
     if (p->clip != clip || restart)
         p->time = 0;
     p->clip = clip;
+    p->blend_weight = 0;
     p->rate = rate;
     p->playing = playing;
     p->looping = looping;
+    return impl_->world->set_animation(*entity, *p);
+}
+std::optional<Pose> System::node_pose(world::PersistentId id, std::uint32_t node, bool physical) const {
+    if (!impl_->current()) return std::nullopt;
+    const auto entity = impl_->world->find(id);
+    const auto p = entity ? impl_->world->animation(*entity) : std::nullopt;
+    if (!p) return std::nullopt;
+    const auto rig = impl_->rigs.find(p->rig);
+    if (rig == impl_->rigs.end() || node >= rig->second.nodes.size()) return std::nullopt;
+    std::vector<Pose> pose;
+    const bool ok = physical
+        ? sample_world_pose(*impl_->world, *entity, rig->second, p->clip, p->time, pose)
+        : p->blend_weight > 0
+            ? sample_blended_pose(rig->second,p->clip,p->time,p->blend_clip,p->blend_time,p->blend_weight,pose)
+            : sample_pose(rig->second,p->clip,p->time,pose);
+    return ok ? std::optional<Pose>{pose[node]} : std::nullopt;
+}
+bool System::control_animation_mix(world::PersistentId id, std::uint32_t clip,
+                                   std::uint32_t other, float weight, float rate) {
+    if (!impl_->current() || !std::isfinite(weight) || weight < 0 || weight > 1 ||
+        !std::isfinite(rate) || rate < 0 || rate > 8) return false;
+    const auto entity = impl_->world->find(id);
+    auto p = entity ? impl_->world->animation(*entity) : std::nullopt;
+    if (!p) return false;
+    const auto rig = impl_->rigs.find(p->rig);
+    if (rig == impl_->rigs.end() || clip >= rig->second.clips.size() ||
+        other >= rig->second.clips.size()) return false;
+    if (p->clip != clip) p->time = 0;
+    if (p->blend_clip != other) p->blend_time = 0;
+    p->clip = clip; p->blend_clip = other; p->blend_weight = weight;
+    p->rate = rate; p->playing = true; p->looping = true;
     return impl_->world->set_animation(*entity, *p);
 }
 bool System::control_audio(world::PersistentId id, float gain, float pitch, bool playing,

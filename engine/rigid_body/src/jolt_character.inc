@@ -30,6 +30,7 @@ namespace {
 
 [[nodiscard]] bool valid_character_desc(const CharacterDesc& desc) noexcept {
     constexpr auto native_invalid_id = std::numeric_limits<std::uint32_t>::max();
+    if(desc.collision.excluded_participants.size()>4096 || std::any_of(desc.collision.excluded_participants.begin(),desc.collision.excluded_participants.end(),[](auto p){return !p;})) return false;
     return desc.id && desc.id.value != native_invalid_id &&
         finite(desc.position) &&
         valid_positive(desc.height) && valid_positive(desc.radius) &&
@@ -83,6 +84,7 @@ public:
         if (body == nullptr) {
             return false;
         }
+        if(std::find(filter_.excluded_participants.begin(),filter_.excluded_participants.end(),body->participant)!=filter_.excluded_participants.end()) return false;
         if (body->trigger && !filter_.include_triggers) {
             return false;
         }
@@ -97,7 +99,7 @@ public:
 
 private:
     const ImplType& impl_;
-    CharacterCollisionFilter filter_{};
+    const CharacterCollisionFilter &filter_;
 };
 
 [[nodiscard]] JPH::CharacterVirtual::ExtendedUpdateSettings character_update_settings(

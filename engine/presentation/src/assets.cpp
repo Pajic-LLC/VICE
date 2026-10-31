@@ -137,8 +137,8 @@ bool valid(const Rig &r, std::string *d) {
 }
 std::optional<Rig> read_rig(const std::filesystem::path &path, std::string *d) {
     std::error_code ec;
-    if (std::filesystem::file_size(path, ec) > 16 * 1024 * 1024 || ec) {
-        fail(d, "Rig is missing or exceeds 16 MiB.");
+    if (std::filesystem::file_size(path, ec) > max_rig_asset_bytes || ec) {
+        fail(d, "Rig is missing or exceeds 64 MiB.");
         return std::nullopt;
     }
     const auto invalid = [&]() -> std::optional<Rig> {
@@ -290,9 +290,9 @@ std::string serialize_rig(const Rig &r) {
         }
     }
     auto text = o.str();
-    return text.size() <= 16 * 1024 * 1024 ? text : std::string{};
+    return text.size() <= max_rig_asset_bytes ? text : std::string{};
 }
-bool sample_pose(const Rig &r, std::uint32_t index, double time, std::vector<Pose> &out) {
+static bool sample_local_pose(const Rig &r, std::uint32_t index, double time, std::vector<Pose> &out) {
     if (index >= r.clips.size() || !std::isfinite(time))
         return false;
     out.clear();
@@ -343,6 +343,9 @@ bool sample_pose(const Rig &r, std::uint32_t index, double time, std::vector<Pos
         else
             p.scale = v[0];
     }
+    return true;
+}
+static bool compose_hierarchy(const Rig &r, std::vector<Pose> &out) {
     for (std::size_t i = 0; i < out.size(); ++i) {
         if (r.nodes[i].parent >= static_cast<int>(i) || r.nodes[i].parent < -1)
             return false;
@@ -353,6 +356,32 @@ bool sample_pose(const Rig &r, std::uint32_t index, double time, std::vector<Pos
     }
     return true;
 }
+bool sample_pose(const Rig &r, std::uint32_t clip, double time, std::vector<Pose> &out) {
+    std::vector<Pose> result;
+    if (!sample_local_pose(r, clip, time, result) || !compose_hierarchy(r, result)) return false;
+    out = std::move(result);
+    return true;
+}
+bool sample_blended_pose(const Rig &r, std::uint32_t clip, double time,
+                          std::uint32_t other_clip, double other_time, float weight,
+                          std::vector<Pose> &out) {
+    if (!std::isfinite(weight) || weight < 0 || weight > 1) return false;
+    std::vector<Pose> a, b;
+    if (!sample_local_pose(r, clip, time, a) ||
+        !sample_local_pose(r, other_clip, other_time, b)) return false;
+    for (std::size_t i = 0; i < a.size(); ++i) {
+        auto &p = a[i]; const auto &q = b[i];
+        p.translation = {(1-weight)*p.translation.x+weight*q.translation.x,
+                         (1-weight)*p.translation.y+weight*q.translation.y,
+                         (1-weight)*p.translation.z+weight*q.translation.z};
+        p.rotation = slerp({p.rotation.x,p.rotation.y,p.rotation.z,p.rotation.w},
+                           {q.rotation.x,q.rotation.y,q.rotation.z,q.rotation.w},weight);
+        p.scale = (1-weight)*p.scale+weight*q.scale;
+    }
+    if (!compose_hierarchy(r, a)) return false;
+    out = std::move(a); return true;
+}
+
 std::optional<Sound> read_pcm(const std::filesystem::path &path, std::string *d) {
     std::error_code ec;
     const auto size = std::filesystem::file_size(path, ec);

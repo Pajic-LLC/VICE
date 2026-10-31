@@ -1,3 +1,4 @@
+#include "builtin_shader_paths.hpp"
 #include "reflection_surface_guide_bridge.hpp"
 
 #include <vice/runtime/ray_reflection_history.hpp>
@@ -39,7 +40,7 @@ void set_diagnostics(std::string* const diagnostics, std::string message) {
 #ifdef VICE_RUNTIME_RAY_REFLECTION_HISTORY_MANIFEST
     return state.pass->initialize(
         device,
-        VICE_RUNTIME_RAY_REFLECTION_HISTORY_MANIFEST,
+        ::vice::runtime::detail::builtin_shader_manifest(VICE_RUNTIME_RAY_REFLECTION_HISTORY_MANIFEST),
         diagnostics
     );
 #else

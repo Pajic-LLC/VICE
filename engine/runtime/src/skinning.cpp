@@ -39,7 +39,9 @@ struct RuntimeSkinningCache::Impl {
         world::PersistentId entity{}, root{};
         world::ResourceId rig{}, source{}, resource{};
         std::uint32_t node = 0, clip = 0;
-        double time = -1;
+        double time = -1, blend_time = -1;
+        std::uint32_t blend_clip = 0;
+        float blend_weight = -1;
         std::uint64_t source_fingerprint = 0, presentation_revision = 0;
         render::MeshAsset asset;
         std::vector<render::MeshVertex> previous;
@@ -178,11 +180,13 @@ bool RuntimeSkinningCache::evaluate(const world::World &w, world::PersistentId i
     entry.seen = true;
     entry.reduced = region && region->fidelity == world::RegionFidelity::reduced;
     const bool restored = entry.presentation_revision != w.presentation_revision();
-    if (entry.time != time || entry.clip != p->clip || restored) {
+    if (entry.time != time || entry.clip != p->clip || entry.blend_time != p->blend_time ||
+        entry.blend_clip != p->blend_clip || entry.blend_weight != p->blend_weight || restored ||
+        w.has_physical_rig_bindings(part->root)) {
         std::vector<presentation::Pose> pose;
         std::vector<math::Mat4> palette;
         std::vector<presentation::SkinVertex> input, result;
-        if (!presentation::sample_pose(rig, p->clip, time, pose) ||
+        if (!presentation::sample_world_pose(w, *owner, rig, p->clip, time, pose) ||
             !presentation::skin_palette(*skin, pose, palette))
             return fail(d, "Could not evaluate skeletal pose/palette.");
         const bool unchanged =
@@ -192,6 +196,9 @@ bool RuntimeSkinningCache::evaluate(const world::World &w, world::PersistentId i
         if (!fresh && !restored && unchanged) {
             entry.time = time;
             entry.clip = p->clip;
+            entry.blend_time = p->blend_time;
+            entry.blend_clip = p->blend_clip;
+            entry.blend_weight = p->blend_weight;
             if (!entry.settled) {
                 entry.previous = entry.asset.vertices;
                 entry.previous_fingerprint = entry.asset.source_fingerprint;
@@ -244,6 +251,9 @@ bool RuntimeSkinningCache::evaluate(const world::World &w, world::PersistentId i
         entry.reduced = region && region->fidelity == world::RegionFidelity::reduced;
         entry.time = time;
         entry.clip = p->clip;
+            entry.blend_time = p->blend_time;
+            entry.blend_clip = p->blend_clip;
+            entry.blend_weight = p->blend_weight;
         entry.changed = true;
         entry.settled = false;
         impl_->evaluated_vertices += bind.vertices.size();

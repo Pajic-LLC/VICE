@@ -62,6 +62,8 @@ bool validate_presentation(const WorldSnapshot &s, std::string *d) {
 bool World::has_rig_parts(EntityId e) const noexcept {
     if (!alive(e))
         return false;
+    if (has_physical_rig_bindings(*persistent_id(e)))
+        return true;
     for (const auto &s : slots_)
         if (s.alive && s.rig_part && s.rig_part->root == slots_[e.index].persistent_id)
             return true;
@@ -158,7 +160,9 @@ std::string serialize_animation(const std::optional<AnimationPlayer> &p) {
     o << std::setprecision(17) << "{\"rig\":\"" << p->rig.value.to_string()
       << "\",\"clip\":" << p->clip << ",\"time\":" << p->time << ",\"rate\":" << p->rate
       << ",\"playing\":" << (p->playing ? "true" : "false")
-      << ",\"looping\":" << (p->looping ? "true" : "false") << '}';
+      << ",\"looping\":" << (p->looping ? "true" : "false")
+      << ",\"blend_clip\":" << p->blend_clip << ",\"blend_time\":" << p->blend_time
+      << ",\"blend_weight\":" << p->blend_weight << '}';
     return o.str();
 }
 std::string serialize_rig_part(const std::optional<RigPart> &p) {

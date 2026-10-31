@@ -92,6 +92,7 @@ enum class ConstraintType : std::uint8_t {
     hinge,
     slider,
     distance,
+    swing_twist,
 };
 
 enum class ConstraintMotorMode : std::uint8_t {
@@ -171,6 +172,23 @@ struct HingeConstraintDesc {
     bool collide_connected = true;
 };
 
+struct SwingTwistMotorDesc {
+    ConstraintMotorMode swing_mode = ConstraintMotorMode::position,
+                        twist_mode = ConstraintMotorMode::position;
+    math::Quat target_orientation{};
+    math::Vec3 target_velocity{};
+    ConstraintSpring drive_spring{4, 1};
+    float max_swing_axis_torque = 100, max_twist_torque = 100;
+};
+struct SwingTwistConstraintDesc {
+    ConstraintId id{};
+    simulation::ParticipantId first{}, second{};
+    std::array<HingeLocalFrame, 2> local_frames{}; // axis=twist X, normal=constraint Y
+    float swing_half_angle = 1, twist_min = -1, twist_max = 1;
+    SwingTwistMotorDesc motor{};
+    ConstraintBreakThresholds break_thresholds{};
+    bool enabled = true, collide_connected = false;
+};
 struct SliderConstraintDesc {
     ConstraintId id{};
     simulation::ParticipantId first{};
@@ -210,6 +228,9 @@ struct ConstraintState {
     float angular_impulse = 0.0F;
     float limit_impulse = 0.0F;
     float motor_impulse = 0.0F;
+    std::optional<math::Quat> relative_orientation;
+    math::Vec3 motor_impulses{}, limit_impulses{};
+    ConstraintMotorMode twist_motor_mode = ConstraintMotorMode::off;
 };
 
 struct ConstraintBreakEvent {
@@ -276,6 +297,8 @@ struct CharacterCollisionFilter {
     bool include_static = true;
     bool include_dynamic = true;
     bool include_triggers = false;
+    std::vector<simulation::ParticipantId> excluded_participants;
+    friend bool operator==(const CharacterCollisionFilter&,const CharacterCollisionFilter&)=default;
 };
 
 struct CharacterDesc {
@@ -366,6 +389,7 @@ struct QueryFilter {
     bool include_dynamic = true;
     bool include_triggers = true;
     std::optional<simulation::ParticipantId> exclude_participant;
+    std::vector<simulation::ParticipantId> excluded_participants;
 };
 
 struct RaycastDesc {
@@ -471,11 +495,13 @@ public:
     bool create_constraint(const FixedConstraintDesc& desc);
     bool create_constraint(const HingeConstraintDesc& desc);
     bool create_constraint(const SliderConstraintDesc& desc);
+    bool create_constraint(const SwingTwistConstraintDesc &desc);
     bool create_constraint(const DistanceConstraintDesc& desc);
     bool destroy_constraint(ConstraintId id);
     bool set_constraint_enabled(ConstraintId id, bool enabled);
     bool set_hinge_motor(ConstraintId id, const HingeMotorDesc& motor);
     bool set_slider_motor(ConstraintId id, const SliderMotorDesc& motor);
+    bool set_swing_twist_motor(ConstraintId id, const SwingTwistMotorDesc &motor);
 
     [[nodiscard]] std::optional<BodyState> body_state(
         simulation::ParticipantId participant

@@ -227,9 +227,13 @@ ParseResult parse_source_manifest(const std::string_view source) {
                 return result;
             }
 
+            bool animation_mix_seen = false;
             std::string metadata;
             while (values >> metadata) {
                 if(metadata=="state"){world::ComponentPayload p;if(entity.components.size()>=world::max_entity_components||!world::read_component_payload(values,p)){fail("invalid component payload.");return result;}entity.components.push_back(std::move(p));continue;}
+                if(metadata=="animation_mix"){
+                    if(animation_mix_seen||!entity.animation||!world::read_animation_mix(values,*entity.animation)){fail("invalid animation mix.");return result;}animation_mix_seen=true;continue;
+                }
                 if(metadata=="animation"){world::AnimationPlayer p;if(entity.animation||!world::read_animation(values,p)){fail("invalid animation.");return result;}entity.animation=p;continue;}
                 if(metadata=="rig_part"){world::RigPart p;if(entity.rig_part||!world::read_rig_part(values,p)){fail("invalid rig part.");return result;}entity.rig_part=p;continue;}
                 if(metadata=="audio_emitter"){world::AudioEmitter p;if(entity.audio_emitter||!world::read_audio_emitter(values,p)){fail("invalid audio emitter.");return result;}entity.audio_emitter=p;continue;}
@@ -253,6 +257,31 @@ ParseResult parse_source_manifest(const std::string_view source) {
                     world::Dependency d;
                     if (entity.dependency || !read_dependency(values, d)) { fail("invalid or duplicate dependency record."); return result; }
                     entity.dependency = d; continue;
+                }
+                if (metadata == "physical_rig") {
+                    world::PhysicalRigBinding b;
+                    if (!world::read_physical_rig(values, b) ||
+                        std::any_of(parsed.physical_rig_bindings.begin(),
+                                    parsed.physical_rig_bindings.end(), [&](const auto &r) {
+                                        return r.body == entity.persistent_id;
+                                    })) {
+                        fail("Invalid or duplicate physical_rig binding.");
+                        return result;
+                    }
+                    parsed.physical_rig_bindings.push_back({entity.persistent_id, b});
+                    continue;
+                }
+                if (metadata == "swing_twist_joint") {
+                    world::PoweredSwingTwist joint;
+                    if (!world::read_swing_twist(values, joint) ||
+                        std::any_of(
+                            parsed.swing_twist_joints.begin(), parsed.swing_twist_joints.end(),
+                            [&](const auto &r) { return r.owner == entity.persistent_id; })) {
+                        fail("invalid or duplicate swing_twist_joint.");
+                        return result;
+                    }
+                    parsed.swing_twist_joints.push_back({entity.persistent_id, joint});
+                    continue;
                 }
                 if (metadata == "powered_hinge") {
                     world::PoweredHinge h;
@@ -485,7 +514,9 @@ ParseResult parse_source_manifest(const std::string_view source) {
     if(!world::validate_materials(parsed,&result.diagnostics))return result;
     std::sort(parsed.causal_history.events.begin(),parsed.causal_history.events.end(),[](const auto& a,const auto& b){return a.sequence<b.sequence;});
     if(!world::validate_causal_history(parsed.causal_history,&result.diagnostics))return result;
-    if (!world::validate_powered_hinges(parsed, &result.diagnostics) ||
+    if (!world::validate_physical_rigs(parsed, &result.diagnostics) ||
+        !world::validate_swing_twist_joints(parsed, &result.diagnostics) ||
+        !world::validate_powered_hinges(parsed, &result.diagnostics) ||
         !world::validate_distance_links(parsed, &result.diagnostics) ||
         !world::validate_dependencies(parsed, &result.diagnostics) ||
         !world::validate_character_attachments(parsed, &result.diagnostics) ||

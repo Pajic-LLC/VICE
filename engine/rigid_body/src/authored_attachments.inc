@@ -49,7 +49,8 @@ AttachmentControlResult AuthoredSimulation::detach_character(world::PersistentId
     const auto offset=attachment_rotate(parent.expected_transform.value_or(world::AuthoredTransform{}).rotation,exit_offset);
     const auto global=parent.expected_spatial.global_position;
     math::Vec3 foot{static_cast<float>(global.x-region->origin.x)+offset.x,static_cast<float>(global.y-region->origin.y)+offset.y,static_cast<float>(global.z-region->origin.z)+offset.z};
-    const QueryFilter solid{.include_triggers=false};
+    QueryFilter solid{.include_triggers=false};
+    solid.excluded_participants=record.collision.excluded_participants;
     const auto ground=target->raycast({vehicle_add(foot,{0,0.05F,0}),{0,-1,0},max_drop+0.05F},solid);
     if(!ground || ground->normal.y<std::cos(record.expected.max_slope_angle))return R::blocked;
     foot.y=ground->point.y+0.01F;
@@ -64,13 +65,15 @@ AttachmentControlResult AuthoredSimulation::detach_character(world::PersistentId
     const math::Vec3 start{current->x,current->y+record.expected.height*0.5F,current->z};
     const auto delta=center-start;const float distance=std::sqrt(math::dot(delta,delta));
     if(distance>0.001F) {
-        const auto hit=target->sweep_shape({{shape,start,{}},math::normalize(delta),distance},{.include_triggers=false,.exclude_participant=*participant});
+        auto sweep_filter=solid;sweep_filter.exclude_participant=*participant;
+        const auto hit=target->sweep_shape({{shape,start,{}},math::normalize(delta),distance},sweep_filter);
         if(hit && hit->distance<distance-0.01F)return R::blocked;
     }
     // Successful preflight makes the walking representation authoritative.
     auto c=record.expected;c.velocity=carried_velocity;c.horizontal_velocity={};c.pending_jump_speed.reset();
     if(!state_->world->clear_character_attachment(record.entity) || !state_->world->set_spatial_state(record.entity,{destination,region->id}) || !state_->world->set_character(record.entity,c)) {state_->unpublished_step=true;return R::reset_required;}
     CharacterDesc desc;desc.id={static_cast<std::uint32_t>(found->second+1)};
+    desc.collision=record.collision;
     desc.height=c.height;desc.radius=c.radius;desc.mass=c.mass;desc.max_strength=c.max_strength;desc.max_slope_angle=c.max_slope_angle;desc.step_height=c.step_height;desc.stick_to_floor_distance=c.stick_to_floor_distance;
     if(!state_->bridge.create_character(*state_->world,state_->coordinator,record.entity,desc)){state_->unpublished_step=true;return R::reset_required;}
     const auto native=state_->bridge.character_id(*state_->world,state_->coordinator,record.entity);

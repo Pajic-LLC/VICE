@@ -94,6 +94,7 @@ int main() {
     require(!error, "runtime host permissions write");
 
     const auto built = editor::build_game_target(*session, runtime_host);
+    if (!built) std::cerr << built.diagnostics << '\n';
     require(static_cast<bool>(built), "game target with mesh builds");
     require(built.diagnostics.empty(), "mesh build diagnostics");
     require(built.mesh_count == 1U, "mesh build count");

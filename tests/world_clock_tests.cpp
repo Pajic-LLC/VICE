@@ -73,7 +73,7 @@ int main() {
     require(static_cast<bool>(tools::world_authoring::apply(world::World{}.snapshot(), tx)),
             "typed clock authoring");
     auto legacy = world::encode_world_snapshot(world::World{}.snapshot()).bytes;
-    legacy.resize(legacy.size() - 46);
+    legacy.resize(legacy.size() - 54);
     legacy[8] = std::byte{17};
     std::uint64_t hash = 14695981039346656037ULL;
     for (std::size_t i = 40; i < legacy.size(); ++i) {

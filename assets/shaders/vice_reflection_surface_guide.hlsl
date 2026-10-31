@@ -23,7 +23,8 @@ cbuffer SceneFrame : register(b0, space0) {
     column_major float4x4 view_projection;
 };
 
-StructuredBuffer<float4x4> scene_models : register(t0, space0);
+struct ViceInstanceModel { column_major float4x4 transform; };
+StructuredBuffer<ViceInstanceModel> scene_models : register(t0, space0);
 StructuredBuffer<uint> visible_scene_instances : register(t1, space0);
 StructuredBuffer<uint4> instance_materials : register(t2, space0);
 StructuredBuffer<ViceGpuMaterialRecord> material_records : register(t3, space0);
@@ -48,7 +49,7 @@ struct VertexOut {
 VertexOut vice_reflection_surface_guide_vs(VertexIn input, uint instance_id : SV_InstanceID) {
     VertexOut output;
     const uint scene_instance_index = visible_scene_instances[instance_id];
-    const float4x4 model = scene_models[scene_instance_index];
+    const float4x4 model = scene_models[scene_instance_index].transform;
     const float4 world_position = mul(model, float4(input.position, 1.0));
     output.position = mul(view_projection, world_position);
     output.world_position = world_position.xyz;

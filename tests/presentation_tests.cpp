@@ -1,6 +1,8 @@
 #include "presentation_fixture.hpp"
 #include <algorithm>
 #include <limits>
+#include <regex>
+#include <vice/tools/mesh_cooker.hpp>
 #include <vice/tools/world_edit.hpp>
 int main() {
     using namespace fixture;
@@ -72,6 +74,22 @@ int main() {
     invalid = *asset;
     invalid.clips[1].tracks[0].keys[1].time = 0;
     require(!presentation::valid(invalid), "nonmonotonic animation keys rejected");
+    {
+        auto dense = *asset;
+        const auto mesh_node = static_cast<std::uint32_t>(std::find_if(dense.nodes.begin(), dense.nodes.end(),
+            [](const auto &node) { return node.mesh.valid(); }) - dense.nodes.begin());
+        presentation::Skin skin; skin.node = mesh_node; skin.joints = {{mesh_node, math::identity()}};
+        presentation::SkinWeights weight; weight.weights[0] = 1;
+        skin.vertices.assign(100001, weight); dense.skins = {skin};
+        require(presentation::valid(dense), "dense weighted surface above former aggregate limit");
+        const auto encoded = presentation::serialize_rig(dense);
+        { std::ofstream out(f.path / "dense-skin.vrig"); out << encoded; }
+        const auto decoded = presentation::read_rig(f.path / "dense-skin.vrig");
+        require(decoded && decoded->skins[0].vertices.size() == 100001,
+                "dense skin source/cooked encoding round trip");
+        dense.skins[0].vertices.resize(presentation::max_skin_vertices + 1, weight);
+        require(!presentation::valid(dense), "aggregate skin capacity remains bounded");
+    }
     const auto imported = f.path / "imported";
     std::string d;
     require(tools::import_rig(std::filesystem::path{VICE_PRESENTATION_EXAMPLE} /
@@ -81,6 +99,34 @@ int main() {
     require(text(imported / "character.vrig") ==
                 text(f.workspace.asset_root / "character/character.vrig"),
             "import is deterministic against committed rig output");
+    {
+        const auto neutral_source = std::regex_replace(
+            text(std::filesystem::path{VICE_PRESENTATION_EXAMPLE} / "sources/humanoid.gltf"),
+            std::regex{R"(,"material":[0-9]+)"}, "");
+        { std::ofstream out(f.path / "neutral.gltf"); out << neutral_source; }
+        require(tools::import_rig(f.path / "neutral.gltf", f.path / "neutral", {rig}, actor, &d),
+                "material-free glTF import");
+        const auto mesh = tools::mesh_cooker::parse_source_manifest(text(f.path / "neutral/node_0.vmesh"));
+        require(mesh.source && !mesh.source->build_virtual_geometry_proxies,
+                "rig import selects exact dense geometry");
+        for (const auto &v : mesh.source->vertices)
+            require(v.color[0] == 1 && v.color[1] == 1 && v.color[2] == 1,
+                    "absent glTF material must not add a blue debug tint");
+    }
+    {
+        auto padded = text(std::filesystem::path{VICE_PRESENTATION_EXAMPLE} / "sources/humanoid.gltf");
+        padded.resize(17ULL * 1024 * 1024, ' ');
+        { std::ofstream out(f.path / "dense-capacity.gltf"); out << padded; }
+        require(tools::import_rig(f.path / "dense-capacity.gltf", f.path / "dense-capacity", {rig}, actor, &d),
+                "valid authoring input above the former 16 MiB limit");
+        require(text(f.path / "dense-capacity/character.vrig") == text(imported / "character.vrig"),
+                "expanded input budget preserves deterministic import");
+        { std::ofstream out(f.path / "over-capacity.gltf", std::ios::binary);
+          out.seekp(static_cast<std::streamoff>(tools::rig_import_source_bytes)); out.put(' '); }
+        require(!tools::import_rig(f.path / "over-capacity.gltf", f.path / "over-capacity", {rig}, actor, &d) &&
+                    !std::filesystem::exists(f.path / "over-capacity"),
+                "oversized authoring input rejected before publication");
+    }
     require(!tools::import_rig(std::filesystem::path{VICE_PRESENTATION_EXAMPLE} /
                                    "sources/humanoid.gltf",
                                imported, {rig}, actor, &d),
@@ -179,7 +225,7 @@ int main() {
     require(!tools::import_wav(f.path / "bad.wav", {rig}, &d), "malformed WAV length rejected");
     const auto empty = world::World{};
     auto old = world::encode_world_snapshot(empty.snapshot()).bytes;
-    old.resize(old.size() - 58);
+    old.resize(old.size() - 66);
     old[8] = std::byte{14};
     rehash(old);
     require(world::decode_world_snapshot(old).snapshot.has_value(),

@@ -36,7 +36,8 @@ struct Clip {
     double duration = 0;
     std::vector<Track> tracks;
 };
-inline constexpr std::size_t max_skin_influences = 8, max_skin_vertices = 100000;
+inline constexpr std::size_t max_skin_influences = 8, max_skin_vertices = 250000;
+inline constexpr std::size_t max_rig_asset_bytes = 64ULL * 1024 * 1024;
 struct SkinWeights {
     std::array<std::uint16_t, max_skin_influences> joints{};
     std::array<float, max_skin_influences> weights{};
@@ -68,8 +69,15 @@ struct Sound {
 [[nodiscard]] std::optional<Rig> read_rig(const std::filesystem::path &path,
                                           std::string *diagnostics = nullptr);
 [[nodiscard]] std::string serialize_rig(const Rig &rig);
+[[nodiscard]] bool sample_blended_pose(const Rig &, std::uint32_t, double, std::uint32_t, double, float, std::vector<Pose> &);
 [[nodiscard]] bool sample_pose(const Rig &rig, std::uint32_t clip, double time,
                                std::vector<Pose> &pose);
+// Shared derived pose: physical nodes override animation; unbound descendants follow.
+// Output remains unchanged on failure.
+[[nodiscard]] bool sample_world_pose(const world::World &, world::EntityId, const Rig &,
+                                      const world::AnimationPlayer &, std::vector<Pose> &);
+[[nodiscard]] bool sample_world_pose(const world::World &, world::EntityId root, const Rig &,
+                                     std::uint32_t clip, double time, std::vector<Pose> &);
 [[nodiscard]] std::optional<Sound> read_pcm(const std::filesystem::path &path,
                                             std::string *diagnostics = nullptr);
 [[nodiscard]] bool write_pcm(const std::filesystem::path &path, const Sound &sound,

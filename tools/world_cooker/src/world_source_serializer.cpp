@@ -49,7 +49,9 @@ std::string serialize_source_manifest(
     const world::WorldSnapshot& snapshot,
     std::string* const diagnostics
 ) {
-    if (!world::validate_powered_hinges(snapshot, diagnostics) ||
+    if (!world::validate_physical_rigs(snapshot, diagnostics) ||
+        !world::validate_swing_twist_joints(snapshot, diagnostics) ||
+        !world::validate_powered_hinges(snapshot, diagnostics) ||
         !world::validate_distance_links(snapshot, diagnostics) ||
         !world::validate_dependencies(snapshot, diagnostics) ||
         !world::validate_character_attachments(snapshot, diagnostics) ||
@@ -163,7 +165,7 @@ std::string serialize_source_manifest(
             write_rigid_box(output, *entity.rigid_box);
         }
         for(const auto& p:entity.components){output<<" state ";world::write_component_payload(output,p);}
-        if(entity.animation){output<<" animation ";world::write_animation(output,*entity.animation);}
+        if(entity.animation){output<<" animation ";world::write_animation(output,*entity.animation);output<<" animation_mix ";world::write_animation_mix(output,*entity.animation);}
         if(entity.rig_part){output<<" rig_part ";world::write_rig_part(output,*entity.rig_part);}
         if(entity.audio_emitter){output<<" audio_emitter ";world::write_audio_emitter(output,*entity.audio_emitter);}
         if(entity.character_attachment){const auto& a=*entity.character_attachment;output<<" character_attachment "<<a.carrier.to_string()<<' '<<a.offset.x<<' '<<a.offset.y<<' '<<a.offset.z;}
@@ -171,6 +173,23 @@ std::string serialize_source_manifest(
         if (entity.character) { output << " character "; write_character(output,*entity.character); }
         if (entity.dependency) {
             output << " dependency "; write_dependency(output, *entity.dependency);
+        }
+        const auto physical =
+            std::lower_bound(value.physical_rig_bindings.begin(), value.physical_rig_bindings.end(),
+                             entity.persistent_id, [](const auto &r, const auto &id) {
+                                 return r.body.bytes() < id.bytes();
+                             });
+        if (physical != value.physical_rig_bindings.end() &&
+            physical->body == entity.persistent_id) {
+            output << " physical_rig ";
+            world::write_physical_rig(output, physical->binding);
+        }
+        const auto swing = std::lower_bound(
+            value.swing_twist_joints.begin(), value.swing_twist_joints.end(), entity.persistent_id,
+            [](const auto &r, const auto &id) { return r.owner.bytes() < id.bytes(); });
+        if (swing != value.swing_twist_joints.end() && swing->owner == entity.persistent_id) {
+            output << " swing_twist_joint ";
+            world::write_swing_twist(output, swing->joint);
         }
         if (entity.powered_hinge) {
             output << " powered_hinge ";

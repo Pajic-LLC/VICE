@@ -78,7 +78,8 @@ cbuffer SceneFrame : register(b0, space0) {
     float4 ambient_occlusion_metadata;
 };
 
-StructuredBuffer<float4x4> scene_models : register(t0, space0);
+struct ViceInstanceModel { column_major float4x4 transform; };
+StructuredBuffer<ViceInstanceModel> scene_models : register(t0, space0);
 StructuredBuffer<uint> visible_scene_instances : register(t1, space0);
 StructuredBuffer<uint4> instance_materials : register(t2, space0);
 StructuredBuffer<ViceGpuMaterialRecord> material_records : register(t3, space0);
@@ -127,7 +128,7 @@ struct VertexIn {
 };
 
 struct VertexOut {
-    float4 position : SV_Position;
+    precise float4 position : SV_Position;
     float3 model_position : TEXCOORD0;
     float3 world_position : TEXCOORD1;
     float3 world_normal : TEXCOORD2;
@@ -139,7 +140,7 @@ struct VertexOut {
 VertexOut vice_gpu_pbr_vs(VertexIn input, uint instance_id : SV_InstanceID) {
     VertexOut output;
     const uint scene_instance_index = visible_scene_instances[instance_id];
-    const float4x4 model = scene_models[scene_instance_index];
+    const float4x4 model = scene_models[scene_instance_index].transform;
     const float4 world_position = mul(model, float4(input.position, 1.0));
     output.position = mul(view_projection, world_position);
     output.model_position = input.position;

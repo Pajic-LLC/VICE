@@ -57,7 +57,7 @@ int main(){
     require(request.request && tools::world_authoring::apply(w.snapshot(),request.request->transaction),"vehicle file edit parsed");
     auto legacy=world::encode_world_snapshot(load().snapshot()).bytes;
     // Strip sparse vehicle section to produce a valid v12 fixture, retaining chassis/materials.
-    legacy.resize(legacy.size() - 150);
+    legacy.resize(legacy.size() - 158);
     legacy[8] = std::byte{12};
     rehash(legacy);
     const auto v12=world::decode_world_snapshot(legacy);require(v12.snapshot && !v12.snapshot->entities.back().vehicle,"v12 has no invented vehicle");

@@ -5,6 +5,7 @@
 #include <vice/project/project.hpp>
 #include <vice/runtime/dade.hpp>
 #include <vice/runtime/package_metadata.hpp>
+#include <vice/runtime/detail/builtin_shader_package.hpp>
 
 #include <filesystem>
 #include <string>
@@ -469,6 +470,27 @@ ProjectBuildResult build_project(
     const auto staged_content_root = staging_root / "content";
     const auto staged_project_content_root = staged_content_root / workspace.manifest.id.to_string();
     const auto staged_world = staged_project_content_root / cooked_relative;
+#ifdef VICE_BUILTIN_SHADER_ROOT
+    // Package renderer kernels with the game. A staged runtime must not open the developer checkout.
+    const std::filesystem::path kernel_root{VICE_BUILTIN_SHADER_ROOT};
+    if(std::filesystem::is_directory(kernel_root,error)) {
+        for(const auto &entry:std::filesystem::directory_iterator(kernel_root,error)) {
+            if(!entry.is_directory() || !entry.path().filename().string().starts_with("vice_runtime_")) continue;
+            const auto destination=staged_project_content_root/"runtime-shaders"/runtime::detail::builtin_shader_package_directory(entry.path().filename().string());
+            std::filesystem::create_directories(destination,error);
+            if(error) break;
+            for(const auto name:{"shader.vice.json","shader.dxil","shader.metallib"}) {
+                const auto source=entry.path()/name;
+                if(!std::filesystem::is_regular_file(source,error)) {error.clear();continue;}
+                std::filesystem::copy_file(source,destination/name,std::filesystem::copy_options::overwrite_existing,error);
+                if(error) break;
+            }
+            if(error) break;
+        }
+        if(error) {cleanup_staging();return fail_build(std::move(result),"Could not package renderer kernels: "+error.message());}
+    }
+#endif
+
     std::filesystem::create_directories(staged_world.parent_path(), error);
     if (error) {
         const std::string message = error.message();

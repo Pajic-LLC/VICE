@@ -814,7 +814,7 @@ std::string make_cache_key(
 ) {
     std::string material;
     material.reserve(source.size() + 512);
-    hash_append(material, "VICE_SHADER_ASSET_V5_METAL_EXPLICIT_TABLES2_RESOURCE_KINDS3");
+    hash_append(material, "VICE_SHADER_ASSET_V5_METAL_EXPLICIT_TABLES2_RESOURCE_KINDS3_POSITION_INVARIANCE1");
     hash_append(material, source);
     hash_append(material, request.entry_point);
     hash_append(material, shader_stage_name(request.stage));
@@ -1030,6 +1030,11 @@ CookResult cook(const CookRequest& request) {
             shell_quote_path(result.dxil_path) + " -o " +
             shell_quote_path(*result.metallib_path) + " --output-reflection-file " +
             shell_quote_path(*result.metal_reflection_path);
+        // Depth-only and color pipelines may otherwise optimize the same
+        // vertex function into different position calculations on Apple GPUs.
+        if (request.stage == ShaderStage::vertex) {
+            converter_command += " --positionInvariance";
+        }
         if (root_signature_path.has_value()) {
             converter_command += " --root-signature " + shell_quote_path(*root_signature_path);
         }
