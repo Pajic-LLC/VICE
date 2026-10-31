@@ -251,7 +251,7 @@ namespace {
                 resource.count == 1U && !resource.unbounded;
             const bool material_textures = resource.space == 1U && resource.binding == 0U &&
                 resource.count == 0U && resource.unbounded;
-            const bool lighting = resource.space == 2U && resource.binding <= 24U &&
+            const bool lighting = resource.space == 2U && resource.binding <= 27U &&
                 resource.count == 1U && !resource.unbounded;
             if (!scene_table && !material_textures && !lighting) return false;
         } else if (resource.register_class == shader_cooker::ShaderRegisterClass::sampler) {
@@ -260,6 +260,12 @@ namespace {
             const bool lighting_samplers = resource.space == 2U && resource.binding <= 1U &&
                 resource.count == 1U && !resource.unbounded;
             if (!material_samplers && !lighting_samplers) return false;
+        } else if (resource.register_class == shader_cooker::ShaderRegisterClass::unordered_access) {
+            // The production shader records virtual-texture requests through this
+            // optional feedback UAV. The runtime always supplies its bounded buffer.
+            if (resource.space != 3U || resource.binding != 0U || resource.count != 1U || resource.unbounded) {
+                return false;
+            }
         } else {
             return false;
         }
@@ -440,7 +446,7 @@ ProjectRenderMaterialCookResult cook_project_render_materials(
         if (gpu_scene_pbr) {
             if (!supported_v4_fragment_reflection(fragment.reflection)) {
                 result.diagnostics = "Render material v4 fragment shader `" + path_text(shader_source) +
-                    "` must use t2 instance materials and t3 material records in space0, unbounded t0/s0 material arrays in space1, and the complete bounded t0-t24/s0-s1 lighting set in space2.";
+                    "` must use t2 instance materials and t3 material records in space0, unbounded t0/s0 material arrays in space1, and the complete bounded t0-t24/s0-s1 lighting set in space2, optional t25-t27 ray-lighting inputs in space2, and optional u0 virtual-texture feedback in space3.";
                 return result;
             }
         } else {

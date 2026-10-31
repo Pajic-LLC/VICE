@@ -42,6 +42,23 @@ cbuffer SceneFrame : register(b0, space0) {
     float4 atmosphere_parameters;
     float4 atmosphere_secondary;
     float4 atmosphere_ground_albedo;
+    float4 point_shadow_metadata_0;
+    column_major float4x4 point_shadow_model_to_light_0;
+    column_major float4x4 point_shadow_face_0_0;
+    column_major float4x4 point_shadow_face_0_1;
+    column_major float4x4 point_shadow_face_0_2;
+    column_major float4x4 point_shadow_face_0_3;
+    column_major float4x4 point_shadow_face_0_4;
+    column_major float4x4 point_shadow_face_0_5;
+    float4 point_shadow_metadata_1;
+    column_major float4x4 point_shadow_model_to_light_1;
+    column_major float4x4 point_shadow_face_1_0;
+    column_major float4x4 point_shadow_face_1_1;
+    column_major float4x4 point_shadow_face_1_2;
+    column_major float4x4 point_shadow_face_1_3;
+    column_major float4x4 point_shadow_face_1_4;
+    column_major float4x4 point_shadow_face_1_5;
+    float4 ambient_occlusion_metadata;
 };
 
 cbuffer MaterialParams : register(b1, space0) {
@@ -73,6 +90,7 @@ Texture2D<float4> environment_brdf_1 : register(t13, space0);
 Texture2D<float4> environment_irradiance_2 : register(t14, space0);
 Texture2D<float4> environment_specular_2 : register(t15, space0);
 Texture2D<float4> environment_brdf_2 : register(t16, space0);
+Texture2D<float> ray_ambient_occlusion_visibility_texture : register(t17, space0);
 SamplerState environment_sampler : register(s2, space0);
 
 struct VertexIn {
@@ -202,6 +220,8 @@ float3 vice_environment_source_0(
     float3 normal,
     float3 reflection_direction,
     float3 f0,
+    float3 albedo,
+    float metallic_value,
     float normal_view,
     float roughness_value,
     float occlusion
@@ -214,7 +234,7 @@ float3 vice_environment_source_0(
         environment_probe_half_extents_0,
         environment_probe_rotation_0
     );
-    const float3 diffuse = environment_irradiance_0.Sample(
+    const float3 diffuse_irradiance = environment_irradiance_0.Sample(
         environment_sampler,
         vice_environment_uv(normal, metadata.y)
     ).rgb;
@@ -228,7 +248,9 @@ float3 vice_environment_source_0(
         float2(saturate(normal_view), saturate(roughness_value))
     ).rg;
     const float3 fresnel = f0 * brdf.x + brdf.y;
-    return (diffuse * (1.0 - f0) * occlusion + specular * fresnel) * metadata.x * metadata.w;
+    const float3 kd = (1.0 - f0) * (1.0 - saturate(metallic_value));
+    const float3 diffuse = diffuse_irradiance * kd * albedo * occlusion;
+    return (diffuse + specular * fresnel) * metadata.x * metadata.w;
 }
 
 float3 vice_environment_source_1(
@@ -236,6 +258,8 @@ float3 vice_environment_source_1(
     float3 normal,
     float3 reflection_direction,
     float3 f0,
+    float3 albedo,
+    float metallic_value,
     float normal_view,
     float roughness_value,
     float occlusion
@@ -248,7 +272,7 @@ float3 vice_environment_source_1(
         environment_probe_half_extents_1,
         environment_probe_rotation_1
     );
-    const float3 diffuse = environment_irradiance_1.Sample(environment_sampler, vice_environment_uv(normal, metadata.y)).rgb;
+    const float3 diffuse_irradiance = environment_irradiance_1.Sample(environment_sampler, vice_environment_uv(normal, metadata.y)).rgb;
     const float3 specular = environment_specular_1.SampleLevel(
         environment_sampler,
         vice_environment_uv(projected, metadata.y),
@@ -256,7 +280,9 @@ float3 vice_environment_source_1(
     ).rgb;
     const float2 brdf = environment_brdf_1.Sample(environment_sampler, float2(saturate(normal_view), saturate(roughness_value))).rg;
     const float3 fresnel = f0 * brdf.x + brdf.y;
-    return (diffuse * (1.0 - f0) * occlusion + specular * fresnel) * metadata.x * metadata.w;
+    const float3 kd = (1.0 - f0) * (1.0 - saturate(metallic_value));
+    const float3 diffuse = diffuse_irradiance * kd * albedo * occlusion;
+    return (diffuse + specular * fresnel) * metadata.x * metadata.w;
 }
 
 float3 vice_environment_source_2(
@@ -264,6 +290,8 @@ float3 vice_environment_source_2(
     float3 normal,
     float3 reflection_direction,
     float3 f0,
+    float3 albedo,
+    float metallic_value,
     float normal_view,
     float roughness_value,
     float occlusion
@@ -276,7 +304,7 @@ float3 vice_environment_source_2(
         environment_probe_half_extents_2,
         environment_probe_rotation_2
     );
-    const float3 diffuse = environment_irradiance_2.Sample(environment_sampler, vice_environment_uv(normal, metadata.y)).rgb;
+    const float3 diffuse_irradiance = environment_irradiance_2.Sample(environment_sampler, vice_environment_uv(normal, metadata.y)).rgb;
     const float3 specular = environment_specular_2.SampleLevel(
         environment_sampler,
         vice_environment_uv(projected, metadata.y),
@@ -284,7 +312,9 @@ float3 vice_environment_source_2(
     ).rgb;
     const float2 brdf = environment_brdf_2.Sample(environment_sampler, float2(saturate(normal_view), saturate(roughness_value))).rg;
     const float3 fresnel = f0 * brdf.x + brdf.y;
-    return (diffuse * (1.0 - f0) * occlusion + specular * fresnel) * metadata.x * metadata.w;
+    const float3 kd = (1.0 - f0) * (1.0 - saturate(metallic_value));
+    const float3 diffuse = diffuse_irradiance * kd * albedo * occlusion;
+    return (diffuse + specular * fresnel) * metadata.x * metadata.w;
 }
 
 float distribution_ggx(float3 normal, float3 half_vector, float alpha) {
@@ -463,6 +493,13 @@ float3 evaluate_light(
     return (diffuse + specular) * radiance * normal_light;
 }
 
+float vice_ray_ambient_occlusion_visibility(float2 pixel_position) {
+    if (ambient_occlusion_metadata.x < 0.5) return 1.0;
+    return saturate(
+        ray_ambient_occlusion_visibility_texture.Load(int3(int2(pixel_position), 0))
+    );
+}
+
 float4 vice_surface_fs(VertexOut input) : SV_Target0 {
     const float4 base_sample = base_color_texture.Sample(material_sampler, input.uv) * base_color * float4(input.color,1);
     const float4 orm = orm_texture.Sample(material_sampler, input.uv);
@@ -477,13 +514,13 @@ float4 vice_surface_fs(VertexOut input) : SV_Target0 {
     const float3 reflection_direction = reflect(-view_direction, normal);
 
     float3 environment = vice_environment_source_0(
-        input.model_position, normal, reflection_direction, f0, normal_view, roughness_value, occlusion
+        input.model_position, normal, reflection_direction, f0, base_sample.rgb, metallic_value, normal_view, roughness_value, occlusion
     );
     environment += vice_environment_source_1(
-        input.model_position, normal, reflection_direction, f0, normal_view, roughness_value, occlusion
+        input.model_position, normal, reflection_direction, f0, base_sample.rgb, metallic_value, normal_view, roughness_value, occlusion
     );
     environment += vice_environment_source_2(
-        input.model_position, normal, reflection_direction, f0, normal_view, roughness_value, occlusion
+        input.model_position, normal, reflection_direction, f0, base_sample.rgb, metallic_value, normal_view, roughness_value, occlusion
     );
 
     const float3 emissive = emissive_sample * emissive_color.rgb * emissive_intensity;
@@ -494,7 +531,8 @@ float4 vice_surface_fs(VertexOut input) : SV_Target0 {
         direct += visibility * evaluate_light(lights[i],input.world_position,normal,view_direction,
                                                base_sample.rgb,metallic_value,roughness_value);
     }
-    float3 surface = environment * base_sample.rgb + direct + emissive;
+    environment *= vice_ray_ambient_occlusion_visibility(input.position.xy);
+    float3 surface = environment + direct + emissive;
     if (atmosphere_secondary.z >= 0.5) {
         const float3 camera_relative = mul(
             atmosphere_camera_from_model,

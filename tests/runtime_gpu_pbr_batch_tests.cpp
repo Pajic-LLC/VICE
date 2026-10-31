@@ -295,6 +295,18 @@ void validate_environment_shader_contract() {
         "fragment composition must add the already material-aware environment term directly"
     );
 
+    const auto direct_shader = read_text_file(gpu_pbr_shader_path().parent_path() / "vice_surface_v3.hlsl");
+    require(count_occurrences(direct_shader, kd_contract) == 3U &&
+            count_occurrences(direct_shader, diffuse_contract) == 3U &&
+            count_occurrences(direct_shader, composition_contract) == 3U,
+        "direct PBR global and local probes must follow the same tested IBL energy contract");
+    require(direct_shader.find("environment * base_sample.rgb") == std::string::npos &&
+            direct_shader.find("surface = environment + direct + emissive") != std::string::npos,
+        "direct PBR must not double tint reflected specular");
+    require(direct_shader.find("register(t17, space0)") != std::string::npos &&
+            direct_shader.find("environment *= vice_ray_ambient_occlusion_visibility(input.position.xy)") != std::string::npos,
+        "direct PBR must consume the runtime AO visibility binding");
+
     const auto source_0 = source_block(
         shader,
         "float3 vice_environment_source_0(",
