@@ -575,6 +575,20 @@ void append_entities(std::string& data, const world::WorldSnapshot& snapshot) {
             data += '}';
         }
 
+        data += ",\"swing_twist_joint\":";
+        if (const auto owner = observed.find(value.persistent_id);
+            owner && observed.swing_twist_joint(*owner)) {
+            std::ostringstream text;
+            text.precision(9);
+            world::write_swing_twist(text, *observed.swing_twist_joint(*owner));
+            data += "{\"record\":";
+            append_json_string(data, text.str());
+            data += "}";
+        } else
+            data += "null";
+        data += ",\"physical_rig\":" +
+                world::serialize_physical_rig(
+                    material_owner ? observed.physical_rig_binding(*material_owner) : std::nullopt);
         data += ",\"powered_hinge\":";
         if (value.powered_hinge) {
             std::ostringstream text;

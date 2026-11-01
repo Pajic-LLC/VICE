@@ -96,7 +96,7 @@ int main(){
         require(!tools::world_authoring::apply(w.snapshot(),tx)&&bytes(w)==before,"authoring transaction fails atomically");tx.operations.pop_back();const auto result=tools::world_authoring::apply(w.snapshot(),tx);require(result&&result.snapshot.rules.size()==1,"authoring creates rule");
         Fixture legacy;
         auto old = bytes(legacy.w);
-        old.erase(old.end() - 34, old.end() - 26);
+        old.erase(old.end() - 42, old.end() - 26);
         old[8] = std::byte{21};
         old[9] = old[10] = old[11] = std::byte{0};
         rehash(old);

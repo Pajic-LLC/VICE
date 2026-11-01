@@ -14,6 +14,14 @@ struct PoweredHingeObservation {
     float angle = 0, error = 0, motor_impulse = 0, limit_impulse = 0, linear_impulse = 0;
     bool active = false;
 };
+struct SwingTwistObservation {
+    world::PoweredSwingTwist intent;
+    math::Quat orientation{};
+    float angular_error = 0;
+    math::Vec3 motor_impulses{}, limit_impulses{};
+    float linear_impulse = 0;
+    bool active = false;
+};
 struct BodySupport {
     bool supported = false;
     world::PersistentId supporting_entity{};
@@ -69,6 +77,11 @@ public:
     [[nodiscard]] VehicleControlResult control_vehicle(world::PersistentId owner, float throttle, float steering, float brake);
     [[nodiscard]] std::optional<VehicleObservation> vehicle(world::PersistentId owner) const noexcept;
     [[nodiscard]] std::size_t vehicle_count() const noexcept;
+    [[nodiscard]] std::optional<SwingTwistObservation>
+        swing_twist_joint(world::PersistentId) const noexcept;
+    [[nodiscard]] BodyControlResult control_swing_twist_joint(world::PersistentId,
+                                                              const world::SwingTwistDrive &,
+                                                              bool enabled = true);
     [[nodiscard]] std::optional<PoweredHingeObservation>
     powered_hinge(world::PersistentId owner) const noexcept;
     [[nodiscard]] BodyControlResult control_powered_hinge(world::PersistentId owner,

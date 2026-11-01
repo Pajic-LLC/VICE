@@ -1,0 +1,7 @@
+vice-project 1
+id d9000000-0000-4000-8000-000000000100
+name "Multi-axis Articulation Lab"
+game_name "Multi-axis Articulation Lab"
+game_target "swing-twist-articulation"
+assets "assets"
+startup_world "worlds/articulation.vworld"
