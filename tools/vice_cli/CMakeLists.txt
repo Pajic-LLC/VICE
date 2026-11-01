@@ -3,6 +3,7 @@ add_library(
   STATIC
     src/cli.cpp
     src/runtime_debug.cpp
+    src/runtime_simulate.cpp
     src/runtime_profile.cpp
     src/world_edit.cpp
 )
@@ -25,7 +26,12 @@ target_link_libraries(
     VICE::Platform
     VICE::RuntimeDevSession
     VICE::PresentationCooker
+    VICE::Runtime
 )
+if(TARGET vice_rigid_body_world)
+  target_link_libraries(vice_dev_cli PRIVATE VICE::RigidBodyWorld VICE::Jobs)
+  target_compile_definitions(vice_dev_cli PRIVATE VICE_CLI_AUTHORED_PHYSICS=1)
+endif()
 if(VICE_BUILD_PLAYER)
   target_compile_definitions(
     vice_dev_cli
