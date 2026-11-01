@@ -195,6 +195,10 @@ RegionId World::causal_region(EntityId entity,PersistentId root) const noexcept 
     const auto target=root.is_nil() ? std::optional{entity}:find(root);
     if(target) {
         if(const auto s=spatial_state(*target)) return s->region;
+        if(const auto joint=swing_twist_joint(*target)) {
+            const auto first=find(joint->first);const auto s=first ? spatial_state(*first):std::nullopt;
+            if(s) return s->region;
+        }
         if(const auto l=distance_link(*target)) {
             const auto first=find(l->first); const auto s=first ? spatial_state(*first):std::nullopt;
             if(s) return s->region;

@@ -227,9 +227,13 @@ ParseResult parse_source_manifest(const std::string_view source) {
                 return result;
             }
 
+            bool animation_mix_seen = false;
             std::string metadata;
             while (values >> metadata) {
                 if(metadata=="state"){world::ComponentPayload p;if(entity.components.size()>=world::max_entity_components||!world::read_component_payload(values,p)){fail("invalid component payload.");return result;}entity.components.push_back(std::move(p));continue;}
+                if(metadata=="animation_mix"){
+                    if(animation_mix_seen||!entity.animation||!world::read_animation_mix(values,*entity.animation)){fail("invalid animation mix.");return result;}animation_mix_seen=true;continue;
+                }
                 if(metadata=="animation"){world::AnimationPlayer p;if(entity.animation||!world::read_animation(values,p)){fail("invalid animation.");return result;}entity.animation=p;continue;}
                 if(metadata=="rig_part"){world::RigPart p;if(entity.rig_part||!world::read_rig_part(values,p)){fail("invalid rig part.");return result;}entity.rig_part=p;continue;}
                 if(metadata=="audio_emitter"){world::AudioEmitter p;if(entity.audio_emitter||!world::read_audio_emitter(values,p)){fail("invalid audio emitter.");return result;}entity.audio_emitter=p;continue;}

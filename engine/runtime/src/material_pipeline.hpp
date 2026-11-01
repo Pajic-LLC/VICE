@@ -16,6 +16,7 @@ namespace vice::runtime::detail {
 
 struct RuntimeMaterialBinding {
     render::GraphicsPipeline* pipeline = nullptr;
+    render::GraphicsPipeline* depth_pipeline = nullptr;
     render::Buffer* constants = nullptr;
     render::Texture* base_color_texture = nullptr;
     render::Texture* normal_texture = nullptr;

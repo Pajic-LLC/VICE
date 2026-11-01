@@ -365,7 +365,7 @@ namespace {
         arguments[0].index_count != 3U || arguments[0].first_index != 0U ||
         arguments[0].instance_count != 1U || arguments[0].first_instance != 0U ||
         arguments[1].index_count != 3U || arguments[1].first_index != 3U ||
-        arguments[1].instance_count != 0U || arguments[1].first_instance != 2U) {
+        arguments[1].instance_count != 0U || arguments[1].first_instance != 0U || batch_result.ranges.size() != 2U || batch_result.ranges[1].offset != 2U) {
         std::cerr << "GPU cluster visibility/compaction did not preserve expected candidate identity.\n";
         return false;
     }

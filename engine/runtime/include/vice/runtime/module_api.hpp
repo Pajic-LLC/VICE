@@ -341,6 +341,11 @@ struct AnimationSnapshot {
     std::uint32_t size=sizeof(AnimationSnapshot),clip=0,playing=0,looping=0,node_count=0,part_count=0;
     float rate=1;double time=0,duration=0;char clip_name[129]{};
 };
+struct RigNodeSnapshot {
+    std::uint32_t size = sizeof(RigNodeSnapshot), node = 0, physical = 0;
+    double position[3]{};
+    float rotation[4]{0,0,0,1}, scale = 1;
+};
 struct AudioSnapshot {
     std::uint32_t size=sizeof(AudioSnapshot),playing=0,looping=0,output_active=0;
     float gain=0,pitch=1,reference_distance=1,max_distance=50,left_gain=0,right_gain=0,distance=0;
@@ -660,6 +665,8 @@ struct HostApi {
     Result (*control_swing_twist_joint)(void *, EntityId, const SwingTwistDrive *,
                                         std::uint32_t) noexcept = nullptr;
     Result (*read_physical_rig)(void *, EntityId, PhysicalRigSnapshot *) noexcept = nullptr;
+    Result (*control_animation_mix)(void *, EntityId, std::uint32_t, std::uint32_t, float, float) noexcept = nullptr;
+    Result (*read_rig_node)(void *, EntityId, std::uint32_t, std::uint32_t, RigNodeSnapshot *) noexcept = nullptr;
 };
 
 inline constexpr std::size_t host_api_v1_size = offsetof(HostApi, read_entity);
@@ -831,6 +838,14 @@ public:
     [[nodiscard]] Result read_animation(EntityId id,AnimationSnapshot& output)const noexcept {
         if(!host_||host_->size<offsetof(HostApi,read_animation)+sizeof(host_->read_animation)||!host_->read_animation)return Result::unavailable;
         return host_->read_animation(host_->context,id,&output);
+    }
+    [[nodiscard]] Result read_rig_node(EntityId id,std::uint32_t node,RigNodeSnapshot &out,bool physical=true) const noexcept {
+        if(!host_||host_->size<offsetof(HostApi,read_rig_node)+sizeof(host_->read_rig_node)||!host_->read_rig_node)return Result::unavailable;
+        return host_->read_rig_node(host_->context,id,node,physical?1U:0U,&out);
+    }
+    [[nodiscard]] Result control_animation_mix(EntityId id, std::uint32_t base, std::uint32_t other, float weight, float rate=1) const noexcept {
+        if (!host_ || host_->size < offsetof(HostApi,control_animation_mix)+sizeof(host_->control_animation_mix) || !host_->control_animation_mix) return Result::unavailable;
+        return host_->control_animation_mix(host_->context,id,base,other,weight,rate);
     }
     [[nodiscard]] Result control_animation(EntityId id,std::uint32_t clip,float rate=1,bool playing=true,bool looping=true,bool restart=false)const noexcept {
         if(!host_||host_->size<offsetof(HostApi,control_animation)+sizeof(host_->control_animation)||!host_->control_animation)return Result::unavailable;

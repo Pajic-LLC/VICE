@@ -112,7 +112,7 @@ void vice_runtime_batch_finalize_cs(uint3 dispatch_id : SV_DispatchThreadID) {
     indirect_words[word + 1U] = min(finalize_counts[batch_index], metadata.capacity);
     indirect_words[word + 2U] = metadata.first_index;
     indirect_words[word + 3U] = asuint(metadata.vertex_offset);
-    indirect_words[word + 4U] = metadata.output_offset;
+    indirect_words[word + 4U] = 0U;
 }
 )";
 
@@ -176,7 +176,7 @@ kernel void vice_runtime_batch_finalize_cs(
     indirect_words[word + 1U] = min(counts[batch_index], batch.capacity);
     indirect_words[word + 2U] = batch.first_index;
     indirect_words[word + 3U] = as_type<uint>(batch.vertex_offset);
-    indirect_words[word + 4U] = batch.output_offset;
+    indirect_words[word + 4U] = 0U;
 }
 )";
 

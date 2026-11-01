@@ -140,5 +140,17 @@ int main() {
     auto only=load().snapshot(); only.entities.erase(only.entities.begin()); world::World character_only; require(character_only.restore(only),"character-only source");
     editor::PreviewRuntime no_module; require(no_module.reset(character_only,jobs,assets,&diagnostics) && no_module.step_once() && no_module.snapshot().characters.size()==1 && no_module.snapshot().bodies.empty(),"character-only preview uses authored path without implicit Lab bodies");
 #endif
+    // Equipment keeps physical ground contact while the wearer's controller excludes it.
+    auto clothed=load();const auto wearer=*clothed.find(id(2));const auto sole=*clothed.create_entity(id(99));
+    require(clothed.set_spatial_state(sole,{{1e12,50.15,0},{1}}),"equipment pose");
+    world::RigidBox equipment;equipment.motion=world::RigidMotion::kinematic_body;equipment.half_extents={.25F,.15F,.4F};
+    require(clothed.set_rigid_box(sole,equipment) && clothed.add_relation({wearer,rigid_body::character_collision_exclusion_kind,sole}),"equipment exclusion relation");
+    rigid_body::AuthoredSimulation dressed;require(dressed.reset(clothed,jobs),"equipment reset");ticks(dressed,120);
+    require(std::abs(clothed.spatial_state(wearer)->global_position.y-50)<.05,"own equipment cannot lift its wearer");
+    world::World cold;require(cold.restore(clothed.snapshot()),"equipment cold World");
+    rigid_body::AuthoredSimulation continued;require(continued.reset(cold,jobs),"equipment cold binding");ticks(continued,120);
+    require(std::abs(cold.spatial_state(*cold.find(id(2)))->global_position.y-50)<.05,"exclusion survives checkpoint");
+    require(cold.remove_relation({*cold.find(id(2)),rigid_body::character_collision_exclusion_kind,*cold.find(id(99))}),"edit collision relation");
+    require(!continued.step(),"exclusion topology changes require reset");
     return 0;
 }

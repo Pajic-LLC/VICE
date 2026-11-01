@@ -25,7 +25,8 @@ bool validate_dependencies(const WorldSnapshot& snapshot, std::string* diagnosti
         }
         if (!d.gate.is_nil()) {
             const auto gate = entities.find(d.gate);
-            if (gate == entities.end() || !gate->second->distance_link) return fail("gate requires a distance link component.");
+            const bool structural=std::any_of(snapshot.swing_twist_joints.begin(),snapshot.swing_twist_joints.end(),[&](const auto &j){return j.owner==d.gate;});
+            if (gate == entities.end() || (!gate->second->distance_link && !structural)) return fail("gate requires a breakable constraint component.");
         }
         std::unordered_set<PersistentId, PersistentIdHash> visited;
         auto current = owner.persistent_id;
@@ -98,7 +99,8 @@ bool World::dependency_available(EntityId entity) const noexcept {
         if (!d->gate.is_nil()) {
             const auto gate = find(d->gate);
             const auto link = gate ? distance_link(*gate) : std::nullopt;
-            if (!link || link->broken) return false;
+            const auto joint=gate ? swing_twist_joint(*gate):std::nullopt;
+            if ((!link && !joint) || (link && link->broken) || (joint && joint->broken)) return false;
         }
         if (d->provider.is_nil()) return true;
         const auto next = find(d->provider);
@@ -124,11 +126,12 @@ std::optional<DependencyState> World::dependency_state(EntityId entity) const {
         if (!d->gate.is_nil()) {
             const auto gate = find(d->gate);
             const auto link = gate ? distance_link(*gate) : std::nullopt;
-            if (!link) return std::nullopt;
-            if (link->broken) {
+            const auto joint=gate ? swing_twist_joint(*gate):std::nullopt;
+            if (!link && !joint) return std::nullopt;
+            if ((link && link->broken) || (joint && joint->broken)) {
                 failed(DependencyReason::link_broken, d->gate);
                 result.path.push_back(d->gate);
-                result.break_impulse = link->last_break_impulse; result.break_step = link->break_step;
+                result.break_impulse = link ? link->last_break_impulse:joint->last_break_impulse; result.break_step = link ? link->break_step:joint->break_step;
                 return result;
             }
         }

@@ -47,6 +47,7 @@ struct AccelerationStructureResources {
     id<MTLAccelerationStructure> result = nil;
     id<MTLBuffer> scratch = nil;
     id<MTLBuffer> instance_buffer = nil;
+    id<MTLBuffer> converter_header = nil, instance_contributions = nil;
     std::string diagnostics;
 
     [[nodiscard]] explicit operator bool() const noexcept {

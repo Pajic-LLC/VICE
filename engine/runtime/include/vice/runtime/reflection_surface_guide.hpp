@@ -35,6 +35,7 @@ struct RuntimeReflectionSurfaceGuideDraw {
     render::Buffer* vertices = nullptr;
     render::Buffer* indices = nullptr;
     render::Buffer* visible_scene_instances = nullptr;
+    render::BufferViewDesc visible_instance_view{};
     render::Buffer* indirect_arguments = nullptr;
     std::uint64_t indirect_argument_offset = 0U;
 };

@@ -2,6 +2,7 @@
 #include <string_view>
 namespace vice::runtime::detail {
 inline constexpr std::string_view gpu_shadow_hlsl_source = R"(
+#pragma pack_matrix(column_major)
 cbuffer ShadowFrame : register(b0) {
     float4x4 view_projection;
 };

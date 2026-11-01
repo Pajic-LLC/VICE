@@ -8,6 +8,10 @@
 #include <string>
 
 namespace vice::rigid_body {
+// Symmetric World relation between a character and an excluded rigid body. Persisted by World relations.
+inline constexpr world::PersistentId character_collision_exclusion_kind{
+    world::PersistentId::Bytes{0xe8,0,0,0,0,0,0x40,0,0x80,0,0,0,0,0,0,1}};
+
 
 struct PoweredHingeObservation {
     world::PoweredHinge intent;

@@ -218,6 +218,13 @@ ParseResult parse_source_manifest(const std::string_view source) {
                 fail("unknown collision mode.");
                 return result;
             }
+        } else if (keyword == "virtual_geometry") {
+            std::string mode;
+            if (!(values >> mode) || (mode != "streamed" && mode != "dense")) {
+                fail("virtual_geometry requires streamed or dense.");
+                return result;
+            }
+            parsed.build_virtual_geometry_proxies = mode == "streamed";
         } else if (keyword == "vertex") {
             render::MeshVertex vertex;
             const bool base = static_cast<bool>(values >>
@@ -393,7 +400,7 @@ CookResult cook(const MeshSource& source) {
     result.bytes.reserve(v5_header_bytes + payload.size());
     constexpr std::string_view magic = "VICEMESH";
     for (const char value : magic) result.bytes.push_back(static_cast<std::byte>(value));
-    append_u32(result.bytes, render::mesh_asset_format_version);
+    append_u32(result.bytes, render::mesh_asset_format_version_v5);
     append_u32(result.bytes, static_cast<std::uint32_t>(source.vertices.size()));
     append_u32(result.bytes, static_cast<std::uint32_t>(source.indices.size()));
     append_u64(result.bytes, result.source_fingerprint);

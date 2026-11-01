@@ -112,7 +112,11 @@ void stream_overwrite_u32(
 
 } // namespace
 
+CookResult cook_v1_v5(const MeshSource& source);
 CookResult cook(const MeshSource& source) {
+    // The dense archive retains exact vertices, indices, clusters and page metadata.
+    // Static simplified proxies are inappropriate for a changing skinned surface.
+    if (!source.build_virtual_geometry_proxies) return cook_v1_v5(source);
     auto result = cook_v6_archive_core(source);
     if (!result.success) return result;
 

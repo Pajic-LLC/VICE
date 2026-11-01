@@ -62,18 +62,25 @@ struct PoweredSwingTwist {
     JointFrame first_frame{}, second_frame{};
     SwingTwist configuration{};
     bool enabled = true;
+    float break_threshold = 0, last_break_impulse = 0;
+    std::uint64_t break_step = 0;
+    bool broken = false;
     friend bool operator==(const PoweredSwingTwist &, const PoweredSwingTwist &) = default;
 };
 inline bool valid(const PoweredSwingTwist &j) noexcept {
     return !j.first.is_nil() && !j.second.is_nil() && j.first != j.second && valid(j.first_frame) &&
-           valid(j.second_frame) && valid(j.configuration);
+           valid(j.second_frame) && valid(j.configuration) &&
+           std::isfinite(j.break_threshold) && j.break_threshold >= 0 &&
+           std::isfinite(j.last_break_impulse) && j.last_break_impulse >= 0 &&
+           (j.broken ? (!j.enabled && j.break_threshold > 0 && j.last_break_impulse > j.break_threshold && j.break_step > 0)
+                     : (j.last_break_impulse == 0 && j.break_step == 0));
 }
 struct OwnedSwingTwist {
     PersistentId owner{};
     PoweredSwingTwist joint;
 };
 inline void write_swing_twist(std::ostream &o, const PoweredSwingTwist &h) {
-    o << 1 << ' ' << h.first.to_string() << ' ' << h.second.to_string();
+    o << 2 << ' ' << h.first.to_string() << ' ' << h.second.to_string();
     for (const auto &f : {h.first_frame, h.second_frame})
         for (auto v : {f.anchor, f.axis, f.normal})
             o << ' ' << v.x << ' ' << v.y << ' ' << v.z;
@@ -86,13 +93,13 @@ inline void write_swing_twist(std::ostream &o, const PoweredSwingTwist &h) {
     for (auto v : d.target_velocity)
         o << ' ' << v;
     o << ' ' << d.frequency_hz << ' ' << d.damping_ratio << ' ' << d.max_swing_axis_torque << ' '
-      << d.max_twist_torque << ' ' << static_cast<unsigned>(h.enabled);
+      << d.max_twist_torque << ' ' << static_cast<unsigned>(h.enabled) << ' ' << h.break_threshold << ' ' << h.last_break_impulse << ' ' << h.break_step << ' ' << static_cast<unsigned>(h.broken);
 }
 inline bool read_swing_twist(std::istream &in, PoweredSwingTwist &out) {
     PoweredSwingTwist h;
     unsigned version = 0, sm = 0, tm = 0, enabled = 0;
     std::string a, b;
-    if (!(in >> version >> a >> b) || version != 1)
+    if (!(in >> version >> a >> b) || (version != 1 && version != 2))
         return false;
     auto first = PersistentId::parse(a), second = PersistentId::parse(b);
     if (!first || !second)
@@ -120,6 +127,11 @@ inline bool read_swing_twist(std::istream &in, PoweredSwingTwist &out) {
     d.swing_mode = static_cast<JointDriveMode>(sm);
     d.twist_mode = static_cast<JointDriveMode>(tm);
     h.enabled = enabled != 0;
+    if(version == 2) {
+        unsigned broken=0;
+        if(!(in >> h.break_threshold >> h.last_break_impulse >> h.break_step >> broken) || broken>1) return false;
+        h.broken=broken!=0;
+    }
     if (!valid(h))
         return false;
     out = h;

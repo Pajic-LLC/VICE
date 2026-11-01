@@ -1954,6 +1954,7 @@ std::optional<RuntimeCameraView> primary_camera_view(
 }
 
 struct RuntimeSceneRenderer::State {
+    std::filesystem::path builtin_shader_root;
     struct MeshGpu {
         std::unique_ptr<render::Buffer> vertices;
         std::unique_ptr<render::Buffer> indices;
@@ -1980,7 +1981,7 @@ struct RuntimeSceneRenderer::State {
     RuntimeGpuDrawBatcher gpu_cluster_default_draw_batches;
     RuntimeGpuDrawBatcher gpu_cluster_pbr_draw_batches;
     RuntimeGpuDrawBatcher gpu_shadow_draw_batches;
-    RuntimeGpuDrawBatcher gpu_motion_draw_batches;
+    RuntimeGpuDrawBatcher gpu_motion_draw_batches, gpu_camera_depth_draw_batches;
     RuntimeGpuClusterInstanceRemap gpu_cluster_default_instances;
     RuntimeGpuClusterInstanceRemap gpu_cluster_pbr_instances;
     RuntimeGpuInstanceTable gpu_instances;
@@ -2000,6 +2001,7 @@ struct RuntimeSceneRenderer::State {
     std::unique_ptr<render::ShaderModule> gpu_pbr_vertex_shader;
     std::unique_ptr<render::ShaderModule> gpu_pbr_fragment_shader;
     std::unique_ptr<render::GraphicsPipeline> gpu_pbr_pipeline;
+    std::unique_ptr<render::GraphicsPipeline> gpu_pbr_depth_pipeline;
     std::unique_ptr<render::ShaderModule> vertex_shader;
     std::unique_ptr<render::ShaderModule> fragment_shader;
     std::unique_ptr<render::GraphicsPipeline> pipeline;
@@ -2082,6 +2084,10 @@ bool RuntimeSceneRenderer::initialize(
         set_diagnostics(diagnostics, "Runtime scene renderer state is unavailable.");
         return false;
     }
+    state_->builtin_shader_root=content_root/"runtime-shaders";
+    std::error_code shader_path_error;
+    if(!std::filesystem::is_directory(state_->builtin_shader_root,shader_path_error)) state_->builtin_shader_root.clear();
+    detail::packaged_shader_root=state_->builtin_shader_root;
     state_->device = &device;
     if (!state_->catalog.load(content_root)) {
         set_diagnostics(diagnostics, state_->catalog.diagnostics());
@@ -2136,6 +2142,7 @@ bool RuntimeSceneRenderer::initialize(
         !state_->gpu_cluster_pbr_draw_batches.initialize(device, diagnostics) ||
         !state_->gpu_shadow_draw_batches.initialize(device, diagnostics) ||
         !state_->gpu_motion_draw_batches.initialize(device, diagnostics) ||
+        !state_->gpu_camera_depth_draw_batches.initialize(device, diagnostics) ||
         !state_->gpu_cluster_default_instances.initialize(device, diagnostics) ||
         !state_->gpu_cluster_pbr_instances.initialize(device, diagnostics) ||
         !state_->gpu_instances.initialize(device, diagnostics) ||
@@ -2265,8 +2272,12 @@ bool RuntimeSceneRenderer::initialize(
         gpu_pbr_pipeline_desc.vertex_buffers = mesh_layouts;
         gpu_pbr_pipeline_desc.debug_name = "VICE Runtime indexed GPU PBR pipeline";
         state_->gpu_pbr_pipeline = device.create_graphics_pipeline(gpu_pbr_pipeline_desc);
+        gpu_pbr_pipeline_desc.fragment_shader = nullptr;
+        gpu_pbr_pipeline_desc.color_format = render::TextureFormat::undefined;
+        gpu_pbr_pipeline_desc.debug_name = "VICE Runtime GPU PBR camera depth pipeline";
+        state_->gpu_pbr_depth_pipeline = device.create_graphics_pipeline(gpu_pbr_pipeline_desc);
         state_->gpu_pbr_frame = create_gpu_pbr_frame_buffer(device);
-        if (!state_->gpu_pbr_pipeline || !state_->gpu_pbr_frame) {
+        if (!state_->gpu_pbr_pipeline || !state_->gpu_pbr_depth_pipeline || !state_->gpu_pbr_frame) {
             set_diagnostics(diagnostics, "VICE Runtime could not create indexed GPU PBR resources.");
             return false;
         }
@@ -3296,6 +3307,10 @@ bool RuntimeSceneRenderer::render(
     std::vector<std::uint8_t> gpu_cluster_pbr_eligible(instances.size(), 0U);
     for (std::size_t instance_index = 0U; instance_index < instances.size(); ++instance_index) {
         const auto& instance = instances[instance_index];
+        // Meshlet bounds are authored in the bind pose. Whole-mesh bounds are
+        // refreshed by CPU skinning above; static per-cluster spheres are not.
+        // Use current whole-mesh visibility until deformed cluster bounds exist.
+        if (state_->skinning.find(instance.mesh)) continue;
         const auto mesh_index = state_->gpu_meshlet_plan.mesh_index(instance.mesh);
         if (!mesh_index.has_value() || *mesh_index >= state_->gpu_meshlet_plan.meshes.size()) {
             set_diagnostics(diagnostics, "Runtime cluster submission could not resolve a mesh table index.");
@@ -3394,7 +3409,7 @@ bool RuntimeSceneRenderer::render(
     RuntimeGpuDrawBatchResult gpu_cluster_default_batch_result{};
     RuntimeGpuDrawBatchResult gpu_cluster_pbr_batch_result{};
     RuntimeGpuDrawBatchResult gpu_shadow_batch_result{};
-    RuntimeGpuDrawBatchResult gpu_motion_batch_result{};
+    RuntimeGpuDrawBatchResult gpu_motion_batch_result{}, gpu_camera_depth_batch_result{};
     RuntimeGpuClusterVisibilityResult gpu_cluster_visibility_result{};
     if (!instances.empty()) {
         if (!state_->gpu_instances.upload(*commands, gpu_instance_models, diagnostics) ||
@@ -3450,6 +3465,15 @@ bool RuntimeSceneRenderer::render(
             return false;
         }
         gpu_motion_batch_result = state_->gpu_motion_draw_batches.result();
+    }
+    if(use_camera_depth_prepass && !gpu_shadow_plan.batches.empty()) {
+        auto assignments=gpu_shadow_plan.instance_batches;
+        // Material surfaces provide their own matching vertex program below.
+        for (std::size_t i = 0U; i < instances.size(); ++i) {
+            if (instances[i].material) assignments[i] = runtime_gpu_draw_batch_unassigned;
+        }
+        if(!state_->gpu_camera_depth_draw_batches.build(*commands,camera_visibility,assignments,gpu_shadow_plan.batches,diagnostics)) return false;
+        gpu_camera_depth_batch_result=state_->gpu_camera_depth_draw_batches.result();
     }
     if (!gpu_default_batches.empty()) {
         if (!state_->gpu_draw_batches.build(
@@ -3658,7 +3682,15 @@ bool RuntimeSceneRenderer::render(
                     auto& mesh = state_->meshes.at(gpu_shadow_plan.batch_meshes[batch_index]);
                     const std::uint64_t argument_offset = static_cast<std::uint64_t>(batch_index) *
                         sizeof(render::IndexedIndirectDrawArguments);
-                    if (!commands->set_vertex_buffer(0U, *mesh.vertices) ||
+                    const auto range = gpu_shadow_batch_result.ranges[batch_index];
+                    if (range.capacity == 0U) continue;
+                    const render::BufferViewDesc batch_view{
+                        .offset = static_cast<std::uint64_t>(range.offset) * sizeof(std::uint32_t),
+                        .size = static_cast<std::uint64_t>(range.capacity) * sizeof(std::uint32_t),
+                        .structure_stride = sizeof(std::uint32_t),
+                    };
+                    if (!commands->set_graphics_buffer(gpu_compacted_instance_binding, *gpu_shadow_batch_result.compacted_instance_indices, batch_view) ||
+                        !commands->set_vertex_buffer(0U, *mesh.vertices) ||
                         !commands->set_index_buffer(*mesh.indices, render::IndexFormat::uint32) ||
                         !commands->draw_indexed_indirect(
                             *gpu_shadow_batch_result.indirect_arguments,
@@ -3735,7 +3767,15 @@ bool RuntimeSceneRenderer::render(
                     auto& mesh = state_->meshes.at(gpu_shadow_plan.batch_meshes[batch_index]);
                     const std::uint64_t argument_offset = static_cast<std::uint64_t>(batch_index) *
                         sizeof(render::IndexedIndirectDrawArguments);
-                    if (!commands->set_vertex_buffer(0U, *mesh.vertices) ||
+                    const auto range = gpu_shadow_batch_result.ranges[batch_index];
+                    if (range.capacity == 0U) continue;
+                    const render::BufferViewDesc batch_view{
+                        .offset = static_cast<std::uint64_t>(range.offset) * sizeof(std::uint32_t),
+                        .size = static_cast<std::uint64_t>(range.capacity) * sizeof(std::uint32_t),
+                        .structure_stride = sizeof(std::uint32_t),
+                    };
+                    if (!commands->set_graphics_buffer(gpu_compacted_instance_binding, *gpu_shadow_batch_result.compacted_instance_indices, batch_view) ||
+                        !commands->set_vertex_buffer(0U, *mesh.vertices) ||
                         !commands->set_index_buffer(*mesh.indices, render::IndexFormat::uint32) ||
                         !commands->draw_indexed_indirect(
                             *gpu_shadow_batch_result.indirect_arguments,
@@ -3819,7 +3859,15 @@ bool RuntimeSceneRenderer::render(
                 auto& mesh = state_->meshes.at(gpu_shadow_plan.batch_meshes[batch_index]);
                 const std::uint64_t argument_offset = static_cast<std::uint64_t>(batch_index) *
                     sizeof(render::IndexedIndirectDrawArguments);
-                if (!commands->set_vertex_buffer(0U, *mesh.vertices) ||
+                const auto range = gpu_motion_batch_result.ranges[batch_index];
+                if (range.capacity == 0U) continue;
+                const render::BufferViewDesc batch_view{
+                    .offset = static_cast<std::uint64_t>(range.offset) * sizeof(std::uint32_t),
+                    .size = static_cast<std::uint64_t>(range.capacity) * sizeof(std::uint32_t),
+                    .structure_stride = sizeof(std::uint32_t),
+                };
+                if (!commands->set_graphics_buffer(gpu_motion_compacted_instance_binding, *gpu_motion_batch_result.compacted_instance_indices, batch_view) ||
+                    !commands->set_vertex_buffer(0U, *mesh.vertices) ||
                     !commands->set_vertex_buffer(1U, mesh.previous_vertices ? *mesh.previous_vertices : *mesh.vertices) ||
                     !commands->set_index_buffer(*mesh.indices, render::IndexFormat::uint32) ||
                     !commands->draw_indexed_indirect(
@@ -3859,8 +3907,8 @@ bool RuntimeSceneRenderer::render(
         if (!gpu_shadow_plan.batches.empty()) {
             const auto instance_table = state_->gpu_instances.result();
             if (state_->gpu_shadow_pipeline == nullptr || instance_table.models == nullptr ||
-                gpu_motion_batch_result.compacted_instance_indices == nullptr ||
-                gpu_motion_batch_result.indirect_arguments == nullptr) {
+                gpu_camera_depth_batch_result.compacted_instance_indices == nullptr ||
+                gpu_camera_depth_batch_result.indirect_arguments == nullptr) {
                 set_diagnostics(diagnostics, "VICE Runtime camera depth-prepass resources are unavailable.");
                 return false;
             }
@@ -3881,7 +3929,7 @@ bool RuntimeSceneRenderer::render(
                     gpu_model_table_binding, *instance_table.models, model_view
                 ) || !commands->set_graphics_buffer(
                     gpu_compacted_instance_binding,
-                    *gpu_motion_batch_result.compacted_instance_indices,
+                    *gpu_camera_depth_batch_result.compacted_instance_indices,
                     compacted_view
                 )) {
                 set_diagnostics(diagnostics, "VICE Runtime could not bind camera depth-prepass resources.");
@@ -3891,14 +3939,98 @@ bool RuntimeSceneRenderer::render(
                 auto& mesh = state_->meshes.at(gpu_shadow_plan.batch_meshes[batch_index]);
                 const std::uint64_t argument_offset = static_cast<std::uint64_t>(batch_index) *
                     sizeof(render::IndexedIndirectDrawArguments);
-                if (!commands->set_vertex_buffer(0U, *mesh.vertices) ||
+                const auto range = gpu_camera_depth_batch_result.ranges[batch_index];
+                if (range.capacity == 0U) continue;
+                const render::BufferViewDesc batch_view{
+                    .offset = static_cast<std::uint64_t>(range.offset) * sizeof(std::uint32_t),
+                    .size = static_cast<std::uint64_t>(range.capacity) * sizeof(std::uint32_t),
+                    .structure_stride = sizeof(std::uint32_t),
+                };
+                if (!commands->set_graphics_buffer(gpu_compacted_instance_binding, *gpu_camera_depth_batch_result.compacted_instance_indices, batch_view) ||
+                    !commands->set_vertex_buffer(0U, *mesh.vertices) ||
                     !commands->set_index_buffer(*mesh.indices, render::IndexFormat::uint32) ||
                     !commands->draw_indexed_indirect(
-                        *gpu_motion_batch_result.indirect_arguments, argument_offset
+                        *gpu_camera_depth_batch_result.indirect_arguments, argument_offset
                     )) {
                     set_diagnostics(diagnostics, "VICE Runtime could not encode a camera depth-prepass batch.");
                     return false;
                 }
+            }
+        }
+        // PBR camera depth uses the same vertex module and selected meshlet
+        // batches as color. A generic shadow VS/full-mesh prepass can disagree
+        // at depth-test precision or preserve geometry omitted by the LOD plan.
+        if (!gpu_pbr_plan.batches.empty()) {
+            const auto instance_table = state_->gpu_instances.result();
+            const render::BufferViewDesc model_view{
+                .size = static_cast<std::uint64_t>(instances.size()) * sizeof(math::Mat4),
+                .structure_stride = sizeof(math::Mat4),
+            };
+            if (!state_->gpu_pbr_depth_pipeline || !instance_table.models ||
+                !commands->set_graphics_pipeline(*state_->gpu_pbr_depth_pipeline) ||
+                !commands->set_graphics_constant_buffer(
+                    frame_binding, *state_->gpu_pbr_frame, 0U, sizeof(GpuPbrSceneConstants)
+                ) || !commands->set_graphics_buffer(
+                    gpu_pbr_model_table_binding, *instance_table.models, model_view
+                )) {
+                set_diagnostics(diagnostics, "VICE Runtime could not bind GPU PBR camera depth.");
+                return false;
+            }
+            const auto draw_depth_batches = [&](const auto& plan, const auto& result,
+                                                render::Buffer* instance_indices) {
+                if (plan.batches.empty()) return true;
+                if (!instance_indices || !result.indirect_arguments ||
+                    result.ranges.size() != plan.batches.size()) return false;
+                for (std::size_t batch = 0U; batch < plan.batches.size(); ++batch) {
+                    const auto range = result.ranges[batch];
+                    if (range.capacity == 0U) continue;
+                    auto& mesh = state_->meshes.at(plan.batch_meshes[batch]);
+                    const render::BufferViewDesc batch_view{
+                        .offset = static_cast<std::uint64_t>(range.offset) * sizeof(std::uint32_t),
+                        .size = static_cast<std::uint64_t>(range.capacity) * sizeof(std::uint32_t),
+                        .structure_stride = sizeof(std::uint32_t),
+                    };
+                    if (!commands->set_graphics_buffer(
+                            gpu_pbr_compacted_instance_binding, *instance_indices, batch_view
+                        ) || !commands->set_vertex_buffer(0U, *mesh.vertices) ||
+                        !commands->set_index_buffer(*mesh.indices, render::IndexFormat::uint32) ||
+                        !commands->draw_indexed_indirect(
+                            *result.indirect_arguments,
+                            static_cast<std::uint64_t>(batch) * sizeof(render::IndexedIndirectDrawArguments)
+                        )) return false;
+                }
+                return true;
+            };
+            if (!draw_depth_batches(gpu_pbr_plan, gpu_pbr_batch_result,
+                                    gpu_pbr_batch_result.compacted_instance_indices) ||
+                !draw_depth_batches(gpu_cluster_pbr_plan, gpu_cluster_pbr_batch_result,
+                                    state_->gpu_cluster_pbr_instances.result().scene_instance_indices)) {
+                set_diagnostics(diagnostics, "VICE Runtime could not encode GPU PBR camera depth batches.");
+                return false;
+            }
+        }
+        // Direct project materials use their own vertex program for both depth and color.
+        for(const auto &instance:instances) {
+            if(!instance.material) continue;
+            const auto *record=state_->materials.catalog().find(*instance.material);
+            if(!record || render::render_material_uses_gpu_scene_pbr(record->asset.version)) continue;
+            const auto binding=state_->materials.find(*instance.material);
+            if(!binding.depth_pipeline) {set_diagnostics(diagnostics,"Material camera depth pipeline is unavailable.");return false;}
+            auto found=state_->constants.find(instance.entity);
+            if(found==state_->constants.end()) {
+                auto buffer=create_constant_buffer(*state_->device);
+                if(!buffer) return false;
+                found=state_->constants.emplace(instance.entity,std::move(buffer)).first;
+            }
+            const SceneConstants constants{.view_projection=view_projection,.model=runtime_model_matrix(instance)};
+            auto &mesh=state_->meshes.at(instance.mesh);
+            if(!found->second->write(0,std::as_bytes(std::span{&constants,1})) ||
+               !commands->set_graphics_pipeline(*binding.depth_pipeline) ||
+               !commands->set_graphics_constant_buffer(frame_binding,*found->second,0,sizeof(SceneConstants)) ||
+               !commands->set_vertex_buffer(0,*mesh.vertices) ||
+               !commands->set_index_buffer(*mesh.indices,render::IndexFormat::uint32) ||
+               !commands->draw_indexed(mesh.index_count)) {
+                set_diagnostics(diagnostics,"Could not encode project material camera depth.");return false;
             }
         }
         if (!commands->end_render_pass()) {
@@ -3994,7 +4126,11 @@ bool RuntimeSceneRenderer::render(
     pass.depth_attachment = current_depth;
     pass.clear_depth = 1.0F;
     pass.clear_color_attachment = false;
-    pass.clear_depth_attachment = !use_camera_depth_prepass;
+    // The early depth is an input to ray-lighting passes, not a contract that
+    // independently compiled forward pipelines reproduce bit-identical depth.
+    // Those consumers have already encoded their work. Build authoritative color
+    // visibility afresh; retain depth testing/writes between forward draws.
+    pass.clear_depth_attachment = true;
     if (!commands->begin_render_pass(*scene_color, pass) ||
         !commands->set_viewport(render::Viewport{
             .width = static_cast<float>(metrics.drawable_width),
@@ -4054,7 +4190,15 @@ bool RuntimeSceneRenderer::render(
             auto& mesh = state_->meshes.at(gpu_default_batch_meshes[batch_index]);
             const std::uint64_t argument_offset = static_cast<std::uint64_t>(batch_index) *
                 sizeof(render::IndexedIndirectDrawArguments);
-            if (!commands->set_vertex_buffer(0U, *mesh.vertices) ||
+            const auto range = gpu_default_batch_result.ranges[batch_index];
+            if (range.capacity == 0U) continue;
+            const render::BufferViewDesc batch_view{
+                .offset = static_cast<std::uint64_t>(range.offset) * sizeof(std::uint32_t),
+                .size = static_cast<std::uint64_t>(range.capacity) * sizeof(std::uint32_t),
+                .structure_stride = sizeof(std::uint32_t),
+            };
+            if (!commands->set_graphics_buffer(gpu_compacted_instance_binding, *gpu_default_batch_result.compacted_instance_indices, batch_view) ||
+                !commands->set_vertex_buffer(0U, *mesh.vertices) ||
                 !commands->set_index_buffer(*mesh.indices, render::IndexFormat::uint32) ||
                 !commands->draw_indexed_indirect(
                     *gpu_default_batch_result.indirect_arguments,
@@ -4114,7 +4258,15 @@ bool RuntimeSceneRenderer::render(
             auto& mesh = state_->meshes.at(gpu_cluster_default_plan.batch_meshes[batch_index]);
             const std::uint64_t argument_offset = static_cast<std::uint64_t>(batch_index) *
                 sizeof(render::IndexedIndirectDrawArguments);
-            if (!commands->set_vertex_buffer(0U, *mesh.vertices) ||
+            const auto range = gpu_cluster_default_batch_result.ranges[batch_index];
+            if (range.capacity == 0U) continue;
+            const render::BufferViewDesc batch_view{
+                .offset = static_cast<std::uint64_t>(range.offset) * sizeof(std::uint32_t),
+                .size = static_cast<std::uint64_t>(range.capacity) * sizeof(std::uint32_t),
+                .structure_stride = sizeof(std::uint32_t),
+            };
+            if (!commands->set_graphics_buffer(gpu_compacted_instance_binding, *remapped_instances.scene_instance_indices, batch_view) ||
+                !commands->set_vertex_buffer(0U, *mesh.vertices) ||
                 !commands->set_index_buffer(*mesh.indices, render::IndexFormat::uint32) ||
                 !commands->draw_indexed_indirect(
                     *gpu_cluster_default_batch_result.indirect_arguments,
@@ -4277,7 +4429,15 @@ bool RuntimeSceneRenderer::render(
             auto& mesh = state_->meshes.at(gpu_pbr_plan.batch_meshes[batch_index]);
             const std::uint64_t argument_offset = static_cast<std::uint64_t>(batch_index) *
                 sizeof(render::IndexedIndirectDrawArguments);
-            if (!commands->set_vertex_buffer(0U, *mesh.vertices) ||
+            const auto range = gpu_pbr_batch_result.ranges[batch_index];
+            if (range.capacity == 0U) continue;
+            const render::BufferViewDesc batch_view{
+                .offset = static_cast<std::uint64_t>(range.offset) * sizeof(std::uint32_t),
+                .size = static_cast<std::uint64_t>(range.capacity) * sizeof(std::uint32_t),
+                .structure_stride = sizeof(std::uint32_t),
+            };
+            if (!commands->set_graphics_buffer(gpu_pbr_compacted_instance_binding, *gpu_pbr_batch_result.compacted_instance_indices, batch_view) ||
+                !commands->set_vertex_buffer(0U, *mesh.vertices) ||
                 !commands->set_index_buffer(*mesh.indices, render::IndexFormat::uint32) ||
                 !commands->draw_indexed_indirect(
                     *gpu_pbr_batch_result.indirect_arguments,
@@ -4315,7 +4475,15 @@ bool RuntimeSceneRenderer::render(
                 auto& mesh = state_->meshes.at(gpu_cluster_pbr_plan.batch_meshes[batch_index]);
                 const std::uint64_t argument_offset = static_cast<std::uint64_t>(batch_index) *
                     sizeof(render::IndexedIndirectDrawArguments);
-                if (!commands->set_vertex_buffer(0U, *mesh.vertices) ||
+                const auto range = gpu_cluster_pbr_batch_result.ranges[batch_index];
+                if (range.capacity == 0U) continue;
+                const render::BufferViewDesc batch_view{
+                    .offset = static_cast<std::uint64_t>(range.offset) * sizeof(std::uint32_t),
+                    .size = static_cast<std::uint64_t>(range.capacity) * sizeof(std::uint32_t),
+                    .structure_stride = sizeof(std::uint32_t),
+                };
+                if (!commands->set_graphics_buffer(gpu_pbr_compacted_instance_binding, *remapped_instances.scene_instance_indices, batch_view) ||
+                    !commands->set_vertex_buffer(0U, *mesh.vertices) ||
                     !commands->set_index_buffer(*mesh.indices, render::IndexFormat::uint32) ||
                     !commands->draw_indexed_indirect(
                         *gpu_cluster_pbr_batch_result.indirect_arguments,

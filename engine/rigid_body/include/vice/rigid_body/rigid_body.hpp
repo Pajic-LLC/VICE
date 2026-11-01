@@ -297,6 +297,8 @@ struct CharacterCollisionFilter {
     bool include_static = true;
     bool include_dynamic = true;
     bool include_triggers = false;
+    std::vector<simulation::ParticipantId> excluded_participants;
+    friend bool operator==(const CharacterCollisionFilter&,const CharacterCollisionFilter&)=default;
 };
 
 struct CharacterDesc {
@@ -387,6 +389,7 @@ struct QueryFilter {
     bool include_dynamic = true;
     bool include_triggers = true;
     std::optional<simulation::ParticipantId> exclude_participant;
+    std::vector<simulation::ParticipantId> excluded_participants;
 };
 
 struct RaycastDesc {

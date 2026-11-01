@@ -2,6 +2,14 @@
 #include <vice/presentation/assets.hpp>
 #include <vice/project/workspace.hpp>
 namespace vice::tools {
+// Bounded authoring inputs for dense multi-part characters. Skin evaluation
+// retains its independent per-skin limit; these do not change archive formats.
+inline constexpr std::size_t rig_import_source_bytes = 64ULL * 1024 * 1024;
+inline constexpr std::size_t rig_import_parser_bytes = 192ULL * 1024 * 1024;
+inline constexpr std::size_t rig_import_mesh_vertices = 200000;
+inline constexpr std::size_t rig_import_total_vertices = 1000000;
+inline constexpr std::size_t rig_import_mesh_indices = 1200000;
+inline constexpr std::size_t rig_import_total_indices = 6000000;
 struct PresentationCookResult {
     bool success = false;
     std::size_t rigs = 0, sounds = 0;

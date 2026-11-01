@@ -767,7 +767,23 @@ bool World::set_swing_twist_joint(EntityId entity, const PoweredSwingTwist &h) {
     powered_hinge_users_[h.second].push_back(entity);
     return true;
 }
+bool World::publish_swing_twist_break(EntityId entity,float impulse,std::uint64_t step) {
+    const auto old=swing_twist_joint(entity);
+    if(!old || old->broken || old->break_threshold<=0 || !std::isfinite(impulse) || impulse<=old->break_threshold || step==0) return false;
+    auto before=observe_causal_dependents(entity,false);
+    if(!causal_room(before.size()+1)) return false;
+    auto h=*old;h.broken=true;h.enabled=false;h.last_break_impulse=impulse;h.break_step=step;
+    // Failure changes state, not structural identity. Keep native topology stable.
+    swing_twist_joints_.at(*persistent_id(entity))=h;
+    CausalEvent event;event.kind=CausalKind::constraint_broken;event.origin=CausalOrigin::physics;
+    event.subject=*persistent_id(entity);event.first=h.first;event.second=h.second;event.value=true;
+    event.region=spatial_state(*find(h.first))->region;event.quantity_kind=CausalQuantity::linear_impulse;
+    event.quantity=impulse;event.solver_step=step;
+    event.first_material=entity_material(*find(h.first));event.second_material=entity_material(*find(h.second));
+    finish_causal_change(std::move(before),event);return true;
+}
 bool World::clear_swing_twist_joint(EntityId entity) {
+    if(alive(entity) && dependency_gate_users_.contains(*persistent_id(entity))) return false;
     if (!alive(entity))
         return false;
     const auto h = swing_twist_joint(entity);

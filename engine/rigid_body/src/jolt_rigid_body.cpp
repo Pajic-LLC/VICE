@@ -665,6 +665,7 @@ public:
         const BodyEntry& body,
         const QueryFilter& filter
     ) const noexcept {
+        if(std::find(filter.excluded_participants.begin(),filter.excluded_participants.end(),body.participant)!=filter.excluded_participants.end()) return false;
         if (filter.exclude_participant.has_value() &&
             body.participant == *filter.exclude_participant) {
             return false;

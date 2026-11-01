@@ -382,7 +382,7 @@ WorldSnapshotEncodeResult encode_world_snapshot(const WorldSnapshot& snapshot_da
     append_u32(payload,static_cast<std::uint32_t>(presentations));
     for(const auto& e:snapshot.entities)if(e.animation||e.rig_part||e.audio_emitter){
         append_id(payload,e.persistent_id);std::ostringstream o;o.imbue(std::locale::classic());o<<std::setprecision(17);
-        if(e.animation){o<<"animation ";write_animation(o,*e.animation);o<<' ';}if(e.rig_part){o<<"rig_part ";write_rig_part(o,*e.rig_part);o<<' ';}if(e.audio_emitter){o<<"audio_emitter ";write_audio_emitter(o,*e.audio_emitter);o<<' ';}append_string(payload,o.str());
+        if(e.animation){o<<"animation ";write_animation(o,*e.animation);o<<" animation_mix ";write_animation_mix(o,*e.animation);o<<' ';}if(e.rig_part){o<<"rig_part ";write_rig_part(o,*e.rig_part);o<<' ';}if(e.audio_emitter){o<<"audio_emitter ";write_audio_emitter(o,*e.audio_emitter);o<<' ';}append_string(payload,o.str());
     }
     std::size_t component_count=0;for(const auto& e:snapshot.entities)component_count+=e.components.size();
     append_u32(payload,static_cast<std::uint32_t>(component_count));
@@ -913,7 +913,7 @@ WorldSnapshotDecodeResult decode_world_snapshot(const std::span<const std::byte>
         std::unordered_map<PersistentId,std::string,PersistentIdHash> records;
         for(std::uint32_t i=0;i<count;++i){PersistentId id;std::string data;if(!reader.read_id(id)||!reader.read_string(data)||data.empty()||!records.emplace(id,std::move(data)).second){result.diagnostics="Invalid presentation record.";return result;}}
         for(auto& e:snapshot.entities){const auto found=records.find(e.persistent_id);if(found==records.end())continue;std::istringstream in{found->second};in.imbue(std::locale::classic());std::string field;
-            while(in>>field){bool ok=false;if(field=="animation"&&!e.animation){AnimationPlayer p;ok=read_animation(in,p);if(ok)e.animation=p;}else if(field=="rig_part"&&!e.rig_part){RigPart p;ok=read_rig_part(in,p);if(ok)e.rig_part=p;}else if(field=="audio_emitter"&&!e.audio_emitter){AudioEmitter p;ok=read_audio_emitter(in,p);if(ok)e.audio_emitter=p;}if(!ok){result.diagnostics="Invalid presentation fields.";return result;}}
+            bool mix_seen=false;while(in>>field){bool ok=false;if(field=="animation"&&!e.animation){AnimationPlayer p;ok=read_animation(in,p);if(ok)e.animation=p;}else if(field=="animation_mix"&&version>=26U&&e.animation&&!mix_seen){ok=read_animation_mix(in,*e.animation);mix_seen=true;}else if(field=="rig_part"&&!e.rig_part){RigPart p;ok=read_rig_part(in,p);if(ok)e.rig_part=p;}else if(field=="audio_emitter"&&!e.audio_emitter){AudioEmitter p;ok=read_audio_emitter(in,p);if(ok)e.audio_emitter=p;}if(!ok){result.diagnostics="Invalid presentation fields.";return result;}}
             records.erase(found);
         }if(!records.empty()||!validate_presentation(snapshot,&result.diagnostics)){result.diagnostics="Invalid presentation references.";return result;}
     }

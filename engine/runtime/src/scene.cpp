@@ -1,3 +1,4 @@
+#include "builtin_shader_paths.hpp"
 #include <vice/runtime/directional_ray_shadow.hpp>
 #include <vice/runtime/gpu_instance_table.hpp>
 #include <vice/runtime/gpu_virtual_geometry.hpp>
@@ -853,7 +854,7 @@ thread_local RuntimeRayAmbientOcclusionTemporalSceneState ray_ambient_occlusion_
 #ifdef VICE_RUNTIME_DIRECTIONAL_RAY_SHADOW_MANIFEST
     if (!state.pass->initialize(
             device,
-            VICE_RUNTIME_DIRECTIONAL_RAY_SHADOW_MANIFEST,
+            ::vice::runtime::detail::builtin_shader_manifest(VICE_RUNTIME_DIRECTIONAL_RAY_SHADOW_MANIFEST),
             diagnostics
         )) {
         return false;
@@ -882,7 +883,7 @@ thread_local RuntimeRayAmbientOcclusionTemporalSceneState ray_ambient_occlusion_
 #ifdef VICE_RUNTIME_RAY_AMBIENT_OCCLUSION_MANIFEST
     if (!state.pass->initialize(
             device,
-            VICE_RUNTIME_RAY_AMBIENT_OCCLUSION_MANIFEST,
+            ::vice::runtime::detail::builtin_shader_manifest(VICE_RUNTIME_RAY_AMBIENT_OCCLUSION_MANIFEST),
             diagnostics
         )) {
         return false;
@@ -911,7 +912,7 @@ thread_local RuntimeRayAmbientOcclusionTemporalSceneState ray_ambient_occlusion_
 #ifdef VICE_RUNTIME_RAY_AMBIENT_OCCLUSION_DENOISE_MANIFEST
     if (!state.pass->initialize(
             device,
-            VICE_RUNTIME_RAY_AMBIENT_OCCLUSION_DENOISE_MANIFEST,
+            ::vice::runtime::detail::builtin_shader_manifest(VICE_RUNTIME_RAY_AMBIENT_OCCLUSION_DENOISE_MANIFEST),
             diagnostics
         )) {
         return false;
@@ -940,7 +941,7 @@ thread_local RuntimeRayAmbientOcclusionTemporalSceneState ray_ambient_occlusion_
 #ifdef VICE_RUNTIME_RAY_AMBIENT_OCCLUSION_TEMPORAL_MANIFEST
     if (!state.pass->initialize(
             device,
-            VICE_RUNTIME_RAY_AMBIENT_OCCLUSION_TEMPORAL_MANIFEST,
+            ::vice::runtime::detail::builtin_shader_manifest(VICE_RUNTIME_RAY_AMBIENT_OCCLUSION_TEMPORAL_MANIFEST),
             diagnostics
         )) {
         return false;
@@ -1509,6 +1510,7 @@ bool RuntimeSceneRenderer::render(
     const render::Color clear_color,
     std::string* const diagnostics
 ) {
+    if(state_) detail::packaged_shader_root=state_->builtin_shader_root;
     directional_shadow_telemetry_.requested_mode = directional_shadow_mode_;
     directional_shadow_telemetry_.active_path = RuntimeDirectionalShadowPath::cascaded;
     directional_shadow_telemetry_.ray_tracing_supported = false;

@@ -123,6 +123,7 @@ public:
     bool set_powered_hinge(EntityId entity, const PoweredHinge &joint);
     bool set_swing_twist_joint(EntityId, const PoweredSwingTwist &);
     bool clear_swing_twist_joint(EntityId);
+    bool publish_swing_twist_break(EntityId, float impulse, std::uint64_t solver_step);
     [[nodiscard]] std::optional<PoweredSwingTwist> swing_twist_joint(EntityId) const noexcept;
     bool clear_powered_hinge(EntityId entity);
     [[nodiscard]] std::optional<PoweredHinge> powered_hinge(EntityId entity) const noexcept;

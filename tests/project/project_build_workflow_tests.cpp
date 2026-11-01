@@ -98,6 +98,7 @@ int main() {
     require(!error, "write runtime host permissions");
 
     const auto no_module = tools::build_project(workspace, runtime_host);
+    if (!no_module) std::cerr << no_module.diagnostics << '\n';
     require(static_cast<bool>(no_module), "shared build without game module succeeds");
     require(no_module.project_id == "84000000-0000-4000-8000-000000000001", "stable project ID");
     require(no_module.game_target == "shared-build-game", "game target identity");

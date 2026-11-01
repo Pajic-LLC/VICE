@@ -92,6 +92,7 @@ inline constexpr render::ShaderBindingKey gpu_virtual_geometry_page_requests_bin
 };
 
 inline constexpr std::string_view gpu_virtual_geometry_hlsl_source = R"(
+#pragma pack_matrix(column_major)
 cbuffer VirtualGeometryFrame : register(b0) {
     float4 frustum_planes[6];
     float projection_scale;

@@ -81,6 +81,31 @@ int main() {
     require(!resumed.step() && resumed.coordinator().step_index() == step &&
                 !resumed.swing_twist_joint(joint_id(3)),
             "stale binding rejected before advance");
+    // Structural failure is solver impulse truth and survives cold reconstruction.
+    auto fragile_fixture=swing_fixture();
+    auto &fragile_joint=fragile_fixture.swing_twist_joints[0].joint;
+    fragile_joint.break_threshold=2;
+    world::World fragile;require(fragile.restore(fragile_fixture),"fragile fixture");
+    const auto lamp=*fragile.create_entity(joint_id(99));
+    require(fragile.set_dependency(lamp,{{},joint_id(3),true}) && fragile.dependency_available(lamp),"powered structural connection");
+    require(!fragile.clear_swing_twist_joint(*fragile.find(joint_id(3))),"live dependent prevents removing its gate");
+    rigid_body::AuthoredSimulation impact;require(impact.reset(fragile,jobs),"fragile reset");
+    require(impact.set_body_velocity(joint_id(2),{20,0,0},{})==rigid_body::BodyControlResult::applied,"impact impulse");
+    for(unsigned i=0;i<30 && !fragile.swing_twist_joint(*fragile.find(joint_id(3)))->broken;++i)
+        require(impact.step(),"structural step");
+    const auto failure=*fragile.swing_twist_joint(*fragile.find(joint_id(3)));
+    require(failure.broken && !failure.enabled && failure.last_break_impulse>failure.break_threshold && failure.break_step>0,"measured joint failure");
+    require(!fragile.dependency_available(lamp) && fragile.dependency_state(lamp)->break_impulse==failure.last_break_impulse,"failure propagates measured cause to dependent");
+    const auto failure_encoded=world::encode_world_snapshot(fragile.snapshot());
+    require(bool(failure_encoded),failure_encoded.diagnostics.c_str());
+    const auto failure_bytes=failure_encoded.bytes;
+    const auto failure_decoded=world::decode_world_snapshot(failure_bytes);
+    require(bool(failure_decoded),failure_decoded.diagnostics.c_str());
+    std::cout << "failure " << failure.last_break_impulse << " step " << failure.break_step << " valid " << world::valid(failure) << std::endl;
+    world::World wreck;require(wreck.restore(*world::decode_world_snapshot(failure_bytes).snapshot),"wreck restore");
+    rigid_body::AuthoredSimulation wreck_sim;require(wreck_sim.reset(wreck,jobs),"wreck cold native reset");
+    for(unsigned i=0;i<20;++i) require(wreck_sim.step(),"released body stays free");
+    require(wreck.swing_twist_joint(*wreck.find(joint_id(3)))->broken,"cold reset does not repair structure");
     // Different physical frame directions must preserve the same constraint-space meaning.
     for (unsigned axis = 0; axis < 3; ++axis) {
         auto fixture = swing_fixture();

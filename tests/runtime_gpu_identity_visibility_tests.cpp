@@ -104,7 +104,7 @@ namespace {
     }
 
     if (arguments[0].instance_count != 2U || arguments[0].first_instance != 0U ||
-        arguments[1].instance_count != 2U || arguments[1].first_instance != 2U) {
+        arguments[1].instance_count != 2U || arguments[1].first_instance != 0U || result.ranges.size() != 2U || result.ranges[1].offset != 2U) {
         std::cerr << "Identity visibility generated unexpected indirect instance ranges.\n";
         return false;
     }
@@ -114,8 +114,8 @@ namespace {
         compacted.begin() + arguments[0].instance_count
     );
     std::vector<std::uint32_t> batch1(
-        compacted.begin() + arguments[1].first_instance,
-        compacted.begin() + arguments[1].first_instance + arguments[1].instance_count
+        compacted.begin() + result.ranges[1].offset,
+        compacted.begin() + result.ranges[1].offset + arguments[1].instance_count
     );
     std::sort(batch0.begin(), batch0.end());
     std::sort(batch1.begin(), batch1.end());

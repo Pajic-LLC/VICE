@@ -80,6 +80,7 @@ struct RuntimeGpuDrawBatcher::State {
     std::uint32_t instance_capacity = 0U;
     std::uint32_t batch_capacity = 0U;
     std::uint32_t batch_count = 0U;
+    std::vector<RuntimeGpuDrawBatchRange> ranges;
 
     [[nodiscard]] bool ensure_capacity(
         const std::uint32_t required_instances,
@@ -267,6 +268,7 @@ bool RuntimeGpuDrawBatcher::initialize(
     state_->instance_capacity = 0U;
     state_->batch_capacity = 0U;
     state_->batch_count = 0U;
+    state_->ranges.clear();
     if (diagnostics != nullptr) diagnostics->clear();
     return true;
 }
@@ -323,6 +325,7 @@ bool RuntimeGpuDrawBatcher::build(
     std::vector<GpuBatchMetadata> metadata;
     metadata.reserve(batch_count);
     std::uint32_t output_offset = 0U;
+    state_->ranges.clear();
     for (std::uint32_t batch_index = 0U; batch_index < batch_count; ++batch_index) {
         const auto& batch = batches[batch_index];
         const std::uint32_t capacity = batch_capacities[batch_index];
@@ -333,6 +336,7 @@ bool RuntimeGpuDrawBatcher::build(
             .output_offset = output_offset,
             .capacity = capacity,
         });
+        state_->ranges.push_back({output_offset, capacity});
         output_offset += capacity;
     }
 
@@ -438,6 +442,7 @@ RuntimeGpuDrawBatchResult RuntimeGpuDrawBatcher::result() const noexcept {
     return RuntimeGpuDrawBatchResult{
         .compacted_instance_indices = state_->compacted_instances.get(),
         .indirect_arguments = state_->indirect_arguments.get(),
+        .ranges = state_->ranges,
         .batch_count = state_->batch_count,
         .instance_capacity = state_->instance_capacity,
     };
