@@ -14,6 +14,7 @@ add_library(
     src/relation.cpp
     src/component.cpp
     src/presentation.cpp
+    src/physical_rig.cpp
     src/dependency.cpp
     src/persistent_id.cpp
     src/primitives.cpp

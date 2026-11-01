@@ -62,6 +62,8 @@ bool validate_presentation(const WorldSnapshot &s, std::string *d) {
 bool World::has_rig_parts(EntityId e) const noexcept {
     if (!alive(e))
         return false;
+    if (has_physical_rig_bindings(*persistent_id(e)))
+        return true;
     for (const auto &s : slots_)
         if (s.alive && s.rig_part && s.rig_part->root == slots_[e.index].persistent_id)
             return true;

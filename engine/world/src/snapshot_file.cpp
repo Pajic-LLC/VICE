@@ -421,6 +421,24 @@ WorldSnapshotEncodeResult encode_world_snapshot(const WorldSnapshot& snapshot_da
             write_powered_hinge(text, *e.powered_hinge);
             append_string(payload, text.str());
         }
+    append_u32(payload, static_cast<std::uint32_t>(snapshot.swing_twist_joints.size()));
+    for (const auto &r : snapshot.swing_twist_joints) {
+        append_id(payload, r.owner);
+        std::ostringstream text;
+        text.imbue(std::locale::classic());
+        text.precision(std::numeric_limits<float>::max_digits10);
+        write_swing_twist(text, r.joint);
+        append_string(payload, text.str());
+    }
+    append_u32(payload, static_cast<std::uint32_t>(snapshot.physical_rig_bindings.size()));
+    for (const auto &r : snapshot.physical_rig_bindings) {
+        append_id(payload, r.body);
+        std::ostringstream text;
+        text.imbue(std::locale::classic());
+        text.precision(std::numeric_limits<float>::max_digits10);
+        write_physical_rig(text, r.binding);
+        append_string(payload, text.str());
+    }
     const auto& clock=snapshot.clock;append_u64(payload,clock.ticks);append_u32(payload,clock.rate_milli);append_u32(payload,clock.rate_remainder);append_f64(payload,clock.input_fraction);append_u8(payload,clock.paused?1U:0U);append_u8(payload,clock.automatic?1U:0U);
     result.bytes.reserve(header_size + payload.size());
     result.bytes.insert(result.bytes.end(), world_magic.begin(), world_magic.end());
@@ -1016,6 +1034,50 @@ WorldSnapshotDecodeResult decode_world_snapshot(const std::span<const std::byte>
                 return result;
             }
             snapshot.entities[e->second].powered_hinge = h;
+        }
+    }
+    if (version >= 24U) {
+        std::uint32_t count = 0;
+        if (!reader.read_u32(count) || count > 4096) {
+            result.diagnostics = "Unsafe swing/twist joint count.";
+            return result;
+        }
+        for (std::uint32_t i = 0; i < count; ++i) {
+            OwnedSwingTwist r;
+            std::string text;
+            if (!reader.read_id(r.owner) || !reader.read_string(text, 4096)) {
+                result.diagnostics = "Truncated swing/twist joint.";
+                return result;
+            }
+            std::istringstream in(text);
+            in.imbue(std::locale::classic());
+            if (!read_swing_twist(in, r.joint) || (in >> std::ws, !in.eof())) {
+                result.diagnostics = "Invalid swing/twist joint.";
+                return result;
+            }
+            snapshot.swing_twist_joints.push_back(r);
+        }
+    }
+    if (version >= 25U) {
+        std::uint32_t count = 0;
+        if (!reader.read_u32(count) || count > 4096) {
+            result.diagnostics = "Unsafe physical rig count.";
+            return result;
+        }
+        for (std::uint32_t i = 0; i < count; ++i) {
+            OwnedPhysicalRigBinding r;
+            std::string text;
+            if (!reader.read_id(r.body) || !reader.read_string(text, 1024)) {
+                result.diagnostics = "Truncated physical rig.";
+                return result;
+            }
+            std::istringstream in(text);
+            in.imbue(std::locale::classic());
+            if (!read_physical_rig(in, r.binding) || (in >> std::ws, !in.eof())) {
+                result.diagnostics = "Invalid physical rig.";
+                return result;
+            }
+            snapshot.physical_rig_bindings.push_back(r);
         }
     }
     if(version>=18U){std::uint8_t paused=0,automatic=0;auto& c=snapshot.clock;if(!reader.read_u64(c.ticks)||!reader.read_u32(c.rate_milli)||!reader.read_u32(c.rate_remainder)||!reader.read_f64(c.input_fraction)||!reader.read_u8(paused)||paused>1||!reader.read_u8(automatic)||automatic>1){result.diagnostics="Invalid/truncated World clock.";return result;}c.paused=paused!=0;c.automatic=automatic!=0;if(!valid(c)){result.diagnostics="Invalid World clock state.";return result;}}

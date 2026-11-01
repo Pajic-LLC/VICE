@@ -782,6 +782,28 @@ void EditorUi::draw(
                 ImGui::Text("Entity  %s", short_id(inspector->persistent_id).c_str());
                 ImGui::Separator();
 
+                if (inspector->physical_rig) {
+                    const auto &b = *inspector->physical_rig;
+                    ImGui::Text("Physical rig root: %s", b.root.to_string().c_str());
+                    ImGui::Text("Physical rig node: %u", b.node);
+                }
+                if (inspector->physical_rig_source_count)
+                    ImGui::Text("Physical bone sources: %zu", inspector->physical_rig_source_count);
+                if (inspector->swing_twist_joint &&
+                    ImGui::CollapsingHeader("Swing / twist joint")) {
+                    const auto &h = *inspector->swing_twist_joint;
+                    const auto &d = h.configuration.drive;
+                    ImGui::Text("First: %s", h.first.to_string().c_str());
+                    ImGui::Text("Second: %s", h.second.to_string().c_str());
+                    ImGui::Text("Swing cone: %.3f rad", h.configuration.swing_half_angle);
+                    ImGui::Text("Twist: %.3f to %.3f rad", h.configuration.twist_min,
+                                h.configuration.twist_max);
+                    ImGui::Text("Target: %.3f %.3f %.3f %.3f", d.target_orientation[0],
+                                d.target_orientation[1], d.target_orientation[2],
+                                d.target_orientation[3]);
+                    ImGui::Text("Torque caps: swing axis %.2f / twist %.2f",
+                                d.max_swing_axis_torque, d.max_twist_torque);
+                }
                 if (inspector->powered_hinge && ImGui::CollapsingHeader("Powered joint")) {
                     const auto &h = *inspector->powered_hinge;
                     ImGui::TextWrapped("%s -> %s", h.first.to_string().c_str(),
