@@ -55,7 +55,7 @@ Texture2D<float4> image:register(t0);RWStructuredBuffer<float4> output:register(
  std::array<std::array<float,4>,1024> reference{},prepassed{};
  auto render=[&](bool prepass,auto &pixels,unsigned repeats=1,Buffer *replacement=nullptr,Buffer *early_constants=nullptr,bool fresh_depth=false){
   auto commands=device->create_command_list();if(!commands)return false;
-  auto bind_frame=[&](){return commands->set_vertex_buffer(0,*vertices)&&commands->set_graphics_constant_buffer(binding(ShaderRegisterClass::constant_buffer,0),*constants,0,sizeof(frame));};
+  auto bind_frame=[&](){return commands->set_viewport({.width=32,.height=32})&&commands->set_scissor_rect({0,0,32,32})&&commands->set_vertex_buffer(0,*vertices)&&commands->set_graphics_constant_buffer(binding(ShaderRegisterClass::constant_buffer,0),*constants,0,sizeof(frame));};
   if(prepass && (!commands->begin_depth_render_pass(*depth,1,true)||!commands->set_graphics_pipeline(*material.depth_pipeline)||!bind_frame()||(early_constants&&!commands->set_graphics_constant_buffer(binding(ShaderRegisterClass::constant_buffer,0),*early_constants,0,sizeof(frame)))||!commands->draw(3)||!commands->end_render_pass()))return false;
   RenderPassDesc pass;pass.clear_color={0,0,0,1};pass.depth_attachment=depth.get();pass.clear_depth_attachment=!prepass||fresh_depth;
   if(!commands->begin_render_pass(*color,pass)||!commands->set_graphics_pipeline(*material.pipeline)||!bind_frame()||!commands->set_graphics_constant_buffer(binding(ShaderRegisterClass::constant_buffer,1),*material.constants,0,material.constants_size) )return false;
@@ -120,7 +120,7 @@ Texture2D<float4> image:register(t0);RWStructuredBuffer<float4> output:register(
  auto model_commands=device->create_command_list();CHECK(model_commands);
  CHECK(model_commands->copy_buffer(*models_upload,0,*models,0,sizeof(model_pair)));CHECK(model_commands->copy_buffer(*indices_upload,0,*indices,0,sizeof(instance_index)));
  if(prepass) {
-  CHECK(model_commands->begin_depth_render_pass(*depth,1,true));CHECK(model_commands->set_graphics_pipeline(*model_depth_pipeline));CHECK(model_commands->set_vertex_buffer(0,*model_stream));
+  CHECK(model_commands->begin_depth_render_pass(*depth,1,true));CHECK(model_commands->set_viewport({.width=32,.height=32}));CHECK(model_commands->set_scissor_rect({0,0,32,32}));CHECK(model_commands->set_graphics_pipeline(*model_depth_pipeline));CHECK(model_commands->set_vertex_buffer(0,*model_stream));
   CHECK(model_commands->set_graphics_constant_buffer(binding(ShaderRegisterClass::constant_buffer,0),*model_constants,0,sizeof(model_frame)));
   CHECK(model_commands->set_graphics_buffer(binding(ShaderRegisterClass::shader_resource,0),*models,{.size=128,.structure_stride=64}));
   CHECK(model_commands->set_graphics_buffer(binding(ShaderRegisterClass::shader_resource,1),*indices,{.offset=4,.size=4,.structure_stride=4}));
