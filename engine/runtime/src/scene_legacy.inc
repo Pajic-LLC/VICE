@@ -18,6 +18,8 @@
 #include <vice/runtime/visibility.hpp>
 
 #include "bloom_shaders.hpp"
+#include "fallback_shaders.hpp"
+#include "depth_shaders.hpp"
 #include "environment_pipeline.hpp"
 #include "gpu_material_scene.hpp"
 #include "gpu_motion_history.hpp"
@@ -426,6 +428,18 @@ struct GpuDefaultFrame {
     math::Mat4 view_projection{};
 };
 
+struct GpuFallbackFrame {
+    math::Mat4 view_projection{};
+    float camera_position[4]{};
+    float light_metadata[4]{};
+    std::array<SceneLightConstants, max_runtime_lights> lights{};
+    std::array<math::Mat4, runtime_shadow_cascade_count> shadow_matrices{};
+    float shadow_metadata[4]{};
+    float shadow_splits[4]{};
+    float camera_forward[4]{};
+};
+static_assert(sizeof(GpuFallbackFrame) == 784U);
+
 struct SceneConstants {
     math::Mat4 view_projection{};
     math::Mat4 model{};
@@ -499,111 +513,6 @@ static_assert(sizeof(SceneConstants) == 2272U);
 static_assert(sizeof(GpuPbrSceneConstants) == 2208U);
 static_assert(sizeof(MotionConstants) == 128U);
 static_assert(sizeof(TaaConstants) == 32U);
-
-constexpr std::string_view hlsl_source = R"(
-cbuffer SceneFrame : register(b0) {
-    float4x4 view_projection;
-};
-StructuredBuffer<float4x4> instance_models : register(t1);
-StructuredBuffer<uint> compacted_instance_indices : register(t2);
-struct VertexIn {
-    float3 position : POSITION0;
-    float3 color : COLOR0;
-};
-struct VertexOut {
-    float4 position : SV_Position;
-    float3 color : COLOR0;
-};
-VertexOut vice_runtime_mesh_vs(VertexIn input, uint instance_id : SV_InstanceID) {
-    VertexOut output;
-    const uint scene_instance = compacted_instance_indices[instance_id];
-    const float4 world_position = mul(
-        instance_models[scene_instance],
-        float4(input.position, 1.0)
-    );
-    output.position = mul(view_projection, world_position);
-    output.color = input.color;
-    return output;
-}
-float4 vice_runtime_mesh_fs(VertexOut input) : SV_Target0 {
-    return float4(input.color, 1.0);
-}
-)";
-
-constexpr std::string_view metal_source = R"(
-#include <metal_stdlib>
-using namespace metal;
-struct SceneFrame {
-    float4x4 view_projection;
-};
-struct VertexIn {
-    float3 position [[attribute(11)]];
-    float3 color [[attribute(12)]];
-};
-struct VertexOut {
-    float4 position [[position]];
-    float3 color;
-};
-vertex VertexOut vice_runtime_mesh_vs(
-    VertexIn input [[stage_in]],
-    constant SceneFrame& frame [[buffer(0)]],
-    device const float4x4* instance_models [[buffer(1)]],
-    device const uint* compacted_instance_indices [[buffer(2)]],
-    uint instance_id [[instance_id]]) {
-    VertexOut output;
-    const uint scene_instance = compacted_instance_indices[instance_id];
-    const float4 world_position = instance_models[scene_instance] * float4(input.position, 1.0);
-    output.position = frame.view_projection * world_position;
-    output.color = input.color;
-    return output;
-}
-fragment float4 vice_runtime_mesh_fs(VertexOut input [[stage_in]]) {
-    return float4(input.color, 1.0);
-}
-)";
-
-constexpr std::string_view gpu_shadow_hlsl_source = R"(
-cbuffer ShadowFrame : register(b0) {
-    float4x4 view_projection;
-};
-StructuredBuffer<float4x4> instance_models : register(t1);
-StructuredBuffer<uint> compacted_instance_indices : register(t2);
-struct VertexIn {
-    float3 position : POSITION0;
-};
-float4 vice_runtime_gpu_shadow_vs(VertexIn input, uint instance_id : SV_InstanceID) : SV_Position {
-    const uint scene_instance = compacted_instance_indices[instance_id];
-    const float4 world_position = mul(
-        instance_models[scene_instance],
-        float4(input.position, 1.0)
-    );
-    return mul(view_projection, world_position);
-}
-)";
-
-constexpr std::string_view gpu_shadow_metal_source = R"(
-#include <metal_stdlib>
-using namespace metal;
-struct ShadowFrame {
-    float4x4 view_projection;
-};
-struct VertexIn {
-    float3 position [[attribute(11)]];
-};
-vertex float4 vice_runtime_gpu_shadow_vs(
-    VertexIn input [[stage_in]],
-    constant ShadowFrame& frame [[buffer(0)]],
-    device const float4x4* instance_models [[buffer(1)]],
-    device const uint* compacted_instance_indices [[buffer(2)]],
-    uint instance_id [[instance_id]]) {
-    const uint scene_instance = compacted_instance_indices[instance_id];
-    // Match the color/motion shaders and HLSL: transform the vertex to world
-    // first. (VP * model) * vertex rounds differently from VP * (model * vertex)
-    // and can reject visible color/motion fragments against prepass depth.
-    const float4 world_position = instance_models[scene_instance] * float4(input.position, 1.0);
-    return frame.view_projection * world_position;
-}
-)";
 
 constexpr std::string_view motion_hlsl_source = R"(
 cbuffer MotionFrame : register(b0) {
@@ -910,7 +819,7 @@ fragment float4 vice_runtime_tonemap_fs(
     render::Device& device
 ) {
     render::BufferDesc desc;
-    desc.size = sizeof(GpuDefaultFrame);
+    desc.size = sizeof(GpuFallbackFrame);
     desc.usage = render::BufferUsage::uniform;
     desc.memory = render::MemoryLocation::cpu_to_gpu;
     desc.debug_name = "VICE Runtime GPU default frame constants";
@@ -2276,7 +2185,7 @@ bool RuntimeSceneRenderer::initialize(
     render::ShaderModuleDesc vertex_desc;
     vertex_desc.stage = render::ShaderStage::vertex;
     vertex_desc.language = metal ? render::ShaderSourceLanguage::metal : render::ShaderSourceLanguage::hlsl;
-    vertex_desc.source = metal ? metal_source : hlsl_source;
+    vertex_desc.source = metal ? detail::fallback_metal_source : detail::fallback_hlsl_source;
     vertex_desc.resources = vertex_resources;
     vertex_desc.entry_point = "vice_runtime_mesh_vs";
     vertex_desc.debug_name = "VICE Runtime mesh vertex fallback";
@@ -2286,6 +2195,7 @@ bool RuntimeSceneRenderer::initialize(
     fragment_desc.language = vertex_desc.language;
     fragment_desc.source = vertex_desc.source;
     fragment_desc.entry_point = "vice_runtime_mesh_fs";
+    fragment_desc.resources = detail::fallback_fragment_resources;
     fragment_desc.debug_name = "VICE Runtime mesh fragment fallback";
 
     state_->vertex_shader = device.create_shader_module(vertex_desc);
@@ -2645,7 +2555,7 @@ bool RuntimeSceneRenderer::initialize(
     render::ShaderModuleDesc gpu_shadow_vertex_desc;
     gpu_shadow_vertex_desc.stage = render::ShaderStage::vertex;
     gpu_shadow_vertex_desc.language = vertex_desc.language;
-    gpu_shadow_vertex_desc.source = metal ? gpu_shadow_metal_source : gpu_shadow_hlsl_source;
+    gpu_shadow_vertex_desc.source = metal ? detail::gpu_shadow_metal_source : detail::gpu_shadow_hlsl_source;
     gpu_shadow_vertex_desc.resources = vertex_resources;
     gpu_shadow_vertex_desc.entry_point = "vice_runtime_gpu_shadow_vs";
     gpu_shadow_vertex_desc.debug_name = "VICE Runtime GPU directional shadow vertex";
@@ -4001,6 +3911,27 @@ bool RuntimeSceneRenderer::render(
     }
 
     const math::Vec3 camera_right = math::normalize(math::cross(runtime_camera.forward, runtime_camera.up));
+    const auto lit_constants = make_gpu_pbr_scene_constants(
+        view_projection, runtime_camera, runtime_lights, shadow_view,
+        point_shadow_views, atmosphere, global_environment
+    );
+    GpuFallbackFrame fallback_frame{.view_projection = view_projection};
+    std::copy_n(lit_constants.camera_position, 4, fallback_frame.camera_position);
+    std::copy_n(lit_constants.light_metadata, 4, fallback_frame.light_metadata);
+    fallback_frame.lights = lit_constants.lights;
+    if (shadow_view) {
+        for (std::size_t i = 0; i < runtime_shadow_cascade_count; ++i) {
+            fallback_frame.shadow_matrices[i] = shadow_view->cascades[i].view_projection;
+            fallback_frame.shadow_splits[i] = shadow_view->cascades[i].split_far;
+        }
+        std::copy_n(lit_constants.shadow_metadata, 4, fallback_frame.shadow_metadata);
+        std::copy_n(lit_constants.shadow_camera_forward, 4, fallback_frame.camera_forward);
+    }
+    if (!state_->gpu_default_frame->write(0U, std::as_bytes(std::span{&fallback_frame, 1}))) {
+        set_diagnostics(diagnostics, "VICE Runtime could not update fallback lighting constants.");
+        return false;
+    }
+
     detail::SkyConstants sky_constants{};
     sky_constants.camera_forward_tan_half_fov[0] = runtime_camera.forward.x;
     sky_constants.camera_forward_tan_half_fov[1] = runtime_camera.forward.y;
@@ -4096,7 +4027,7 @@ bool RuntimeSceneRenderer::render(
         };
         if (!commands->set_graphics_pipeline(*state_->pipeline) ||
             !commands->set_graphics_constant_buffer(
-                frame_binding, *state_->gpu_default_frame, 0U, sizeof(GpuDefaultFrame)
+                frame_binding, *state_->gpu_default_frame, 0U, sizeof(GpuFallbackFrame)
             ) ||
             !commands->set_graphics_buffer(
                 gpu_model_table_binding, *instance_table.models, model_view
@@ -4107,6 +4038,16 @@ bool RuntimeSceneRenderer::render(
                 compacted_view
             )) {
             set_diagnostics(diagnostics, "VICE Runtime could not bind GPU default scene resources.");
+            return false;
+        }
+        for (std::size_t cascade = 0; cascade < runtime_shadow_cascade_count; ++cascade) {
+            if (!commands->set_graphics_texture(shadow_texture_binding(3U, cascade), *state_->shadow_maps[cascade])) {
+                set_diagnostics(diagnostics, "VICE Runtime could not bind fallback shadow cascades.");
+                return false;
+            }
+        }
+        if (!commands->set_graphics_sampler(shadow_sampler_binding, *state_->shadow_sampler)) {
+            set_diagnostics(diagnostics, "VICE Runtime could not bind fallback shadow sampler.");
             return false;
         }
         for (std::size_t batch_index = 0U; batch_index < gpu_default_batches.size(); ++batch_index) {
@@ -4148,7 +4089,7 @@ bool RuntimeSceneRenderer::render(
         };
         if (!commands->set_graphics_pipeline(*state_->pipeline) ||
             !commands->set_graphics_constant_buffer(
-                frame_binding, *state_->gpu_default_frame, 0U, sizeof(GpuDefaultFrame)
+                frame_binding, *state_->gpu_default_frame, 0U, sizeof(GpuFallbackFrame)
             ) || !commands->set_graphics_buffer(
                 gpu_model_table_binding, *instance_table.models, model_view
             ) || !commands->set_graphics_buffer(
@@ -4157,6 +4098,16 @@ bool RuntimeSceneRenderer::render(
                 compacted_view
             )) {
             set_diagnostics(diagnostics, "VICE Runtime could not bind GPU default cluster resources.");
+            return false;
+        }
+        for (std::size_t cascade = 0; cascade < runtime_shadow_cascade_count; ++cascade) {
+            if (!commands->set_graphics_texture(shadow_texture_binding(3U, cascade), *state_->shadow_maps[cascade])) {
+                set_diagnostics(diagnostics, "VICE Runtime could not bind fallback shadow cascades.");
+                return false;
+            }
+        }
+        if (!commands->set_graphics_sampler(shadow_sampler_binding, *state_->shadow_sampler)) {
+            set_diagnostics(diagnostics, "VICE Runtime could not bind fallback shadow sampler.");
             return false;
         }
         for (std::size_t batch_index = 0U; batch_index < gpu_cluster_default_plan.batches.size(); ++batch_index) {

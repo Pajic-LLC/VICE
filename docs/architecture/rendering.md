@@ -109,3 +109,27 @@ The next rendering slices should add:
 - render-graph integration
 
 These APIs should continue to come from real renderer requirements instead of copying the full surface area of Metal or Direct3D 12.
+
+
+## Runtime meshes without a render material
+
+The native Runtime now shades vertex-colored meshes without an explicit render
+material using a built-in diffuse fallback. It reads the same bounded World
+light list as the material path: directional lights and range-limited point
+lights, with a fixed hemispheric ambient fill. The selected authored directional
+light receives the existing four cascaded shadow maps with 3x3 PCF. Point shadows,
+specular/metallic response, textures and image-based lighting still require an
+explicit render material; this fallback is a prototype presentation path.
+
+Both ordinary instanced draws and streamed virtual-geometry cluster draws bind
+the full lighting frame. Depth-only draws retain the original matrix prefix.
+Normals use the inverse transpose of the model basis, including nonuniform and
+negative scales. The color vertex shader preserves the depth shader's full
+world-position calculation before projection: reconstructing a float4 from its
+xyz can change rounding enough to reject fragments against a depth prepass.
+
+`vice_runtime_fallback_lighting_tests` compiles the actual native fallback and
+depth shaders, renders through the depth prepass, and reads HDR pixels through
+compute. It covers directional orientation, inverse-transpose normals, sun
+occlusion, point-light range and surviving interior pixels. It runs on the
+host's native RHI; a local Metal pass is not evidence of Windows execution.
